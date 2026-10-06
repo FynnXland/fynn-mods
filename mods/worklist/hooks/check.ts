@@ -6,10 +6,31 @@ import type { Strings } from './i18n.ts'
 import type { PlanItem } from './model.ts'
 
 export type Outcome = 'WEITER' | 'WARTEN' | 'FRAGEN' | 'STOPP'
-export type Decision = { outcome: Outcome; stage: number; reason: string }
+// short: Kurzform bei WARTEN für die Statuszeile („2 Helfer“, „npm run dev“)
+export type Decision = { outcome: Outcome; stage: number; reason: string; short?: string }
 
 /** Hintergrundarbeit aus `classic.Stop` (types: StopHookInput.background_tasks, session_crons). */
-export type StopFacts = { background: readonly { type: string; status: string; description: string }[]; crons: number }
+export type BgTask = { id: string; type: string; status: string; description: string }
+export type StopFacts = { background: readonly BgTask[]; crons: number }
+
+/** Hintergrundarbeit, die Helfer sind (types: BackgroundTaskSummary.type): `$.agent.list()` sagt, ob sie noch laufen. */
+export const AGENT_TASKS: readonly string[] = ['subagent', 'workflow']
+
+/**
+ * Stufe 3 ohne die Aufgaben, auf die nicht mehr gewartet wird (0.4.0): Helfer, wenn `$.agent.list()` keinen beschäftigten
+ * mehr kennt (`agentsIdle`), und Aufgaben, die Fynn per „Nicht mehr warten“ ausgenommen hat (`ignore`, IDs; 'cron').
+ */
+export function filterStop(stop: StopFacts | null, agentsIdle: boolean, ignore: readonly string[]): StopFacts | null {
+  if (!stop) return null
+  const background = stop.background.filter((t) => !(agentsIdle && AGENT_TASKS.includes(t.type)) && !ignore.includes(t.id))
+  return { background, crons: ignore.includes('cron') ? 0 : stop.crons }
+}
+
+/** Andere Hintergrundarbeit als Helfer (Shells, Monitore, Weckaufträge): Für sie gilt die Wartegrenze (0.4.0). */
+export function otherBackground(stop: StopFacts | null): { tasks: BgTask[]; crons: number } {
+  if (!stop) return { tasks: [], crons: 0 }
+  return { tasks: stop.background.filter((t) => !AGENT_TASKS.includes(t.type)), crons: stop.crons }
+}
 
 export type Facts = {
   reason: 'answer' | 'aborted' | 'error' | 'refusal'
@@ -157,9 +178,9 @@ export function decideRules(f: Facts, tx: Strings): Decision | null {
     return { outcome: 'STOPP', stage: 2, reason: f.reason === 'refusal' ? tx.refused : tx.turnError }
   }
   if (f.stop && (f.stop.background.length > 0 || f.stop.crons > 0)) {
-    return { outcome: 'WARTEN', stage: 3, reason: waitingText(f.stop, tx) }
+    return { outcome: 'WARTEN', stage: 3, reason: waitingText(f.stop, tx), short: waitingShort(f.stop, tx) }
   }
-  if (f.busyAgents.length > 0) return { outcome: 'WARTEN', stage: 4, reason: tx.waitingHelpers(f.busyAgents) }
+  if (f.busyAgents.length > 0) return { outcome: 'WARTEN', stage: 4, reason: tx.waitingHelpers(f.busyAgents), short: tx.helpers(f.busyAgents.length) }
   if (f.plan.length > 0) {
     const done = f.plan.filter((s) => s.status === 'completed').length
     if (done < f.plan.length) return { outcome: 'FRAGEN', stage: 5, reason: tx.planOpen(done, f.plan.length) }
@@ -180,6 +201,17 @@ function waitingText(stop: StopFacts, tx: Strings): string {
   }
   if (stop.crons > 0) parts.push(tx.crons(stop.crons))
   return tx.waitingBackground(parts.join(', '))
+}
+
+/** Kurzform für die Statuszeile: Helfer als Anzahl, sonst die erste Beschreibung (bzw. die Weckaufträge). */
+function waitingShort(stop: StopFacts, tx: Strings): string {
+  const agents = stop.background.filter((t) => AGENT_TASKS.includes(t.type)).length
+  const other = stop.background.filter((t) => !AGENT_TASKS.includes(t.type))
+  const parts: string[] = []
+  if (agents > 0) parts.push(tx.helpers(agents))
+  if (other.length > 0) parts.push(other.length === 1 ? (other[0]?.description || other[0]?.type || tx.task) : tx.tasks(other.length, [...new Set(other.map((t) => t.type))].join(', ')))
+  if (stop.crons > 0) parts.push(tx.crons(stop.crons))
+  return parts.join(', ')
 }
 
 // ---------- Stufe 9: Haiku ----------

@@ -2,7 +2,7 @@ import type { Engine, On, RenderNode } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { decideHaiku, decideRules, haikuSystem, isDone, isProblem, isQuestion, parseHaiku } from '../hooks/check.ts'
 import type { Facts } from '../hooks/check.ts'
-import { DONE_HINTS, DONE_LINES, T, cents, cleanLang, dayDate, hhmm, shortDate } from '../hooks/i18n.ts'
+import { ANSWER_HINTS, CONTINUE_TEXTS, DONE_HINTS, DONE_LINES, T, cents, cleanLang, dayDate, hhmm, shortDate } from '../hooks/i18n.ts'
 import { commandOfTurn, findSent, firstSentence, hideDoneMarker, move, parseCommand, parseSent, pushSent, textHash } from '../hooks/model.ts'
 import type { Queue } from '../hooks/model.ts'
 import { renderPane } from '../hooks/view.ts'
@@ -24,12 +24,12 @@ test('Stufe 1–2: Abbruch, Fehler, Ablehnung, StopFailure → STOPP', async () 
   expect(decide({ reason: 'refusal' })).toMatchObject({ outcome: 'STOPP', stage: 2 })
   expect(decide({ stopFailure: true })).toMatchObject({ outcome: 'STOPP', stage: 2 })
   // Abbruch geht vor allem anderen, auch vor Hintergrundarbeit
-  expect(decide({ reason: 'aborted', stop: { background: [{ type: 'shell', status: 'running', description: 'x' }], crons: 0 } })?.stage).toBe(1)
+  expect(decide({ reason: 'aborted', stop: { background: [{ id: 'x', type: 'shell', status: 'running', description: 'x' }], crons: 0 } })?.stage).toBe(1)
 })
 
 test('Stufe 3: Hintergrundarbeit (Shell, Subagent, Workflow, Monitor) und Weckaufträge → WARTEN', async () => {
   for (const type of ['shell', 'subagent', 'workflow', 'monitor']) {
-    const d = decide({ stop: { background: [{ type, status: 'running', description: 'läuft' }], crons: 0 } })
+    const d = decide({ stop: { background: [{ id: type, type, status: 'running', description: 'läuft' }], crons: 0 } })
     expect(d).toMatchObject({ outcome: 'WARTEN', stage: 3 })
     expect(d?.reason).toContain(type)
   }
@@ -214,10 +214,12 @@ function world(
   const sent: string[] = []
   const cmdRuns: string[] = []
   const hints: (readonly string[] | undefined)[] = []
+  const userHints: (readonly string[] | undefined)[] = []
   const haikuCalls: string[] = []
   const haikuSystems: string[] = []
   let sid = 's1'
   let agents: Agent[] = []
+  let agentCalls = 0
   let reply: unknown = { isAnswered: true, text: JSON.stringify({ verdict: 'done', confidence: 0.95, why: 'umgesetzt' }), usage: USAGE }
   on('session.start', () => ({ cwd: '/proj' }))
   on('session.id', () => {
@@ -253,6 +255,7 @@ function world(
     return { value: undefined }
   })
   on('agent.list', () => {
+    agentCalls += 1
     if (o.agentsThrow?.on) throw new Error('keine Liste')
     return { value: agents as never }
   })
@@ -279,7 +282,7 @@ function world(
   on('prompt.submit', ($, e) => {
     // Nur was worklist selbst sendet (origin plugin); Fynns Nachrichten laufen hier ebenfalls durch. Ein `/name` mit Herkunft
     // worklist ist der Prompt eines Skill-Befehls aus $.command.run, kein gesendetes To-do
-    if (e.origin.kind === 'plugin' && !e.text.startsWith('/')) sent.push(e.text)
+    if (e.origin.kind === 'plugin' && (e.origin as { name?: string }).name === 'worklist' && !e.text.startsWith('/')) sent.push(e.text)
     if (o.submitDrop && e.origin.kind === 'plugin') return { drop: 'nein' }
     if (o.submitThrows && e.origin.kind === 'plugin') throw new Error('nicht jetzt')
     return { text: e.text }
@@ -304,9 +307,11 @@ function world(
     sent,
     cmdRuns,
     hints,
+    userHints,
     haikuCalls,
     haikuSystems,
     setSid: (s: string) => (sid = s),
+    agentCalls: () => agentCalls,
     setAgents: (a: Agent[]) => (agents = a),
     setReply: (r: unknown) => (reply = r),
     queue: (s = sid) => (saved.get(`queue:${s}`) as Queue | undefined) ?? { items: [], paused: false },
@@ -316,9 +321,14 @@ function world(
       await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/proj' })
       await flush()
     },
-    /** Fynn tippt im Desktop (origin composer) und der Turn beginnt. */
-    user: async ($: Engine, text: string) => {
-      await $.prompt.submit({ text, wait: false, origin: { kind: 'composer' } } as never)
+    /**
+     * Fynn tippt im Desktop (origin composer) bzw. ein anderer Mod sendet für ihn (z. B. sidekick mit asUser), und der Turn
+     * beginnt. Davor classic.UserPromptSubmit wie in der Engine; dessen `additionalContext` landet in `userHints`.
+     */
+    user: async ($: Engine, text: string, origin: Record<string, unknown> = { kind: 'composer' }) => {
+      await $.prompt.submit({ text, wait: false, origin } as never)
+      const r = await $.classic.UserPromptSubmit({ hook_event_name: 'UserPromptSubmit', prompt: text } as never)
+      userHints.push((r as { additionalContext?: readonly string[] }).additionalContext)
       n += 1
       await $.turn.start({ turnId: `t${n}`, text })
       await flush()
@@ -375,7 +385,7 @@ async function tick(clock: { advance(ms: number): Promise<void> }, ms: number) {
 }
 
 // /todo <Aufgabe> reiht ein; alles andere läuft über /todos (Fynn, 2026-10-06)
-const ALL = ['', 'status', 'pause', 'resume', 'done', 'skip', 'clear', 'history', 'close', 'help']
+const ALL = ['', 'status', 'pause', 'resume', 'done', 'skip', 'retry', 'clear', 'history', 'close', 'help']
 const cmd = ($: Engine, args: string) => $.command.run({ command: ALL.includes(args) ? 'todos' : 'todo', args })
 const DONE = 'Umgesetzt.\n\nFertig.'
 
@@ -447,8 +457,13 @@ test('Stufe 1–2 im Ablauf: Abbruch, Fehler, Ablehnung, StopFailure → To-do w
     expect(w.opened.length, label).toBeGreaterThan(0)
     await tick(w.clock, 5000)
     expect(w.sent.length, label).toBe(sentBefore)
-    // „Nochmal senden“ (der Schleifenschutz greift hier ab dem zweiten Mal; der Knopf setzt trotzdem fort)
-    expect(await press($, 'resend'), label).toBe(true)
+    // Beim ersten Halt sendet „Fortsetzen“ das offene To-do vorn erneut. Ab dem zweiten greift der Schleifenschutz: Der Knopf
+    // fehlt, /todos retry sendet trotzdem ganz neu (SPEC 0.4.2)
+    if (w.stops().length === 1) expect(await press($, 'resume'), label).toBe(true)
+    else {
+      expect(await press($, 'resume'), label).toBe(false)
+      expect((await cmd($, 'retry')).text, label).toBe('Wird noch einmal gesendet: A')
+    }
     await tick(w.clock, 300)
     expect(w.sent.length, label).toBe(sentBefore + 1)
   }
@@ -590,7 +605,7 @@ test('Stufe 9 im Ablauf: Haiku done 0,95 → weiter; question, done 0,6, Müll, 
     w.setReply(r)
     i += 1
     // vorherigen Hinweis lösen: „Weiter“ legt das To-do zurück und pausiert (nichts anderes offen), dann aufräumen und fortsetzen
-    await press($, 'proceed')
+    await press($, 'skip')
     await cmd($, 'clear')
     await cmd($, 'resume')
     await cmd($, `B${i}`)
@@ -704,7 +719,7 @@ test('Senden scheitert → To-do offen, Hinweis mit Toast', DE, async ($, on) =>
   expect(w.toasts.at(-1)).toContain('Senden abgelehnt')
 })
 
-test('Schleifenschutz: zweimal FRAGEN beim selben To-do → hält auch nach Fynns Chat, erst der Knopf setzt fort', DE, async ($, on) => {
+test('Schleifenschutz: zweimal FRAGEN beim selben To-do → kein „Fortsetzen“ mehr; Abhaken hilft', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
   await cmd($, 'A')
@@ -712,21 +727,40 @@ test('Schleifenschutz: zweimal FRAGEN beim selben To-do → hält auch nach Fynn
   await tick(w.clock, 3000)
   await w.todoTurn($)
   await w.end($, 'Soll ich das so machen?')
-  await press($, 'resend')
+  // Fortsetzen: kurze Fortsetzung für dasselbe To-do, mit Schluss-Hinweis; B wartet weiter
+  await press($, 'resume')
   await tick(w.clock, 300)
-  expect(w.sent).toHaveLength(2)
+  expect(w.sent).toEqual(['A', CONTINUE_TEXTS.de])
   await w.todoTurn($)
+  expect(w.hints.at(-1)).toEqual([DONE_HINTS.de])
   await w.end($, 'Soll ich es wirklich so machen?')
   expect(w.toasts.at(-1)).toContain('Zum zweiten Mal')
-  // Fynn antwortet im Chat, Claude wird fertig: trotzdem kein automatisches Weiter
-  await w.user($, 'ja')
-  await w.end($, DONE)
-  await tick(w.clock, 5000)
-  expect(w.sent).toHaveLength(2)
-  // Erst der Knopf setzt fort
-  await press($, 'proceed')
+  // Nach dem zweiten Halt: kein Fortsetzen-Knopf; Abhaken geht
+  expect(await press($, 'resume')).toBe(false)
+  expect(await press($, 'mark-done')).toBe(true)
+  expect(w.history()[0]).toMatchObject({ text: 'A', how: 'manual' })
+})
+
+test('Schleifenschutz: nach dem zweiten Halt hilft Fynns Antwort im Chat; sie gehört zum To-do, „Fertig.“ hakt es ab', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await cmd($, 'B')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, 'Soll ich das so machen?')
+  expect((await cmd($, 'resume')).text).toBe('Wird fortgesetzt: A')
   await tick(w.clock, 300)
-  expect(w.sent).toHaveLength(3)
+  await w.todoTurn($)
+  await w.end($, 'Soll ich es wirklich so machen?')
+  expect((await cmd($, 'resume')).text).toContain('Zweimal angehalten')
+  await tick(w.clock, 1000)
+  expect(w.sent).toHaveLength(2)
+  await w.user($, 'ja, so')
+  await w.end($, DONE)
+  expect(w.history()[0]).toMatchObject({ text: 'A', how: 'auto' })
+  await tick(w.clock, 3000)
+  expect(w.sent.at(-1)).toBe('B')
 })
 
 test('maxAutoRun: nach n To-dos in Folge ohne Eingriff Pause mit Hinweis', { options: { maxAutoRun: 2, language: 'de' } }, async ($, on) => {
@@ -743,7 +777,7 @@ test('maxAutoRun: nach n To-dos in Folge ohne Eingriff Pause mit Hinweis', { opt
   expect(w.toasts.at(-1)).toContain('2 To-dos in Folge')
   const ui = await $.ui.mount(PANE('desktop'))
   expect(await ui.find({ key: 'mark-done' })).toBeUndefined()
-  await ui.press({ key: 'proceed' })
+  await ui.press({ key: 'resume' })
   await ui.unmount()
   await tick(w.clock, 300)
   expect(w.sent).toHaveLength(4)
@@ -773,14 +807,57 @@ test('Liste pro Chat, Verlauf pro Projekt', DE, async ($, on) => {
   expect(w.history().map((h) => h.text)).toEqual(['nur in s1', 'nur in s2'])
 })
 
-test('Neustart (--resume): laufendes To-do wieder offen, Liste pausiert, nichts gesendet', DE, async ($, on) => {
+test('Neustart (--resume): laufendes To-do offen an seinem Platz, nicht pausiert, Prüfstand „bereit“, nichts gesendet; Fynns Turn mit WEITER startet', DE, async ($, on) => {
   const w = world(on)
-  w.saved.set('queue:s1', { items: [{ id: 'x', text: 'halb fertig', status: 'running', createdAt: 0 }], paused: false })
+  w.saved.set('queue:s1', {
+    items: [
+      { id: 'x', text: 'halb fertig', status: 'running', createdAt: 0 },
+      { id: 'y', text: 'danach', status: 'open', createdAt: 1 },
+    ],
+    paused: false,
+  })
   await w.start($)
-  expect(w.queue().items[0]).toMatchObject({ status: 'open' })
-  expect(w.queue().paused).toBe(true)
+  expect(w.queue().items.map((t) => `${t.id}:${t.status}`)).toEqual(['x:open', 'y:open'])
+  expect(w.queue().paused).toBe(false)
+  expect((await cmd($, 'status')).text).toContain('Prüfstand: bereit')
   await tick(w.clock, 5000)
   expect(w.sent).toEqual([])
+  const ui = await $.ui.mount(PANE('desktop'))
+  expect(await ui.find({ text: /bereit · startet nach deiner nächsten Nachricht/ })).toBeDefined()
+  expect(await ui.find({ key: 'pause', text: /Jetzt starten/ })).toBeDefined()
+  await ui.unmount()
+  // Fynns erste Nachricht endet sauber: Das To-do startet, vorn das unterbrochene
+  await w.user($, 'Wo waren wir?')
+  await w.end($, 'Bei der Export-Funktion. Erledigt.')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['halb fertig'])
+})
+
+test('Neustart: von Fynn pausiert bleibt pausiert; „Start“ setzt fort', DE, async ($, on) => {
+  const w = world(on)
+  w.saved.set('queue:s1', { items: [{ id: 'x', text: 'A', status: 'open', createdAt: 0 }], paused: true })
+  await w.start($)
+  expect(w.queue().paused).toBe(true)
+  await w.user($, 'hallo')
+  await w.end($, DONE)
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual([])
+  await press($, 'pause')
+  await tick(w.clock, 300)
+  expect(w.sent).toEqual(['A'])
+})
+
+test('Neustart mit offenen To-dos: Fynns Turn endet mit Rückfrage → nichts startet; Einreihen startet trotzdem', DE, async ($, on) => {
+  const w = world(on)
+  w.saved.set('queue:s1', { items: [{ id: 'x', text: 'A', status: 'open', createdAt: 0 }], paused: false })
+  await w.start($)
+  await w.user($, 'Was meinst du?')
+  await w.end($, 'Soll ich erst die Tests schreiben?')
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual([])
+  await cmd($, 'B')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['A'])
 })
 
 test('Stufe 5 mit TodoWrite (offene Schritte → FRAGEN) und TaskUpdate „deleted“ (Schritt fällt weg)', DE, async ($, on) => {
@@ -800,10 +877,19 @@ test('Stufe 5 mit TodoWrite (offene Schritte → FRAGEN) und TaskUpdate „delet
   } as never)
   await w.end($, DONE)
   expect(w.toasts.at(-1)).toBe('To-do-Liste angehalten: Claudes Plan ist noch nicht durch (1/2).')
-  // Nochmal senden: neuer Plan per TaskCreate, offener Schritt wird gelöscht → Plan durch → WEITER
-  await press($, 'resend')
+  // Fortsetzen: Claude führt den Plan weiter (TodoWrite durch), dazu Task-System: ein Schritt erledigt, einer gelöscht → WEITER
+  await press($, 'resume')
   await tick(w.clock, 300)
+  expect(w.sent.at(-1)).toBe(CONTINUE_TEXTS.de)
   await w.todoTurn($)
+  await $.tool.call({
+    tool: 'TodoWrite',
+    tool_use_id: 'w2',
+    todos: [
+      { content: 'Eins', status: 'completed', activeForm: 'x' },
+      { content: 'Zwei', status: 'completed', activeForm: 'x' },
+    ],
+  } as never)
   await $.tool.call({ tool: 'TaskCreate', tool_use_id: 'c1', subject: 'Fertig machen', description: 'd' } as never)
   await $.tool.call({ tool: 'TaskCreate', tool_use_id: 'c2', subject: 'Unnötig', description: 'd' } as never)
   await $.tool.call({ tool: 'TaskUpdate', tool_use_id: 'c3', taskId: 'Fertig machen', status: 'completed' } as never)
@@ -935,7 +1021,7 @@ test('Fehlerpfade: Senden wirft, Agentenliste wirft, Befehl nicht registrierbar'
   expect(w.toasts.at(-1)).toContain('Senden ging nicht')
   // Agentenliste wirft während der Beruhigungszeit → nicht senden
   agents.on = true
-  await press($, 'proceed')
+  await press($, 'skip')
   await tick(w.clock, 1000)
   expect(w.queue().items.every((t) => t.status === 'open')).toBe(true)
 })
@@ -1028,7 +1114,7 @@ test('Seitenleiste auf Desktop und Terminal: Bereiche, Knöpfe, Eingabe, Verlauf
     await ui.input({ key: second, text: 'Zwei', kind: 'submit' })
     await flush()
     expect(w.queue().items.map((t) => t.text), surface).toEqual(['Eins', 'Zwei'])
-    for (const t of ['JETZT', 'DANACH', 'VERLAUF']) expect(await ui.find({ text: new RegExp(t) }), `${surface} ${t}`).toBeDefined()
+    for (const t of ['pausiert', 'DANACH', 'VERLAUF']) expect(await ui.find({ text: new RegExp(t) }), `${surface} ${t}`).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Eins' }), surface).toBeDefined()
     const ids = w.queue().items.map((t) => t.id)
     await ui.press({ key: `down-${ids[0]}` })
@@ -1067,7 +1153,7 @@ test('Hinweisblock: Abhaken und Weiter per Knopf', DE, async ($, on) => {
   await w.todoTurn($)
   await w.end($, 'Soll ich?')
   const ui = await $.ui.mount(PANE('desktop'))
-  for (const key of ['proceed', 'mark-done', 'resend']) expect(await ui.find({ key }), key).toBeDefined()
+  for (const key of ['resume', 'mark-done', 'skip']) expect(await ui.find({ key }), key).toBeDefined()
   await ui.unmount()
   // Abhaken: A in den Verlauf (von Hand), B startet
   await press($, 'mark-done')
@@ -1078,7 +1164,7 @@ test('Hinweisblock: Abhaken und Weiter per Knopf', DE, async ($, on) => {
   await w.todoTurn($)
   await w.end($, 'Soll ich?')
   await cmd($, 'C')
-  await press($, 'proceed')
+  await press($, 'skip')
   await tick(w.clock, 300)
   expect(w.sent.at(-1)).toBe('C')
   // C läuft (vorn), B wartet dahinter
@@ -1089,13 +1175,28 @@ test('Zwischengespeicherter Baum: ohne Datenänderung dasselbe Objekt, mit Ände
   const mk = (type: string) => (p: Record<string, unknown>) => ({ type, props: p }) as unknown as RenderNode
   const el = { Box: mk('Box'), Text: mk('Text'), Button: mk('Button'), Input: mk('Input') }
   const noop = () => undefined
-  const act: Actions = { proceed: noop, markDone: noop, resend: noop, up: noop, down: noop, remove: noop, add: noop, draft: noop, control: noop, toggleHistory: noop, toggleAll: noop }
+  const act: Actions = {
+    resume: noop,
+    markDone: noop,
+    skip: noop,
+    stopWaiting: noop,
+    keepWaiting: noop,
+    up: noop,
+    down: noop,
+    remove: noop,
+    add: noop,
+    draft: noop,
+    control: noop,
+    toggleHistory: noop,
+    toggleAll: noop,
+  }
   const v: View = {
     lang: 'de',
-    now: { kind: 'free', note: 'frei' },
-    notice: { reason: 'Rückfrage', hasTodo: true },
-    queue: [{ id: 'a', text: 'A' }],
-    paused: false,
+    status: { icon: '◐', text: 'wartet auf deine Antwort im Chat', tone: 'strong' },
+    progress: { done: 1, total: 3 },
+    now: null,
+    notice: { kind: 'question', reason: 'Rückfrage' },
+    queue: [{ id: 'a', text: 'A', skipped: false }],
     control: 'pause',
     draft: '',
     history: [],
@@ -1110,8 +1211,8 @@ test('Zwischengespeicherter Baum: ohne Datenänderung dasselbe Objekt, mit Ände
   const b = kids(renderPane(el as never, v, T.de, act, 48, 'desktop', cache))
   expect(b.length).toBe(4)
   for (let i = 0; i < a.length; i++) expect(b[i]).toBe(a[i])
-  const c = kids(renderPane(el as never, { ...v, queue: [{ id: 'b', text: 'B' }] }, T.de, act, 48, 'desktop', cache))
-  expect(c[0]).toBe(a[0]) // JETZT unverändert
+  const c = kids(renderPane(el as never, { ...v, queue: [{ id: 'b', text: 'B', skipped: false }] }, T.de, act, 48, 'desktop', cache))
+  expect(c[0]).toBe(a[0]) // Statuszeile unverändert
   expect(c[1]).toBe(a[1]) // HINWEIS unverändert
   expect(c[2]).not.toBe(a[2]) // DANACH neu
   const d = kids(renderPane(el as never, v, T.de, act, 60, 'desktop', cache))
@@ -1224,7 +1325,7 @@ test('„Fertig.“ am Ende einer Antwort nur in der Anzeige ausgeblendet; mitte
   await ui.unmount()
 })
 
-test('„Weiter“ ohne weitere To-dos: nicht dasselbe nochmal senden, Liste pausiert (Fynn, Desktop 2026-10-06)', DE, async ($, on) => {
+test('Überspringen beim einzigen To-do: Marke „übersprungen“, nichts pausiert, nichts gesendet; nach Fynns nächster Nachricht startet es', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
   await cmd($, 'Frag mich, welche Farbe ich will.')
@@ -1232,30 +1333,53 @@ test('„Weiter“ ohne weitere To-dos: nicht dasselbe nochmal senden, Liste pau
   await w.todoTurn($)
   await w.end($, 'Welche Farbe magst du am liebsten?\n\nFertig.')
   expect(w.toasts.at(-1)).toContain('Rückfrage')
-  await press($, 'proceed')
+  await press($, 'skip')
   await tick(w.clock, 5000)
   expect(w.sent).toHaveLength(1)
-  expect(w.queue().paused).toBe(true)
-  expect(w.queue().items.map((t) => `${t.text}:${t.status}`)).toEqual(['Frag mich, welche Farbe ich will.:open'])
+  expect(w.queue().paused).toBe(false)
+  expect(w.queue().items).toMatchObject([{ text: 'Frag mich, welche Farbe ich will.', status: 'open', skipped: true }])
+  const ui = await $.ui.mount(PANE('desktop'))
+  expect(await ui.find({ text: 'übersprungen' })).toBeDefined()
+  await ui.unmount()
+  await w.user($, 'Egal, mach was anderes.')
+  await w.end($, 'Gut. Erledigt.')
+  await tick(w.clock, 3000)
+  expect(w.sent).toHaveLength(2)
+  // Läuft es wieder, ist die Marke weg
+  expect(w.queue().items[0]).not.toHaveProperty('skipped')
 })
 
-test('Review 4, S1: /todos resume und skip bei Hinweis mit nur einem To-do melden die Pause ehrlich', DE, async ($, on) => {
+test('Knöpfe: Fortsetzen behält die Reihenfolge (Rückfrage → Fortsetzung, STOPP → voller Text vorn), Überspringen ans Ende mit Marke', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
-  await cmd($, 'Frag mich was.')
+  for (const t of ['A', 'B', 'C']) await cmd($, t)
   await tick(w.clock, 3000)
   await w.todoTurn($)
   await w.end($, 'Was genau?')
-  expect((await cmd($, 'resume')).text).toContain('Liste pausiert, nichts gesendet')
-  await tick(w.clock, 5000)
-  expect(w.sent).toHaveLength(1)
-  // Nochmal anhalten lassen, dann skip
-  await cmd($, 'resume')
+  await press($, 'resume')
   await tick(w.clock, 300)
-  expect(w.sent).toHaveLength(2)
+  expect(w.sent).toEqual(['A', CONTINUE_TEXTS.de])
+  // Der Turn der Fortsetzung zählt zu A
   await w.todoTurn($)
-  await w.end($, 'Was genau?')
-  expect((await cmd($, 'skip')).text).toContain('sonst nichts offen, Liste pausiert')
+  await w.end($, DONE)
+  expect(w.history().map((h) => h.text)).toEqual(['A'])
+  await tick(w.clock, 3000)
+  expect(w.sent.at(-1)).toBe('B')
+  // STOPP (Abbruch): B wieder offen, vorn; Fortsetzen sendet B ganz neu, nicht C
+  await w.todoTurn($)
+  await w.end($, 'halb', { reason: 'aborted' })
+  expect(w.queue().items.map((t) => `${t.text}:${t.status}`)).toEqual(['B:open', 'C:open'])
+  await press($, 'resume')
+  await tick(w.clock, 300)
+  expect(w.sent.at(-1)).toBe('B')
+  // Überspringen: B ans Ende mit Marke, C startet
+  await w.todoTurn($)
+  await w.end($, 'Soll ich?')
+  expect((await cmd($, 'skip')).text).toBe('Übersprungen, jetzt am Ende: B')
+  await tick(w.clock, 300)
+  expect(w.sent.at(-1)).toBe('C')
+  expect(w.queue().items.map((t) => `${t.text}:${t.status}:${t.skipped === true}`)).toEqual(['C:running:false', 'B:open:true'])
+  expect(w.queue().paused).toBe(false)
 })
 
 test('Review 4: Peer-Nachricht im To-do-Format bleibt unverändert; „Fertig.“ auch im Terminal ausgeblendet', DE, async ($, on) => {
@@ -1308,7 +1432,7 @@ test('i18n: Gründe in der eingestellten Sprache, Erkennung immer zweisprachig',
   expect(en({ answer: 'Alles umgesetzt.\n\nFertig.' })?.outcome).toBe('WEITER')
   expect(en({ answer: 'All implemented.\n\nDone.' })?.outcome).toBe('WEITER')
   expect(en({ answer: 'Welche Farbe magst du?\n\nDone.' })?.outcome).toBe('FRAGEN')
-  expect(en({ stop: { background: [{ type: 'shell', status: 'running', description: 'x' }], crons: 1 } })?.reason).toBe(
+  expect(en({ stop: { background: [{ id: 'x', type: 'shell', status: 'running', description: 'x' }], crons: 1 } })?.reason).toBe(
     'waiting for background work: 1 task (shell), 1 scheduled wake-up',
   )
   expect(decideHaiku(parseHaiku(JSON.stringify({ verdict: 'question', confidence: 0.9, why: 'asks the user' })), T.en).reason).toBe(
@@ -1360,7 +1484,7 @@ test('Englisch (Standard): Ablauf, Toast, Seitenleiste, Chat-Zeile, Status', asy
   expect(w.toasts.at(-1)).toBe('To-do list stopped: Claude has a question.')
   const pane = await $.ui.mount(PANE('desktop'))
   for (const t of ['NOW', 'NOTICE · list stopped', 'NEXT', 'HISTORY']) expect(await pane.find({ text: new RegExp(t) }), t).toBeDefined()
-  expect(JSON.stringify(await pane.find({ key: 'proceed' }))).toContain('Continue')
+  expect(JSON.stringify(await pane.find({ key: 'resume' }))).toContain('Continue')
   expect(JSON.stringify(await pane.find({ key: 'mark-done' }))).toContain('Mark as done')
   await pane.press({ key: 'history' })
   expect(await pane.find({ text: 'Today' })).toBeDefined()
@@ -1615,7 +1739,7 @@ test('/todos mit allen Argumenten', DE, async ($, on) => {
   await tick(w.clock, 300)
   expect(w.sent).toHaveLength(1)
   await w.todoTurn($)
-  expect(await cmd($, 'skip')).toMatchObject({ text: 'Zurück in die Liste: Erstes To-do' })
+  expect(await cmd($, 'skip')).toMatchObject({ text: 'Übersprungen, jetzt am Ende: Erstes To-do' })
   expect(w.queue().items.map((t) => t.text)).toEqual(['Zweites', 'Erstes To-do'])
   await w.end($, 'abgebrochen', { reason: 'aborted' })
   expect((await cmd($, 'history')).text).toContain('Verlauf')
@@ -1625,4 +1749,431 @@ test('/todos mit allen Argumenten', DE, async ($, on) => {
   expect((await cmd($, 'help')).text).toContain('Nutzung')
   // Ausgaben ohne eigenes „worklist:“ davor (der Desktop setzt es selbst)
   expect((await cmd($, 'status')).text).not.toStartWith('worklist')
+})
+
+// ---------- Seitenleiste 0.4.0 (SPEC 0.4.4) ----------
+
+test('Seitenleiste 0.4: Knopf-Reihenfolge (Empfehlung vorn), Eingabefeld oben in DANACH, Start/Pause in der Kopfzeile', async () => {
+  type N = { type: string; props: Record<string, unknown> }
+  const mk = (type: string) => (p: Record<string, unknown>) => ({ type, props: p }) as unknown as RenderNode
+  const el = { Box: mk('Box'), Text: mk('Text'), Button: mk('Button'), Input: mk('Input') }
+  const noop = () => undefined
+  const act = new Proxy({}, { get: () => noop }) as Actions
+  const v: View = {
+    lang: 'de',
+    status: { icon: '◐', text: 'wartet auf deine Antwort im Chat', tone: 'strong' },
+    progress: { done: 1, total: 3 },
+    now: null,
+    notice: { kind: 'question', reason: 'Claude hat eine Rückfrage.' },
+    queue: [
+      { id: 'a', text: 'A', skipped: false },
+      { id: 'b', text: 'B', skipped: true },
+    ],
+    control: 'pause',
+    draft: '',
+    history: [],
+    historyOpen: false,
+    historyAll: false,
+    todayStart: NOW,
+    inputKey: 'new-todo',
+  }
+  const all = (n: unknown): N[] => {
+    const x = n as N
+    if (!x || typeof x !== 'object' || !('props' in x)) return []
+    const kids = (x.props.children as unknown[] | undefined) ?? []
+    return [x, ...kids.flatMap(all)]
+  }
+  const root = renderPane(el as never, v, T.de, act, 48, 'desktop', new Map())
+  const nodes = all(root)
+  const buttons = nodes.filter((n) => n.type === 'Button').map((n) => n.props.key)
+  expect(buttons.slice(0, 4)).toEqual(['resume', 'mark-done', 'skip', 'pause'])
+  expect(nodes.find((n) => n.props.key === 'resume')?.props.variant).toBe('primary')
+  expect(nodes.find((n) => n.props.key === 'skip')?.props.plain).toBe(true)
+  // In DANACH: Kopfzeile (mit Pause), dann das Eingabefeld, dann die Liste
+  const order = nodes.filter((n) => n.type === 'Input' || n.props.key === 'pause' || n.props.key === 'up-a').map((n) => n.type === 'Input' ? 'input' : String(n.props.key))
+  expect(order).toEqual(['pause', 'input', 'up-a'])
+  // Statuszeile fett in Akzentfarbe; Fortschritt 1/3
+  const texts = nodes.filter((n) => n.type === 'Text')
+  expect(texts[0]?.props).toMatchObject({ bold: true, color: '#D77757' })
+  expect(JSON.stringify(root)).toContain('1/3 erledigt')
+  expect(JSON.stringify(root)).toContain('übersprungen')
+})
+
+// ---------- 0.4.0: läuft standardmäßig, nichts wird übersprungen (SPEC 0.4.6) ----------
+
+const SIDEKICK = { kind: 'plugin', name: 'sidekick', asUser: true }
+
+test('Einreihen bei freiem Claude nach einer Rückfrage (blocked) → startet nach der Beruhigungszeit, ohne Haiku', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.user($, 'Räum auf.')
+  await w.end($, 'Soll ich die alte Datei löschen?')
+  // Fynn reiht später ein (nicht während des Turns): das zählt als seine Antwort
+  await tick(w.clock, 5000)
+  await cmd($, 'README ergänzen')
+  await tick(w.clock, 2900)
+  expect(w.sent).toEqual([])
+  await tick(w.clock, 200)
+  expect(w.sent).toEqual(['README ergänzen'])
+  expect(w.haikuCalls).toEqual([])
+})
+
+test('Einreihen bei freiem Claude nach einem unklaren Turn-Ende (unclear) → startet ohne Haiku', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.user($, 'Mach X.')
+  await w.end($, 'Ich habe X umgesetzt und die Datei gespeichert.')
+  await tick(w.clock, 5000)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['A'])
+  expect(w.haikuCalls).toEqual([])
+})
+
+test('Einreihen: während Hintergrundarbeit (waiting) oder offenem Hinweis kein Start; eingereiht während der Arbeit, danach Rückfrage → kein Start', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  // waiting: Shell läuft im Hintergrund
+  await w.user($, 'Starte den Server.')
+  await w.end($, 'Server läuft. Fertig.', { bg: [{ id: 'b1', type: 'shell', status: 'running', description: 'npm run dev' }] })
+  await tick(w.clock, 5000)
+  await cmd($, 'A')
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual([])
+  // während der Arbeit eingereiht, Turn endet mit Rückfrage → wartet
+  await w.notification($)
+  await cmd($, 'B')
+  await w.end($, 'Soll ich auch die Tests starten?')
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual([])
+  // offener Hinweis (To-do mit Rückfrage) → neues To-do reiht sich nur ein
+  await tick(w.clock, 5000)
+  await cmd($, 'C')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['A'])
+  await w.todoTurn($)
+  await w.end($, 'Welche Variante?')
+  await cmd($, 'D')
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual(['A'])
+  expect(w.queue().items.map((t) => t.text)).toEqual(['A', 'B', 'C', 'D'])
+})
+
+test('Herkunft: sidekick bzw. quick-replies mit asUser zählen als Fynns Antwort (Hinweis weg, Turn gehört zum To-do)', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  for (const origin of [SIDEKICK, { kind: 'plugin', name: 'quick-replies', asUser: true }]) {
+    await cmd($, 'clear')
+    await cmd($, 'A')
+    await cmd($, 'B')
+    await tick(w.clock, 3000)
+    await w.todoTurn($)
+    await w.end($, 'Soll ich die Tabelle auch sortieren?')
+    expect((await cmd($, 'status')).text, origin.name).toContain('angehalten')
+    await w.user($, 'Ja, nach Datum.', origin)
+    expect((await cmd($, 'status')).text, origin.name).toContain('Claude arbeitet')
+    await w.end($, 'Sortiert nach Datum.\n\nFertig.')
+    expect(w.history()[0], origin.name).toMatchObject({ text: 'A', how: 'auto' })
+    await tick(w.clock, 3000)
+    expect(w.sent.at(-1), origin.name).toBe('B')
+    await w.todoTurn($)
+    await w.end($, DONE)
+  }
+})
+
+test('Herkunft: plugin ohne asUser und worklist selbst sind nicht Fynn (Hinweis bleibt, nichts abgehakt)', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  for (const origin of [{ kind: 'plugin', name: 'sidekick' }, { kind: 'plugin', name: 'worklist', asUser: true }, { kind: 'peer' }]) {
+    // Den Hinweis des vorigen Durchgangs löst Fynn per Abhaken
+    await press($, 'mark-done')
+    await cmd($, 'clear')
+    await tick(w.clock, 5000)
+    await cmd($, 'A')
+    await tick(w.clock, 3000)
+    await w.todoTurn($)
+    await w.end($, 'Soll ich?')
+    await w.user($, 'irgendwas', origin)
+    expect(w.userHints.at(-1), JSON.stringify(origin)).toBeUndefined()
+    await w.end($, DONE)
+    // Der Hinweis stand noch: Die Prüfung ruht, A bleibt (bis Fynn abhakt)
+    expect(w.history().filter((h) => h.text === 'A' && h.how === 'auto'), JSON.stringify(origin)).toEqual([])
+  }
+})
+
+test('Antwort-Hinweis: nur an Fynns Antwort auf die offene Rückfrage eines To-dos, nur an diese eine Nachricht', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'Tabelle bauen')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, 'Soll die Tabelle sortierbar sein?')
+  await w.user($, 'Ja, bitte.')
+  expect(w.userHints.at(-1)).toEqual([ANSWER_HINTS.de('Tabelle bauen')])
+  await w.end($, 'Erledigt.')
+  // Danach bekommt eine normale Nachricht nichts mehr
+  await w.user($, 'Danke!')
+  expect(w.userHints.at(-1)).toBeUndefined()
+  await w.end($, 'Gern.')
+  // Über sidekicks Fassung genauso
+  await cmd($, 'Liste bauen')
+  await tick(w.clock, 5000)
+  await w.todoTurn($)
+  await w.end($, 'Mit Nummern?')
+  await w.user($, 'Mit Nummern.', SIDEKICK)
+  expect(w.userHints.at(-1)).toEqual([ANSWER_HINTS.de('Liste bauen')])
+})
+
+test('Antwort-Hinweis: nicht bei STOPP, nicht ohne To-do (Chat-Rückfrage), nicht mit doneLine aus', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  // STOPP: Abbruch
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, 'halb', { reason: 'aborted' })
+  await w.user($, 'Mach weiter.')
+  expect(w.userHints.at(-1)).toBeUndefined()
+  await w.end($, 'Soll ich?')
+  // Rückfrage im Chat ohne To-do
+  await w.user($, 'Ja.')
+  expect(w.userHints.at(-1)).toBeUndefined()
+})
+
+test('Antwort-Hinweis aus mit doneLine: false', { options: { doneLine: false, language: 'de' } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, 'Soll ich?')
+  await w.user($, 'Ja.')
+  expect(w.userHints.at(-1)).toBeUndefined()
+})
+
+test('Warten: Helfer läuft → Nachprüfen alle 10 s per agent.list; danach WEITER ohne neuen Turn', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await cmd($, 'B')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  w.setAgents([{ id: 'x', description: 'Tests prüfen', type: 'Explore', status: 'running' }])
+  await w.end($, DONE, { bg: [{ id: 'x', type: 'subagent', status: 'running', description: 'Tests prüfen' }] })
+  let ui = await $.ui.mount(PANE('desktop'))
+  expect(JSON.stringify(await ui.drawn())).toContain('wartet auf Hintergrund (1 Helfer)')
+  await ui.unmount()
+  await tick(w.clock, 10_000)
+  expect(w.history()).toEqual([])
+  // Helfer fertig, aber kein neuer Turn: das Nachprüfen merkt es
+  w.setAgents([{ id: 'x', description: 'Tests prüfen', type: 'Explore', status: 'completed' }])
+  await tick(w.clock, 10_000)
+  expect(w.history()[0]).toMatchObject({ text: 'A', how: 'auto' })
+  await tick(w.clock, 3000)
+  expect(w.sent.at(-1)).toBe('B')
+  ui = await $.ui.mount(PANE('desktop'))
+  expect(await ui.find({ text: /läuft · To-do|Claude arbeitet|nächstes/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Warten: Shell läuft → nach 2 Minuten einmal der Hinweis; „Nicht mehr warten“ prüft ohne Stufe 3 für diese Aufgabe', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'Server starten')
+  await cmd($, 'Tests schreiben')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, 'Der Server läuft auf Port 4410.\n\nFertig.', { bg: [{ id: 'dev', type: 'shell', status: 'running', description: 'npm run dev' }] })
+  await tick(w.clock, 110_000)
+  expect(w.stops()).toEqual([])
+  await tick(w.clock, 10_000)
+  expect(w.toasts.at(-1)).toBe('Im Hintergrund läuft noch: npm run dev. Nicht mehr warten?')
+  const ui = await $.ui.mount(PANE('desktop'))
+  expect(await ui.find({ key: 'stop-waiting' })).toBeDefined()
+  expect(await ui.find({ key: 'keep-waiting' })).toBeDefined()
+  expect(await ui.find({ text: /wartet auf Hintergrund \(npm run dev\)/ })).toBeDefined()
+  await ui.unmount()
+  await press($, 'stop-waiting')
+  await tick(w.clock, 20)
+  expect(w.history()[0]).toMatchObject({ text: 'Server starten', how: 'auto' })
+  await tick(w.clock, 3000)
+  expect(w.sent.at(-1)).toBe('Tests schreiben')
+  // Dieselbe Shell beim nächsten Turn-Ende: kein Warten mehr
+  await w.todoTurn($)
+  await w.end($, DONE, { bg: [{ id: 'dev', type: 'shell', status: 'running', description: 'npm run dev' }] })
+  expect(w.history()[0]).toMatchObject({ text: 'Tests schreiben' })
+})
+
+test('Warten: „Weiter warten“ fragt in dieser Wartephase nicht noch einmal; ein neuer Turn beendet das Nachprüfen', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, DONE, { bg: [{ id: 'm', type: 'monitor', status: 'running', description: 'Log beobachten' }] })
+  await tick(w.clock, 120_000)
+  const asked = w.stops().length
+  expect(asked).toBe(1)
+  await press($, 'keep-waiting')
+  await tick(w.clock, 300_000)
+  expect(w.stops().length).toBe(asked)
+  // Die Engine meldet die Hintergrundarbeit: neuer Turn, danach ohne Hintergrund → WEITER
+  await w.notification($)
+  await w.end($, DONE)
+  expect(w.history()[0]).toMatchObject({ text: 'A' })
+})
+
+test('Warten: Weckauftrag (Cron) wird nach „Nicht mehr warten“ ignoriert', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, DONE, { crons: 1 })
+  await tick(w.clock, 120_000)
+  expect(w.toasts.at(-1)).toContain('1 geplanter Weckauftrag')
+  await press($, 'stop-waiting')
+  await tick(w.clock, 20)
+  expect(w.history()[0]).toMatchObject({ text: 'A' })
+})
+
+test('sidekick-Szenario: Rückfrage, dann 3 × /todo per command.run; Schritt 2 hält an, Antwort über sidekicks Fassung; Verlauf 1-2-3', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.user($, 'Lange Nachricht mit drei Aufgaben …')
+  await w.end($, 'Das sind drei Dinge. Soll ich sie nacheinander erledigen?')
+  // sidekick teilt auf (Fynns Klick): drei /todo aus seinem Timer, Sekunden nach dem Turn-Ende
+  await tick(w.clock, 4000)
+  await $.command.run({ command: 'todo', args: 'Schritt 1' })
+  await $.command.run({ command: 'todo', args: 'Schritt 2' })
+  await $.command.run({ command: 'todo', args: 'Schritt 3' })
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['Schritt 1'])
+  await w.todoTurn($)
+  await w.end($, 'Schritt 1 umgesetzt.\n\nFertig.')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['Schritt 1', 'Schritt 2'])
+  await w.todoTurn($)
+  await w.end($, 'Soll Schritt 2 auch die alten Daten umstellen?')
+  await tick(w.clock, 5000)
+  expect(w.sent).toHaveLength(2)
+  // Antwort über sidekicks Fassung (plugin sidekick, asUser): zählt als Fynns Antwort, mit Antwort-Hinweis
+  await w.user($, 'Ja, die alten Daten auch.', SIDEKICK)
+  expect(w.userHints.at(-1)).toEqual([ANSWER_HINTS.de('Schritt 2')])
+  await w.end($, 'Alte Daten umgestellt.\n\nFertig.')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['Schritt 1', 'Schritt 2', 'Schritt 3'])
+  await w.todoTurn($)
+  await w.end($, DONE)
+  expect(w.history().map((h) => h.text).reverse()).toEqual(['Schritt 1', 'Schritt 2', 'Schritt 3'])
+  expect(w.queue().items).toEqual([])
+})
+
+test('/todo kurz nach dem Turn-Ende (im Desktop während der Arbeit getippt): Prüfung dieses Turns gilt', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.user($, 'Bau X.')
+  await w.end($, 'X ist gebaut.\n\nFertig.')
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['A'])
+  await w.todoTurn($)
+  await w.end($, DONE)
+  await w.user($, 'Bau Y.')
+  await w.end($, 'Soll Y auch Z können?')
+  await cmd($, 'B')
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual(['A'])
+})
+
+test('Statuszeile in allen Zuständen der echten Liste, Fortschritt der Liste', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const line = async (re: RegExp) => {
+    const ui = await $.ui.mount(PANE('desktop'))
+    const found = await ui.find({ text: re })
+    await ui.unmount()
+    return found
+  }
+  expect(await line(/◇ frei · Liste leer/)).toBeDefined()
+  await cmd($, 'pause')
+  await cmd($, 'A')
+  await cmd($, 'B')
+  expect(await line(/⏸ pausiert/)).toBeDefined()
+  await cmd($, 'resume')
+  await tick(w.clock, 300)
+  await w.todoTurn($)
+  expect(await line(/● läuft · To-do 1\/2/)).toBeDefined()
+  expect(await line(/0\/2 erledigt/)).toBeDefined()
+  await w.end($, 'Welche Variante?')
+  expect(await line(/◐ wartet auf deine Antwort im Chat/)).toBeDefined()
+  await press($, 'mark-done')
+  await tick(w.clock, 300)
+  await w.todoTurn($)
+  await w.end($, 'halb', { reason: 'aborted' })
+  expect(await line(/◐ angehalten · wartet auf dich/)).toBeDefined()
+  expect(await line(/1\/2 erledigt/)).toBeDefined()
+  await w.user($, 'Weiter.')
+  expect(await line(/● arbeitet · aus dem Chat/)).toBeDefined()
+})
+
+test('Unklares Turn-Ende bei leerer Liste: keine Prüf-Schleife (Fehler bis 0.3: alle 10 ms neu geprüft)', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.user($, 'Mach X.')
+  await w.end($, 'Ich habe X umgesetzt und die Datei gespeichert.')
+  const calls = w.agentCalls()
+  await tick(w.clock, 5000)
+  expect(w.agentCalls()).toBe(calls)
+  expect((await cmd($, 'status')).text).toContain('Prüfung vor dem nächsten Start')
+})
+
+// ---------- Review 0.4.0 ----------
+
+test('Review 0.4.0, S1: nach Neustart (fresh) startet ein fremder Turn (Benachrichtigung) die Liste nicht; Fynns Turn schon', DE, async ($, on) => {
+  const w = world(on)
+  w.saved.set('queue:s1', { items: [{ id: 'x', text: 'A', status: 'open', createdAt: 0 }], paused: false })
+  await w.start($)
+  await w.notification($)
+  await w.end($, 'Hintergrundaufgabe fertig. Fertig.')
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual([])
+  expect((await cmd($, 'status')).text).toContain('Prüfstand: bereit')
+  await w.user($, 'Weiter geht’s.')
+  await w.end($, 'Gern. Erledigt.')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['A'])
+})
+
+test('Review 0.4.0, S2: Reload während des Wartens → „wartet auf dich“ mit „Jetzt starten“ statt stillem Warten', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await cmd($, 'B')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, DONE, { bg: [{ id: 'dev', type: 'shell', status: 'running', description: 'npm run dev' }] })
+  expect((await cmd($, 'status')).text).toContain('Prüfstand: wartet')
+  // /reload-plugins: session.start mit demselben Laufzustand
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/proj' })
+  await flush()
+  expect((await cmd($, 'status')).text).toContain('Neuladen unterbrochen')
+  const ui = await $.ui.mount(PANE('desktop'))
+  expect(await ui.find({ key: 'pause', text: /Jetzt starten/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Review 0.4.0, K4: Warten bei leerer Liste prüft nicht dauernd nach; Einreihen startet das Nachprüfen wieder', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.user($, 'Starte den Dev-Server.')
+  await w.end($, 'Läuft. Fertig.', { bg: [{ id: 'dev', type: 'shell', status: 'running', description: 'npm run dev' }] })
+  const calls = w.agentCalls()
+  await tick(w.clock, 60_000)
+  expect(w.agentCalls()).toBe(calls)
+  await tick(w.clock, 5000)
+  await cmd($, 'A')
+  await tick(w.clock, 130_000)
+  expect(w.agentCalls()).toBeGreaterThan(calls)
+  expect(w.toasts.at(-1)).toBe('Im Hintergrund läuft noch: npm run dev. Nicht mehr warten?')
 })

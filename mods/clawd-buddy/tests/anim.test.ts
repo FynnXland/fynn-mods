@@ -8,7 +8,7 @@ import type { Pose } from '../hooks/stage.ts'
 import { resolveClip } from '../hooks/clipdef.ts'
 import { captureClip, newEngine } from '../hooks/capture.ts'
 import { lintFrames } from '../hooks/lint.ts'
-import { PLAN_TICKS, SOURCE_MAX, createDesk } from '../hooks/desk.ts'
+import { HANDOVER_TICKS, PLAN_TICKS, SOURCE_MAX, createDesk } from '../hooks/desk.ts'
 import { NO_FACTS, NO_STRAIN } from '../hooks/mood.ts'
 
 const LIB = { clips: ALL_CLIPS, props: ALL_PROPS }
@@ -832,4 +832,54 @@ test('Gespiegelt läuft er selbst: Gegenstände am Boden bleiben stehen, die Fig
   expect(b.body - a.body).toBe(5) // er geht gespiegelt nach rechts
   const c = at(-5, false)
   expect(c.body - at(0, false).body).toBe(-5)
+})
+
+test('Kein Gespamt: nach zwei kurzen Clips (< 4 s) läuft der dritte länger, auch wenn die Arbeit im Sekundentakt wechselt', { timeoutMs: 30000 }, () => {
+  const moods = ['work_read', 'work_write', 'work_shell', 'work_think', 'watching', 'idle', 'work_git', 'work_test']
+  for (let seed = 1; seed <= 6; seed++) {
+    const e = newEngine(LIB, 500 + seed)
+    e.start()
+    let r = seed
+    const rand = () => ((r = (r * 16807) % 2147483647) / 2147483647)
+    const starts: number[] = []
+    let last = e.S.realStart
+    for (let i = 0; i < 4000; i++) {
+      if (i % 12 === 0) e.setMood(moods[Math.floor(rand() * moods.length)])
+      e.tick()
+      if (e.S.realStart !== last) {
+        last = e.S.realStart
+        starts.push(last)
+      }
+    }
+    const lens = starts.slice(1).map((s, k) => s - starts[k])
+    expect(lens.length, 'genug Wechsel').toBeGreaterThan(20)
+    for (let k = 2; k < lens.length; k++) {
+      expect(lens[k - 2] < 53 && lens[k - 1] < 53 && lens[k] < 53, `Seed ${seed}: drei kurze nacheinander ab Clip ${k - 2}`).toBe(false)
+    }
+  }
+})
+
+test('Desktop: ein Eingriff wirkt nach der Staffelübergabe (die neue Animation setzt erst die alte fort), ohne Übergabe sofort', () => {
+  const t0 = Date.UTC(2026, 9, 6, 12)
+  const calm = { ...NO_FACTS, endedAt: t0 - 60_000 }
+  const d = createDesk({ seed: 7, nightStart: 23, nightEnd: 6, idleSeconds: 45, reduced: false, flip: false })
+  d.draw(t0, calm, NO_STRAIN, 4)
+  // Nichts Neues: keine Übergabe nötig
+  expect(d.draw(t0 + 3000, calm, NO_STRAIN, 4).lead).toBe(0)
+  // Anstupsen: die ersten HANDOVER_TICKS wie bisher, dann die Reaktion (Ärger steigt mit dem Klick)
+  const t1 = t0 + 6000
+  d.request('boop')
+  const annoy = d.engine.S.annoy
+  expect(d.draw(t1, calm, NO_STRAIN, 4).lead).toBe(HANDOVER_TICKS)
+  d.catchUp(t1 + (HANDOVER_TICKS - 1) * 75)
+  expect(d.engine.S.annoy).toBe(annoy)
+  d.catchUp(t1 + HANDOVER_TICKS * 75)
+  expect(d.engine.S.annoy).toBe(annoy + 1)
+  // Baut die App die Rahmen ohnehin neu: sofort
+  d.catchUp(t1 + 5000)
+  const before = d.engine.S.annoy // (Ärger klingt mit der Zeit ab)
+  d.request('boop')
+  const p = d.drawFresh(t1 + 5000, calm, NO_STRAIN, 4)
+  expect(p.lead).toBe(0)
+  expect(d.engine.S.annoy).toBe(before + 1)
 })

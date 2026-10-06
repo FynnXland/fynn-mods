@@ -3,7 +3,8 @@
 import { DONE_LINES, cleanLang } from './i18n.ts'
 import type { Lang } from './i18n.ts'
 
-export type Todo = { id: string; text: string; status: 'open' | 'running'; createdAt: number; startedAt?: number }
+// skipped: per „Überspringen“ ans Ende gelegt; die Seitenleiste zeigt die Marke, bis es wieder startet (0.4.0)
+export type Todo = { id: string; text: string; status: 'open' | 'running'; createdAt: number; startedAt?: number; skipped?: boolean }
 export type Queue = { items: Todo[]; paused: boolean }
 export type HistoryEntry = { text: string; doneAt: number; durationMs: number; sessionId: string; result: string; how: 'auto' | 'manual' }
 export type Cost = { usd: number; calls: number }
@@ -46,6 +47,7 @@ export function cleanQueue(v: unknown): Queue {
       status: t.status === 'running' ? 'running' : 'open',
       createdAt: typeof t.createdAt === 'number' ? t.createdAt : 0,
       ...(typeof t.startedAt === 'number' ? { startedAt: t.startedAt } : {}),
+      ...(t.skipped === true ? { skipped: true } : {}),
     })
   }
   return { items: items.slice(0, QUEUE_MAX), paused: o.paused === true }
@@ -100,10 +102,15 @@ export function remove(q: Queue, id: string): Queue {
   return { ...q, items: q.items.filter((t) => t.id !== id) }
 }
 
+/** Status setzen; ein To-do, das wieder läuft, verliert die Marke „übersprungen“. */
 export function setStatus(q: Queue, id: string, status: Todo['status'], startedAt?: number): Queue {
   return {
     ...q,
-    items: q.items.map((t) => (t.id === id ? { ...t, status, ...(startedAt !== undefined ? { startedAt } : {}) } : t)),
+    items: q.items.map((t) => {
+      if (t.id !== id) return t
+      const { skipped, ...rest } = t
+      return { ...rest, status, ...(startedAt !== undefined ? { startedAt } : {}), ...(skipped && status !== 'running' ? { skipped } : {}) }
+    }),
   }
 }
 
@@ -123,18 +130,26 @@ export function move(q: Queue, id: string, by: -1 | 1): Queue {
   return { ...q, items: q.items.map((t) => (t.status === 'open' ? (swapped[k++] ?? t) : t)) }
 }
 
-/** Laufendes zurück in die Liste: offen, ans Ende (`/todos skip`, Knopf „Weiter“). */
-export function requeue(q: Queue, id: string): Queue {
+/** Überspringen (Knopf, `/todos skip`): offen, ans Ende, mit der Marke `skipped`. */
+export function skipToEnd(q: Queue, id: string): Queue {
   const t = q.items.find((x) => x.id === id)
   if (!t) return q
-  const { startedAt: _s, ...rest } = t
-  void _s
-  return { ...q, items: [...q.items.filter((x) => x.id !== id), { ...rest, status: 'open' }] }
+  return { ...q, items: [...q.items.filter((x) => x.id !== id), { id: t.id, text: t.text, status: 'open', createdAt: t.createdAt, skipped: true }] }
+}
+
+/** Dasselbe To-do offen ganz nach vorn (Fortsetzen nach STOPP, `/todos retry`); die Marke `skipped` fällt weg. */
+export function toFront(q: Queue, id: string): Queue {
+  const t = q.items.find((x) => x.id === id)
+  if (!t) return q
+  return { ...q, items: [{ id: t.id, text: t.text, status: 'open', createdAt: t.createdAt }, ...q.items.filter((x) => x.id !== id)] }
 }
 
 /** Laufendes zurück auf offen, an seinem Platz vorn (Stufen 1–2: STOPP). */
 export function reopen(q: Queue, id: string): Queue {
-  return { ...q, items: q.items.map((t) => (t.id === id ? { id: t.id, text: t.text, status: 'open', createdAt: t.createdAt } : t)) }
+  return {
+    ...q,
+    items: q.items.map((t) => (t.id === id ? { id: t.id, text: t.text, status: 'open', createdAt: t.createdAt, ...(t.skipped ? { skipped: true } : {}) } : t)),
+  }
 }
 
 /** Erster Satz der Antwort, höchstens 120 Zeichen, ohne Markdown-Zierrat: die Kurz-Ergebniszeile im Verlauf (kostenlos). */
@@ -148,7 +163,7 @@ export function firstSentence(answer: string, max = 120): string {
     .trim()
   if (!plain) return ''
   const m = plain.match(/^(.+?[.!?])(\s|$)/u)
-  const s = (m ? m[1] : plain).trim()
+  const s = (m?.[1] ?? plain).trim()
   if (s.length <= max) return s
   const cut = s.slice(0, max - 1)
   const sp = cut.lastIndexOf(' ')
@@ -183,7 +198,8 @@ export function isTodoPrompt(text: string): boolean {
  * Ein gesendetes To-do, pro Chat gemerkt: Daran erkennen `turn.start` und die Zeile im Chat den Text wieder, denn beim
  * Modell kommt ab 0.3.0 genau Fynns Text an, ohne Präfix. Statt des Texts nur eine Prüfsumme (Store 4 MiB).
  */
-export type SentRec = { id: string; h: string; n: number; m: number }
+// c: eine Fortsetzung („Mach mit diesem To-do weiter …“) statt des To-do-Texts (0.4.0, Knopf „Fortsetzen“)
+export type SentRec = { id: string; h: string; n: number; m: number; c?: boolean }
 
 const SENT_MAX = 50
 
@@ -205,7 +221,7 @@ export function cleanSent(v: unknown): SentRec[] {
     if (!x || typeof x !== 'object') continue
     const r = x as Record<string, unknown>
     if (typeof r.id !== 'string' || typeof r.h !== 'string' || typeof r.n !== 'number' || typeof r.m !== 'number') continue
-    out.push({ id: r.id, h: r.h, n: r.n, m: r.m })
+    out.push({ id: r.id, h: r.h, n: r.n, m: r.m, ...(r.c === true ? { c: true } : {}) })
   }
   return out.slice(-SENT_MAX)
 }
@@ -258,8 +274,9 @@ export function cleanText(text: string): string {
 
 // ---------- Laufzustand (in $.state, überlebt einen Hot Reload) ----------
 
-// unclear: Claudes letzte Antwort war nach den Regeln nicht eindeutig; vor dem nächsten Start prüft Haiku
-export type CheckState = 'idle' | 'waiting' | 'checking' | 'ask' | 'blocked' | 'unclear'
+// unclear: Claudes letzte Antwort war nach den Regeln nicht eindeutig. fresh (0.4.0): nach Neustart, Resume oder Chatwechsel;
+// gesendet wird erst nach einem sauberen Turn-Ende, nach „Start“ oder wenn Fynn einreiht
+export type CheckState = 'idle' | 'waiting' | 'checking' | 'ask' | 'blocked' | 'unclear' | 'fresh'
 export type PlanItem = { id: string; text: string; status: 'pending' | 'in_progress' | 'completed' }
 
 export type Runtime = {
@@ -269,7 +286,8 @@ export type Runtime = {
   turn: { startedAt: number; todoId: string | null; text: string; fromFynn: boolean }
   state: CheckState
   stateReason: string
-  notice: { reason: string; todoId: string | null } | null
+  // kind 'background': Hintergrundarbeit läuft länger als die Wartegrenze (0.4.0); sonst Rückfrage, STOPP oder Halt ohne To-do
+  notice: { reason: string; todoId: string | null; kind?: 'background' } | null
   autoRun: number
   strikes: { id: string; n: number }
   hold: boolean
@@ -281,6 +299,14 @@ export type Runtime = {
   // Gesendete To-dos dieses Chats (auch in `$.store` `sent:<sessionId>`, damit der Rahmen im Chat nach Resume bleibt)
   sent: SentRec[]
   lastResult: string // Kurz-Ergebnis (erster Satz) der letzten Antwort, nicht die ganze Antwort
+  // Warten auf Hintergrundarbeit (0.4.0): Kurzform für die Statuszeile, Beginn der Wartephase, Hinweis schon gezeigt,
+  // Aufgaben, auf die nach „Nicht mehr warten“ nicht mehr gewartet wird (IDs; 'cron' für geplante Weckaufträge)
+  stateShort: string
+  waitSince: number
+  waitNoticed: boolean
+  ignoreBg: string[]
+  // Zeitpunkt des letzten Turn-Endes: Ein /todo kurz danach hat Fynn während dieses Turns getippt (Phase 0, Runde 3)
+  turnEndAt: number
 }
 
 export function freshRuntime(sid: string): Runtime {
@@ -301,5 +327,10 @@ export function freshRuntime(sid: string): Runtime {
     expectCmd: null,
     sent: [],
     lastResult: '',
+    stateShort: '',
+    waitSince: 0,
+    waitNoticed: false,
+    ignoreBg: [],
+    turnEndAt: 0,
   }
 }

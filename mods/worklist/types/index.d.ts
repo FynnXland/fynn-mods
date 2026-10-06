@@ -10,9 +10,11 @@ declare module 'claude-code' {
         busy: boolean
         turnSeq: number
         turn: { startedAt: number; todoId: string | null; text: string; fromFynn: boolean }
-        state: 'idle' | 'waiting' | 'checking' | 'ask' | 'blocked' | 'unclear'
+        // ab 0.4.0: 'fresh' nach Neustart, Resume oder Chatwechsel (läuft, sendet erst nach Fynns Zutun)
+        state: 'idle' | 'waiting' | 'checking' | 'ask' | 'blocked' | 'unclear' | 'fresh'
         stateReason: string
-        notice: { reason: string; todoId: string | null } | null
+        // ab 0.4.0: kind 'background' für „Nicht mehr warten?“
+        notice: { reason: string; todoId: string | null; kind?: 'background' } | null
         autoRun: number
         strikes: { id: string; n: number }
         hold: boolean
@@ -21,8 +23,15 @@ declare module 'claude-code' {
         expectOwn: string | null
         // ab 0.3.0: Befehls-To-do, auf dessen Turn gewartet wird, und die gesendeten To-dos des Chats (Prüfsumme statt Text)
         expectCmd: string | null
-        sent: { id: string; h: string; n: number; m: number }[]
+        // ab 0.4.0: c = Fortsetzung statt To-do-Text
+        sent: { id: string; h: string; n: number; m: number; c?: boolean }[]
         lastResult: string
+        // ab 0.4.0: Warten mit Grenze (Kurzform, Beginn, Hinweis gezeigt, ausgenommene Aufgaben) und letztes Turn-Ende
+        stateShort: string
+        waitSince: number
+        waitNoticed: boolean
+        ignoreBg: string[]
+        turnEndAt: number
       }
       // Zähler zum Neuzeichnen: nur die Seitenleiste liest ihn, also zeichnet ein Schreiben nur sie neu
       paint: number

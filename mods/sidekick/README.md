@@ -4,7 +4,7 @@ Checks your message just before it is sent: first with fixed rules, and only whe
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.10.2**
+Tested with Claude Code **v2.1.291** · Plugin version **0.10.3**
 
 **Cost:** sidekick calls Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
 
@@ -36,7 +36,8 @@ Plans text as to-dos for later, also while Claude is working. sidekick answers t
 - Works in every level except Off. Without worklist only a notice, with your text; nothing is queued.
 - `/later` without text shows a one-line help.
 - If writing the to-dos fails, a notice shows your text, and `/sidekick status` keeps it in full.
-- **Desktop app:** a slash command waits for Claude's current tool and **then ends Claude's turn** (seen with worklist's `/todo`). In the terminal it should run during the work (documented, not tested). If that gets in the way, write the plan as a normal message later.
+- **Desktop app:** send `/later` normally with Enter, not with "Send now" (that interrupts Claude). With desktop app 2.1.288 worklist saw its `/todo` held until Claude's turn ends, without ending it; whether `/later` behaves the same is not tested yet. With 2.1.286 such a command ended Claude's turn after the current tool. In the terminal it should run during the work (documented, not tested). If that gets in the way, write the plan as a normal message later.
+- **When the to-dos start** (worklist 0.4.0): if Claude is free when they are queued, worklist starts them, even after a question in the chat. If you queued them while Claude was working and that turn ends with a question, the list waits: answer in the chat, or press **Start now** in worklist's sidebar. If a to-do of the list stopped (a question, an interruption), new to-dos wait behind it: answer in the chat, or use **Continue**, **Mark as done** or **Skip** in the sidebar.
 - Cost: one Sonnet call, ≈ $0.01.
 
 ## What happens when you send
@@ -67,7 +68,7 @@ Plans text as to-dos for later, also while Claude is working. sidekick answers t
    - *question* (the engine's dialog). The recommended answer is option **1** and is marked "(recommended)": without handoff if your message doesn't need the old history; send if resending is cheap (under $0.30); otherwise with handoff. The answers:
      - **New chat with handoff**: Sonnet 5.5 (effort `medium`) writes a handoff from the summary and the end of the history (up to 100,000 characters, without tool results). Then `/clear` runs, and the handoff plus your message go into the new chat. The old chat stays reachable via `/resume`. Not offered when the message has an attachment or `@file`.
      - **New chat without handoff**: clears the chat and sends only your message, without a model call. Meant for messages that don't need the old history.
-     - **Send Sonnet's version**: the rewritten version is sent. The desktop app still shows your original in the bubble, so below it sidekick shows `· sidekick: Sonnet's version was sent` in blue, plus a box with the text that was actually sent.
+     - **Send Sonnet's version**: the rewritten version is sent. The desktop app still shows your original in the bubble, so below it sidekick shows `· sidekick: Sonnet's version was sent` in blue, plus a box with the text that was actually sent. With worklist 0.4.0 this counts as your own answer: if a to-do stopped with a question, that to-do continues.
      - **Send anyway**
      - **Cancel**: the message is not sent; your text is shown in the notice.
    - **Split into to-dos** (since 0.9.0, only with worklist): see below.
@@ -92,7 +93,7 @@ Sonnet turns them into 3 to-dos with every point of your message; worklist works
 [Split into 3 to-dos (recommended)] [Send anyway] [Cancel]
 ```
 
-- **Split into n to-dos**: the message is not sent. A blue box above the prompt reads "sidekick is writing the to-dos … 4 s". Sonnet 5.5 (effort `low`) writes one complete to-do per step, in your voice and language, with every point of your message and nothing added; to-do 1 ends with a line naming the steps that follow, so Claude doesn't start on them early. Each to-do stays under 1,900 characters (worklist cuts at 2,000). sidekick then runs `/todo` once per to-do, in order. worklist starts step 1 as soon as Claude is free, otherwise "Start now" in its sidebar.
+- **Split into n to-dos**: the message is not sent. A blue box above the prompt reads "sidekick is writing the to-dos … 4 s". Sonnet 5.5 (effort `low`) writes one complete to-do per step, in your voice and language, with every point of your message and nothing added; to-do 1 ends with a line naming the steps that follow, so Claude doesn't start on them early. Each to-do stays under 1,900 characters (worklist cuts at 2,000). sidekick then runs `/todo` once per to-do, in order. worklist works through them as soon as Claude is free, even if Claude's last answer ended with a question (since worklist 0.4.0, queueing while Claude is free counts as your answer). To-dos already in the list come first. If a to-do of the list stopped with a question or an interruption, the new ones wait until you continue it in the chat or the sidebar.
 - **Send anyway**: sent as typed. The question rests until +50k context or the next commit.
 - **Cancel**: not sent, your text is shown for copying. Closing the dialog sends the message as typed.
 - **Not split:** one coherent task with many details, a question or discussion, an answer to Claude's question. During a cold-cache question (c) sidekick never splits; that question comes first. To-dos that worklist sends are never checked again.
@@ -302,8 +303,8 @@ claude --plugin-dir <path-to-clone>/mods/sidekick
 - **`/savings` card:** the drawing is kept in memory for the last 10 outputs; after a restart or `/reload-plugins`, older `/savings` outputs show as Markdown.
 - **Splitting into to-dos:** only with worklist. sidekick can't tell a dictated message from a typed one; it only sees length and several tasks. Not offered with an attachment or `@file` (whether worklist resolves `@file` in a to-do is not documented). Messages over 7,600 characters are not offered for splitting (4 to-dos of 1,900 characters); a message close to that may still not fit, then writing fails and sidekick asks again. Only the first 4,000 characters reach the check that proposes the steps.
 - **Held-back text and Claude Code's limits:** Claude Code ignores a hold-back reason over 4,096 characters and sends the message anyway, and it shows only about 2,000 characters of a reason (found while building 0.9.0, not documented). sidekick keeps the text in the reason under 1,800 characters and stores longer messages in full for `/sidekick status`.
-- **Footer label:** whether the desktop app draws the colored circles in the footer is not documented and not tested yet. `/sidekick status` shows whether Claude Code asked for the label at all, on which surface, and whether reading its value failed (since 0.10.1). The engine redraws the label when the state changes (in the terminal, the color depends on the terminal font). Other surfaces show no label.
-- **`/later` in the desktop app** ends Claude's turn (see above).
+- **Footer label:** the desktop app does not draw added mode labels; sidekick draws its own ● there (since 0.10.2, checked with desktop app 2.1.288). `/sidekick status` shows whether Claude Code asked for the label at all, on which surface, and whether reading its value failed (since 0.10.1). The engine redraws the label when the state changes (in the terminal, the color depends on the terminal font). Other surfaces show no label.
+- **`/later` in the desktop app** ended Claude's turn with desktop app 2.1.286; with 2.1.288 not tested yet (see above).
 - **Level Auto:** a rewritten version over 600 characters is not sent (it would not fit into the question either); long dictations come close to that.
 - **Cost of question (c):** the "New chat" estimate uses the most recently measured base load of a new chat. Before the first handoff it assumes 20k tokens.
 

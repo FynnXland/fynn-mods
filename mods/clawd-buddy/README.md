@@ -4,7 +4,7 @@ An animated pixel mascot ("Clawd") sits to the right above the prompt. It reacts
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** (terminal and desktop app) · Plugin version **0.6.2**
+Tested with Claude Code **v2.1.291** (terminal and desktop app) · Plugin version **0.6.5**
 
 ## What it does
 
@@ -26,16 +26,18 @@ Clawd runs on his own. What he does depends on what is happening:
 | Usage limit reached (5-hour or weekly) | 5 h: turns the hourglass, dozes with an alarm clock, spins a top, is annoyed or sad (can't keep working); weekly: sits on a suitcase, goes fishing, tends a potted plant, paints, knits a scarf, builds a sandcastle. After the reset: a jump for joy or a confetti cannon (always plays to the end) |
 | Night (default 23:00 to 6:00) | yawns, nods off, sleeps with a nightcap |
 | You come back after at least 2 h (first input, or the desktop session becomes visible again), at any time of day | gets up or rubs his eyes, then stretches, has a coffee, brushes his teeth, does jumping jacks or waters a flower |
+| Claude switches between tools within seconds | at most two animations in a row are cut short; the third one stays at least about 8 s, so he does not flip back and forth |
 | Mood | Piling errors make him irritable (facepalm, stomping, steam); successes in a row put him in a good mood; long stretches of work make him tired. Everything wears off again. |
 
 | Input | Effect |
 |---|---|
-| `/clawd` or `/clawd status` | on/off, mood, tiredness, annoyance; in the desktop app also measurements since the last call (draws per minute, animation length and frame changes, size, compute and drawing time) |
+| `/clawd` or `/clawd status` | on/off, mood, tiredness, annoyance; in the desktop app also measurements since the last call (draws per minute, animation length and frame changes, size, compute and drawing time, how many animations were swapped with or without handover and why) |
 | `/clawd on` / `/clawd off` | show or hide him (persists) |
 | `/clawd list` | all animations by group |
 | `/clawd demo <name>` | play one animation, e.g. `/clawd demo type_laptop` |
 | `/clawd nap` | sends him to sleep |
 | `/clawd boop` | pokes him |
+| `/clawd flicker` | desktop app only: a 30-second test in three parts (number top left) to find out where a blink on frame changes comes from; afterwards he continues normally |
 | Mouse (terminal): click | giggles; many clicks in a row make him annoyed, then offended |
 | Mouse (terminal): drag an arm | the arm follows briefly and snaps back |
 | Mouse (terminal): hold the body for ~0.7 s, then drag | he hangs from the pointer, falls when you let go, and walks back |
@@ -80,7 +82,7 @@ In plain language:
 - `$.ui.resolve`: fetches the drawing components (Box, Client, Svg).
 - `$.clock.now`: time of day for day/night, waiting times, mood, and the break before the welcome.
 - Hook `session.measure`: reads only the percentage and reset time of the 5-hour and weekly limits (for the limit animations) and the fill percentage of the context window (for the "context almost full" hint); never the conversation itself.
-- `$.clock.every`: a watcher (every 250 ms, no drawing of its own) **only in the desktop app**, while it draws the band and Clawd is on; it asks for the next animation shortly before the current one ends, or shortly before new facts would change what is shown. In the terminal the client ticks on its own.
+- `$.clock.every`: a watcher (every 250 ms, no drawing of its own) **only in the desktop app**, while it draws the band and Clawd is on; it asks for the next animation shortly before the current one ends, or shortly before new facts would change what is shown, and once about half a second after each new animation, to clear the frame of the previous one. In the terminal the client ticks on its own.
 - `$.ui.log`: error messages to the debug log.
 - Hook `session.compact`: notices only that the main conversation is being compacted and when it ends. Never reads the conversation.
 - Hook `skill.prompt`: notices only that a skill starts. Never reads the skill's text.
@@ -116,7 +118,7 @@ To just hide him without uninstalling, use `/clawd off`.
 
 ## Known limitations
 
-- **Desktop app:** The client frame does not load there. The hooks module computes up to the next 30 seconds ahead and sends them as one SVG with SMIL animation, which the app plays in a script-less frame (`isInteractive`). Pastimes with many different frames get shorter animations, down to about 5 s. The band is redrawn only on events (turn, tool, question, typing) and shortly before the animation runs out. If the band is redrawn for another mod, or an event changes nothing in what is currently shown, the same SVG is passed on unchanged, so the frame does not reload (a reload made the figure blink briefly); a new animation is computed only shortly before something actually changes. `/clawd status` shows how often that happened. Every redraw of the band makes the app also re-request the rows other mods hook (for example your own messages with sidekick), which made their hover bar flicker in 0.4.1 at about 5 redraws per second. While Claude works, tool calls still redraw the band now and then. No mouse (clicking, dragging) in the desktop app; `/clawd boop|demo|nap` work. The app draws the dark area behind the band itself and it cannot be hidden, so he does not sit quite flush on the input. In very narrow windows the 400 px wide image may be cut off.
+- **Desktop app:** The client frame does not load there. The hooks module computes up to the next 30 seconds ahead and sends them as one SVG with SMIL animation, which the app plays in a script-less frame (`isInteractive`). Pastimes with many different frames get shorter animations, down to about 5 s. The band is redrawn only on events (turn, tool, question, typing) and shortly before the animation runs out. If the band is redrawn for another mod, or an event changes nothing in what is currently shown, the same SVG is passed on unchanged, so the frame does not reload (a reload made the figure blink briefly); a new animation is computed only shortly before something actually changes. `/clawd status` shows how often that happened. A new animation does not replace the old one in place: there are two frames on top of each other, the new one loads in the free frame while the old one keeps playing, and about half a second later the old frame is cleared. For that overlap the new animation first continues exactly what the old one shows (up to 0.75 s), so a new event or `/clawd boop|demo|nap` may show up to 0.75 s later. Every redraw of the band makes the app also re-request the rows other mods hook (for example your own messages with sidekick), which made their hover bar flicker in 0.4.1 at about 5 redraws per second. While Claude works, tool calls still redraw the band now and then. No mouse (clicking, dragging) in the desktop app; `/clawd boop|demo|nap` work. The app draws the dark area behind the band itself and it cannot be hidden, so he does not sit quite flush on the input. In very narrow windows the 400 px wide image may be cut off.
 - **Mouse in the terminal** only works where the terminal delivers mouse events (fullscreen). After a click on the figure it may keep the keyboard focus until you press Esc.
 - **After a hidden desktop session is shown again**, the figure may stand still (last frame of the animation) until the next event (turn, tool, typing) if the app reuses the last drawing.
 - **Mood** is per Claude Code process and is not saved. "Working on the same feature for a long time" is approximated by the time spent working in one stretch (the mod cannot see what the work is about).

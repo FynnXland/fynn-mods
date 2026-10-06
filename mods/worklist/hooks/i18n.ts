@@ -39,8 +39,23 @@ export function cents(lang: Lang, usd: number): string {
  * im Chat nicht, das Modell liest ihn als System-Hinweis neben dem To-do. Die Marke darin ist „Done.“ bzw. „Fertig.“
  */
 export const DONE_HINTS: Record<Lang, string> = {
-  en: 'This message is a task from the user\'s to-do list (worklist). If anything is unclear, end your answer with a clear question and don\'t write "Done.". Otherwise finish the task completely and end your answer with "Done." on a line of its own.',
-  de: 'Diese Nachricht ist eine Aufgabe aus der To-do-Liste des Nutzers (worklist). Ist etwas unklar, schließ deine Antwort mit einer klaren Rückfrage und schreib kein „Fertig.“. Sonst erledige die Aufgabe vollständig und schließ deine Antwort mit „Fertig.“ in einer eigenen Zeile.',
+  en: 'This message is a task from the user\'s to-do list (worklist). If you need a decision from the user and the AskUserQuestion tool is available, ask with it and carry on after the answer; otherwise end your answer with a clear question and don\'t write "Done.". Write "Done." on a line of its own only when this to-do is completely finished.',
+  de: 'Diese Nachricht ist eine Aufgabe aus der To-do-Liste des Nutzers (worklist). Brauchst du eine Entscheidung des Nutzers und gibt es das Werkzeug AskUserQuestion, stell die Frage damit und mach nach der Antwort weiter; sonst schließ mit einer klaren Rückfrage und schreib kein „Fertig.“. Schreib „Fertig.“ in einer eigenen Zeile nur, wenn dieses To-do vollständig erledigt ist.',
+}
+
+/**
+ * Ab 0.4.0: unsichtbarer Hinweis an Fynns Antwort auf die Rückfrage eines To-dos (classic.UserPromptSubmit). So weiß Claude,
+ * dass die Antwort zu diesem To-do gehört, und schließt erst dann mit der Fertig-Marke, wenn es ganz erledigt ist.
+ */
+export const ANSWER_HINTS: Record<Lang, (todo: string) => string> = {
+  en: (todo) => `This message answers your question about the to-do "${todo}" (worklist). If this to-do is then completely finished, end with "Done." on a line of its own; if something is still open or unclear, ask.`,
+  de: (todo) => `Diese Nachricht antwortet auf deine Rückfrage zum To-do „${todo}“ (worklist). Ist dieses To-do danach vollständig erledigt, schließ mit „Fertig.“ in einer eigenen Zeile; ist noch etwas offen oder unklar, frag nach.`,
+}
+
+/** Ab 0.4.0: Text, den „Fortsetzen“ für ein angehaltenes To-do sendet; der Schluss-Hinweis geht unsichtbar mit. */
+export const CONTINUE_TEXTS: Record<Lang, string> = {
+  en: 'Continue with this to-do; decide open points sensibly yourself.',
+  de: 'Mach mit diesem To-do weiter; entscheide offene Punkte selbst sinnvoll.',
 }
 
 /** Bis 0.2.2 sichtbare Schlusszeile an jedem gesendeten To-do; bleibt, damit alte Nachrichten im Chat erkannt werden. */
@@ -78,6 +93,8 @@ const en = {
   stopped: (reason: string) => `To-do list stopped: ${reason}`,
   storeWarn: "To-do list: saving failed, the list only lasts until restart. /todos status shows more.",
   maxAutoRun: (n: number) => `${n} to-dos in a row without your input. Take a quick look, then "Continue".`,
+  bgNotice: (what: string) => `Still running in the background: ${what}. Stop waiting?`,
+  holdNoResume: 'Stopped twice on this to-do: answer in the chat, mark it as done or skip it.',
   nextStarting: 'Next to-do starts shortly …',
   checking: 'checking whether Claude is clearly done …',
   sendRejected: (why: string) => `Sending was refused: ${why}`,
@@ -91,6 +108,7 @@ const en = {
   unclearFree: 'Unclear whether Claude is free.',
   reloadUnclear: 'After the reload it is unclear whether Claude is free.',
   reloadInterrupted: 'The check was interrupted by the reload.',
+  reloadWaiting: 'Waiting for background work was interrupted by the reload. "Start now" continues.',
   thinking: 'thinking',
   noAnswer: (reason: string) => `no answer (${reason})`,
   unreadable: (text: string) => `unreadable: ${text}`,
@@ -103,29 +121,40 @@ const en = {
   rulesUnclear: 'rules unclear, Haiku only at the next to-do',
   listIdle: 'list empty or paused',
 
-  // Seitenleiste: JETZT (view.ts, nowView)
+  // Seitenleiste: Statuszeile und Fortschritt (view.ts, statusBox)
+  stRunning: (n: number, m: number, time: string) => `running · to-do ${n}/${m} · ${time}`,
+  stChat: (time: string) => `working · from the chat · ${time}`,
+  stAsk: 'waiting for your answer in the chat',
+  stStopped: 'stopped · waiting for you',
+  stWaiting: (what: string) => `waiting for background work (${what})`,
+  stChecking: 'checking whether Claude is clearly done',
+  stNext: 'free · next one starts shortly',
+  stEmpty: 'free · list empty',
+  stPaused: 'paused',
+  stFresh: 'ready · starts after your next message or with "Start"',
+  stSwitching: 'new chat, loading its list …',
+  helpers: (n: number) => (n === 1 ? '1 helper' : `${n} helpers`),
+  progress: (done: number, total: number) => `${done}/${total} done`,
+
+  // Seitenleiste: JETZT
   now: 'NOW',
-  free: '◇ free',
   fromChat: '◆ from the chat',
   checkingLine: '… checking whether Claude is clearly done',
   plan: "Claude's plan",
-  notePaused: 'List paused. "Start" resumes it.',
-  noteBlocked: (reason: string) => `Waiting for you: ${reason} "Start now" resumes the list.`,
-  noteChecking: 'checking …',
-  noteUnclear: 'The next to-do starts after a short check.',
-  noteEmpty: 'Nothing in the list. Type a to-do below.',
-  noteNext: 'The next to-do starts as soon as Claude is clearly free.',
-  noteSwitching: 'New chat, loading its list …',
 
   // Seitenleiste: HINWEIS, DANACH, VERLAUF
   noticeTitle: 'NOTICE · list stopped',
-  proceed: 'Continue',
+  noticeWaitTitle: 'NOTICE · still waiting',
+  answerInChat: 'Just answer in the chat, then this to-do continues.',
+  resume: 'Continue',
   markDone: 'Mark as done',
-  resend: 'Send again',
+  skip: 'Skip',
+  stopWaiting: "Don't wait",
+  keepWaiting: 'Keep waiting',
   next: 'NEXT',
   nothingOpen: 'nothing open',
   nOpen: (n: number) => `${n} open`,
-  paused: '⏸ paused',
+  skippedMark: 'skipped',
   placeholder: 'new to-do, Enter',
   submit: 'queue',
   pause: '⏸ Pause',
@@ -143,6 +172,7 @@ const en = {
 
   // Zeile im Chat
   sentLine: (n: number, m: number) => `· worklist: to-do ${n}/${m} sent`,
+  sentLineCont: (n: number, m: number) => `· worklist: to-do ${n}/${m} · continued`,
   sentLabel: 'sent:',
 
   // Live-Aktivität
@@ -163,15 +193,16 @@ const en = {
   // Befehle
   cmdTodo: 'Queue a to-do: /todo <task> (without text: open the sidebar)',
   cmdTodoHint: '<task>',
-  cmdTodos: 'To-do list: sidebar, status, pause, resume, done, skip, clear, history, close',
+  cmdTodos: 'To-do list: sidebar, status, pause, resume, done, skip, retry, clear, history, close',
   help: [
     'Usage:',
     '  /todo <task>            queue a task (everything after /todo is the task)',
     '  /todo                   open the sidebar',
     '  /todos                  open the sidebar',
-    '  /todos pause | resume   pause or resume the list',
+    '  /todos pause | resume   pause the list, or continue (like the Continue button)',
     '  /todos done             mark the running to-do as done',
-    '  /todos skip             move the running to-do back to the list',
+    '  /todos skip             skip the stopped to-do (to the end, marked "skipped")',
+    '  /todos retry            send the stopped to-do again, in full',
     '  /todos clear            delete open to-dos (the history stays)',
     '  /todos history          show the history',
     '  /todos status           check state, last decision, Haiku cost',
@@ -180,19 +211,20 @@ const en = {
   paneWaiting: (reason: string) => `Sidebar is waiting: ${reason}`,
   queued: (n: number, text: string) => `Queued (${n} open): ${text}`,
   pausedMsg: 'List paused. /todos resume resumes it.',
-  resumePaused: 'Nothing else is open: list paused, nothing sent. "Start" or /todos resume sends the to-do again.',
   resumed: 'List continues.',
   resumedEmpty: 'List continues; nothing is open right now.',
   doneMsg: (text: string) => `Marked as done: ${text}`,
   noRunning: 'No running to-do.',
-  skipped: (text: string, paused: boolean) => `Back in the list: ${text}${paused ? ' · nothing else open, list paused' : ''}`,
+  skipped: (text: string) => `Skipped, now at the end: ${text}`,
+  retried: (text: string) => `Sending again: ${text}`,
+  continued: (text: string) => `Continuing: ${text}`,
   cleared: (n: number) => `${n} open to-dos deleted. The history stays.`,
   unknown: (args: string) => `Unknown: ${args}. To queue a to-do use /todo <task>.`,
   failed: (err: string) => `That didn't work: ${err}`,
 
   // /todos status
   stateWorking: 'Claude is working',
-  state: { idle: 'free', waiting: 'waiting', checking: 'checking', ask: 'stopped', blocked: 'waiting for you', unclear: 'free, check before the next start' },
+  state: { idle: 'free', waiting: 'waiting', checking: 'checking', ask: 'stopped', blocked: 'waiting for you', unclear: 'free, check before the next start', fresh: 'ready, starts after your next message or with Start' },
   statusList: (open: number, running: boolean, paused: boolean, done: number) =>
     `List: ${open} open${running ? ', 1 running' : ''}${paused ? ', paused' : ''} · done in this chat: ${done}`,
   statusState: (state: string, reason: string, hold: boolean) => `Check state: ${state}${reason ? ` (${reason})` : ''}${hold ? ' · loop guard active' : ''}`,
@@ -237,7 +269,9 @@ const de: Strings = {
 
   stopped: (reason) => `To-do-Liste angehalten: ${reason}`,
   storeWarn: 'To-do-Liste: Speichern ging nicht, die Liste gilt nur bis zum Neustart. /todos status zeigt mehr.',
-  maxAutoRun: (n) => `${n} To-dos in Folge ohne deinen Eingriff. Kurz drüberschauen, dann „Weiter“.`,
+  maxAutoRun: (n) => `${n} To-dos in Folge ohne deinen Eingriff. Kurz drüberschauen, dann „Fortsetzen“.`,
+  bgNotice: (what) => `Im Hintergrund läuft noch: ${what}. Nicht mehr warten?`,
+  holdNoResume: 'Zweimal angehalten bei diesem To-do: Antworte im Chat, hake es ab oder überspringe es.',
   nextStarting: 'Nächstes To-do startet gleich …',
   checking: 'prüft, ob Claude sicher fertig ist …',
   sendRejected: (why) => `Senden abgelehnt: ${why}`,
@@ -251,6 +285,7 @@ const de: Strings = {
   unclearFree: 'Unklar, ob Claude frei ist.',
   reloadUnclear: 'Nach dem Neuladen unklar, ob Claude frei ist.',
   reloadInterrupted: 'Die Prüfung wurde durch das Neuladen unterbrochen.',
+  reloadWaiting: 'Das Warten auf Hintergrundarbeit wurde durch das Neuladen unterbrochen. „Jetzt starten“ setzt fort.',
   thinking: 'denkt nach',
   noAnswer: (reason) => `keine Antwort (${reason})`,
   unreadable: (text) => `unlesbar: ${text}`,
@@ -262,27 +297,37 @@ const de: Strings = {
   rulesUnclear: 'Regeln unklar, Haiku erst beim nächsten To-do',
   listIdle: 'Liste leer oder pausiert',
 
+  stRunning: (n, m, time) => `läuft · To-do ${n}/${m} · ${time}`,
+  stChat: (time) => `arbeitet · aus dem Chat · ${time}`,
+  stAsk: 'wartet auf deine Antwort im Chat',
+  stStopped: 'angehalten · wartet auf dich',
+  stWaiting: (what) => `wartet auf Hintergrund (${what})`,
+  stChecking: 'prüft, ob Claude sicher fertig ist',
+  stNext: 'frei · nächstes startet gleich',
+  stEmpty: 'frei · Liste leer',
+  stPaused: 'pausiert',
+  stFresh: 'bereit · startet nach deiner nächsten Nachricht oder mit „Start“',
+  stSwitching: 'neuer Chat, Liste wird geladen …',
+  helpers: (n) => (n === 1 ? '1 Helfer' : `${n} Helfer`),
+  progress: (done, total) => `${done}/${total} erledigt`,
+
   now: 'JETZT',
-  free: '◇ frei',
   fromChat: '◆ aus dem Chat',
   checkingLine: '… prüft, ob Claude sicher fertig ist',
   plan: 'Claudes Plan',
-  notePaused: 'Liste pausiert. „Start“ setzt sie fort.',
-  noteBlocked: (reason) => `Wartet auf dich: ${reason} „Jetzt starten“ setzt die Liste fort.`,
-  noteChecking: 'prüft …',
-  noteUnclear: 'Das nächste To-do startet nach einer kurzen Prüfung.',
-  noteEmpty: 'Nichts in der Liste. Unten ein To-do eintippen.',
-  noteNext: 'Das nächste To-do startet, sobald Claude sicher frei ist.',
-  noteSwitching: 'Neuer Chat, Liste wird geladen …',
 
   noticeTitle: 'HINWEIS · Liste angehalten',
-  proceed: 'Weiter',
-  markDone: 'Als erledigt abhaken',
-  resend: 'Nochmal senden',
+  noticeWaitTitle: 'HINWEIS · wartet noch',
+  answerInChat: 'Antworte einfach im Chat, dann geht es mit diesem To-do weiter.',
+  resume: 'Fortsetzen',
+  markDone: 'Abhaken',
+  skip: 'Überspringen',
+  stopWaiting: 'Nicht mehr warten',
+  keepWaiting: 'Weiter warten',
   next: 'DANACH',
   nothingOpen: 'nichts offen',
   nOpen: (n) => `${n} offen`,
-  paused: '⏸ pausiert',
+  skippedMark: 'übersprungen',
   placeholder: 'neues To-do, Enter',
   submit: 'einreihen',
   pause: '⏸ Pause',
@@ -299,6 +344,7 @@ const de: Strings = {
   renderError: 'Anzeige-Fehler, /todos status',
 
   sentLine: (n, m) => `· worklist: To-do ${n}/${m} gesendet`,
+  sentLineCont: (n, m) => `· worklist: To-do ${n}/${m} · fortgesetzt`,
   sentLabel: 'gesendet:',
 
   act: {
@@ -317,15 +363,16 @@ const de: Strings = {
 
   cmdTodo: 'To-do einreihen: /todo <Aufgabe> (ohne Text: Seitenleiste)',
   cmdTodoHint: '<Aufgabe>',
-  cmdTodos: 'To-do-Liste: Seitenleiste, status, pause, resume, done, skip, clear, history, close',
+  cmdTodos: 'To-do-Liste: Seitenleiste, status, pause, resume, done, skip, retry, clear, history, close',
   help: [
     'Nutzung:',
     '  /todo <Aufgabe>         einreihen (alles hinter /todo ist die Aufgabe)',
     '  /todo                   Seitenleiste öffnen',
     '  /todos                  Seitenleiste öffnen',
-    '  /todos pause | resume   anhalten bzw. fortsetzen',
+    '  /todos pause | resume   Liste pausieren bzw. fortsetzen (wie der Knopf Fortsetzen)',
     '  /todos done             laufendes abhaken',
-    '  /todos skip             laufendes zurück in die Liste',
+    '  /todos skip             angehaltenes überspringen (ans Ende, Marke „übersprungen“)',
+    '  /todos retry            angehaltenes noch einmal ganz senden',
     '  /todos clear            offene löschen (der Verlauf bleibt)',
     '  /todos history          Verlauf zeigen',
     '  /todos status           Prüfstand, letzte Entscheidung, Haiku-Kosten',
@@ -334,18 +381,19 @@ const de: Strings = {
   paneWaiting: (reason) => `Seitenleiste wartet: ${reason}`,
   queued: (n, text) => `Eingereiht (${n} offen): ${text}`,
   pausedMsg: 'Liste pausiert. /todos resume setzt sie fort.',
-  resumePaused: 'Nichts anderes offen: Liste pausiert, nichts gesendet. „Start“ bzw. /todos resume schickt das To-do erneut.',
   resumed: 'Liste läuft weiter.',
   resumedEmpty: 'Liste läuft weiter; gerade ist nichts offen.',
   doneMsg: (text) => `Abgehakt: ${text}`,
   noRunning: 'Kein laufendes To-do.',
-  skipped: (text, paused) => `Zurück in die Liste: ${text}${paused ? ' · sonst nichts offen, Liste pausiert' : ''}`,
+  skipped: (text) => `Übersprungen, jetzt am Ende: ${text}`,
+  retried: (text) => `Wird noch einmal gesendet: ${text}`,
+  continued: (text) => `Wird fortgesetzt: ${text}`,
   cleared: (n) => `${n} offene To-dos gelöscht. Der Verlauf bleibt.`,
   unknown: (args) => `Unbekannt: ${args}. Einreihen geht mit /todo <Aufgabe>.`,
   failed: (err) => `Das ging nicht: ${err}`,
 
   stateWorking: 'Claude arbeitet',
-  state: { idle: 'frei', waiting: 'wartet', checking: 'prüft', ask: 'angehalten', blocked: 'wartet auf dich', unclear: 'frei, Prüfung vor dem nächsten Start' },
+  state: { idle: 'frei', waiting: 'wartet', checking: 'prüft', ask: 'angehalten', blocked: 'wartet auf dich', unclear: 'frei, Prüfung vor dem nächsten Start', fresh: 'bereit, startet nach deiner nächsten Nachricht oder mit Start' },
   statusList: (open, running, paused, done) => `Liste: ${open} offen${running ? ', 1 läuft' : ''}${paused ? ', pausiert' : ''} · in diesem Chat erledigt: ${done}`,
   statusState: (state, reason, hold) => `Prüfstand: ${state}${reason ? ` (${reason})` : ''}${hold ? ' · Schleifenschutz aktiv' : ''}`,
   statusDecision: (d) => `Letzte Entscheidung: ${d}`,

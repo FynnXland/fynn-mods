@@ -105,6 +105,10 @@ export type EngineState = {
   /** Tick, an dem der laufende (nicht dynamische) Clip begann, und wann jeder Clip zuletzt begann (Cooldown). */
   clipStart: number
   playedAt: Record<string, number>
+  /** Kurz-Ketten (siehe SHORT_PLAY): Beginn des letzten gezählten Clips, wie viele davor nacheinander kurz liefen, und bis wann der laufende bleibt. */
+  realStart: number
+  shortRun: number
+  holdUntil: number
   /** Laufende Subagenten (vom Client/Desktop gesetzt) und die Begleiter auf ihren Plätzen: Versatz nach unten je Platz (0 = steht, MATE_HIDE = hinter der Linie). */
   agents: number
   mates: number[]
@@ -140,6 +144,12 @@ const WORK_DWELL = 133 // ~10 s ab Clipbeginn (samt Auspacken)
 // (Ausgangspose, Arme unten). Bei dringenden Stimmungen (wartet auf dich, fertig …) ist die Frist kürzer und jede sichere Stelle zählt.
 const FINISH = 80 // ~6 s
 const FINISH_URGENT = 27 // ~2 s
+// Kein Gespamt (Fynn, 2026-10-06: „eine Animation kurz spielt und dann die nächste … wirkt das wie Gespame“): Höchstens zwei Clips
+// nacheinander dürfen kürzer als SHORT_PLAY laufen. Der dritte bleibt mindestens HOLD_PLAY: kein Ausstieg für einen Stimmungswechsel,
+// auch keinen dringenden, und eine Schleife läuft weiter. Nur Maus, Aufwachen und Eingriffe (`/clawd`) unterbrechen sofort; reduzierte
+// Bewegung wählt wie bisher.
+const SHORT_PLAY = 53 // ~4 s
+const HOLD_PLAY = 107 // ~8 s
 const COOLDOWN = 280 // ~21 s: ein eben gespielter Clip wird so lange deutlich seltener gewählt
 const NIGHT_PLAY = 3 // nachts: so viele Leerlaufzeiten Zeitvertreib, bevor er einschläft
 const LOOP_STAY = 330 // ~25 s: so lange bleibt eine Schleife ohne Stimmungswechsel bei sich, dann darf eine Variante kommen
@@ -160,7 +170,7 @@ export function createEngine(opts: EngineOpts) {
     blinkAt: 40, blinkUntil: -1, hover: null, drag: null, gallery: null, galleryLoop: false, hour: opts.hour ?? 12,
     nightStart: opts.nightStart ?? 23, nightEnd: opts.nightEnd ?? 6, idleLimit: ((opts.idleSeconds ?? 45) * 1000) / TICK,
     reduced: opts.reduced ?? false, lastClipName: '', lastPose: null, landing: 'stand', carry: null, pendingClick: false,
-    temper: 0, tired: 0, moodWant: null, clipStart: 0, playedAt: {}, agents: 0, mates: [], special: '', welcome: false,
+    temper: 0, tired: 0, moodWant: null, clipStart: 0, playedAt: {}, realStart: -1, shortRun: 0, holdUntil: 0, agents: 0, mates: [], special: '', welcome: false,
   }
 
   // ---- Begleiter (Subagenten): je laufendem Subagenten (max. 12, ab 7 in zweiter Reihe) steht ein kleiner Helfer auf seinem Platz. Er steigt einmal von
@@ -260,6 +270,12 @@ export function createEngine(opts: EngineOpts) {
   function chooseForMood(): string {
     if (S.gallery) return S.gallery
     const m = S.mood
+    // Der nächste Clip wäre der dritte kurze in Folge (SHORT_PLAY): eine Schleife wählen, die die Sperre halten kann; ein Einmal-Clip
+    // (Nicken, Hüpfer) endete von selbst. Einmal-Stimmungen (fertig, Fehler …) und das Einschlafen behalten ihre Clips.
+    if (!S.reduced && S.shortRun >= 1 && S.realStart >= 0 && S.ticks - S.realStart < SHORT_PLAY && !ONE_SHOT.has(m) && S.sleepStage === 0 && !(m === 'idle' && isNight() && S.idleTicks > S.idleLimit * NIGHT_PLAY)) {
+      const loops = m === 'idle' ? [] : poolOf(m).filter((c) => c.loop && weightOf(c) > 0)
+      return loops.length ? pick(loops, m) : 'idle_breathe'
+    }
     if (m === 'idle') {
       // Nachts erst eine Weile ruhiger Zeitvertreib, eingeschlafen wird nach dem Dreifachen der Leerlaufzeit (oder wenn es schon begann)
       if (isNight() && (S.sleepStage > 0 || S.idleTicks > S.idleLimit * NIGHT_PLAY)) {
@@ -387,6 +403,12 @@ export function createEngine(opts: EngineOpts) {
     if (!isDyn(c)) {
       S.clipStart = S.ticks
       S.playedAt[c.name] = S.ticks
+    }
+    // Übergänge und Maus-Reaktionen zählen zum Clip davor; eine Galerie (Demo) läuft ohne Sperre
+    if (!isDyn(c) && c.cat !== 'transition' && c.cat !== 'mouse') {
+      if (S.realStart >= 0) S.shortRun = S.ticks - S.realStart < SHORT_PLAY ? S.shortRun + 1 : 0
+      S.realStart = S.ticks
+      S.holdUntil = S.shortRun >= 2 && !S.gallery ? S.ticks + HOLD_PLAY : 0
     }
     S.landing = c.from
     log(`${isDyn(c) ? '  ↳ ' : ''}<b>${c.label}</b> <span>(${isDyn(c) ? 'weich' : c.cat})</span>`)
@@ -549,6 +571,9 @@ export function createEngine(opts: EngineOpts) {
     return true
   }
 
+  /** Der laufende Clip folgt auf zwei kurze und muss noch bleiben (HOLD_PLAY). */
+  const held = () => S.ticks < S.holdUntil
+
   /** Ticks bis zum Ende des laufenden Durchgangs (Hauptteil ab dem aktuellen Bild). */
   function bodyLeft(pl: Play): number {
     let n = 0
@@ -562,6 +587,7 @@ export function createEngine(opts: EngineOpts) {
    * Ausgangspose, damit keine Geste mitten in der Luft endet.
    */
   function cutHere(pl: Play): boolean {
+    if (held()) return false
     const p = pl.body[pl.fi].p
     if (!isSafe(pl.clip, p)) return false
     // Grundpose (atmen, umschauen) hat keine Handlung, die man abbrechen könnte: sofort an jeder sicheren Stelle weiter
@@ -602,6 +628,7 @@ export function createEngine(opts: EngineOpts) {
         // Schleifengrenze = Ausgangspose: weiterlaufen oder weich aussteigen. Ohne Stimmungswechsel bleibt er bei seiner Schleife und
         // wählt erst nach LOOP_STAY eine Variante (Fynn: nicht ständig zwischen den Denk-Clips springen).
         pl.fi = 0
+        if (held()) return
         // (Im Leerlauf wählt die Grundpose an jeder Schleifengrenze neu, sonst käme Zeitvertreib zu spät.)
         // Ein Ersatz-Clip aus einer anderen Gruppe (z. B. atmen, während du tippst) bleibt nur einen Durchgang (Review 2, K4)
         if (!S.pending && !S.queue.length && S.mood !== 'idle' && pl.clip.cat === S.mood && (S.ticks - S.clipStart < LOOP_STAY || S.gallery)) return

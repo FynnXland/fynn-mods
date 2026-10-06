@@ -81,7 +81,7 @@ for (let seed = 1; seed <= SEEDS; seed++) {
         runs.push(cur)
         if (LOG && seed === 1) console.log(`${(now / 1000).toFixed(1).padStart(7)}s  ${cur.cut ? '✂' : ' '} ${cur.name} (${cur.cat}, ${(cur.ticks * TICK / 1000).toFixed(1)} s, ${cur.cycles} Durchl.) → ${name}  [${S.mood}]`)
       }
-      cur = { name, cat: pl?.clip.cat, ticks: 0, cut: false, cycles: 0, play: pl, lastFi: -1 }
+      cur = { name, cat: pl?.clip.cat, ticks: 0, cut: false, cycles: 0, play: pl, lastFi: -1, seed }
     }
     cur.ticks++
     // Hauptteil mitten drin verlassen: zuletzt im Hauptteil gesehen, nicht am letzten Bild, und danach nicht mehr im Hauptteil
@@ -125,3 +125,32 @@ for (const r of moodRuns) {
 }
 console.log('\nStimmung         Wechsel  Ø Dauer  < 3 s')
 for (const [k, v] of [...mm.entries()].sort((a, b) => b[1].n - a[1].n)) console.log(`${k.padEnd(16)} ${String(v.n).padStart(6)}  ${(v.ms / 1000 / v.n).toFixed(1).padStart(5)} s  ${pct(v.short, v.n).padStart(6)}`)
+
+// Gespamt (Fynn, 2026-10-06): mehr als zwei Clips hintereinander nur kurz gespielt. Kurz = unter SHORT_S Sekunden bis zum nächsten echten Clip
+// (Übergänge und Wegräumen zählen zum Clip davor). Höchstens zwei dürfen kurz sein, der dritte soll länger laufen.
+const SHORT_S = 4
+let chains = 0
+let worst = 0
+let streak = 0
+let prev = null
+let span = 0
+const tail = []
+for (const r of runs) {
+  if (prev && r.seed !== prev.seed) { streak = 0; prev = null; span = 0 }
+  if (!r.cat || r.cat === 'dynamic' || r.cat === 'transition') { span += r.ticks; continue }
+  if (prev) {
+    const short = (span * TICK) / 1000 < SHORT_S
+    streak = short ? streak + 1 : 0
+    tail.push(`${prev.name} ${((span * TICK) / 1000).toFixed(1)} s`)
+    if (tail.length > 4) tail.shift()
+    if (streak === 3) {
+      chains++
+      if (LOG) console.log(`  Kurz-Kette: ${tail.slice(-3).join(' → ')} → ${r.name}`)
+    }
+    worst = Math.max(worst, streak)
+  }
+  prev = r
+  span = r.ticks
+}
+console.log(`
+Kurz-Ketten (≥ 3 Clips < ${SHORT_S} s nacheinander): ${chains}, längste: ${worst}`)

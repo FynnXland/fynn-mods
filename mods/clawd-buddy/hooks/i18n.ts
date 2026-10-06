@@ -27,13 +27,16 @@ type Texts = {
   mood: { veryGrumpy: string; grumpy: string; great: string; good: string; even: string }
   deskNone: string
   desk: (o: { secs: string; draws: number; reused: number; perMin: string; planSecs: string; changes: string; kb: string; calcAvg: string; calcMax: string; drawAvg: string; drawMax: string; others: string }) => string
+  deskFresh: (o: { fresh: number; shape: number; shown: number; handover: number; waited: number }) => string
+  flicker: string
+  flickerNone: string
   alt: string
 }
 
 export const T: Readonly<Record<Lang, Texts>> = {
   en: {
     description: 'Control the mascot',
-    help: 'Commands: on | off | list | demo <animation> | nap | boop | status',
+    help: 'Commands: on | off | list | demo <animation> | nap | boop | status | flicker',
     on: 'clawd-buddy: on',
     off: 'clawd-buddy: off',
     demoUsage: 'clawd demo <animation>. /clawd list shows all of them.',
@@ -48,11 +51,17 @@ export const T: Readonly<Record<Lang, Texts>> = {
     desk: (o) =>
       `Desktop drawing, last ${o.secs} s: ${o.draws} draws (${o.perMin}/min), ${o.reused} times kept unchanged (no reload), animations avg ${o.planSecs} s with ${o.changes} frame changes, ` +
       `${o.kb} kB; compute avg ${o.calcAvg} / max ${o.calcMax} ms, draw avg ${o.drawAvg} / max ${o.drawMax} ms (other mods avg ${o.others} ms)`,
+    deskFresh: (o) =>
+      `; ${o.handover} with handover, ${o.fresh} without (band layout changed ${o.shape}, shown again or switched on ${o.shown}), ${o.waited} times waited for the previous handover`,
+    flicker:
+      'Flicker test, 30 s, watch Clawd (the number top left shows the part): 1 = Clawd stands still, only a gray dot next to him jumps every 2 s. ' +
+      '2 = Clawd alone, reloaded every 2 s. 3 = handover between both frames every 2 s, as in normal operation. For each part: does Clawd blink? Afterwards he continues normally.',
+    flickerNone: 'Flicker test only works in the desktop app while the band is shown.',
     alt: 'Clawd, the mascot',
   },
   de: {
     description: 'Maskottchen steuern',
-    help: 'Befehle: on | off | list | demo <animation> | nap | boop | status',
+    help: 'Befehle: on | off | list | demo <animation> | nap | boop | status | flicker',
     on: 'clawd-buddy: an',
     off: 'clawd-buddy: aus',
     demoUsage: 'clawd demo <animation>. Mit /clawd list siehst du alle.',
@@ -67,6 +76,12 @@ export const T: Readonly<Record<Lang, Texts>> = {
     desk: (o) =>
       `Desktop-Zeichnung, letzte ${o.secs} s: ${o.draws} Zeichnungen (${o.perMin}/min), ${o.reused}-mal unverändert weitergegeben (kein Neuladen), Animationen Ø ${o.planSecs} s mit ${o.changes} Bildwechseln, ` +
       `${o.kb} kB; Rechnen Ø ${o.calcAvg} / max ${o.calcMax} ms, Zeichnen Ø ${o.drawAvg} / max ${o.drawMax} ms (davon andere Mods Ø ${o.others} ms)`,
+    deskFresh: (o) =>
+      `; ${o.handover} mit Übergabe, ${o.fresh} ohne (Aufbau des Bands geändert ${o.shape}, wieder angezeigt oder eingeschaltet ${o.shown}), ${o.waited}-mal auf die vorige Übergabe gewartet`,
+    flicker:
+      'Flacker-Test, 30 s, schau auf Clawd (die Zahl oben links zeigt den Abschnitt): 1 = Clawd steht still, nur ein grauer Punkt daneben springt alle 2 s. ' +
+      '2 = Clawd allein, alle 2 s neu geladen. 3 = Übergabe zwischen beiden Rahmen alle 2 s, wie im Betrieb. Je Abschnitt: Blinkt Clawd? Danach geht es normal weiter.',
+    flickerNone: 'Der Flacker-Test geht nur in der Desktop-App, während das Band angezeigt wird.',
     alt: 'Clawd, das Maskottchen',
   },
 }

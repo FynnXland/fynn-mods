@@ -80,6 +80,21 @@ function frameAt(svg: string, ms: number): string {
   return out
 }
 
+/** Leerer Rahmen der Staffelübergabe (desk.ts → blankSource). */
+const isBlank = (src: string) => /^<svg [^>]*><style>[^<]*<\/style><\/svg>$/.test(src)
+/** Quellen der beiden Rahmen (clawd-a, clawd-b). */
+async function slots(ui: { findAll: (q: { type: string }) => Promise<{ props: Record<string, unknown> }[]> }): Promise<string[]> {
+  return (await ui.findAll({ type: 'Svg' })).map((e) => e.props.source as string)
+}
+/** Der Rahmen mit der neuesten Animation: der einzige nicht leere, sonst der gegenüber `before` geänderte. */
+function newest(now: string[], before?: string[]): string {
+  const full = now.filter((x) => !isBlank(x))
+  if (full.length === 1) return full[0]
+  const changed = full.filter((x) => !before?.includes(x))
+  expect(changed.length, 'genau ein Rahmen neu').toBe(1)
+  return changed[0]
+}
+
 test('Band: Desktop zeigt die Figur als animiertes Svg (SMIL im Rahmen) und zeichnet in Ruhe nur zum Ende der Animation neu; /clawd off hält den Wächter an', async ($, on) => {
   const clock = mock.clock(on)
   const { logs } = stubs(on)
@@ -91,9 +106,16 @@ test('Band: Desktop zeigt die Figur als animiertes Svg (SMIL im Rahmen) und zeic
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: 'von anderen' })).toBeDefined()
   expect(await ui.find({ type: 'Client' })).toBeUndefined()
-  const svgEl = await ui.find({ type: 'Svg' })
-  expect(svgEl?.props.isInteractive).toBe(true)
-  const first = svgEl?.props.source as string
+  // Zwei Rahmen übereinander (Staffelübergabe), beide im Rahmen ohne Skripte; der zweite liegt absolut über dem ersten
+  const els = await ui.findAll({ type: 'Svg' })
+  expect(els.length).toBe(2)
+  expect(els.every((x) => x.props.isInteractive === true)).toBe(true)
+  expect((await ui.find({ type: 'Box', key: 'clawd-b' }))?.props.position).toBe('absolute')
+  // Erste Zeichnung: ein Rahmen zeigt die Animation, der andere ist leer (durchsichtig, gleiches Farbschema)
+  const s0 = await slots(ui)
+  expect(s0.filter(isBlank).length).toBe(1)
+  expect(s0.find(isBlank)).toMatch(/color-scheme:light dark/)
+  const first = newest(s0)
   expect(first).toMatch(/^<svg [^>]*viewBox="0 0 100 14"/)
   // Durchsichtiger Grund im Rahmen: ohne passendes Farbschema malt Chromium ihn im Dark Mode weiß
   expect(first).toMatch(/^<svg [^>]*><style>:root\{color-scheme:light dark\}html,body\{margin:0;padding:0;overflow:hidden\}/)
@@ -111,17 +133,28 @@ test('Band: Desktop zeigt die Figur als animiertes Svg (SMIL im Rahmen) und zeic
   await clock.advance(1000)
   expect(invalidates).toBe(1)
   await ui.redraw()
-  const next = (await ui.find({ type: 'Svg' }))?.props.source as string
+  // Die nächste lädt im anderen Rahmen, die vorige läuft darunter weiter (kein leerer Moment)
+  const s1 = await slots(ui)
+  expect(s1).toContain(first)
+  const next = newest(s1, s0)
   expect(next).not.toBe(first)
+  // ~0,5 s später bittet der Wächter ums Leeren des alten Rahmens; danach steht nur noch die neue
+  await clock.advance(500)
+  expect(invalidates).toBe(2)
+  await ui.redraw()
+  const s2 = await slots(ui)
+  expect(s2).toContain(next)
+  expect(s2.filter(isBlank).length).toBe(1)
   // Antwortet die App nicht mehr (Sitzung verdeckt), bittet er nicht erneut und endet nach ~2 s
   const k = invalidates
   await clock.advance(60_000)
   expect(invalidates - k).toBe(1)
-  // Demo: sofort neu gezeichnet, das neue Svg zeigt sie
+  // Demo: sofort neu gezeichnet (die App baut die Rahmen beim Wiederanzeigen neu, dann gleich mit Übergabe)
   await ui.redraw()
+  const s3 = await slots(ui)
   await $.command.run({ command: 'clawd', args: 'demo wave_question' })
   await ui.redraw()
-  expect((await ui.find({ type: 'Svg' }))?.props.source).not.toBe(next)
+  expect(newest(await slots(ui), s3)).not.toBe(newest(s3))
   // Aus: der Wächter ist sofort beendet (kein invalidate mehr), und nichts wirft ins Debug-Log
   const offRes = await $.command.run({ command: 'clawd', args: 'off' })
   expect(offRes.text).toMatch(/: off$/)
@@ -151,7 +184,17 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
   on('turn.complete', () => ({ text: '' }))
   on('session.measure', ($: unknown, e: any) => ({ changed: e.changed }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  const svg = async () => (await ui.find({ type: 'Svg' }))?.props.source as string
+  let front = newest(await slots(ui))
+  let seen = await slots(ui)
+  const svg = async () => {
+    const now = await slots(ui)
+    // Der zuletzt gezeichnete Rahmen bleibt vorn, bis ein neuer dazukommt
+    if (!now.includes(front)) throw new Error('vorderer Rahmen verschwunden')
+    const fresh = now.filter((x) => !isBlank(x) && !seen.includes(x))
+    if (fresh.length) front = fresh[0]
+    seen = now
+    return front
+  }
   for (const [i, ms] of [2025, 1275, 3075].entries()) { // ganze Takte: ein Rest unter 75 ms verschöbe die Erwartung um ein Bild; unter DESK_REUSE_MS
     const before = await svg()
     await clock.advance(ms)
@@ -171,6 +214,27 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
     // Der Stand rückt in ganzen Takten (75 ms) vor
     expect(frameAt(after, 0)).toMatch(/#D77757/i)
     expect(frameAt(after, 0), `Durchgang ${i}`).toBe(frameAt(before, Math.floor(ms / 75) * 75))
+    // Staffelübergabe: Beide Rahmen sind kurz sichtbar. Die ersten 0,75 s zeigt die neue genau, was die alte zur selben Zeit zeigt
+    // (sonst sähe man zwei Figuren übereinander); Neues erst danach
+    const s = await slots(ui)
+    expect(s).toContain(before)
+    expect(s).toContain(after)
+    for (let t = 0; t < 750; t += 75) expect(frameAt(after, t), `Durchgang ${i}, ${t} ms`).toBe(frameAt(before, Math.floor(ms / 75) * 75 + t))
+  }
+  // Ein Ereignis, während die Übergabe noch läuft: es wartet, bis der alte Rahmen geleert ist (sonst wären kurz beide leer)
+  {
+    await clock.advance(100)
+    const s = await slots(ui)
+    await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, reason: 'answer', turnId: 't2' } as any)
+    await ui.redraw()
+    expect(await slots(ui)).toEqual(s)
+    const k = invalidates
+    await clock.advance(500)
+    expect(invalidates - k).toBe(1)
+    await ui.redraw()
+    const now = await slots(ui)
+    expect(now).toContain(await svg())
+    expect(now.filter((x) => !s.includes(x)).length).toBe(1)
   }
   // Älter als 5 s: nicht mehr weitergeben, neu zeichnen (ein unerkannter Neustart des Rahmens spränge sonst weit zurück)
   {
@@ -188,6 +252,93 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
     await $.prompt.edit({ text: 'x'.repeat(i + 1), inputText: 'x', cursor: i + 1, start: i, end: i } as any)
   }
   expect(invalidates - k).toBe(1)
+  expect(logs.filter((l) => /Error|not a function/i.test(l))).toEqual([])
+  await ui.unmount()
+})
+
+test('Band: Staffelübergabe im Desktop: zweiter Rahmen unten bündig, Zeichnen während der Übergabe erzwingt nichts, /clawd on bei an mit Übergabe (Review 0.6.3)', async ($, on) => {
+  const clock = mock.clock(on)
+  const { logs } = stubs(on)
+  let invalidates = 0
+  on('ui.invalidate', () => {
+    invalidates++
+    return { value: undefined }
+  })
+  on('turn.start', ($: unknown, e: any) => ({ turnId: e.turnId }))
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  // K3: unten bündig wie der erste Rahmen (die Spalte drückt ihn nach unten)
+  const b = await ui.find({ type: 'Box', key: 'clawd-b' })
+  expect(b?.props.bottom).toBe(0)
+  expect(b?.props.top).toBeUndefined()
+  // K2: ein Ereignis zeichnet neu; eine fremde Zeichnung während der Übergabe ändert nichts, und beim Leeren entsteht keine neue Animation
+  await clock.advance(1500)
+  await $.turn.start({ text: 'los', turnId: 't1' })
+  await ui.redraw()
+  const s1 = await slots(ui)
+  expect(s1.filter(isBlank).length).toBe(0)
+  await clock.advance(100)
+  await ui.redraw()
+  expect(await slots(ui)).toEqual(s1)
+  const k = invalidates
+  await clock.advance(500)
+  expect(invalidates - k).toBe(1)
+  await ui.redraw()
+  const s2 = await slots(ui)
+  expect(s2.filter(isBlank).length).toBe(1)
+  expect(s1).toContain(s2.find((x) => !isBlank(x)))
+  // K4: /clawd on, obwohl er an ist: mit Übergabe (der bisherige Rahmen bleibt stehen, bis der neue geladen ist), nicht beide auf einmal neu
+  const front = s2.find((x) => !isBlank(x))!
+  await $.command.run({ command: 'clawd', args: 'on' })
+  await ui.redraw()
+  const s3 = await slots(ui)
+  expect(s3).toContain(front)
+  expect(s3.filter(isBlank).length).toBe(0)
+  expect(logs.filter((l) => /Error|not a function/i.test(l))).toEqual([])
+  await ui.unmount()
+})
+
+test('Band: /clawd flicker zeigt 30 s lang drei Testabschnitte und zeichnet danach normal weiter; /clawd status zählt Zeichnungen mit und ohne Übergabe', async ($, on) => {
+  const clock = mock.clock(on)
+  const { logs } = stubs(on)
+  on('ui.invalidate', () => ({ value: undefined }))
+  // Ohne Desktop-Band: nur ein Hinweis
+  expect((await $.command.run({ command: 'clawd', args: 'flicker' })).text).toMatch(/only works in the desktop app/)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const res = await $.command.run({ command: 'clawd', args: 'flicker' })
+  expect(res.text).toMatch(/Flicker test, 30 s/)
+  await ui.redraw()
+  // 1: Clawd still im ersten Rahmen, im zweiten nur der Punkt; der erste bleibt beim Sprung des Punkts gleich
+  const p1 = await slots(ui)
+  expect(p1[0]).toMatch(/#D77757/i)
+  expect(p1[1]).not.toMatch(/#D77757/i)
+  await clock.advance(2000)
+  await ui.redraw()
+  const p1b = await slots(ui)
+  expect(p1b[0]).toBe(p1[0])
+  expect(p1b[1]).not.toBe(p1[1])
+  // 2: Clawd allein, gleiches Bild, anderes source
+  await clock.advance(8500)
+  await ui.redraw()
+  const p2 = await slots(ui)
+  expect(isBlank(p2[1])).toBe(true)
+  await clock.advance(2000)
+  await ui.redraw()
+  const p2b = await slots(ui)
+  expect(p2b[0]).not.toBe(p2[0])
+  expect(p2b[0].replace(/<rect[^>]*\/>/, '')).toBe(p2[0].replace(/<rect[^>]*\/>/, ''))
+  // 3: Übergabe: kurz nach dem Wechsel beide voll, danach einer leer
+  await clock.advance(20_100 - 12_500)
+  await ui.redraw()
+  expect((await slots(ui)).filter(isBlank).length).toBe(0)
+  await clock.advance(600)
+  await ui.redraw()
+  expect((await slots(ui)).filter(isBlank).length).toBe(1)
+  // Danach normal: eine echte Animation (SMIL)
+  await clock.advance(10_000)
+  await ui.redraw()
+  expect(newest(await slots(ui))).toMatch(/<animate /)
+  const st = await $.command.run({ command: 'clawd', args: 'status' })
+  expect(st.text).toMatch(/\d+ with handover, \d+ without \(band layout changed \d+, shown again or switched on [1-9]\d*\)/)
   expect(logs.filter((l) => /Error|not a function/i.test(l))).toEqual([])
   await ui.unmount()
 })

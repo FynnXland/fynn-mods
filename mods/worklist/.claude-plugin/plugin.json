@@ -1,8 +1,10 @@
 {
   "name": "worklist",
-  "version": "0.3.0",
-  "description": "To-do sidebar next to the chat: queue tasks, even while Claude is working. When Claude is clearly done, the to-do is checked off and the next one starts; otherwise the list pauses with a reason and buttons. History per project. /todo",
-  "author": { "name": "Fynn Hansen" },
+  "version": "0.4.0",
+  "description": "To-do sidebar next to the chat: queue tasks, even while Claude is working. When Claude is clearly done, the to-do is checked off and the next one starts; otherwise the list stops with a reason and buttons (Continue keeps the order). Runs by default, never pauses on its own. History per project. /todo",
+  "author": {
+    "name": "Fynn Hansen"
+  },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -11,7 +13,10 @@
       "title": "Language / Sprache",
       "description": "Language of the mod's texts and of its model prompts. en: English, de: Deutsch.",
       "default": "en",
-      "options": ["en", "de"]
+      "options": [
+        "en",
+        "de"
+      ]
     },
     "haiku": {
       "type": "boolean",
@@ -21,8 +26,8 @@
     },
     "doneLine": {
       "type": "boolean",
-      "title": "Hidden closing hint",
-      "description": "Gives Claude, invisibly with every sent to-do, the request to end with a clear question or with \"Done.\" (German: \"Fertig.\"). It isn't shown in the chat; Claude reads exactly your to-do text plus this hint. Makes the detection more reliable.",
+      "title": "Hidden hints",
+      "description": "Gives Claude, invisibly, a hint with every sent to-do (end with a clear question, use AskUserQuestion if available, or with \"Done.\"; German: \"Fertig.\") and with your answer to a stopped to-do's question. It isn't shown in the chat. Makes the detection more reliable.",
       "default": true
     },
     "settleSeconds": {
