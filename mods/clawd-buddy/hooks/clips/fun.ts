@@ -38,9 +38,9 @@ const PROPS_BASE: Readonly<Record<string, PropSprite>> = {
   fun_stone1: s(['...GWW..', '..GWWWG.', '.GWWGGGD', 'GWGGGGGD', 'GGGGGGDD', '.DDDDDD.']),
   fun_stone2: s(['...GGW..', '..GWWGG.', '.GGGGWGD', 'GGGWGGGD', 'GDGGGDDD', '.DDDDDD.']),
   // Jonglierbälle (3×3): drei klare Farben mit weißem Glanzpunkt
-  fun_jy: s(['WYY', 'YYY', 'YYY']),
-  fun_jb: s(['WBB', 'BBB', 'BBB']),
-  fun_je: s(['WEE', 'EEE', 'EEE']),
+  fun_jy: { rows: ['WYY', 'YYY', 'YYY'], front: true },
+  fun_jb: { rows: ['WBB', 'BBB', 'BBB'], front: true },
+  fun_je: { rows: ['WEE', 'EEE', 'EEE'], front: true },
   // Gänseblümchen (5×8): 1 Knospe, 2 halb offen, 3 blühend; gleiche Stiel- und Blattzeilen
   fun_flower1: s(['.....', '..W..', '.EEE.', '..E..', '.EE..', '..EE.', '..E..', '..E..']),
   fun_flower2: s(['.....', '.WYW.', '.WWW.', '..E..', '.EE..', '..EE.', '..E..', '..E..']),
@@ -62,7 +62,7 @@ const PROPS_BASE: Readonly<Record<string, PropSprite>> = {
 
 // ---- Tageszeit-Faktoren: [Morgen, Mittag, Abend, Nacht]
 const DP: Record<string, readonly [number, number, number, number]> = {
-  stretch: [3, 1, 0.6, 0], whistle: [2.5, 1, 0.5, 0], stroll_whistle: [2.5, 1, 0.5, 0], dance: [2.5, 1, 0.4, 0],
+  stretch: [3, 1, 0.6, 0], whistle: [2.5, 1, 0.5, 0], stroll: [2.5, 1, 0.5, 0], dance: [2.5, 1, 0.4, 0],
   fly_chase: [1, 1.3, 0.5, 0], pebble_kick: [1, 1.3, 0.5, 0], juggle: [0.5, 2.5, 0.5, 0], smell_flower: [0.5, 2.5, 0.5, 0],
   bubbles: [0.5, 2.5, 0.5, 0], hop: [1, 2.5, 0.5, 0], dribble_ball: [0.5, 2.5, 0.4, 0], grumble_kick: [1, 1, 0.7, 0],
   happy_hum: [1, 1, 2, 0.3], nap_sitting: [0.2, 0.6, 2, 0.5],
@@ -138,7 +138,7 @@ for (let i = 0; i < 13; i++) {
     const p = NOTE_PATH[i - born]
     if (p) props.push(['note', p[0], p[1]])
   }
-  whistleFrames.push({ ...(i === 0 ? { mouth: 'o', look: [1, 0] } : {}), ...(i === 11 ? { mouth: null, look: [0, 0] } : {}), props, t: 3 })
+  whistleFrames.push({ ...(i === 0 ? { mouth: 'whistle', look: [1, 0] } : {}), ...(i === 11 ? { mouth: null, look: [0, 0] } : {}), props, t: 3 })
 }
 C('whistle', 'Pfeifen', 'fun', { interruptible: true, breathe: true, frames: whistleFrames });
 
@@ -277,10 +277,16 @@ function juggleParts(): { intro: Frame[]; body: Frame[]; outro: Frame[] } {
     dst.push({ ...fr, props: [...balls.map((b) => G(b.n, ...jpos(b.k))), ...extra], t: 1 })
     balls.forEach((b) => b.k++)
   }
-  /** Beide Hände vor dem Körper; sie heben sich, wenn ein Ball links aufsteigt (linke Hand wirft) bzw. rechts herunterkommt (rechte Hand fängt). */
+  /**
+   * Beide Hände vor dem Körper, sie federn mit den Bällen (Fynn, 2026-10-06: „wenn der Ball nach unten kommt, dass das nach einer Bewegung aussieht“):
+   * Die rechte Hand reckt sich dem herabfallenden Ball entgegen, fängt ihn und gibt mit ihm nach unten nach. Die linke holt unten Schwung
+   * (tiefer) und wirft ihn nach oben (hoch). Die Bälle fliegen vor den Händen (`front`).
+   */
   const hands = (): Frame => {
-    const near = (lo: number, hi: number): boolean => balls.some((b) => mod(b.k - lo, JN) <= hi - lo)
-    return { armL: near(8, 12) ? 'holdUp' : 'hold', armR: near(0, 3) ? 'holdUp' : 'hold' }
+    const at = (lo: number, hi: number): boolean => balls.some((b) => mod(b.k - lo, JN) <= hi - lo)
+    const right = at(0, 1) ? 'holdUp' : at(4, 6) ? 'holdLow' : 'hold'
+    const left = at(11, 13) ? 'holdUp' : at(7, 9) ? 'holdLow' : 'hold'
+    return { armL: left, armR: right }
   }
   const base = (): Frame => ({ by: 0, eyes: 'open', look: [0, 0], mouth: null, ...hands() })
   const fetchBall = (idx: number): void => {
@@ -325,44 +331,36 @@ function juggleParts(): { intro: Frame[]; body: Frame[]; outro: Frame[] } {
 const JUG = juggleParts()
 C('juggle', 'Jonglieren', 'fun', { interruptible: false, intro: JUG.intro, frames: JUG.body, outro: JUG.outro });
 
-// Schlendern und pfeifen: Er geht gemütlich ein langes Stück nach links (30 Pixel), die Arme schwingen, die Noten steigen neben seinem Kopf ein paar Pixel auf und
-// vergehen dort (sie gehen mit ihm mit). Links schaut er zum Himmel, pfeift weiter und hüpft einmal, dann geht er genauso zurück.
+// Schlendern: Er geht gemütlich ein langes Stück nach links (30 Pixel), die Arme schwingen. Links schaut er zum Himmel und hüpft einmal, dann geht er genauso
+// zurück. Ohne Pfeifen (Fynn, 2026-10-06: „das Pfeifen beim Laufen finde ich unnötig“).
 function strollFrames(): Frame[] {
   const f: Frame[] = []
-  let tick = 0
   let fx = 0
-  let born: number[] = []
-  const push = (extra: Frame, emit: boolean): void => {
-    born = born.filter((b) => tick - b < NOTE_PATH.length * 2)
-    if (emit && (born.length === 0 || tick - born[born.length - 1] >= 8)) born.push(tick)
-    // Noten relativ zur Figur: jede steigt in 4 Stufen zu je 2 Ticks
-    const props = born.map((b): PropRef => ['note', ...NOTE_PATH[Math.floor((tick - b) / 2)]])
-    f.push({ ...extra, fx, props, t: 1 })
-    tick++
+  const push = (extra: Frame): void => {
+    f.push({ ...extra, fx, props: [], t: 1 })
   }
-  const whistle = (): Frame => ({ mouth: tick % 6 < 3 ? 'o' : null })
   const walkSteps = (dir: number, count: number, look: readonly [number, number]): void => {
     for (let st = 0; st < count; st++) {
       fx += dir
       const swing = st % 2 ? { armL: 'down', armR: 'up1' } : { armL: 'up1', armR: 'down' }
-      push({ ...swing, legs: stepLegs(st), look, by: 0, eyes: 'open', ...whistle() } as Frame, true)
-      push({ by: 1, legs: stepLegs(st), ...whistle() }, true)
+      push({ ...swing, legs: stepLegs(st), look, by: 0, eyes: 'open' } as Frame)
+      push({ by: 1, legs: stepLegs(st) })
     }
   }
-  push({ look: [-1, 0], eyes: 'happy', ...whistle() }, true)
+  push({ look: [-1, 0], eyes: 'open', mouth: null })
   walkSteps(-1, 30, [-1, 0])
-  // links: stehen bleiben, zum Himmel schauen, weiterpfeifen, ein kleiner Hüpfer
-  push({ legs: 'stand', by: 0, armL: 'down', armR: 'down', look: [-1, -1], ...whistle() }, true)
-  for (let i = 0; i < 5; i++) push({ look: [i % 2 ? -1 : 0, -1], by: i % 2 ? 1 : 0, ...whistle() }, true)
-  push({ fy: -1, legs: 'tuck', armL: 'up1', armR: 'up1', eyes: 'happy', ...whistle() }, true)
-  push({ fy: 0, legs: 'stand', armL: 'down', armR: 'down', by: 0, ...whistle() }, true)
-  push({ look: [1, 0], eyes: 'open', ...whistle() }, true)
+  // links: stehen bleiben, zum Himmel schauen, ein kleiner Hüpfer
+  push({ legs: 'stand', by: 0, armL: 'down', armR: 'down', look: [-1, -1] })
+  for (let i = 0; i < 5; i++) push({ look: [i % 2 ? -1 : 0, -1], by: i % 2 ? 1 : 0 })
+  push({ fy: -1, legs: 'tuck', armL: 'up1', armR: 'up1', eyes: 'happy' })
+  push({ fy: 0, legs: 'stand', armL: 'down', armR: 'down', by: 0 })
+  push({ look: [1, 0], eyes: 'open' })
   walkSteps(1, 30, [1, 0])
-  push({ legs: 'stand', by: 0, armL: 'down', armR: 'down', look: [0, 0], eyes: 'happy', ...whistle() }, false)
-  for (let i = 0; i < 8; i++) push({ mouth: null, eyes: 'open' }, false)
+  push({ legs: 'stand', by: 0, armL: 'down', armR: 'down', look: [0, 0], eyes: 'happy' })
+  for (let i = 0; i < 8; i++) push({ eyes: 'open' })
   return f
 }
-C('stroll_whistle', 'Schlendert und pfeift', 'fun', { interruptible: true, frames: strollFrames() });
+C('stroll', 'Schlendert', 'fun', { interruptible: true, frames: strollFrames() });
 
 // Blume: Links neben ihm wächst hinter der Linie eine Blume hervor (Knospe, öffnet sich). Er schaut hin, geht die 12 Pixel hin, beugt sich
 // vor, schnuppert, freut sich (Herz). Dann geht er zurück, die Blume sinkt wieder hinter die Linie.

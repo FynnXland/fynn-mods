@@ -8,7 +8,7 @@ for (const c of ALL_CLIPS) {
   const r = resolveClip(c)
   for (const [ph, list] of Object.entries(r)) list.forEach((f, i) => {
     const a = compose(f.p, ALL_PROPS), b = compose({ ...f.p, mirror: true }, ALL_PROPS)
-    const ax = FX + Math.round(f.p.fx) + 8
+    const ax = FX + 8 // Spiegelachse: Heimatplatz (stage.ts → compose)
     let diff = 0
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const t = b.hit[y * W + x]

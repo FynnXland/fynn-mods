@@ -152,7 +152,7 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
   on('session.measure', ($: unknown, e: any) => ({ changed: e.changed }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = async () => (await ui.find({ type: 'Svg' }))?.props.source as string
-  for (const [i, ms] of [5025, 1275, 7575].entries()) { // ganze Takte: ein Rest unter 75 ms verschöbe die Erwartung um ein Bild
+  for (const [i, ms] of [2025, 1275, 3075].entries()) { // ganze Takte: ein Rest unter 75 ms verschöbe die Erwartung um ein Bild; unter DESK_REUSE_MS
     const before = await svg()
     await clock.advance(ms)
     // Neu zeichnen ohne neue Fakten (z. B. für einen anderen Mod): dasselbe Svg, der Rahmen lädt nicht neu (kein Flackern)
@@ -171,6 +171,13 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
     // Der Stand rückt in ganzen Takten (75 ms) vor
     expect(frameAt(after, 0)).toMatch(/#D77757/i)
     expect(frameAt(after, 0), `Durchgang ${i}`).toBe(frameAt(before, Math.floor(ms / 75) * 75))
+  }
+  // Älter als 5 s: nicht mehr weitergeben, neu zeichnen (ein unerkannter Neustart des Rahmens spränge sonst weit zurück)
+  {
+    const before = await svg()
+    await clock.advance(6000)
+    await ui.redraw()
+    expect(await svg()).not.toBe(before)
   }
   // /clawd status nennt die Messwerte der Desktop-Zeichnung und beginnt danach neu
   const st = await $.command.run({ command: 'clawd', args: 'status' })

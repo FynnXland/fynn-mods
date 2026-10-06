@@ -81,7 +81,7 @@ export const CLIP_EN: Readonly<Record<string, string>> = {
   pebble_kick: 'Kicking a pebble',
   dance: 'Little dance',
   juggle: 'Juggling',
-  stroll_whistle: 'Strolls and whistles',
+  stroll: 'Strolls',
   smell_flower: 'Smells a flower',
   dribble_ball: 'Bouncing a ball',
   bubbles: 'Soap bubbles',

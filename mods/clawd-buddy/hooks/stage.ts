@@ -26,6 +26,8 @@ export type PropSprite = {
   effect?: true
   /** Schrift/Zeichen/Uhr: beim Spiegeln nur den Platz wechseln, das Bild selbst nicht umdrehen (ein „?“ bleibt ein „?“). */
   noFlip?: true
+  /** Liegt vor den Händen vor dem Körper (Vorderarme): z. B. Jonglierbälle, die vor den Händen fliegen. Sonst decken die Hände Gegenstände. */
+  front?: true
   /**
    * Bild für die gespiegelte Figur (wird dann wie jedes andere gespiegelt): für Gegenstände, deren Form mitgespiegelt werden muss, deren Zeichen
    * darin aber lesbar bleiben sollen (Denkblase mit „?“: die Spur hängt an der Figur). Darin steht das Zeichen seitenverkehrt.
@@ -154,6 +156,8 @@ export const EYES_ONE: Readonly<Record<string, { left: string; right: string }>>
 export const LOOKABLE_EYES: ReadonlySet<string> = new Set(['open', 'wide', 'half', 'angry', 'sad', 'winkR', 'winkL'])
 export const MOUTH: Readonly<Record<string, readonly (readonly [number, number])[]>> = {
   o: [[8, 5]],
+  /** Gespitzter Mund beim Pfeifen (wird als einziger gezeichnet): 1 × 2 Pixel unter der Augenmitte. */
+  whistle: [[8, 5], [8, 6]],
   yawn: [[8, 4], [8, 5]],
   yawnBig: [[7, 4], [8, 4], [9, 4], [7, 5], [8, 5], [9, 5]],
   smile: [[7, 4], [8, 5], [9, 4]],
@@ -205,6 +209,7 @@ export function propSprite(props: PropTable, name: string): PropSprite | undefin
       rows: shrink(src.rows),
       ...(src.effect ? { effect: true as const } : {}),
       ...(src.noFlip ? { noFlip: true as const } : {}),
+      ...(src.front ? { front: true as const } : {}),
       ...(src.mirrorRows ? { mirrorRows: shrink(src.mirrorRows) } : {}),
     }
   }
@@ -220,8 +225,9 @@ export function compose(p: Pose, props: PropTable): Composed {
   const oy = FY + Math.round(p.fy)
   const top = p.by + p.squash
   const bot = 7 + p.by
-  // Spiegeln um die Mitte der Figur (Spalte ox+8); linker und rechter Arm tauschen dabei ihre Trefferkennung.
-  const mx = (x: number) => (p.mirror ? 2 * (ox + 8) - x : x)
+  // Spiegeln um die Mitte des Heimatplatzes (Spalte FX+8), nicht um die laufende Figur: sonst liefe er gespiegelt weiter in die alte Richtung und die
+  // Gegenstände am Boden kämen ihm entgegen (Fynn, 2026-10-06: „die Blume kommt näher an ihn ran“). Linker und rechter Arm tauschen ihre Trefferkennung.
+  const mx = (x: number) => (p.mirror ? 2 * (FX + 8) - x : x)
   const mt = (tag: string | null) => (p.mirror && tag === 'armL' ? 'armR' : p.mirror && tag === 'armR' ? 'armL' : tag)
   const set = (x0: number, y: number, c: string | undefined, tag: string | null) => {
     const x = mx(x0)
@@ -269,16 +275,18 @@ export function compose(p: Pose, props: PropTable): Composed {
       drawEye(p.eyes, true)
     }
     // Kein Mund (Fynn: ohne wirkt er stimmiger als mit einem, der zwischendurch auftaucht). `mouth` bleibt in den Clips stehen,
-    // wird aber nicht gezeichnet; die Formen in MOUTH bleiben für eine spätere Wiederaufnahme.
+    // wird aber nicht gezeichnet; die Formen in MOUTH bleiben für eine spätere Wiederaufnahme. Einzige Ausnahme: der gespitzte Mund beim
+    // Pfeifen, ein schmales Rechteck in der Mitte (Fynn, 2026-10-06: „nur einen, der auch rechteckig ist“).
+    if (p.mouth === 'whistle') for (const [x, y] of MOUTH.whistle) set(ox + x + fc, oy + top + y, 'K', null)
     if (p.blush) {
       set(ox + 3 + fc, oy + top + 4, 'P', null)
       set(ox + 13 + fc, oy + top + 4, 'P', null)
     }
   }
-  for (const pr of p.props) {
+  const drawProp = (pr: PropRef, front: boolean): void => {
     const [name, px, py, flag] = pr
     const s = propSprite(props, name)
-    if (!s) continue
+    if (!s || !!s.front !== front) return
     const bx = flag ? FX + px : ox + px
     const by = flag ? FY + py : oy + py + p.by
     // 'G': fest auf der Bühne, wird beim Spiegeln nicht mitgespiegelt (Begleiter der Subagenten bleiben links)
@@ -291,6 +299,7 @@ export function compose(p: Pose, props: PropTable): Composed {
       for (let rx = 0; rx < row.length; rx++) if (row[rx] !== '.') put(keep ? bx + w - 1 - rx : bx + rx, by + ry, row[rx], 'prop:' + name)
     })
   }
+  for (const pr of p.props) drawProp(pr, false)
   // Hände vor dem Körper gehen nie über die Augen (Fynn), außer beim Augenreiben (rub*), wo genau das gemeint ist: Berührt ein Vorderarm
   // ein Auge (auch nur daneben oder darunter), rutscht er als Ganzes bis zu 3 Pixel nach unten; nur wenn das nicht reicht, bleibt dort eine Lücke.
   const touchesEye = (x: number, y: number): boolean =>
@@ -311,6 +320,7 @@ export function compose(p: Pose, props: PropTable): Composed {
   }
   frontArm(p.armL, false)
   frontArm(p.armR, true)
+  for (const pr of p.props) drawProp(pr, true)
   return { buf, hit }
 }
 

@@ -642,9 +642,15 @@ test('Rückkehr: Begrüßung (Augen reiben, dann Morgen-Clip) zu jeder Uhrzeit, 
   expect(w.S.queue.some((q) => typeof q === 'string' && MORNING.includes(q))).toBe(false)
 })
 
-test('Gesicht: kein Mund; Blinzeln senkt nur das Lid (Auge springt nie zur Seite)', { timeoutMs: 30000 }, () => {
+test('Gesicht: kein Mund außer dem rechteckigen beim Pfeifen; Blinzeln senkt nur das Lid (Auge springt nie zur Seite)', { timeoutMs: 30000 }, () => {
   const plain = compose({ ...POSES.stand }, ALL_PROPS).buf
-  for (const m of Object.keys(MOUTH)) expect(compose({ ...POSES.stand, mouth: m }, ALL_PROPS).buf).toEqual(plain)
+  for (const m of Object.keys(MOUTH)) if (m !== 'whistle') expect(compose({ ...POSES.stand, mouth: m }, ALL_PROPS).buf).toEqual(plain)
+  // Pfeifen: genau die zwei Pixel 1 × 2 in der Mitte unter den Augen, schwarz
+  const wh = compose({ ...POSES.stand, mouth: 'whistle' }, ALL_PROPS).buf
+  const diff = wh.map((c, i) => (c !== plain[i] ? i : -1)).filter((i) => i >= 0)
+  expect(diff.length).toBe(2)
+  expect(diff.every((i) => wh[i] === 'K')).toBe(true)
+  expect(diff[1] - diff[0]).toBe(W)
   const e = newEngine(LIB, 9)
   e.start()
   for (let i = 0; i < 600; i++) {
@@ -812,4 +818,18 @@ test('Helfer fertig, während Clawd selbst arbeitet: er bleibt stehen bis zur Ü
       expect(seq.slice(gone).includes(true), `${mood}/${seed}: taucht wieder auf`).toBe(false)
     }
   }
+})
+
+test('Gespiegelt läuft er selbst: Gegenstände am Boden bleiben stehen, die Figur bewegt sich gespiegelt in die Gegenrichtung', () => {
+  const at = (fx: number, mirror: boolean): { body: number; prop: number } => {
+    const c = compose({ ...POSES.stand, fx, mirror, props: [['fun_jy', -10, 6, 'g']] }, ALL_PROPS)
+    const first = (tag: (t: string) => boolean): number => c.hit.findIndex((t) => !!t && tag(t)) % W
+    return { body: first((t) => t === 'body'), prop: first((t) => t.startsWith('prop:')) }
+  }
+  const a = at(0, true)
+  const b = at(-5, true)
+  expect(b.prop).toBe(a.prop) // der Ball liegt still
+  expect(b.body - a.body).toBe(5) // er geht gespiegelt nach rechts
+  const c = at(-5, false)
+  expect(c.body - at(0, false).body).toBe(-5)
 })

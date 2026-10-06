@@ -5,7 +5,7 @@
 // daraus auf seiner eigenen Uhr ab (mood.ts); `$.ui.invalidate` läuft darum nur bei echten Ereignissen, nie im Bildtakt (Desktop: desk.ts).
 // Zeichnet ins Band über dem Prompt (docs/raw/en/interface.md:207-213) und lässt fremden Inhalt stehen (`await next(e)` als Kind).
 import type { EngineInterface, On, Timer } from 'claude-code'
-import { joinBand, splitBand } from './band.ts'
+import { joinBand, nameOf, splitBand } from './band.ts'
 import { ALL_CLIPS } from './library.ts'
 import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
 import type { Strain } from './mood.ts'
@@ -64,6 +64,13 @@ let deskAsked = 0 // Wächter-Runden, seit um eine neue Zeichnung gebeten wurde 
 let deskSource = ''
 let deskDrawnAt = 0 // Uhrzeit der letzten echten Zeichnung
 let deskForce = false
+// Springen (Fynn, 2026-10-06: „springt von jetzt auf gleich zu einer ganz anderen Sache“): Baut der Desktop den Rahmen trotz gleichem `source` neu
+// auf, beginnt die Animation wieder bei ihrem Anfang, also Sekunden zurück, und bei der nächsten echten Zeichnung springt sie nach vorn. Das passiert
+// sicher, wenn sich der Aufbau des Bands ändert (eine Ebene von quick-replies oder sidekick kommt oder geht, andere Breite), und vermutlich auch nach
+// dem Wiederanzeigen der Sitzung [UNKLAR]. Deshalb: bei geändertem Aufbau immer neu zeichnen, und ein Svg höchstens DESK_REUSE_MS lang weitergeben;
+// ein unerkannter Neustart springt so höchstens um diese Zeit zurück.
+const DESK_REUSE_MS = 5000
+let deskShape = ''
 // Messung für `/clawd status` (Fynn, 2026-10-05: Clawd wirkt bei mehreren Agenten verzögert). Zählt seit dem letzten `/clawd status`,
 // mit performance.now() (synchron, kein `$`-Aufruf): Zeichnungen, Länge und Bildwechsel der Animationen, Rechen- und Zeichendauer.
 type DeskMeter = { since: number; draws: number; reused: number; planSecs: number; changes: number; chars: number; calcSum: number; calcMax: number; drawSum: number; drawMax: number; othersSum: number }
@@ -555,7 +562,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         const calcStart = performance.now()
         const fNow = deskFacts(now)
         // Ändern die neuen Fakten an der gezeigten Animation (vorerst) nichts, bleibt das Svg dasselbe: kein Neuladen, kein Flackern
-        const keep = deskSource !== '' && !deskForce && deskAsked === 0
+        const shape = `${layers.map((l) => nameOf(l)).join(',')}|${e.props.bodyColumns}|${e.props.maxRows}`
+        const keep = deskSource !== '' && !deskForce && deskAsked === 0 && shape === deskShape && now - deskDrawnAt < DESK_REUSE_MS
         const div = keep ? desk.divergence(now, fNow, strain) : 0
         const left = keep ? desk.remaining(now) : 0
         if (keep && div > DESK_LEAD && left > DESK_LEAD) {
@@ -567,6 +575,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           const plan = desk.draw(now, fNow, strain, DESK_SCALE)
           deskSource = plan.source
           deskDrawnAt = now
+          deskShape = shape
           deskForce = false
           deskPlanMs = plan.ticks * DESK_TICK
           deskChecks = 0
