@@ -1,11 +1,11 @@
 // quick-replies: Hooks-Modul. Nach jeder Antwort von Claude stehen vorgeschlagene nächste Nachrichten als eigene Pille über Clawd
 // im Band über dem Prompt (AbovePrompt, docs/raw/en/interface.md:207-213). Klick oder Ziffer 1–4 als erstes Zeichen im leeren
 // Prompt (prompt.edit, types@2.1.289:8128-8203) schickt den Vorschlag als Nachricht des Nutzers ab ($.prompt.submit mit asUser,
-// types@2.1.289:8516-8529).
+// types@2.1.289:8516-8529). Wird die Ziffer allein abgeschickt, ersetzt prompt.submit sie durch den Vorschlag.
 // Quellen: der eine Vorschlag von Claude Codes eigenem Dienst (prompt.suggest); auf Wunsch (/replies more on) bis zu drei weitere
 // aus einem Fork der Session ($.model.fork, voller Kontext, gleicher Cache), nach dem Vorbild von next-steps.
 // Der Mod beobachtet nur: Jeder Event-Hook gibt das Ergebnis von next(e) weiter; nur eine Ziffer, die einen Vorschlag sendet,
-// landet nicht im Prompt. Er sendet nie von selbst, nur auf Klick oder Taste.
+// landet nicht im Prompt bzw. wird beim Absenden durch den Vorschlag ersetzt. Er sendet nie von selbst, nur auf Klick oder Taste.
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
 import { joinBand, layer, LEVEL, nameOf, splitBand } from './band.ts'
 import { forkStateText, langOf, T } from './i18n.ts'
@@ -20,6 +20,9 @@ const CMD = 'replies'
 const FRAME = 4
 // Keine Neubelegung so lange nach einer Eingabe (SPEC → Stabilität)
 const QUIET_MS = 2000
+// Abgeschickte Ziffer zählt nur, wenn der Nutzer sie selbst geschickt hat: Prompt im Terminal oder SDK-Host (Desktop). Nicht
+// Remote Control: Telefon und Web zeigen die Pille nicht (types@2.1.290:8554-8575)
+const USER_ORIGINS: ReadonlySet<string> = new Set(['composer', 'sdk'])
 
 type Settings = { enabled: boolean; more: boolean }
 
@@ -43,6 +46,8 @@ let forkState: ForkState = { kind: 'idle' }
 let promptText = ''
 // Die Pille stand beim letzten Zeichnen (nur dann schickt eine Ziffer im leeren Prompt den Vorschlag ab)
 let shown = false
+// Was die Pille in diesem Turn zuletzt gezeigt hat: Eine allein abgeschickte Ziffer sendet nur einen Vorschlag, der zu sehen war
+let seen: string[] = []
 let quiet: Timer | null = null
 let pending = false
 
@@ -85,6 +90,7 @@ function resetTurn() {
   engine = ''
   fork = []
   replies = []
+  seen = []
   forkGen += 1
   pending = false
 }
@@ -286,6 +292,48 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     return r
   })
 
+  // Nur die Ziffer als ganze Nachricht abgeschickt (z. B. im Desktop, wenn die Ziffer im Prompt stehen blieb): stattdessen geht
+  // der Vorschlag mit dieser Nummer raus, im Transkript steht sein Text (types@2.1.290:4024-4033, 8740-8791). Alles andere,
+  // auch die eigenen Sendungen des Mods (origin plugin), läuft unverändert durch.
+  on('prompt.submit', async ($, e, next) => {
+    const digit = e.text.trim()
+    if (!/^[1-4]$/.test(digit)) return next(e)
+    const pick = seen[Number(digit) - 1]
+    const why = !USER_ORIGINS.has(e.origin.kind)
+      ? `origin ${e.origin.kind}`
+      : e.turnId !== undefined || e.attachments?.length
+        ? 'mid-turn or attachments'
+        : !settings.enabled || !ready || !pick
+          ? 'no suggestion shown'
+          : ''
+    if (why || !pick) {
+      $.ui.log(`quick-replies: "${digit}" sent as typed (${why})`, { to: 'debug' })
+      return next(e)
+    }
+    // Nach /clear nie den Vorschlag des alten Chats
+    let now: string
+    try {
+      now = await $.session.id()
+    } catch {
+      return next(e)
+    }
+    if (sid && now !== sid) {
+      sid = now
+      resetTurn()
+      return next(e)
+    }
+    ready = false
+    promptText = ''
+    $.ui.invalidate('ui.render')
+    const r = await next({ ...e, text: pick })
+    // Ein Hook weiter innen oder ein UserPromptSubmit-Hook hat die Nachricht gestoppt: die Pille kommt zurück
+    if (r.drop !== undefined) {
+      ready = replies.length > 0
+      $.ui.invalidate('ui.render')
+    }
+    return r
+  })
+
   on('command.run', { command: CMD }, async ($, e) => {
     // Der Befehl stand gerade im Prompt; ob das Leeren beim Absenden prompt.edit auslöst, ist nicht belegt
     if (!promptEmpty(promptText)) {
@@ -392,6 +440,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       // Während sidekick einen neuen Chat startet, keine Pille; sidekick weiter innen sieht sie nicht
       if (layers.some((l) => nameOf(l) === 'sidekick')) return joinBand(layers, base)
       shown = true
+      seen = texts
       return joinBand([...layers, layer(LEVEL.quickReplies, 'quick-replies', cached.node)], base)
     } catch (err) {
       // Fehler aus der Kette weiterwerfen (docs/raw/en/events.md:313-316); eigener Fehler: Clawd und Balken bleiben stehen

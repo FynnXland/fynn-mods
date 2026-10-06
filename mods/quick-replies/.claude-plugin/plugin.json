@@ -1,7 +1,7 @@
 {
   "name": "quick-replies",
-  "version": "0.2.1",
-  "description": "Claude Code's own next-message suggestion as a button above Clawd; click it or type 1 in the empty prompt to send it. With /replies more on, up to three more suggestions from a fork of the session.",
+  "version": "0.3.0",
+  "description": "Claude Code's own next-message suggestion as a button above Clawd; click it, type 1 in the empty prompt, or send just 1 to send it. With /replies more on, up to three more suggestions from a fork of the session.",
   "author": {
     "name": "Fynn Hansen"
   },

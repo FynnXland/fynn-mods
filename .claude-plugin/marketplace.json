@@ -18,12 +18,12 @@
     {
       "name": "sidekick",
       "source": "./mods/sidekick",
-      "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Sonnet: a hint line under your message or a question (new chat with handoff, a skill, a clearer version, or \"wrong chat?\" when the message belongs to another project). Names due maintenance once per chat (/skill-doctor, prompt-audit, consolidate-memory, /init). /savings shows cost and measurable savings at a glance, /savings detail compares the models over time."
+      "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Sonnet: a hint line under your message or a question (new chat with handoff, a skill, a clearer version, or \"wrong chat?\" when the message belongs to another project). Names due maintenance once per chat (/skill-doctor, prompt-audit, consolidate-memory, /init). With worklist installed, a long message with several tasks can be split into 3-4 to-dos, and /later plans text as to-dos. Five levels (off, cache, guide, plan, auto) with a colored label in the prompt footer. /savings shows cost and measurable savings at a glance, /savings detail compares the models over time."
     },
     {
       "name": "quick-replies",
       "source": "./mods/quick-replies",
-      "description": "Claude Code's own next-message suggestion as a button above Clawd; click it or type 1 in the empty prompt to send it. With /replies more on, up to three more suggestions from a fork of the session."
+      "description": "Claude Code's own next-message suggestion as a button above Clawd; click it, type 1 in the empty prompt, or send just 1 to send it. With /replies more on, up to three more suggestions from a fork of the session."
     },
     {
       "name": "worklist",

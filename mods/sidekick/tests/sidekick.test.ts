@@ -29,12 +29,18 @@ import {
   sumPeriod,
   rankChoices,
   triggerOf,
+  cleanSettings,
+  isLong,
+  parseSplit,
+  splitPrompt,
+  splitSystem,
+  TODO_MAX,
 } from '../hooks/logic.ts'
-import type { Ledger } from '../hooks/logic.ts'
+import type { Ledger, Level } from '../hooks/logic.ts'
 import { DEFAULT_HINTS, applyHints, availOf, cleanWartung, doneFromSkill, doneFromText, memoryMeasure, normModel, pickHint, projectKey, rebase, rootFromFiles, unusedSkills } from '../hooks/wartung.ts'
 import type { Measure, Wartung } from '../hooks/wartung.ts'
 import { T, dec, setLang, shortDate, spanText, tokensText, usdText } from '../hooks/i18n.ts'
-import { CHECK, HANDOFF as HANDOFF_ROLE, genitiveDe, modelLabel, modelName } from '../hooks/models.ts'
+import { CHECK, HANDOFF as HANDOFF_ROLE, SPLIT, genitiveDe, modelLabel, modelName } from '../hooks/models.ts'
 import { savingsTree } from '../hooks/view.ts'
 
 // Die bisherigen Tests prüfen die deutschen Texte (language: de, Fynns Einstellung); eigene Tests unten prüfen Englisch.
@@ -114,7 +120,7 @@ deTest('Verlaufsende: etwa 100 000 Zeichen, ohne Tool-Ergebnisse, die neuesten b
 
 deTest('Einstellungen: englische Befehle', async () => {
   const s = DEFAULT_SETTINGS
-  expect(applySetting(s, 'off')?.on).toBe(false)
+  expect(applySetting(s, 'off')?.level).toBe('off')
   expect(applySetting(s, 'threshold 5k')?.threshold).toBe(5000)
   expect(applySetting(s, 'big 1,5m')?.big).toBe(1500000)
   expect(applySetting(s, 'skills off')?.skills).toBe(false)
@@ -226,6 +232,7 @@ type W = {
   submitFails?: boolean
   handoffDelayMs?: number
   stateFails?: () => boolean // $.state.set lehnt ab (Schnittstelle clawd-buddy)
+  stateGetFails?: boolean // $.state.get lehnt ab (Anzeige, 0.10.1)
   // Wartungs-Hinweise (SPEC Nachtrag 0.2.0)
   root?: string | null // null: $.session.root() wirft
   memory?: { path: string; type: string; tokens: number }[]
@@ -234,14 +241,20 @@ type W = {
   cmds?: { name: string; description: string; source: string; plugin?: string }[]
   fillFails?: boolean // $.prompt.fill: Dialog hält die Tasten
   todoFails?: boolean // /todo von worklist scheitert
+  todoFailAt?: number // das n-te /todo (ab 1) scheitert (Nachtrag 0.9.0)
+  todoTextAt?: number // das n-te /todo antwortet mit Fehlertext wie worklist (Review 0.9.0 S1)
+  clearAtSplit?: boolean // während SPLIT wechselt die Session (Review 0.9.0 K2)
+  splitDelayMs?: number // SPLIT braucht so lange (blaue Box)
   runFails?: boolean // ein anderer Befehl als /todo und /clear scheitert (Nachtrag 0.8.1)
   usageFails?: boolean
   noBreakdown?: boolean // breakdown fehlt in der Antwort
+  level?: Level // Stufe in den gespeicherten Einstellungen (Nachtrag 0.10.0)
 }
 
 function world(on: On, o: W = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
+  if (o.level && !saved.has('settings')) saved.set('settings', { ...DEFAULT_SETTINGS, level: o.level, lastOn: o.level === 'off' ? 'guide' : o.level })
   const toasts: string[] = []
   const asks: { question: string; options: string[] }[] = []
   const sent: string[] = []
@@ -255,6 +268,10 @@ function world(on: On, o: W = {}) {
   let answer: string | null = 'Trotzdem senden'
   let reply: unknown = { isAnswered: true, text: verdict({}), usage: MODEL_USAGE }
   let handoffReply: unknown = { isAnswered: true, text: HANDOFF, usage: MODEL_USAGE }
+  // SPLIT (Nachtrag 0.9.0): `null` = Aufruf wird abgelehnt
+  const splits: { system: string; prompt: string; req: unknown }[] = []
+  let splitReply: unknown = { isAnswered: true, text: JSON.stringify({ todos: ['To-do eins', 'To-do zwei', 'To-do drei'] }), usage: MODEL_USAGE }
+  let todos = 0
   let id = 'sess-1'
   let ctx: number | undefined = 1000
   let messages: unknown[] = [{ role: 'assistant', text: 'vorher', toolUses: [] }]
@@ -293,6 +310,13 @@ function world(on: On, o: W = {}) {
       if (o.handoffDelayMs) await clock.sleep(o.handoffDelayMs)
       return { value: handoffReply as never }
     }
+    if (e.system?.includes('Du teilst eine lange Nachricht')) {
+      splits.push({ system: e.system, prompt: e.prompt, req: { model: e.model, effort: e.effort, maxTokens: e.maxTokens, timeoutMs: e.timeoutMs } })
+      if (o.splitDelayMs) await clock.sleep(o.splitDelayMs)
+      if (o.clearAtSplit) id = 'sess-2'
+      if (splitReply === null) return { deny: 'kein Modell' }
+      return { value: splitReply as never }
+    }
     checks.push({ system: e.system ?? '', prompt: e.prompt, req: { model: e.model, effort: e.effort, maxTokens: e.maxTokens, timeoutMs: e.timeoutMs } })
     return { value: reply as never }
   })
@@ -320,6 +344,8 @@ function world(on: On, o: W = {}) {
     commands.push(e.command)
     commandArgs.push(`${e.command} ${e.args ?? ''}`.trim())
     if (o.todoFails && e.command === 'todo') throw new Error('kein todo')
+    if (e.command === 'todo' && ++todos === o.todoFailAt) throw new Error('worklist voll')
+    if (e.command === 'todo' && todos === o.todoTextAt) return { text: 'To-do nicht angelegt: Store voll' }
     if (o.runFails && e.command !== 'todo' && e.command !== 'clear') throw new Error('nicht erlaubt')
     // Ein werfender Stub wird übersprungen (docs/raw/en/test.md:182); ohne weitere Antwort scheitert der Aufruf
     if (o.clearFails && e.command === 'clear') throw new Error('nicht jetzt')
@@ -345,14 +371,28 @@ function world(on: On, o: W = {}) {
   // Schnittstelle zu clawd-buddy: jede Änderung von sidekick.buddy (Art bzw. null)
   const buddy: (string | null)[] = []
   let buddyVersion = 0
+  const status: string[] = []
+  const stateVals = new Map<string, unknown>()
+  on('state.get', ($: unknown, e: any) => {
+    if (o.stateGetFails) return { deny: 'get abgelehnt' }
+    return { value: { value: e.plugin === 'sidekick' ? stateVals.get(e.key) : undefined, version: buddyVersion } }
+  })
   on('state.set', ($: unknown, e: any) => {
     if (o.stateFails?.()) throw new Error('state abgelehnt')
     if (e.plugin === 'sidekick' && e.key === 'buddy') buddy.push(e.value?.kind ?? null)
+    // Anzeige (Nachtrag 0.10.0): jede Änderung von sidekick.status, als „Stufe busy“ bzw. „Stufe“
+    if (e.plugin === 'sidekick' && e.key === 'status') status.push(e.value ? `${e.value.level}${e.value.busy ? ' busy' : ''}` : 'null')
+    if (e.plugin === 'sidekick') stateVals.set(e.key, e.value)
     buddyVersion += 1
     return { value: { isSet: true, version: buddyVersion } }
   })
   let bandTree: unknown = null
-  on('ui.render', ($, e) => (e.component === 'AbovePrompt' && bandTree ? (bandTree as never) : { type: 'Text', props: {}, children: [String((e.props as { text?: string }).text ?? '')] }))
+  on('ui.render', ($, e) => {
+    if (e.component === 'AbovePrompt' && bandTree) return bandTree as never
+    // SessionMode: die Labels so, wie die Engine sie zeigt (mit „ & “ verbunden)
+    if (e.component === 'SessionMode') return { type: 'Text', props: {}, children: [((e.props as { modes?: string[] }).modes ?? []).join(' & ')] }
+    return { type: 'Text', props: {}, children: [String((e.props as { text?: string }).text ?? '')] }
+  })
   let next: StepU = stepUsage(0, 0)
   let turn = 0
   on('turn.step', async function* (_$, e) {
@@ -379,8 +419,11 @@ function world(on: On, o: W = {}) {
     handoffs,
     handoffReqs,
     handoffSystems,
+    splits,
     buddy,
+    status,
     step,
+    setSplit: (r: unknown) => (splitReply = r),
     setAnswer: (a: string | null) => (answer = a),
     setReply: (r: unknown) => (reply = r),
     setHandoff: (r: unknown) => (handoffReply = r),
@@ -1328,7 +1371,11 @@ test('i18n: beide Tabellen haben dieselben Schlüssel und keine leeren Texte', a
       else if (typeof v === 'object') {
         expect(keys(v)).toEqual(keys((T.de as Record<string, object>)[k]!))
         for (const x of Object.values(v)) expect(String(x).trim().length > 0).toBe(true)
-      } else expect(String((v as (...a: unknown[]) => string)('x', 'y', 'z')).trim().length > 0).toBe(true)
+      } else {
+        // splitAsk nimmt die Liste der Titel
+        const args = k === 'splitAsk' ? [['x', 'y', 'z']] : ['x', 'y', 'z']
+        expect(String((v as (...a: unknown[]) => string)(...args)).trim().length > 0).toBe(true)
+      }
     }
   }
 })
@@ -1383,7 +1430,7 @@ test('i18n: Englisch ist Standard; Rückfrage, Zeile und Befehle auf Englisch', 
   // Die Anweisung der Prüfung verlangt Englisch
   expect(w.checks[0]!.system).toContain('auf Englisch')
   const status = String(((await $.command.run({ command: 'sidekick', args: 'status' })) as { text?: string }).text)
-  expect(status).toContain('**on** · status')
+  expect(status).toContain('**Guide** · status')
   expect(status).toContain('| **Threshold** | 80k context (checks from here) |')
   expect(status).toContain('**Maintenance hints:** on')
   const bad = String(((await $.command.run({ command: 'sidekick', args: 'quatsch' })) as { text?: string }).text)
@@ -1832,7 +1879,7 @@ deTest('0.6.0: /savings detail zeigt Zeitraum, Modelle mit Nutzung, Vergleich un
   expect(md).toContain('*Daten 04.10.–05.10. · an 2 Tagen*')
   expect(md).toContain('| Sonnet 5.5 | Übergabe | 1 | ≈ 0,05 $ | ≈ 0,05 $ | 8,0 s | 05.10. |')
   expect(md).toContain('| früher, ohne Modell | – | 20 | ≈ 0,10 $ | – | – | 04.10. |')
-  expect(md).toContain('- Sonnet 5.5: Ø 3,0k Tokens ein · 200 aus je Aufruf (Prüfung und Übergabe) · genutzt 05.10. · an 1 Tag')
+  expect(md).toContain('- Sonnet 5.5: Ø 3,0k Tokens ein · 200 aus je Aufruf (alle Rollen) · genutzt 05.10. · an 1 Tag')
   expect(md).toContain('- Haiku 4.5: Ø 3,0k Tokens ein · 200 aus je Prüfung · genutzt 04.10. · an 1 Tag')
   expect(md).toContain('| 05.10. | 2 | ≈ 0,07 $ | ≈ 1,50 $ | Sonnet 5.5 3× |')
   expect(md).toContain('| 04.10. | 21 | ≈ 0,10 $ | ≈ 0 $ | Haiku 4.5 1× · früher 20× |')
@@ -1906,7 +1953,7 @@ deTest('0.6.0 Review: ungleiche Tokens von Prüfung und Übergabe heißen „je 
   bookModel(d, 'claude-sonnet-5-5', 'pruefung', 0.01, 1000, { input_tokens: 3000, output_tokens: 200, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
   bookModel(d, 'claude-sonnet-5-5', 'uebergabe', 0.04, 8000, { input_tokens: 20000, output_tokens: 800, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
   const r = modelCompare(d, { [dayKey(NOW)]: d })[0]!
-  expect(compareNote(r)).toContain('je Aufruf (Prüfung und Übergabe)')
+  expect(compareNote(r)).toContain('je Aufruf (alle Rollen)')
   expect(compareNote(r)).not.toContain('je Prüfung')
   // Leer: keine Fehler, kein Vergleich, kein Verlauf
   const empty = savingsReport(emptyDay(), 'all', NOW, '', {})
@@ -2235,4 +2282,817 @@ deTest('0.8.1 Review: Doppelklick auf „ausführen“ startet den Befehl einmal
   await flush()
   await ui.unmount()
   expect(w.commandArgs.filter((c) => c.startsWith('claude-api')).length).toBe(1)
+})
+
+// ---------- 0.9.0: Lange Nachricht in To-dos aufteilen ----------
+
+const STEPS = ['Ring in limit-bars', 'Zeile im sidekick kürzen', 'README von worklist']
+const LONG =
+  'erstens: im limit-bars springt der ring beim start kurz auf grau, das soll weg. zweitens: die zeile unter der nachricht im sidekick ist zu lang, bitte kürzen. drittens: die readme von worklist nachtragen. ' +
+  'details dazu, die alle wichtig sind. '.repeat(18)
+const splitVerdict = (steps: unknown) => JSON.stringify({ urteil: 'anhalten', art: 'aufteilen', zeile: 'Drei getrennte Aufträge.', fassung: '', skill: '', schritte: steps, kurzfassung: 'Kurz.' })
+const BAND_SPLIT = { plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface: 'desktop', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } }
+
+deTest('0.9.0: Auslöser (d) nur mit worklist und ≥ long; nicht mit Anhang oder @datei; (c) vor (d); long off', async () => {
+  const s = { ...DEFAULT_SETTINGS, level: 'plan' as const }
+  expect(LONG.length >= 800).toBe(true)
+  expect(s.long).toBe(800)
+  // Seit 0.10.0 gehört (d) zu Plan und Autonom; im Begleiter nie
+  expect(triggerOf({ first: false, ctx: 1000, cold: false, long: true, settings: DEFAULT_SETTINGS })).toBe(null)
+  expect(isLong('x'.repeat(800), true, s)).toBe(true)
+  expect(isLong('x'.repeat(799), true, s)).toBe(false)
+  expect(isLong(`   ${'x'.repeat(799)}   `, true, s)).toBe(false)
+  // resendable = false: Anhang oder @datei
+  expect(isLong('x'.repeat(900), false, s)).toBe(false)
+  expect(isLong('x'.repeat(5000), true, { ...s, long: 0 })).toBe(false)
+  expect(triggerOf({ first: false, ctx: 1000, cold: false, long: true, settings: s })).toBe('d')
+  expect(triggerOf({ first: false, ctx: 1000, cold: false, long: false, settings: s })).toBe(null)
+  expect(triggerOf({ first: false, ctx: 200000, cold: true, long: true, settings: s })).toBe('c')
+  expect(triggerOf({ first: true, ctx: 1000, cold: false, long: true, settings: s })).toBe('a')
+  expect(triggerOf({ first: false, ctx: 90000, cold: false, long: true, settings: s })).toBe('b')
+  expect(applySetting(s, 'long off')?.long).toBe(0)
+  expect(applySetting(s, 'long 1200')?.long).toBe(1200)
+  expect(applySetting(s, 'long 1,5k')?.long).toBe(1500)
+  expect(applySetting(s, 'long quatsch')).toBe(null)
+  expect(cleanSettings({ long: 0 }).long).toBe(0)
+  expect(cleanSettings({}).long).toBe(800)
+  expect(cleanSettings({ long: -5 }).long).toBe(800)
+})
+
+deTest('0.9.0: parseVerdict „aufteilen“ nur mit Erlaubnis, nie bei (c), 3–4 Schritte, keine leeren Titel; Titel gekürzt', async () => {
+  const p = (steps: unknown, split = true, trigger: 'b' | 'c' | 'd' = 'd') => parseVerdict(splitVerdict(steps), trigger, [], LONG, split)
+  expect(p(STEPS)).toMatchObject({ urteil: 'anhalten', art: 'aufteilen', schritte: STEPS })
+  expect(p(STEPS, true, 'b')?.urteil).toBe('anhalten')
+  expect(p(STEPS, false)?.urteil).toBe('durch')
+  expect(p(STEPS, true, 'c')?.urteil).toBe('durch')
+  expect(p(STEPS.slice(0, 2))?.urteil).toBe('durch')
+  expect(p([...STEPS, 'vier', 'fünf'])?.urteil).toBe('durch')
+  expect(p([...STEPS, 'vier'])?.schritte?.length).toBe(4)
+  expect(p(['eins', '  ', 'drei'])?.urteil).toBe('durch')
+  expect(p('kein array')?.urteil).toBe('durch')
+  // Auch als „hinweis“ geliefert: immer Rückfrage
+  expect(parseVerdict(splitVerdict(STEPS).replace('"anhalten"', '"hinweis"'), 'd', [], LONG, true)?.urteil).toBe('anhalten')
+  const cutT = p(['Ein sehr langer Titel mit vielen Wörtern, der weit über sechzig Zeichen hinausgeht', 'zwei', 'drei'])
+  expect(cutT!.schritte![0]!.length <= 60).toBe(true)
+  expect(cutT!.schritte![0]!.endsWith('…')).toBe(true)
+  // Regel und Fakt nur mit Erlaubnis: ohne bleibt der geprobte Prompt unverändert
+  expect(checkSystem(null, true)).toContain('"Aufteilen erlaubt: ja"')
+  expect(checkSystem(null, true)).toContain('"schritte"')
+  expect(checkSystem(null, false)).not.toContain('aufteilen')
+  expect(checkSystem(null)).toBe(checkSystem(null, false))
+})
+
+deTest('0.9.0: parseSplit genau n nicht leere To-dos ≤ 1900 Zeichen; SPLIT bekommt Titel und die ganze Nachricht', async () => {
+  expect(parseSplit('```json\n{"todos":["a","b","c"]}\n```', 3)).toEqual(['a', 'b', 'c'])
+  expect(parseSplit('{"todos":["a","b"]}', 3)).toBe(null)
+  expect(parseSplit('{"todos":["a","  ","c"]}', 3)).toBe(null)
+  expect(parseSplit(JSON.stringify({ todos: ['a', 'b', 'x'.repeat(TODO_MAX + 1)] }), 3)).toBe(null)
+  expect(parseSplit(JSON.stringify({ todos: ['a', 'b', 'x'.repeat(TODO_MAX)] }), 3)?.length).toBe(3)
+  expect(parseSplit('kaputt', 3)).toBe(null)
+  expect(parseSplit('{"todos":"a"}', 3)).toBe(null)
+  const big = LONG.repeat(6)
+  const pr = splitPrompt('Kurz.', big, STEPS)
+  expect(pr).toContain('1. Ring in limit-bars\n2. Zeile im sidekick kürzen\n3. README von worklist')
+  expect(pr).toContain(big)
+  expect(pr).toContain('Kurzfassung des Chats: Kurz.')
+  expect(splitSystem()).toContain('To-do 1 endet mit einer eigenen Zeile')
+  expect(splitSystem()).toContain(`höchstens ${TODO_MAX} Zeichen`)
+  expect(SPLIT).toEqual({ model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 3000, timeoutMs: 45000 })
+})
+
+deTest('0.9.0: ohne worklist löst eine lange Nachricht nichts aus (kein Modellaufruf)', async ($, on) => {
+  const w = world(on, { level: 'plan' })
+  expect(await $.prompt.submit(userPrompt(LONG))).toMatchObject({ text: LONG })
+  expect(w.checks.length).toBe(0)
+  expect(w.asks.length).toBe(0)
+})
+
+deTest('0.9.0: mit worklist prüft eine lange Nachricht mit „Aufteilen erlaubt: ja“; kurz, @datei, Anhang, long off nicht', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST] })
+  await $.prompt.submit(userPrompt(LONG))
+  expect(w.checks.length).toBe(1)
+  expect(w.checks[0]!.prompt).toContain('Auslöser: lange Nachricht')
+  expect(w.checks[0]!.prompt).toContain('; Aufteilen erlaubt: ja')
+  expect(w.checks[0]!.system).toContain('"aufteilen"')
+  // Die Prüfung bleibt schnell: dieselbe Rolle CHECK
+  expect(w.checks[0]!.req).toEqual({ model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 400, timeoutMs: 6000 })
+  await $.prompt.submit(userPrompt('kurz'))
+  await $.prompt.submit(userPrompt(`${LONG} schau in @src/app.ts`))
+  await $.prompt.submit({ ...userPrompt(LONG), attachments: [{ kind: 'image' }] } as never)
+  await $.command.run({ command: 'sidekick', args: 'long off' } as never)
+  await $.prompt.submit(userPrompt(LONG))
+  expect(w.checks.length).toBe(1)
+  // (b) mit langer Nachricht: Aufteilen erlaubt; ohne lange Nachricht nicht
+  await $.command.run({ command: 'sidekick', args: 'long 800' } as never)
+  w.setCtx(90000)
+  await $.prompt.submit(userPrompt(LONG))
+  expect(w.checks[1]!.prompt).toContain('Auslöser: Kontext über der Schwelle')
+  expect(w.checks[1]!.prompt).toContain('Aufteilen erlaubt: ja')
+  await $.prompt.submit(userPrompt('kurze Frage'))
+  expect(w.checks[2]!.prompt).not.toContain('Aufteilen erlaubt')
+  expect(w.checks[2]!.system).not.toContain('aufteilen')
+})
+
+deTest('0.9.0: bei (c) wird nie aufgeteilt: Kalt-Rückfrage, ohne „Aufteilen erlaubt“', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST] })
+  w.setCtx(undefined)
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  await w.step($, stepUsage(0, 300000))
+  await w.clock.advance(70 * MIN)
+  w.setAnswer('Abbrechen')
+  await $.prompt.submit(userPrompt(LONG))
+  expect(w.checks[0]!.prompt).not.toContain('Aufteilen erlaubt')
+  expect(w.asks[0]!.question).toContain('Cache seit 10 min kalt')
+  expect(w.asks[0]!.options.some((o) => o.includes('To-dos'))).toBe(false)
+})
+
+deTest('0.9.0: Aufteilen: Rückfrage mit Titeln, drop mit Text, SPLIT im Timer, /todo nacheinander, Toast, Box ohne Buddy-Wert', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST], splitDelayMs: 3000 })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+  const r = await $.prompt.submit(userPrompt(LONG))
+  const q = w.asks[0]!.question
+  expect(q).toContain('Deine Nachricht enthält mehrere getrennte Aufträge.\n  1. Ring in limit-bars\n  2. Zeile im sidekick kürzen\n  3. README von worklist')
+  expect(q).toContain('Sonnet schreibt daraus 3 To-dos mit allen Punkten deiner Nachricht')
+  expect(q.endsWith('?')).toBe(true)
+  expect(w.asks[0]!.options).toEqual(['In 3 To-dos aufteilen (empfohlen)', 'Trotzdem senden', 'Abbrechen'])
+  // Angehalten, der ganze Text steht im Grund; aus dem Hook selbst kein /todo
+  expect(r.drop).toContain(LONG)
+  expect(w.commands).toEqual([])
+  expect(w.sent).toEqual([])
+  await w.clock.advance(400)
+  await w.clock.advance(1000)
+  let band = await $.ui.mount(BAND_SPLIT as never)
+  expect(JSON.stringify(await band.find({ key: 'sidekick-busy' }))).toContain('sidekick schreibt die To-dos')
+  await band.unmount()
+  // clawd-buddy bekommt keinen neuen Wert und kein „handoff“
+  expect(w.buddy).toEqual(['check', 'stop', null])
+  await w.clock.advance(3000)
+  await flush(120)
+  expect(w.splits.length).toBe(1)
+  expect(w.splits[0]!.prompt).toContain(LONG)
+  expect(w.splits[0]!.prompt).toContain('3. README von worklist')
+  expect(w.splits[0]!.req).toEqual({ model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 3000, timeoutMs: 45000 })
+  expect(w.commandArgs).toEqual(['todo To-do eins', 'todo To-do zwei', 'todo To-do drei'])
+  expect(w.toasts.at(-1)).toContain('3 To-dos eingereiht. worklist startet Schritt 1')
+  band = await $.ui.mount(BAND_SPLIT as never)
+  expect(await band.find({ key: 'sidekick-busy' })).toBeUndefined()
+  await band.unmount()
+  expect(w.buddy).toEqual(['check', 'stop', null])
+  expect(w.saved.get('split:last')).toMatchObject({ titles: STEPS, todos: ['To-do eins', 'To-do zwei', 'To-do drei'], queued: 3 })
+  // Bilanz: Hinweis angenommen, Kosten der Rolle Aufteilung
+  const d = today(w.ledger())
+  expect(d.hinweise.aufteilen).toEqual({ gezeigt: 1, angenommen: 1, ignoriert: 0, abgebrochen: 0 })
+  expect(d.modelle['claude-sonnet-5-5']?.aufteilung.n).toBe(1)
+  expect(near(d.kosten, completeCost(MODEL_USAGE, CHECK.model) + completeCost(MODEL_USAGE, SPLIT.model))).toBe(true)
+  const s = await $.command.run({ command: 'savings', args: 'detail today' } as never)
+  expect(s.text).toContain('| Sonnet 5.5 | Aufteilung | 1 |')
+  expect(s.text).toContain('| Aufteilen | 1 | 1 | 0 | 0 |')
+  const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  expect(st.text).toContain('**Letzte Aufteilung** (10:00): 3 von 3 To-dos eingereiht')
+  expect(st.text).toContain('3. README von worklist')
+  expect(st.text).not.toContain('Nicht eingereiht')
+  // Die Kurzfassung behält die Nachricht: die nächste Prüfung sieht sie
+  w.setReply({ isAnswered: true, text: verdict({}), usage: MODEL_USAGE })
+  w.setCtx(90000)
+  await $.prompt.submit(userPrompt('und weiter'))
+  expect(w.checks[1]!.prompt).toContain('erstens: im limit-bars')
+})
+
+deTest('0.9.0 Fehlerpfade: SPLIT abgelehnt, Timeout oder falsche Anzahl → zweite Frage, nichts eingereiht', async ($, on) => {
+  const fails: [unknown, string][] = [
+    [null, 'kein Modell'],
+    [{ isAnswered: false, reason: 'timeout', usage: MODEL_USAGE }, '(timeout)'],
+    [{ isAnswered: true, text: '{"todos":["nur","zwei"]}', usage: MODEL_USAGE }, '(ungültige Antwort)'],
+  ]
+  const w = world(on, { level: 'plan', cmds: [WORKLIST] })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  for (const [reply, why] of fails) {
+    w.setSplit(reply)
+    w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+    const asked = w.asks.length
+    await $.prompt.submit(userPrompt(LONG))
+    w.setAnswer('Abbrechen')
+    await w.clock.advance(400)
+    await flush(120)
+    expect(w.asks.length).toBe(asked + 2)
+    expect(w.asks.at(-1)!.question).toContain('Die To-dos ließen sich nicht schreiben')
+    if (reply) expect(w.asks.at(-1)!.question).toContain(why)
+    expect(w.asks.at(-1)!.options).toEqual(['Trotzdem senden', 'Abbrechen'])
+    expect(w.commands.filter((c) => c === 'todo')).toEqual([])
+    expect(w.sent).toEqual([])
+    expect(w.toasts.at(-1)).toContain('Nicht gesendet')
+  }
+  // Zweite Frage mit „Trotzdem senden“: die Nachricht geht in diesen Chat (Herkunft plugin, keine erneute Prüfung)
+  w.setSplit(null)
+  w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+  const checks = w.checks.length
+  await $.prompt.submit(userPrompt(LONG))
+  w.setAnswer('Trotzdem senden')
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.sent).toEqual([LONG])
+  expect(w.checks.length).toBe(checks + 1)
+  expect(w.saved.has('split:last')).toBe(false)
+})
+
+deTest('0.9.0 Fehlerpfad: /todo scheitert bei Nummer 2 → Toast, Rest in split:last und /sidekick status', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST], todoFailAt: 2 })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+  await $.prompt.submit(userPrompt(LONG))
+  await w.clock.advance(400)
+  await flush(120)
+  // Nach dem Fehler kein weiterer Versuch: die Reihenfolge bliebe sonst nicht erhalten
+  expect(w.commandArgs).toEqual(['todo To-do eins', 'todo To-do zwei'])
+  // Ein werfender Stub wird übersprungen (docs/raw/en/test.md:182): der Grund ist der der Engine
+  expect(w.toasts.at(-1)).toContain('Nur 1 von 3 To-dos eingereiht (')
+  expect(w.toasts.at(-1)).toContain('/sidekick status')
+  expect(w.saved.get('split:last')).toMatchObject({ queued: 1 })
+  const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  expect(st.text).toContain('1 von 3 To-dos eingereiht')
+  expect(st.text).toContain('Nicht eingereiht, zum Kopieren:')
+  expect(st.text).toContain('**2.** To-do zwei')
+  expect(st.text).toContain('**3.** To-do drei')
+  expect(st.text).not.toContain('**1.** To-do eins')
+})
+
+deTest('0.9.0: Dialog geschlossen → gesendet; Trotzdem senden → gesendet und ruht; Abbrechen → drop mit dem Text', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST] })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setAnswer(null)
+  expect(await $.prompt.submit(userPrompt(LONG))).toMatchObject({ text: LONG })
+  w.setAnswer('Abbrechen')
+  const r0 = await $.prompt.submit(userPrompt(LONG))
+  expect(r0.drop).toContain(LONG)
+  expect(w.saved.has('held:last')).toBe(false)
+  w.setAnswer('Trotzdem senden')
+  expect(await $.prompt.submit(userPrompt(LONG))).toMatchObject({ text: LONG })
+  // Ignoriert: ruht bis +50k oder Commit, die nächste lange Nachricht geht ohne Rückfrage durch
+  const asked = w.asks.length
+  expect(await $.prompt.submit(userPrompt(LONG))).toMatchObject({ text: LONG })
+  expect(w.asks.length).toBe(asked)
+  await w.clock.advance(400)
+  await flush()
+  expect(w.splits.length).toBe(0)
+  expect(w.commands).toEqual([])
+  const d = today(w.ledger())
+  expect(d.hinweise.aufteilen).toMatchObject({ gezeigt: 3, abgebrochen: 1, ignoriert: 1 })
+})
+
+deTest('0.9.0: sehr lange Nachricht: drop-Grund bleibt unter 2000 Zeichen (über 4096 ginge sie durch, angezeigt werden ≈ 2000), ganzer Text in /sidekick status', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST] })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  const huge = `${LONG}${'noch ein wichtiger punkt mit ümläuten. '.repeat(130)}`
+  expect(huge.length > 5000 && huge.length <= 7600).toBe(true)
+  for (const [answer, word] of [['In 3 To-dos aufteilen (empfohlen)', 'schreibt 3 To-dos'], ['Abbrechen', 'nicht gesendet']] as const) {
+    w.setAnswer(answer)
+    w.saved.delete('held:last')
+    const r = await $.prompt.submit(userPrompt(huge))
+    expect(r.drop).toContain(word)
+    expect(r.drop!.length < 4096).toBe(true)
+    expect(r.drop).toContain(huge.slice(0, 1700))
+    expect(r.drop!.length < 2000).toBe(true)
+    expect(r.drop).toContain('(gekürzt; der ganze Text steht in /sidekick status)')
+    expect(w.saved.get('held:last')).toMatchObject({ msg: huge })
+    // Die Aufteilung zu Ende laufen lassen: solange bietet die Prüfung keine zweite an (Review K2)
+    await w.clock.advance(400)
+    await flush(120)
+  }
+  const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  expect(st.text).toContain('**Zurückgehaltene lange Nachricht** (10:00), vollständig:')
+  expect(st.text).toContain(huge)
+})
+
+deTest('0.9.0: von worklist gesendetes To-do (Herkunft plugin) wird nie geprüft', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST], surfaces: ['desktop'] })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  const r = await $.prompt.submit({ text: LONG, wait: false, origin: { kind: 'plugin', name: 'worklist' } } as never)
+  expect(r).toMatchObject({ text: LONG })
+  expect(w.checks.length).toBe(0)
+  expect(w.asks.length).toBe(0)
+})
+
+deTest('0.9.0: /sidekick long setzt und zeigt die Schwelle', async ($, on) => {
+  const w = world(on, { level: 'plan' })
+  const r1 = await $.command.run({ command: 'sidekick', args: 'long 1200' } as never)
+  expect(r1.text).toContain('| **Lang** | 1200 Zeichen')
+  expect(r1.text).toContain('**Letzte Aufteilung:** keine')
+  expect(w.saved.get('settings')).toMatchObject({ long: 1200 })
+  const r2 = await $.command.run({ command: 'sidekick', args: 'long off' } as never)
+  expect(r2.text).toContain('| **Lang** | aus |')
+  expect(r2.text).toContain('`long 800|off`')
+})
+
+test('0.9.0 en: split question, buttons, toast and status in English', async ($, on) => {
+  setLang('en')
+  const w = world(on, { level: 'plan', cmds: [WORKLIST] })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setAnswer('Split into 3 to-dos (recommended)')
+  const r = await $.prompt.submit(userPrompt(LONG))
+  expect(w.asks[0]!.question).toContain('Your message contains several separate tasks.\n  1. Ring in limit-bars')
+  expect(w.asks[0]!.question).toContain('Sonnet turns them into 3 to-dos')
+  expect(w.asks[0]!.options).toEqual(['Split into 3 to-dos (recommended)', 'Send anyway', 'Cancel'])
+  expect(r.drop).toContain('Sonnet is writing 3 to-dos for worklist from your message')
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.toasts.at(-1)).toContain('3 to-dos queued. worklist starts step 1')
+  const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  expect(st.text).toContain('| **Long** | 800 characters')
+  expect(st.text).toContain('**Last split** (10:00): 3 of 3 to-dos queued')
+  const s = await $.command.run({ command: 'savings', args: 'detail today' } as never)
+  expect(s.text).toContain('| Sonnet 5.5 | Split | 1 |')
+  expect(s.text).toContain('| Split into to-dos | 1 | 1 | 0 | 0 |')
+})
+
+// ---------- 0.9.0 Review ----------
+
+deTest('0.9.0 Review S1: worklist antwortet mit Fehlertext → nicht als eingereiht gezählt, Rest in /sidekick status', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST], todoTextAt: 2 })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+  await $.prompt.submit(userPrompt(LONG))
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.commandArgs).toEqual(['todo To-do eins', 'todo To-do zwei'])
+  expect(w.toasts.at(-1)).toContain('Nur 1 von 3 To-dos eingereiht (To-do nicht angelegt: Store voll)')
+  expect(w.saved.get('split:last')).toMatchObject({ queued: 1 })
+})
+
+deTest('0.9.0 Review S2: Abbrechen beim Aufteilen nimmt die Nachricht aus Kurzfassung und letzten Nachrichten', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST] })
+  w.setReply({ isAnswered: true, text: JSON.stringify({ ...JSON.parse(splitVerdict(STEPS)), kurzfassung: 'Mit der langen Nachricht.' }), usage: MODEL_USAGE })
+  w.setAnswer('Abbrechen')
+  await $.prompt.submit(userPrompt(LONG))
+  w.setReply({ isAnswered: true, text: verdict({}), usage: MODEL_USAGE })
+  w.setCtx(90000)
+  await $.prompt.submit(userPrompt('und weiter'))
+  expect(w.checks[1]!.prompt).not.toContain('erstens: im limit-bars')
+  expect(w.checks[1]!.prompt).not.toContain('Mit der langen Nachricht.')
+})
+
+deTest('0.9.0 Review K1/K2: Fortschritt nach jedem /todo gesichert; Session-Wechsel während SPLIT reiht nichts in den neuen Chat', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST], clearAtSplit: true })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+  await $.prompt.submit(userPrompt(LONG))
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.commands.filter((c) => c === 'todo')).toEqual([])
+  expect(w.toasts.at(-1)).toContain('Nur 0 von 3 To-dos eingereiht (anderer Chat')
+  expect(w.saved.get('split:last')).toMatchObject({ queued: 0, todos: ['To-do eins', 'To-do zwei', 'To-do drei'] })
+})
+
+deTest('0.9.0 Review K2: während eine Aufteilung läuft, bietet die Prüfung keine zweite an', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST], splitDelayMs: 5000 })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+  await $.prompt.submit(userPrompt(LONG))
+  await w.clock.advance(1000)
+  const r = await $.prompt.submit(userPrompt(`${LONG} und noch mehr`))
+  expect(r).toMatchObject({ text: `${LONG} und noch mehr` })
+  expect(w.asks.length).toBe(1)
+  await w.clock.advance(5000)
+  await flush(120)
+  expect(w.commandArgs).toEqual(['todo To-do eins', 'todo To-do zwei', 'todo To-do drei'])
+  // Danach wieder möglich
+  await $.prompt.submit(userPrompt(LONG))
+  expect(w.asks.length).toBe(2)
+})
+
+deTest('0.9.0 Review K3/K4: bei (d) nur Aufteilen, andere Arten gehen durch; über 4 × 1900 Zeichen kein Auslöser', async ($, on) => {
+  expect(parseVerdict(verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), 'd', [], LONG, true)?.urteil).toBe('durch')
+  expect(parseVerdict(verdict({ urteil: 'hinweis', art: 'sonstiges', zeile: 'Hm' }), 'd', [], LONG, true)?.urteil).toBe('durch')
+  expect(parseVerdict(verdict({ urteil: 'hinweis', art: 'sonstiges', zeile: 'Hm' }), 'b', [], LONG, true)?.urteil).toBe('hinweis')
+  expect(isLong('x'.repeat(7600), true, DEFAULT_SETTINGS)).toBe(true)
+  expect(isLong('x'.repeat(7601), true, DEFAULT_SETTINGS)).toBe(false)
+  const w = world(on, { level: 'plan', cmds: [WORKLIST] })
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'sonstiges', zeile: 'Eine Zeile' }), usage: MODEL_USAGE })
+  expect(await $.prompt.submit(userPrompt(LONG))).toMatchObject({ text: LONG })
+  expect(w.checks.length).toBe(1)
+  expect(w.asks.length).toBe(0)
+  const ui = await mountLine($, LONG, 'k3')
+  expect(await ui.find({ key: 'sidekick-line' })).toBeUndefined()
+  await ui.unmount()
+})
+
+// ---------- 0.10.0: Fünf Stufen, Statusanzeige, /later ----------
+
+const AUTO_MSG = 'bitte schau dir das mit der zeile nochmal an, die war irgendwie komisch, und dann mach das wie besprochen, ' + 'also genau so wie vorhin gesagt. '.repeat(6)
+const mountMode = ($: Engine, surface = 'terminal', modes: string[] = ['plan mode']) =>
+  $.ui.mount({ plugin: 'sidekick', component: 'SessionMode', requestId: 'mode', surface, props: { modes } } as never)
+const modeText = async (ui: { find: (q: object) => Promise<unknown> }) => String(((await ui.find({ type: 'Text' })) as { children?: unknown[] } | undefined)?.children ?? '')
+
+deTest('0.10.0: Stufen: Übernahme on true/false, off|cache|guide|plan|auto|on, status nennt die Stufe', async ($, on) => {
+  expect(cleanSettings({ on: true })).toMatchObject({ level: 'guide', lastOn: 'guide' })
+  expect(cleanSettings({ on: false })).toMatchObject({ level: 'off', lastOn: 'guide' })
+  expect(cleanSettings({})).toMatchObject({ level: 'guide' })
+  expect(cleanSettings({ level: 'quatsch', on: true }).level).toBe('guide')
+  const s = DEFAULT_SETTINGS
+  for (const lv of ['cache', 'guide', 'plan', 'auto'] as const) expect(applySetting(s, lv)).toMatchObject({ level: lv, lastOn: lv })
+  const plan = applySetting(s, 'plan')!
+  const off = applySetting(plan, 'off')!
+  expect(off).toMatchObject({ level: 'off', lastOn: 'plan' })
+  expect(applySetting(off, 'on')).toMatchObject({ level: 'plan' })
+  world(on)
+  const r = await $.command.run({ command: 'sidekick', args: 'plan' } as never)
+  expect(r.text).toContain('**Plan** · Status')
+  expect(r.text).toContain('| **Stufe** | Plan (wie Begleiter, früher prüfen')
+  // Ohne worklist: ein Satz, dass Aufteilen und /later wegfallen
+  expect(r.text).toContain('Ohne worklist entfallen Aufteilen und /later.')
+  expect((await $.command.run({ command: 'sidekick', args: 'off' } as never)).text).toContain('**Aus** · Status')
+  expect((await $.command.run({ command: 'sidekick', args: 'on' } as never)).text).toContain('**Plan** · Status')
+  expect((await $.command.run({ command: 'sidekick', args: 'guide' } as never)).text).not.toContain('Ohne worklist')
+})
+
+deTest('0.10.0: Alte Einstellung on:false → Aus, keine Prüfung; on:true → Begleiter', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['settings', { on: false, threshold: 80000 }]]) })
+  w.setCtx(500000)
+  await $.prompt.submit(userPrompt('aus'))
+  expect(w.checks.length).toBe(0)
+  w.saved.set('settings', { on: true, threshold: 5000 })
+  await $.prompt.submit(userPrompt('an'))
+  expect(w.checks.length).toBe(1)
+})
+
+deTest('0.10.0: Cache: (c) mit Dialog ohne Modellaufruf; (a)/(b) ohne Aufruf, ohne Zeile, ohne Wartung', async ($, on) => {
+  const w = world(on, { level: 'cache', memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  w.setMessages([])
+  await $.prompt.submit(userPrompt('Hallo, erste Nachricht'))
+  w.setMessages([{ role: 'assistant', text: 'ok', toolUses: [] }])
+  // Unter `big` (bei unbekanntem Cache-Zustand fragte auch Cache vorsichtig, Verhalten 3.2 (c))
+  w.setCtx(140000)
+  await $.prompt.submit(userPrompt('großer Kontext, warm'))
+  expect(w.checks.length).toBe(0)
+  const ui = await mountLine($, 'Hallo, erste Nachricht', 'c1')
+  expect(await ui.find({ key: 'sidekick-line' })).toBeUndefined()
+  await ui.unmount()
+  // (c): kalt und groß → Rückfrage mit Kosten, ohne Sonnet
+  w.setCtx(undefined)
+  await w.step($, stepUsage(0, 300000))
+  await w.clock.advance(70 * MIN)
+  w.setAnswer('Abbrechen')
+  const r = await $.prompt.submit(userPrompt('weiter'))
+  expect(w.checks.length).toBe(0)
+  expect(w.asks[0]!.question).toContain('Cache seit 10 min kalt')
+  expect(r.drop).toContain('weiter')
+  expect(today(w.ledger()).wartung.audit).toBeUndefined()
+})
+
+deTest('0.10.0: Plan prüft (b) ab der halben Schwelle, Begleiter erst ab der Schwelle', async ($, on) => {
+  const w = world(on, { level: 'guide' })
+  w.setCtx(45000)
+  await $.prompt.submit(userPrompt('mittel'))
+  expect(w.checks.length).toBe(0)
+  await $.command.run({ command: 'sidekick', args: 'plan' } as never)
+  await $.prompt.submit(userPrompt('mittel'))
+  expect(w.checks.length).toBe(1)
+  expect(w.checks[0]!.prompt).toContain('Kontext über der Schwelle')
+  expect(triggerOf({ first: false, ctx: 39999, cold: false, settings: { ...DEFAULT_SETTINGS, level: 'plan' } })).toBe(null)
+})
+
+deTest('0.10.0: Autonom prüft jede eigene Nachricht ab 300 Zeichen, 299 nicht; kritischer Zusatz nur dort', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  await $.prompt.submit(userPrompt('x'.repeat(299)))
+  expect(w.checks.length).toBe(0)
+  await $.prompt.submit(userPrompt('y'.repeat(300)))
+  expect(w.checks.length).toBe(1)
+  expect(w.checks[0]!.prompt).toContain('Auslöser: Nachricht ab 300 Zeichen (autonome Stufe)')
+  expect(w.checks[0]!.system).toContain('Autonome Stufe')
+  expect(checkSystem(null, false, false)).not.toContain('Autonome Stufe')
+  expect(checkSystem(null)).toBe(checkSystem(null, false, false))
+})
+
+deTest('0.10.0 Autonom: Fassung geht ohne Rückfrage raus, Zeile „gesendet wurde …“; über 40 % kürzer wird gefragt', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  const good = 'Bitte prüfe die sidekick-Zeile unter der Nachricht noch einmal: Sie wirkte seltsam. Setze sie danach so um, wie wir es vorhin besprochen haben, genau in der Form, die wir festgelegt haben, ohne neue Ideen.'
+  expect(good.length >= 0.6 * AUTO_MSG.trim().length).toBe(true)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Klarer.', fassung: good }), usage: MODEL_USAGE })
+  const r = await $.prompt.submit(userPrompt(AUTO_MSG))
+  expect(w.asks.length).toBe(0)
+  expect(r).toMatchObject({ text: good })
+  const ui = await mountLine($, AUTO_MSG, 'a1')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('· sidekick: gesendet wurde Sonnets Fassung')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-sent' }))).toContain('Bitte prüfe die sidekick-Zeile')
+  await ui.unmount()
+  await flush()
+  expect(today(w.ledger()).autonom).toBe(1)
+  expect(today(w.ledger()).hinweise.fassung?.angenommen).toBe(1)
+  // Deutlich kürzer (auch nur als Hinweis geliefert): Rückfrage wie im Begleiter
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'fassung', zeile: 'Klarer.', fassung: 'Bitte prüfe die Zeile noch einmal.' }), usage: MODEL_USAGE })
+  w.setAnswer('Trotzdem senden')
+  expect(await $.prompt.submit(userPrompt(AUTO_MSG))).toMatchObject({ text: AUTO_MSG })
+  expect(w.asks.length).toBe(1)
+  expect(w.asks[0]!.options).toEqual(['Sonnets Fassung senden (empfohlen)', 'Trotzdem senden', 'Abbrechen'])
+  // Die autonome Fassung gilt nicht im Begleiter
+  await $.command.run({ command: 'sidekick', args: 'guide' } as never)
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Klarer.', fassung: good }), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt(`${AUTO_MSG} noch einmal`))
+  expect(w.asks.length).toBe(2)
+})
+
+deTest('0.10.0 Autonom: Aufteilen ohne Rückfrage; neuer Chat und falscher Chat fragen weiter; Fehler fail-open', async ($, on) => {
+  const w = world(on, { level: 'auto', cmds: [WORKLIST] })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  const r = await $.prompt.submit(userPrompt(LONG))
+  expect(w.asks.length).toBe(0)
+  expect(r.drop).toContain('Sonnet schreibt 3 To-dos')
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.commandArgs).toEqual(['todo To-do eins', 'todo To-do zwei', 'todo To-do drei'])
+  expect(w.toasts.at(-1)).toContain('In 3 To-dos aufgeteilt.')
+  expect(today(w.ledger()).autonom).toBe(1)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
+  w.setAnswer('Trotzdem senden')
+  w.setCtx(90000)
+  await $.prompt.submit(userPrompt(AUTO_MSG))
+  expect(w.asks.length).toBe(1)
+  w.setReply({ isAnswered: true, text: verdict(WRONG), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt(`${WRONG_MSG} ${'und noch details dazu. '.repeat(14)}`))
+  expect(w.asks.length).toBe(2)
+  expect(w.asks[1]!.question).toContain('Das passt gar nicht zu diesem Chat.')
+  w.setReply({ isAnswered: true, text: 'kein JSON', usage: MODEL_USAGE })
+  expect(await $.prompt.submit(userPrompt(`${AUTO_MSG} drei`))).toMatchObject({ text: `${AUTO_MSG} drei` })
+})
+
+deTest('0.10.0 Autonom: abgelehntes Modell lässt durch', async ($, on) => {
+  const w = world(on, { level: 'auto', completeFails: true })
+  expect(await $.prompt.submit(userPrompt(AUTO_MSG))).toMatchObject({ text: AUTO_MSG })
+  expect(w.asks.length).toBe(0)
+})
+
+deTest('0.10.0 Anzeige: Label an modes angehängt, fremde bleiben; Kreis je Zustand; Aus rot; nur Terminal und Desktop', async ($, on) => {
+  const w = world(on, { level: 'plan' })
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await flush(200)
+  for (const surface of ['terminal']) {
+    const ui = await mountMode($, surface)
+    expect(await modeText(ui)).toBe('plan mode & 🟢 sidekick · Plan')
+    await ui.unmount()
+  }
+  const vs = await mountMode($, 'vscode')
+  expect(await modeText(vs)).toBe('plan mode')
+  await vs.unmount()
+  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await flush()
+  const off = await mountMode($, 'terminal', [])
+  expect(await modeText(off)).toBe('🔴 sidekick aus')
+  await off.unmount()
+  await $.command.run({ command: 'sidekick', args: 'auto' } as never)
+  await flush()
+  expect(w.status).toEqual(['plan', 'off', 'auto'])
+})
+
+deTest('0.10.0 Anzeige: busy (orange) bei Prüfung, Rückfrage, Übergabe und Aufteilung, danach wieder grün', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST], splitDelayMs: 3000 })
+  w.setCtx(90000)
+  await $.prompt.submit(userPrompt('prüf mich'))
+  await flush()
+  expect(w.status).toEqual(['plan', 'plan busy', 'plan'])
+  // Rückfrage offen, dann Aufteilung im Timer
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+  await $.prompt.submit(userPrompt(LONG))
+  await w.clock.advance(400)
+  await w.clock.advance(1000)
+  const ui = await mountMode($)
+  expect(await modeText(ui)).toBe('plan mode & 🟠 sidekick · Plan')
+  await ui.unmount()
+  await w.clock.advance(3000)
+  await flush(120)
+  expect(w.status.at(-1)).toBe('plan')
+  const ui2 = await mountMode($)
+  expect(await modeText(ui2)).toBe('plan mode & 🟢 sidekick · Plan')
+  await ui2.unmount()
+  // Übergabe: busy, danach grün
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
+  w.setAnswer('Neuer Chat mit Übergabe')
+  const before = w.status.length
+  await $.prompt.submit(userPrompt('ganz neues Thema'))
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.status.slice(before)).toContain('plan busy')
+  expect(w.status.at(-1)).toBe('plan')
+})
+
+deTest('0.10.0 Anzeige: Schreiben scheitert → Prüfung und Nachricht laufen normal', async ($, on) => {
+  const w = world(on, { level: 'guide', stateFails: () => true })
+  w.setCtx(90000)
+  expect(await $.prompt.submit(userPrompt('trotzdem'))).toMatchObject({ text: 'trotzdem' })
+  expect(w.checks.length).toBe(1)
+  const ui = await mountMode($)
+  // Ohne geschriebenen Wert zeigt die Anzeige die eingestellte Stufe
+  expect(await modeText(ui)).toBe('plan mode & 🟢 sidekick · Begleiter')
+  await ui.unmount()
+})
+
+deTest('0.10.0 /later: gibt {} zurück, Timer reiht 1 bzw. 4 Schritte ein, Toast', async ($, on) => {
+  const w = world(on, { level: 'guide', cmds: [WORKLIST] })
+  w.setSplit({ isAnswered: true, text: JSON.stringify({ todos: ['Nur eins'] }), usage: MODEL_USAGE })
+  const r = await $.command.run({ command: 'later', args: 'bitte später die README prüfen' } as never)
+  expect(r.text).toBeUndefined()
+  // Eigener Befehl: erreicht den Stub der Engine nicht; noch kein /todo, bis der Timer läuft
+  expect(w.commands).toEqual([])
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.splits[0]!.prompt).toContain('Titel: keine. Bestimme die Schritte selbst (1 bis 4).')
+  expect(w.splits[0]!.system).toContain('Bestimme die Schritte selbst, 1 bis 4 To-dos')
+  expect(w.commandArgs).toEqual(['todo Nur eins'])
+  expect(w.toasts.at(-1)).toBe('1 To-do für später eingereiht.')
+  w.setSplit({ isAnswered: true, text: JSON.stringify({ todos: ['A', 'B', 'C', 'D'] }), usage: MODEL_USAGE })
+  await $.command.run({ command: 'later', args: 'vier dinge' } as never)
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.commandArgs.slice(-4)).toEqual(['todo A', 'todo B', 'todo C', 'todo D'])
+  expect(w.toasts.at(-1)).toBe('4 To-dos für später eingereiht.')
+  // Mehr als 4 ist ungültig
+  expect(parseSplit(JSON.stringify({ todos: ['1', '2', '3', '4', '5'] }), [1, 4])).toBe(null)
+  expect(parseSplit(JSON.stringify({ todos: [] }), [1, 4])).toBe(null)
+})
+
+deTest('0.10.0 /later: ohne worklist Toast und kein Aufruf; leer → Hilfe; Stufe Aus → Toast', async ($, on) => {
+  const w = world(on, { level: 'guide' })
+  await $.command.run({ command: 'later', args: 'etwas für später' } as never)
+  expect(w.toasts.at(-1)).toContain('/later braucht worklist. Nichts eingereiht. Dein Text: „etwas für später“')
+  await $.command.run({ command: 'later', args: '   ' } as never)
+  expect(w.toasts.at(-1)).toContain('/later <Text>')
+  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await $.command.run({ command: 'later', args: 'aus' } as never)
+  expect(w.toasts.at(-1)).toContain('sidekick ist aus')
+  await w.clock.advance(400)
+  await flush()
+  expect(w.splits.length).toBe(0)
+  expect(w.commands.filter((c) => c === 'todo')).toEqual([])
+})
+
+deTest('0.10.0 /later: SPLIT scheitert → Toast mit Text, ganzer Text in split:last und /sidekick status', async ($, on) => {
+  const w = world(on, { level: 'cache', cmds: [WORKLIST] })
+  w.setSplit(null)
+  await $.command.run({ command: 'later', args: 'das darf nicht verloren gehen' } as never)
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.toasts.at(-1)).toContain('/later: Die To-dos ließen sich nicht schreiben')
+  expect(w.toasts.at(-1)).toContain('das darf nicht verloren gehen')
+  expect(w.saved.get('split:last')).toMatchObject({ todos: ['das darf nicht verloren gehen'], queued: 0 })
+  const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  expect(st.text).toContain('**1.** das darf nicht verloren gehen')
+  expect(w.commands.filter((c) => c === 'todo')).toEqual([])
+})
+
+test('0.10.0 en: levels, footer label and /later in English', async ($, on) => {
+  setLang('en')
+  const w = world(on, { level: 'auto', cmds: [WORKLIST] })
+  const r = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  expect(r.text).toContain('**Auto** · status')
+  expect(r.text).toContain('| **Level** | Auto (like Plan, plus every message from 300 characters')
+  const ui = await mountMode($, 'terminal', [])
+  expect(await modeText(ui)).toBe('🟢 sidekick · Auto')
+  await ui.unmount()
+  w.setSplit({ isAnswered: true, text: JSON.stringify({ todos: ['One', 'Two'] }), usage: MODEL_USAGE })
+  await $.command.run({ command: 'later', args: 'two things' } as never)
+  await w.clock.advance(400)
+  await flush(120)
+  expect(w.toasts.at(-1)).toBe('2 to-dos queued for later.')
+  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  const off = await mountMode($, 'terminal', [])
+  expect(await modeText(off)).toBe('🔴 sidekick off')
+  await off.unmount()
+})
+
+// ---------- 0.10.0 Review ----------
+
+deTest('0.10.0 Review S1: Autonom mit worklist und langer Nachricht prüft voll (e), Aufteilen bleibt erlaubt', async ($, on) => {
+  const w = world(on, { level: 'auto', cmds: [WORKLIST] })
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'sonstiges', zeile: 'Eine Zeile zur langen Nachricht' }), usage: MODEL_USAGE })
+  expect(await $.prompt.submit(userPrompt(LONG))).toMatchObject({ text: LONG })
+  expect(w.checks[0]!.prompt).toContain('Auslöser: Nachricht ab 300 Zeichen (autonome Stufe)')
+  expect(w.checks[0]!.prompt).toContain('Aufteilen erlaubt: ja')
+  const ui = await mountLine($, LONG, 's1')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Eine Zeile zur langen Nachricht')
+  await ui.unmount()
+  // Aufteilen bei (e): weiter ohne Rückfrage
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  const r = await $.prompt.submit(userPrompt(`${LONG} zwei`))
+  expect(r.drop).toContain('Sonnet schreibt 3 To-dos')
+  expect(w.asks.length).toBe(0)
+})
+
+deTest('0.10.0 Review S2: /later während einer Aufteilung oder Übergabe → Toast; laufendes /later sperrt die Aufteilen-Frage', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST], splitDelayMs: 3000, handoffDelayMs: 3000 })
+  // /later läuft (Timer gestellt): die nächste lange Nachricht bekommt keine Aufteilen-Frage, nur die Zeile
+  w.setSplit({ isAnswered: true, text: JSON.stringify({ todos: ['Später eins'] }), usage: MODEL_USAGE })
+  await $.command.run({ command: 'later', args: 'später eins' } as never)
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  expect(await $.prompt.submit(userPrompt(LONG))).toMatchObject({ text: LONG })
+  expect(w.asks.length).toBe(0)
+  // Zweites /later, während das erste noch schreibt
+  await w.clock.advance(400)
+  await $.command.run({ command: 'later', args: 'später zwei' } as never)
+  expect(w.toasts.at(-1)).toContain('sidekick teilt gerade auf oder startet einen neuen Chat')
+  await w.clock.advance(3000)
+  await flush(120)
+  expect(w.commandArgs).toEqual(['todo Später eins'])
+  // Während einer Übergabe
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
+  w.setAnswer('Neuer Chat mit Übergabe')
+  await $.prompt.submit(userPrompt('ganz neues Thema'))
+  await w.clock.advance(400)
+  await $.command.run({ command: 'later', args: 'später drei' } as never)
+  expect(w.toasts.at(-1)).toContain('sidekick teilt gerade auf oder startet einen neuen Chat')
+  expect(w.toasts.at(-1)).toContain('später drei')
+})
+
+deTest('0.10.0 Review K1: Autonom mit Kalt-Fall und Fassung → Kalt-Rückfrage; Begleiter mit worklist prüft lange Nachrichten nicht', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(undefined)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Klarer.', fassung: 'Bitte prüfe die Zeile noch einmal und setze sie wie besprochen um.' }), usage: MODEL_USAGE })
+  await w.step($, stepUsage(0, 300000))
+  await w.clock.advance(70 * MIN)
+  w.setAnswer('Abbrechen')
+  const r = await $.prompt.submit(userPrompt(AUTO_MSG))
+  expect(w.asks[0]!.question).toContain('Cache seit 10 min kalt')
+  expect(r.drop).toContain('nicht gesendet')
+})
+
+deTest('0.10.0 Review K1: Begleiter mit worklist prüft lange Nachrichten nicht', async ($, on) => {
+  const g = world(on, { level: 'guide', cmds: [WORKLIST] })
+  await $.prompt.submit(userPrompt(LONG))
+  expect(g.checks.length).toBe(0)
+})
+
+deTest('0.10.0 Review K2/K4: /later scheitert im Timer → ganzer Text in split:last; zweite Frage nach gescheitertem SPLIT ist orange', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST] })
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setSplit(null)
+  w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+  await $.prompt.submit(userPrompt(LONG))
+  w.setAnswer('Abbrechen')
+  const before = w.status.length
+  await w.clock.advance(400)
+  await flush(120)
+  // busy (Aufteilung), wieder grün, busy (zweite Frage), grün
+  expect(w.status.slice(before)).toEqual(['plan busy', 'plan', 'plan busy', 'plan'])
+})
+
+// ---------- 0.10.1: Anzeige robuster, Diagnose ----------
+
+deTest('0.10.1: $.state.get scheitert → Label aus der eingestellten Stufe, Fehler in /sidekick status', async ($, on) => {
+  world(on, { level: 'plan', stateGetFails: true })
+  const before = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  expect(before.text).toContain('**Anzeige in der Fußzeile:** von Claude Code noch nie angefragt')
+  const ui = await mountMode($)
+  expect(await modeText(ui)).toBe('plan mode & 🟢 sidekick · Plan')
+  await ui.unmount()
+  await flush()
+  const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  expect(st.text).toContain('**Anzeige in der Fußzeile:** zuletzt angefragt 10:00 (terminal), Lesen des Werts scheiterte:')
+})
+
+deTest('0.10.1: Diagnose nennt die Oberfläche, auch ohne Label (VS Code)', async ($, on) => {
+  world(on, { level: 'guide' })
+  const ui = await mountMode($, 'terminal')
+  await ui.unmount()
+  await flush()
+  expect((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text).toContain('zuletzt angefragt 10:00 (terminal)')
+  const vs = await mountMode($, 'vscode')
+  await vs.unmount()
+  await flush()
+  expect((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text).toContain('zuletzt angefragt 10:00 (vscode)')
+})
+
+deTest('0.10.2: Desktop: eigener Baum mit farbigem ● neben der Zeichnung der Engine; Kreis je Zustand', async ($, on) => {
+  const w = world(on, { level: 'plan', cmds: [WORKLIST], splitDelayMs: 3000 })
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
+  await flush(200)
+  const desk = async () => {
+    const ui = await mountMode($, 'desktop')
+    const mine = JSON.stringify(await ui.find({ key: 'sidekick-mode' }))
+    const theirs = await modeText(ui)
+    await ui.unmount()
+    return { mine, theirs }
+  }
+  let d = await desk()
+  // Die Labels der Engine bleiben unverändert, ohne angehängtes Label
+  expect(d.theirs).toBe('plan mode')
+  expect(d.mine).toContain('●')
+  expect(d.mine).toContain('#3FB950')
+  expect(d.mine).toContain('sidekick · Plan')
+  // Aufteilung läuft: orange
+  w.setReply({ isAnswered: true, text: splitVerdict(STEPS), usage: MODEL_USAGE })
+  w.setAnswer('In 3 To-dos aufteilen (empfohlen)')
+  await $.prompt.submit(userPrompt(LONG))
+  await w.clock.advance(1400)
+  d = await desk()
+  expect(d.mine).toContain('#F0883E')
+  await w.clock.advance(3000)
+  await flush(120)
+  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await flush()
+  d = await desk()
+  expect(d.mine).toContain('#F85149')
+  expect(d.mine).toContain('sidekick aus')
 })

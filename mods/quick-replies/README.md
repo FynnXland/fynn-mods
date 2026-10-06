@@ -1,10 +1,10 @@
 # quick-replies
 
-After Claude answers, Claude Code often suggests your next message itself (the grey text in the prompt). quick-replies turns that suggestion into a button in its own pill above Clawd, in the band above the prompt. A click, or typing its digit as the first character in an empty prompt, sends it immediately as your message. Nothing is ever sent automatically. On request (`/replies more on`) up to three more suggestions come from a fork of the session. Handy for development and debugging, where the answer is often just "yes, do that".
+After Claude answers, Claude Code often suggests your next message itself (the grey text in the prompt). quick-replies turns that suggestion into a button in its own pill above Clawd, in the band above the prompt. A click, typing its digit as the first character in an empty prompt, or sending just its digit as a message sends it immediately as your message. Nothing is ever sent automatically. On request (`/replies more on`) up to three more suggestions come from a fork of the session. Handy for development and debugging, where the answer is often just "yes, do that".
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.290** · Plugin version **0.2.1**
+Tested with Claude Code **v2.1.291** · Plugin version **0.3.0**
 
 ## Display
 
@@ -24,6 +24,7 @@ Tested with Claude Code **v2.1.290** · Plugin version **0.2.1**
 ## Sending
 
 - **Click** a suggestion, or **type its digit** (`1`–`4`) as the first character in an empty prompt: the suggestion is sent right away as your own message. The digit does not end up in the prompt. The digits also work as the band's hotkeys.
+- **Send just the digit** (`1`–`4`, nothing else) as a message, e.g. when the digit stayed in the prompt: instead of the digit, the suggestion with that number is sent, and the transcript shows its text. This works only for a suggestion the pill has shown since Claude's last answer, while the mod is on, and never for a message typed while Claude is working, with attachments, or from another source (Remote Control, plugins, other sessions). Otherwise the digit is sent as typed. If another hook stops the message, the pill comes back.
 - Only on click or key, **never automatically**. A suggestion is sent at most once per turn (click and digit in quick succession send once).
 - After `/clear`, a suggestion from the old chat is never sent into the new one.
 - If sending fails, a toast shows **Sending failed. Please send it yourself: …** with the text, and the pill comes back.
@@ -66,7 +67,7 @@ The fork only runs after a normal answer of at least 40 characters, not for suba
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.start, turn.complete, prompt.suggest, prompt.edit, command.run{command=replies}, ui.render{component=AbovePrompt}
+hooks: session.start, turn.start, turn.complete, prompt.suggest, prompt.edit, prompt.submit, command.run{command=replies}, ui.render{component=AbovePrompt}
 calls: $.clock.every, $.command.register, $.model.fork, $.prompt.submit, $.session.id, $.store.get, $.store.set, $.ui.invalidate, $.ui.log, $.ui.resolve, $.ui.toast
 ```
 
@@ -74,6 +75,7 @@ In plain language:
 
 - Hook `prompt.suggest`: reads Claude Code's own suggestion and passes it on unchanged.
 - Hook `prompt.edit`: notices whether you are typing; a single digit typed into the empty prompt while the pill shows sends that suggestion. Any other input passes through unchanged.
+- Hook `prompt.submit`: this hook sees every message you send and could change it. quick-replies only replaces a message that is just a digit `1`–`4` with the suggestion shown under that number, before the turn starts. Every other message passes through unchanged and is not stored or logged.
 - Hooks `turn.start`, `turn.complete`: clear the suggestions when you send, mark when an answer is finished.
 - Hook `ui.render` for `AbovePrompt`: draws the pill above the rest of the band.
 - Hook `command.run` and `$.command.register`: the `/replies` command.
@@ -114,7 +116,7 @@ claude --plugin-dir <path-to-clone>/mods/quick-replies
 
 - **No suggestion, no pill.** Claude Code does not always provide a suggestion (for example on the first turn or with a cold cache). Then there is no pill, unless `more` is on and the fork delivers something. `/replies status` shows how often Claude Code supplied one in this session.
 - **Language switch and the command description:** after changing `language` in `/config`, the `/replies` output and the toast switch right away; the description of `/replies` in the command list may only switch in the next session.
-- **Messages starting with a digit:** while the pill shows, a message cannot start with a digit from `1` to the number of suggestions; typing it sends the suggestion instead. A digit after other text, a higher digit, or a digit pasted together with more text stays normal text.
+- **Messages starting with a digit:** while the pill shows, a message cannot start with a digit from `1` to the number of suggestions; typing it sends the suggestion instead. A digit after other text, a higher digit, or a digit pasted together with more text stays normal text. Likewise, a message that is only such a digit is sent as the suggestion, not as the digit; this also applies when Claude offered numbered options in its answer. Write `1.` or `option 1` to send the number itself.
 - **Order in the band is not documented.** Claude Code does not define in which order mods that draw into the band run, and with marketplace installs the order is not guaranteed. The pill sits above Clawd when quick-replies runs as the outer band mod. The other band mods from fynn-mods (clawd-buddy, limit-bars, sidekick) share a small layout protocol that keeps the pill on top in either order. With other band mods that do not know it, quick-replies may end up inside them, and the buttons then appear squeezed next to their content (e.g. next to Clawd). quick-replies cannot prevent that from inside. `/replies status` shows the position.
 - **Hover flicker in the desktop app:** next to animated mods in the band (e.g. clawd-buddy's Clawd), the buttons can flicker under the mouse. Clicks still work.
 

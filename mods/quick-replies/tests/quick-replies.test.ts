@@ -466,6 +466,99 @@ for (const language of ['en', 'de'] as const) {
   })
 }
 
+type Origin = { kind: 'composer' | 'sdk' | 'bridge' | 'peer' } | { kind: 'plugin'; name: string; asUser: boolean }
+const submit = ($: Engine, text: string, more: { origin?: Origin; turnId?: string; image?: boolean } = {}) =>
+  $.prompt.submit({
+    text,
+    wait: false,
+    turnId: more.turnId,
+    origin: more.origin ?? { kind: 'composer' },
+    ...(more.image ? { attachments: [{ type: 'image', mediaType: 'image/png', data: 'AA==' }] } : {}),
+  } as Parameters<Engine['prompt']['submit']>[0])
+
+test('Ziffer allein abgeschickt: der Vorschlag mit dieser Nummer geht stattdessen raus (Terminal und Desktop)', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  for (const [surface, kind] of [['desktop', 'sdk'], ['terminal', 'composer']] as const) {
+    w.sent.length = 0
+    const ui = await boot($, surface)
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    await w.clock.advance(2100)
+    expect(await labels(ui)).toEqual(['Committe die Änderungen', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+    expect(await submit($, ' 2 ', { origin: { kind } })).toMatchObject({ text: 'Lauf die Tests' })
+    expect(w.sent).toEqual([{ text: 'Lauf die Tests', asUser: undefined }])
+    expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+    // höchstens einmal pro Turn: die nächste 1 ist wieder Text
+    expect(await submit($, '1', { origin: { kind } })).toMatchObject({ text: '1' })
+    await $.turn.start({ turnId: 't2', text: 'Lauf die Tests' })
+    await ui.unmount()
+  }
+})
+
+test('Ziffer allein abgeschickt bleibt Text: ohne Vorschlag, über der Zahl, mehr Text, mitten im Turn, Anhang, fremde Herkunft, aus, /clear', async ($, on) => {
+  const w = world(on)
+  // vor dem ersten Turn
+  const ui = await boot($, 'desktop')
+  expect(await submit($, '1')).toMatchObject({ text: '1' })
+  await finish($)
+  await suggest($, 'Weiter')
+  expect(await labels(ui)).toEqual(['Weiter'])
+  expect(await submit($, '2')).toMatchObject({ text: '2' })
+  expect(await submit($, '1 bitte')).toMatchObject({ text: '1 bitte' })
+  expect(await submit($, '12')).toMatchObject({ text: '12' })
+  expect(await submit($, '1', { turnId: 't1' })).toMatchObject({ text: '1' })
+  expect(await submit($, '1', { image: true })).toMatchObject({ text: '1' })
+  expect(await submit($, '1', { origin: { kind: 'peer' } })).toMatchObject({ text: '1' })
+  // Remote Control (Telefon, Web) zeigt die Pille nicht
+  expect(await submit($, '1', { origin: { kind: 'bridge' } })).toMatchObject({ text: '1' })
+  // die eigene Sendung eines Vorschlags, der selbst eine Ziffer ist, bleibt, wie sie ist
+  expect(await submit($, '1', { origin: { kind: 'plugin', name: 'quick-replies', asUser: true } })).toMatchObject({ text: '1' })
+  await $.command.run({ command: 'replies', args: 'off' })
+  expect(await submit($, '1')).toMatchObject({ text: '1' })
+  await $.command.run({ command: 'replies', args: 'on' })
+  // Session-ID nicht lesbar: lieber die Ziffer als einen womöglich fremden Vorschlag
+  w.sid = 'DENY'
+  expect(await submit($, '1')).toMatchObject({ text: '1' })
+  w.sid = 's2'
+  expect(await submit($, '1')).toMatchObject({ text: '1' })
+  expect(w.sent.map((s) => s.text)).toEqual(['1', '2', '1 bitte', '12', '1', '1', '1', '1', '1', '1', '1', '1'])
+  await ui.unmount()
+})
+
+test('Ziffer allein abgeschickt: nur ein Vorschlag, der zu sehen war (kam er erst nach der getippten Ziffer, bleibt sie Text)', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  const ui = await boot($, 'desktop')
+  await finish($)
+  // Ziffer getippt, bevor ein Vorschlag da ist: bleibt im Prompt, die Pille ist ausgeblendet
+  expect(await type($, '', '1')).toMatchObject({ text: '1' })
+  await suggest($, 'Committe das')
+  await w.clock.advance(2100)
+  expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+  expect(await submit($, '1', { origin: { kind: 'sdk' } })).toMatchObject({ text: '1' })
+  expect(w.sent.map((s) => s.text)).toEqual(['1'])
+  await ui.unmount()
+})
+
+test('Ziffer allein abgeschickt, von einem Hook weiter innen gestoppt: die Pille kommt zurück', async ($, on) => {
+  const w = world(on, { submit: 'drop' })
+  const ui = await boot($, 'desktop')
+  await finish($)
+  await suggest($, 'Committe das')
+  expect(await labels(ui)).toEqual(['Committe das'])
+  expect(await submit($, '1', { origin: { kind: 'sdk' } })).toMatchObject({ drop: 'blockiert' })
+  expect(w.sent.map((s) => s.text)).toEqual(['Committe das'])
+  expect(await labels(ui)).toEqual(['Committe das'])
+  await ui.unmount()
+})
+
+test('Ziffer allein abgeschickt: ohne gezeichnetes Band (-p) bleibt sie Text', async ($, on) => {
+  world(on)
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  await finish($)
+  await suggest($, 'Weiter')
+  expect(await submit($, '1', { origin: { kind: 'sdk' } })).toMatchObject({ text: '1' })
+})
+
 test('nach /clear sendet ein Druck nicht den Vorschlag des alten Chats', async ($, on) => {
   const w = world(on)
   const ui = await boot($, 'desktop')

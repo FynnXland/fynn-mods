@@ -11,6 +11,9 @@ export const CHECK = { model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 400
 /** Übergabe für „Neuer Chat mit Übergabe“ (Probe 2026-10-06: 8 s, 781 Ausgabe-Tokens). */
 export const HANDOFF = { model: 'claude-sonnet-5-5', effort: 'medium', maxTokens: 3000, timeoutMs: 45000 } as const
 
+/** To-do-Texte nach „In n To-dos aufteilen“ (SPEC Nachtrag 0.9.0); läuft im Timer, nach der Antwort des Nutzers. */
+export const SPLIT = { model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 3000, timeoutMs: 45000 } as const
+
 const NAMES: readonly [string, string][] = [
   ['fable', 'Fable'],
   ['mythos', 'Mythos'],
@@ -40,3 +43,4 @@ export const genitiveDe = (name: string) => (/[sßxz]$/i.test(name) ? `${name}�
 export const CHECK_NAME = modelName(CHECK.model)
 export const CHECK_GEN_DE = genitiveDe(CHECK_NAME)
 export const HANDOFF_NAME = modelName(HANDOFF.model)
+export const SPLIT_NAME = modelName(SPLIT.model)

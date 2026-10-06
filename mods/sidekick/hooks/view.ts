@@ -4,7 +4,7 @@
 // ganzzahliger Prozentbreite (Kommaprozente verwirft er, cost-ledger-Befund), im Terminal dünne `▄`.
 import type { RenderElement, RenderNode } from 'claude-code'
 import { tokensText, t, usdFine, usdText } from './i18n.ts'
-import { ARTS, active, compareNote, dayModels, dayRows, factorText, keyDate, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf } from './logic.ts'
+import { ARTS, ROLES, active, compareNote, dayModels, dayRows, factorText, keyDate, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf } from './logic.ts'
 import type { Day, Period, Span } from './logic.ts'
 import { modelLabel } from './models.ts'
 import { RULE_IDS } from './wartung.ts'
@@ -92,8 +92,8 @@ function modelsBlock(d: Day, days: Record<string, Day>, sf: Surface, inner: numb
   const pct = (v: number) => `${sum > 0 ? Math.round((v / sum) * 100) : 0} %`
   const kids: RenderNode[] = list.flatMap((m, i) => {
     const color = MODEL_COLORS[i % MODEL_COLORS.length]!
-    const calls = m.m.pruefung.n + m.m.uebergabe.n
-    const roles = (['pruefung', 'uebergabe'] as const)
+    const calls = ROLES.reduce((a, r) => a + m.m[r].n, 0)
+    const roles = ROLES
       .filter((r) => m.m[r].n)
       .map((r) => x.vRoleLine(x.role[r], m.m[r].n, secsText(m.m[r].ms, m.m[r].n), usdFine(m.m[r].usd / m.m[r].n)))
     return [
@@ -226,7 +226,7 @@ export function savingsTree(d: Day, p: Period, now: number, columns: number, sur
   ])
   const fw = inner >= 60 ? '33%' : '100%'
   const figures = row({ flexWrap: 'wrap', marginTop: 1 }, [
-    figure(x.vCost, usdText(d.kosten), x.vCostSub(d.pruefungen, d.uebergaben), fw),
+    figure(x.vCost, usdText(d.kosten), x.vCostSub(d.pruefungen, d.uebergaben, d.modelle ? Object.values(d.modelle).reduce((a, m) => a + m.aufteilung.n, 0) : 0), fw),
     figure(x.vSaved, usdText(savedOf(d)), x.vSavedSub(d.kaltVermieden.n + d.neuWarm.n), fw),
     figure(x.vRatio, ratioOf(d), x.vRatioSub, fw),
   ])

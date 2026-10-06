@@ -78,7 +78,10 @@ Three mods make model calls **on your account** (on a subscription they count to
 
 - **sidekick** asks Sonnet 5.5 (effort `low`) only when a check can pay off (first message of a chat, large context,
   cold cache): about $0.01 and 2 seconds per check (API value). A handoff to a new chat is one larger Sonnet call,
-  made only when you choose it. `/savings` sets both against the measured savings. Turn it off with `/sidekick off`.
+  made only when you choose it. In level `plan` or `auto` with worklist installed, a long message (800+ characters) is
+  checked too, and splitting it into to-dos or `/later` costs about $0.01 more. Level `auto` checks every message from
+  300 characters (about $0.01 each); level `cache` makes no model call at all. `/savings` sets both against the measured
+  savings. Turn it off with `/sidekick off`.
 - **worklist** asks Haiku only when its rules can't tell whether Claude is done: about $0.0005 per case. Turn it off
   with the `haiku` setting in `/config`; the list then pauses in those cases.
 - **quick-replies** forks the session after each answer **only with `/replies more on`** (off by default): roughly
@@ -143,6 +146,15 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
   version of your message that you can send with one click.
 - **Wrong chat:** if a message clearly belongs to a different project than the chat, sidekick holds it back and asks
   whether you're in the wrong chat, before it lands in (and pays for) the wrong context.
+- **Long message, several tasks:** with worklist installed, a long message (e.g. dictated) that holds three or more
+  separate tasks can be split into 3–4 to-dos. sidekick shows the steps and asks; Sonnet then writes the to-dos with
+  every point of your message, and worklist works through them one after another.
+- **Five levels:** `/sidekick off`, `cache` (only the cold-cache question, no model call), `guide` (the default),
+  `plan` (checks earlier and splits long messages) and `auto` (checks every message from 300 characters and sends a
+  clearer version or a split without asking; new chat and wrong chat still ask). A label in the prompt footer next to the
+  model picker shows the level: 🟢 ready, 🟠 working or asking, 🔴 off.
+- **`/later <text>`:** plans text as 1–4 to-dos with worklist, also while Claude works, without Claude reading it. In the
+  desktop app the command ends Claude's current turn.
 - **Due maintenance:** once per chat it names at most one due command (`/skill-doctor`, prompt audit, memory
   consolidation, `/init`), based on a free local estimate. A button next to the line (also for a command a hint names, e.g.
   `/handoff`) runs it with one click or, with worklist installed, queues a skill as a to-do.
@@ -151,12 +163,14 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
 
 If a check fails or times out, your message goes through unchanged.
 
-- **Commands:** `/sidekick` (status and settings), `/sidekick on|off`, `/sidekick hints …`,
-  `/savings [today|week|all]`, `/savings detail`
+- **Commands:** `/sidekick` (status and settings), `/sidekick off|cache|guide|plan|auto|on`, `/sidekick long 800|off`,
+  `/sidekick hints …`, `/later <text>`, `/savings [today|week|all]`, `/savings detail`
 - **Rights in short:** reads your message before it is sent; holds it back or replaces it only after your choice in
-  the dialog; Sonnet via `$.model.complete` with a short running summary and your last 3 messages, never the whole
+  the dialog (in level `auto` also without asking: a rewritten version or a split); Sonnet via `$.model.complete` with a short running summary and your last 3 messages, never the whole
   history; on a button click it runs the command shown in the line (plugin and your own commands, `/skill-doctor`,
-  `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) or worklist's `/todo`, and fills
+  `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) or worklist's `/todo` (also for
+  the to-dos of a split or `/later`); in level `auto` it sends a rewritten version in your name without asking, only
+  after you chose that level; draws its label in the prompt footer; and fills
   the prompt if the command is refused; reads the project root path; tells clawd-buddy via `$.state` only the kind of
   event and the time, never your message. No files, environment, network or settings.
 - **Details:** [mods/sidekick](mods/sidekick/README.md)
@@ -212,7 +226,8 @@ your projects and the most expensive chats, drawn in Claude Code's own style.
 - **limit-bars and sidekick both guard against cold sends.** If you use both, turn off limit-bars' warning once with
   `/cache warn off`, so you don't get two dialogs in a row; sidekick's question replaces it.
 - **sidekick hands tasks to worklist.** With both installed, the button next to a maintenance hint queues the command
-  as a to-do; worklist sends it once the current task is done.
+  as a to-do; worklist sends it once the current task is done. A long message with several tasks can be split into
+  to-dos the same way. Without worklist, sidekick never offers this and doesn't check long messages for it.
 - **Clawd acts out what sidekick does.** With both installed, Clawd holds a magnifying glass to the input while
   sidekick checks, holds up a stop sign when it asks, and writes a letter when it starts a new chat with a handoff.
 - **cost-ledger books the others.** Model calls of sidekick, worklist, quick-replies and limit-bars don't show up in

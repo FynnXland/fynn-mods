@@ -6,11 +6,16 @@
 //   handoff = baut einen neuen Chat (Übergabe schreiben, leeren)
 //   fresh   = der neue Chat ist eben gestartet (`at` zählt; Clawd zeigt es nur kurz danach)
 // `at` = Zeitpunkt (ms, $.clock.now). /clear setzt den Wert zurück (undefined).
+//
+// `status` (Nachtrag 0.10.0) speist die Anzeige in der Fußzeile (SessionMode): die eingestellte Stufe und ob sidekick gerade
+// arbeitet (Prüfung, offene Rückfrage, Übergabe oder Aufteilung). Der Zeichen-Hook liest ihn und wird so bei jedem Schreiben neu
+// gezeichnet, ohne $.ui.invalidate. Keine Texte.
 
 declare module 'claude-code' {
   interface PluginState {
     sidekick: {
       buddy: { kind: 'check' | 'stop' | 'handoff' | 'fresh'; at: number } | null
+      status: { level: 'off' | 'cache' | 'guide' | 'plan' | 'auto'; busy: boolean } | null
     }
   }
 }

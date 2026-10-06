@@ -83,8 +83,10 @@ Drei Mods lösen Modellaufrufe **über dein Konto** aus (im Abo zählen sie auf 
 
 - **sidekick** fragt Sonnet 5.5 (Effort `low`) nur, wenn sich eine Prüfung lohnen kann (erste Nachricht eines Chats,
   großer Kontext, kalter Cache): etwa 0,01 $ und 2 Sekunden je Prüfung (API-Wert). Eine Übergabe in einen neuen Chat
-  ist ein größerer Sonnet-Aufruf, nur wenn du ihn wählst. `/savings` stellt beides der gemessenen Ersparnis gegenüber.
-  Abschalten mit `/sidekick off`.
+  ist ein größerer Sonnet-Aufruf, nur wenn du ihn wählst. In der Stufe `plan` oder `auto` mit worklist prüft er auch
+  eine lange Nachricht (ab 800 Zeichen), und das Aufteilen in To-dos oder `/later` kostet etwa 0,01 $ mehr. Die Stufe
+  `auto` prüft jede Nachricht ab 300 Zeichen (je etwa 0,01 $); die Stufe `cache` ruft gar kein Modell auf. `/savings`
+  stellt beides der gemessenen Ersparnis gegenüber. Abschalten mit `/sidekick off`.
 - **worklist** fragt Haiku nur, wenn die Regeln nicht sicher erkennen, ob Claude fertig ist: etwa 0,0005 $ je Fall.
   Abschalten mit der Option `haiku` in `/config`; die Liste hält dann in diesen Fällen an.
 - **quick-replies** forkt die Session nach jeder Antwort **nur mit `/replies more on`** (standardmäßig aus): etwa so
@@ -152,6 +154,15 @@ Nachricht oder fragt nach.
   eine klarere Fassung deiner Nachricht an, die du mit einem Klick sendest.
 - **Falscher Chat:** Gehört eine Nachricht klar zu einem anderen Projekt als der Chat, hält sidekick sie an und fragt,
   ob du im falschen Chat bist, bevor sie im falschen Kontext landet (und dort Kosten verursacht).
+- **Lange Nachricht, mehrere Aufträge:** Ist worklist installiert, lässt sich eine lange (z. B. diktierte) Nachricht mit
+  drei oder mehr getrennten Aufträgen in 3–4 To-dos aufteilen. sidekick zeigt die Schritte und fragt; Sonnet schreibt
+  dann die To-dos mit allen Punkten deiner Nachricht, und worklist arbeitet sie nacheinander ab.
+- **Fünf Stufen:** `/sidekick off`, `cache` (nur die Kalt-Rückfrage, kein Modellaufruf), `guide` (Begleiter, der
+  Standard), `plan` (prüft früher und teilt lange Nachrichten auf) und `auto` (prüft jede Nachricht ab 300 Zeichen und
+  sendet eine klarere Fassung oder eine Aufteilung ohne Rückfrage; neuer Chat und falscher Chat fragen weiter). Ein Label
+  in der Fußzeile neben der Modellauswahl zeigt die Stufe: 🟢 bereit, 🟠 arbeitet oder fragt, 🔴 aus.
+- **`/later <Text>`:** plant Text als 1–4 To-dos mit worklist ein, auch während Claude arbeitet, ohne dass Claude ihn
+  liest. In der Desktop-App beendet der Befehl Claudes laufenden Turn.
 - **Fällige Wartung:** Einmal pro Chat nennt er höchstens einen fälligen Befehl (`/skill-doctor`, Prompt-Audit, Memory
   aufräumen, `/init`), auf Grundlage einer kostenlosen lokalen Schätzung. Ein Knopf neben der Zeile (auch für einen Befehl,
   den ein Hinweis nennt, z. B. `/handoff`) führt ihn mit einem Klick aus oder reiht einen Skill, wenn worklist installiert
@@ -161,12 +172,15 @@ Nachricht oder fragt nach.
 
 Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unverändert raus.
 
-- **Befehle:** `/sidekick` (Status und Einstellungen), `/sidekick on|off`, `/sidekick hints …`,
+- **Befehle:** `/sidekick` (Status und Einstellungen), `/sidekick off|cache|guide|plan|auto|on`, `/sidekick long 800|off`,
+  `/sidekick hints …`, `/later <Text>`,
   `/savings [today|week|all]`, `/savings detail`
 - **Rechte kurz:** liest deine Nachricht vor dem Senden; hält sie nur an oder ersetzt sie nur nach deiner Wahl im
-  Dialog; Sonnet über `$.model.complete` mit einer laufenden Kurzfassung und deinen letzten 3 Nachrichten, nie dem
+  Dialog (in der Stufe `auto` auch ohne Rückfrage: eine Fassung oder eine Aufteilung); Sonnet über `$.model.complete` mit einer laufenden Kurzfassung und deinen letzten 3 Nachrichten, nie dem
   ganzen Verlauf; auf Knopfdruck führt er den Befehl der Zeile aus (Befehle aus Plugins und eigene, `/skill-doctor`, `/init`;
-  nie MCP-Prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) oder ruft `/todo` von worklist auf, und
+  nie MCP-Prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) oder ruft `/todo` von worklist auf (auch
+  für die To-dos einer Aufteilung oder von `/later`); in der Stufe `auto` sendet er eine umformulierte Nachricht ohne
+  Rückfrage in deinem Namen, nur wenn du diese Stufe gewählt hast; zeichnet sein Label in die Fußzeile; und
   füllt das Eingabefeld, wenn der Befehl abgelehnt wird;
   liest den Pfad der Projektwurzel; teilt clawd-buddy über `$.state` nur die Art des Ereignisses und die Uhrzeit mit,
   nie deine Nachricht. Keine Dateien, Umgebung, kein Netzwerk, keine Einstellungen.
@@ -225,7 +239,9 @@ deine Projekte und die teuersten Chats, gezeichnet im Stil von Claude Code.
   einmal mit `/cache warn off` ab, damit nicht zwei Dialoge hintereinander kommen; die Rückfrage von sidekick ersetzt
   sie.
 - **sidekick gibt Aufgaben an worklist.** Sind beide installiert, reiht der Knopf neben einem Wartungshinweis den
-  Befehl als To-do ein; worklist sendet ihn, sobald die laufende Aufgabe fertig ist.
+  Befehl als To-do ein; worklist sendet ihn, sobald die laufende Aufgabe fertig ist. Genauso lässt sich eine lange
+  Nachricht mit mehreren Aufträgen in To-dos aufteilen. Ohne worklist bietet sidekick das nie an und prüft lange
+  Nachrichten dafür auch nicht.
 - **Clawd spielt sidekick mit.** Sind beide installiert, hält Clawd die Lupe ans Eingabefeld, während sidekick prüft,
   zeigt bei einer Rückfrage ein Stoppschild und schreibt einen Brief, wenn sidekick einen neuen Chat mit Übergabe
   startet.
