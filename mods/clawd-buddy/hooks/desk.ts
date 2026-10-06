@@ -49,7 +49,7 @@ export type Desk = {
    * Ab wann (ms nach `now`) zeigten die Fakten `facts` etwas anderes als die gezeigte Animation (Stimmung oder Zahl der Helfer)?
    * `Infinity`: bis zu ihrem Ende nichts; 0: sofort (noch nichts gezeigt, oder Fynn ist eben zurückgekommen).
    */
-  divergence: (now: number, facts: Facts) => number
+  divergence: (now: number, facts: Facts, strain: Strain) => number
   /** Wie lange (ms ab `now`) die gezeigte Animation noch läuft. */
   remaining: (now: number) => number
 }
@@ -197,8 +197,10 @@ export function createDesk(o: DeskOpts): Desk {
     catchUp(now) {
       if (drawn) advance(now, drawn.facts, drawn.strain)
     },
-    divergence(now, facts) {
+    divergence(now, facts, strainNow) {
       if (!drawn || (facts.backAt ?? 0) !== (drawn.facts.backAt ?? 0)) return 0
+      // Die Laune (Gewichte der Clips) ist mit den Fakten gezeichnet; hat sie sich geändert, gleich neu (Review 2, K1)
+      if (strainNow !== drawn.strain) return 0
       const end = drawn.at + drawn.ticks * TICK
       for (let t = now; t <= end; t += TICK) {
         if (deriveMood(facts, t) !== deriveMood(drawn.facts, t) || activeAgents(facts, t) !== activeAgents(drawn.facts, t)) return t - now

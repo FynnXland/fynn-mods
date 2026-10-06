@@ -149,12 +149,17 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
   on('prompt.edit', ($: unknown, e: any) => ({ text: e.text, cursor: e.cursor }))
   on('turn.start', ($: unknown, e: any) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
+  on('session.measure', ($: unknown, e: any) => ({ changed: e.changed }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = async () => (await ui.find({ type: 'Svg' }))?.props.source as string
   for (const [i, ms] of [5025, 1275, 7575].entries()) { // ganze Takte: ein Rest unter 75 ms verschöbe die Erwartung um ein Bild
     const before = await svg()
     await clock.advance(ms)
     // Neu zeichnen ohne neue Fakten (z. B. für einen anderen Mod): dasselbe Svg, der Rahmen lädt nicht neu (kein Flackern)
+    await ui.redraw()
+    expect(await svg()).toBe(before)
+    // Neue Fakten, die am Bild nichts ändern (Limit-Stand weit unter voll): ebenfalls dasselbe Svg
+    await ($ as any).session.measure({ context: { window: 200000 }, rateLimits: [{ kind: 'five_hour', percentUsed: 10 + i, resetsAt: '2030-01-01T10:00:00Z' }], changed: ['rateLimits'] })
     await ui.redraw()
     expect(await svg()).toBe(before)
     // Ein Ereignis, das etwas ändert: neues Svg, das mit dem Bild beginnt, das das vorige zu dieser Zeit zeigte

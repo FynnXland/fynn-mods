@@ -4,7 +4,7 @@ An animated pixel mascot ("Clawd") sits to the right above the prompt. It reacts
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** (terminal and desktop app) · Plugin version **0.6.0**
+Tested with Claude Code **v2.1.291** (terminal and desktop app) · Plugin version **0.6.1**
 
 ## What it does
 
@@ -80,7 +80,7 @@ In plain language:
 - `$.ui.resolve`: fetches the drawing components (Box, Client, Svg).
 - `$.clock.now`: time of day for day/night, waiting times, mood, and the break before the welcome.
 - Hook `session.measure`: reads only the percentage and reset time of the 5-hour and weekly limits (for the limit animations) and the fill percentage of the context window (for the "context almost full" hint); never the conversation itself.
-- `$.clock.every`: a watcher (every 250 ms, no drawing of its own) **only in the desktop app**, while it draws the band and Clawd is on; it asks for the next animation shortly before the current one ends. In the terminal the client ticks on its own.
+- `$.clock.every`: a watcher (every 250 ms, no drawing of its own) **only in the desktop app**, while it draws the band and Clawd is on; it asks for the next animation shortly before the current one ends, or shortly before new facts would change what is shown. In the terminal the client ticks on its own.
 - `$.ui.log`: error messages to the debug log.
 - Hook `session.compact`: notices only that the main conversation is being compacted and when it ends. Never reads the conversation.
 - Hook `skill.prompt`: notices only that a skill starts. Never reads the skill's text.

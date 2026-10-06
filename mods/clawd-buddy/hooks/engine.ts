@@ -168,7 +168,10 @@ export function createEngine(opts: EngineOpts) {
   const ownsMate = (): boolean => !!S.play && !isDyn(S.play.clip) && S.play.clip.companion === true && S.play.phase !== 'end'
   function updateMates() {
     if (!props.agent_s) return
-    const want = Math.min(MATE_X.length, S.agents)
+    // Ist ein Subagent eben fertig, bleibt sein Helfer stehen, bis der Übergabe-Clip beginnt (der zeichnet ihn dann selbst); spielt ein
+    // Begleiter-Clip, gehört ihm Platz 0. So sinkt der Helfer erst danach ab, statt vorher zu verschwinden und im Clip wieder aufzuploppen (Review 2, S2).
+    const hold = ownsMate() || (S.mood === 'agent_done' && S.oneShotWait)
+    const want = Math.max(Math.min(MATE_X.length, S.agents), hold ? 1 : 0)
     while (S.mates.length < want) S.mates.push(MATE_HIDE)
     for (let i = 0; i < S.mates.length; i++) {
       if (i === 0 && ownsMate()) S.mates[0] = 0
@@ -279,7 +282,7 @@ export function createEngine(opts: EngineOpts) {
       return rng() < 0.22 && S.lastClipName !== 'idle_look' ? 'idle_look' : 'idle_breathe'
     }
     // Du tippst: nicht jedes Mal eine Mitlese-Animation (Fynn, 2026-10-06: „muss nicht immer kommen“); oft schaut er nur kurz hin
-    if (m === 'watching' && !S.reduced && rng() < 0.35) return S.lastClipName !== 'idle_look' ? 'idle_look' : 'idle_breathe'
+    if (m === 'watching' && !S.reduced && rng() < 0.35 && !['idle_look', 'idle_breathe'].includes(S.lastClipName)) return 'idle_breathe'
     const pool = poolOf(m)
     if (!pool.length) return 'idle_breathe'
     if (S.reduced && !ONE_SHOT.has(m)) return pool[0].name
@@ -600,7 +603,8 @@ export function createEngine(opts: EngineOpts) {
         // wählt erst nach LOOP_STAY eine Variante (Fynn: nicht ständig zwischen den Denk-Clips springen).
         pl.fi = 0
         // (Im Leerlauf wählt die Grundpose an jeder Schleifengrenze neu, sonst käme Zeitvertreib zu spät.)
-        if (!S.pending && !S.queue.length && S.mood !== 'idle' && (S.ticks - S.clipStart < LOOP_STAY || S.gallery)) return
+        // Ein Ersatz-Clip aus einer anderen Gruppe (z. B. atmen, während du tippst) bleibt nur einen Durchgang (Review 2, K4)
+        if (!S.pending && !S.queue.length && S.mood !== 'idle' && pl.clip.cat === S.mood && (S.ticks - S.clipStart < LOOP_STAY || S.gallery)) return
         if (!S.pending && !S.queue.length && S.gallery) return
         const want = S.queue.length ? null : chooseForMood()
         if (!S.pending && want === pl.clip.name) return

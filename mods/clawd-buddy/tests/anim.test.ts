@@ -100,6 +100,14 @@ test('Daten: Sprites sind rechteckig und nutzen nur Palettenzeichen; Clip-Namen 
       expect(row.length, `${name}: Zeilenbreite`).toBe(w)
       for (const ch of row) if (ch !== '.') expect(PAL[ch], `${name}: Farbe ${ch}`).toBeDefined()
     }
+    // Bild für die gespiegelte Figur: gleich groß, nur Palettenzeichen
+    if (sp.mirrorRows) {
+      expect(sp.mirrorRows.length, `${name}: mirrorRows Höhe`).toBe(sp.rows.length)
+      for (const row of sp.mirrorRows) {
+        expect(row.length, `${name}: mirrorRows Breite`).toBe(w)
+        for (const ch of row) if (ch !== '.') expect(PAL[ch], `${name}: mirrorRows Farbe ${ch}`).toBeDefined()
+      }
+    }
   }
   const names = ALL_CLIPS.map((c) => c.name)
   expect(new Set(names).size).toBe(names.length)
@@ -780,4 +788,28 @@ test('Türmchen: er bleibt an seinem Platz (kein Hin- und Herlaufen), und Hinwei
   for (const f of [...r.intro, ...r.body, ...r.outro]) expect(f.p.fx).toBe(0)
   expect(cat('ctx_full').length).toBeGreaterThanOrEqual(2)
   expect(cat('done_long').length).toBeGreaterThanOrEqual(2)
+})
+
+test('Helfer fertig, während Clawd selbst arbeitet: er bleibt stehen bis zur Übergabe und sinkt danach ab (nie weg und wieder da)', { timeoutMs: 30000 }, () => {
+  for (const mood of ['work_read', 'work_shell']) {
+    for (let seed = 1; seed <= 8; seed++) {
+      const e = newEngine(LIB, 600 + seed)
+      e.start()
+      e.set({ agents: 1 })
+      e.setMood(mood)
+      for (let i = 0; i < 200; i++) e.tick()
+      const vis = (): boolean => e.pose().props.some((x) => x[0].startsWith('agent_s'))
+      expect(vis()).toBe(true)
+      e.set({ agents: 0 })
+      e.setMood('agent_done')
+      const seq: boolean[] = []
+      for (let i = 0; i < 400; i++) {
+        e.tick()
+        seq.push(vis())
+      }
+      const gone = seq.indexOf(false)
+      expect(gone, `${mood}/${seed}: sinkt am Ende ab`).toBeGreaterThan(0)
+      expect(seq.slice(gone).includes(true), `${mood}/${seed}: taucht wieder auf`).toBe(false)
+    }
+  }
 })

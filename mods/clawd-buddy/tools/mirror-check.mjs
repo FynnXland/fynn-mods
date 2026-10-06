@@ -12,7 +12,8 @@ for (const c of ALL_CLIPS) {
     let diff = 0
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const t = b.hit[y * W + x]
-      if (t && t.startsWith('prop:') && propSprite(ALL_PROPS, t.slice(5))?.noFlip) continue
+      const sp = t && t.startsWith('prop:') ? propSprite(ALL_PROPS, t.slice(5)) : undefined
+      if (sp?.noFlip || sp?.mirrorRows) continue // Zeichen bleiben gewollt lesbar
       const mx = 2 * ax - x
       const va = mx >= 0 && mx < W ? a.buf[y * W + mx] : undefined
       if (va === undefined) continue

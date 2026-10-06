@@ -188,17 +188,25 @@ export function propSprite(props: PropTable, name: string): PropSprite | undefin
   const f = Number(name.slice(at + 1)) / 100
   let out: PropSprite | undefined
   if (src && f > 0) {
-    const h = src.rows.length
-    const w = Math.max(...src.rows.map((r) => r.length))
-    const nh = Math.max(1, Math.round(h * f))
-    const nw = Math.max(1, Math.round(w * f))
-    const rows: string[] = []
-    for (let j = 0; j < nh; j++) {
-      let row = ''
-      for (let i = 0; i < nw; i++) row += src.rows[Math.floor(((j + 0.5) * h) / nh)][Math.floor(((i + 0.5) * w) / nw)] ?? '.'
-      rows.push(row)
+    const shrink = (from: readonly string[]): string[] => {
+      const h = from.length
+      const w = Math.max(...from.map((r) => r.length))
+      const nh = Math.max(1, Math.round(h * f))
+      const nw = Math.max(1, Math.round(w * f))
+      const rows: string[] = []
+      for (let j = 0; j < nh; j++) {
+        let row = ''
+        for (let i = 0; i < nw; i++) row += from[Math.floor(((j + 0.5) * h) / nh)][Math.floor(((i + 0.5) * w) / nw)] ?? '.'
+        rows.push(row)
+      }
+      return rows
     }
-    out = { rows, ...(src.effect ? { effect: true as const } : {}), ...(src.noFlip ? { noFlip: true as const } : {}) }
+    out = {
+      rows: shrink(src.rows),
+      ...(src.effect ? { effect: true as const } : {}),
+      ...(src.noFlip ? { noFlip: true as const } : {}),
+      ...(src.mirrorRows ? { mirrorRows: shrink(src.mirrorRows) } : {}),
+    }
   }
   scaled.set(key, out)
   return out
@@ -277,7 +285,7 @@ export function compose(p: Pose, props: PropTable): Composed {
     const put = flag === 'G' && p.mirror ? (x: number, y: number, c: string, tag: string) => set(mx(x), y, c, tag) : set
     // Nicht spiegelbar (Schrift, Zeichen, Uhren): gespiegelt wird nur die Lage, die Spalten laufen rückwärts, damit das Bild gleich bleibt
     const keep = !!s.noFlip && !!p.mirror && flag !== 'G'
-    const rows = p.mirror && flag !== 'G' && s.mirrorRows ? s.mirrorRows : s.rows
+    const rows = p.mirror && flag !== 'G' && s.mirrorRows && !s.noFlip ? s.mirrorRows : s.rows
     const w = Math.max(...rows.map((r) => r.length))
     rows.forEach((row, ry) => {
       for (let rx = 0; rx < row.length; rx++) if (row[rx] !== '.') put(keep ? bx + w - 1 - rx : bx + rx, by + ry, row[rx], 'prop:' + name)

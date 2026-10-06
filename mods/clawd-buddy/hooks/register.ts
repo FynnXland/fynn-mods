@@ -71,12 +71,12 @@ const newMeter = (): DeskMeter => ({ since: performance.now(), draws: 0, reused:
 let meter = newMeter()
 function meterText(lang: Lang, m: DeskMeter, at: number): string {
   const s = (at - m.since) / 1000
-  if (m.draws === 0) return T[lang].deskNone
-  const avg = (sum: number) => fmt(lang, sum / m.draws)
+  if (m.draws + m.reused === 0) return T[lang].deskNone
+  const avg = (sum: number) => fmt(lang, m.draws ? sum / m.draws : 0)
   const avgAll = (sum: number) => fmt(lang, sum / (m.draws + m.reused))
   return T[lang].desk({
     secs: s.toFixed(0), draws: m.draws, reused: m.reused, perMin: fmt(lang, s > 0 ? (m.draws * 60) / s : 0), planSecs: avg(m.planSecs), changes: avg(m.changes),
-    kb: fmt(lang, m.chars / m.draws / 1000), calcAvg: avg(m.calcSum), calcMax: fmt(lang, m.calcMax), drawAvg: avgAll(m.drawSum),
+    kb: fmt(lang, m.draws ? m.chars / m.draws / 1000 : 0), calcAvg: avg(m.calcSum), calcMax: fmt(lang, m.calcMax), drawAvg: avgAll(m.drawSum),
     drawMax: fmt(lang, m.drawMax), others: avgAll(m.othersSum),
   })
 }
@@ -255,7 +255,14 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       }
     }
     const isQuestion = e.tool === 'AskUserQuestion'
-    const now = await $.clock.now()
+    // Beobachtend: wirft die Uhr, geht der Tool-Aufruf trotzdem durch, nur ohne Stimmung (Review 2, K8)
+    let now: number
+    try {
+      now = await $.clock.now()
+    } catch (err) {
+      $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+      return next(e)
+    }
     // Shell-Befehle genauer: Commit/Push bzw. Tests/Checks (nur Mustervergleich, der Befehl wird nicht gespeichert)
     const base = toolKind(e.tool)
     const kind = base === 'shell' ? shellKind((e as { command?: unknown }).command) : base
@@ -381,7 +388,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // Desktop: die Engine steht beim Anfang der gezeigten Animation; vor einem Eingriff erst auf jetzt nachziehen
     const deskCatchUp = async () => {
       if (!desk) return
-      deskForce = true
       try {
         desk.catchUp(await $.clock.now())
       } catch (err) {
@@ -400,7 +406,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
     if (sub === 'on' || sub === 'off') {
       enabled = sub === 'on'
-      deskForce = true
       if (!enabled) {
         deskTimer?.cancel()
         deskTimer = null
@@ -410,6 +415,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       } catch (err) {
         $.ui.log(`clawd-buddy: saving failed: ${String(err)}`, { to: 'debug' })
       }
+      // Erst direkt vor dem Neuzeichnen: ein Zeichnen während der `await`s davor verbrauchte das Flag sonst mit dem alten Stand (Review 2, S1)
+      deskForce = true
       $.ui.invalidate('ui.render')
       return { text: enabled ? tx.on : tx.off }
     }
@@ -431,6 +438,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       await ensureOn()
       await deskCatchUp()
       desk?.engine.play(hit.name)
+      deskForce = true
       $.ui.invalidate('ui.render')
       const more = part.length > 1 && !exact ? tx.demoMore(part.slice(1, 5).map((c) => c.name).join(', ')) : ''
       return { text: tx.demoPlays(hit.name, clipLabel(lang, hit)) + more }
@@ -440,6 +448,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       await ensureOn()
       await deskCatchUp()
       desk?.nap()
+      deskForce = true
       $.ui.invalidate('ui.render')
       return { text: tx.nap }
     }
@@ -447,6 +456,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       boopN += 1
       await deskCatchUp()
       desk?.engine.click()
+      deskForce = true
       $.ui.invalidate('ui.render')
       return { text: 'boop!' }
     }
@@ -546,7 +556,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         const fNow = deskFacts(now)
         // Ändern die neuen Fakten an der gezeigten Animation (vorerst) nichts, bleibt das Svg dasselbe: kein Neuladen, kein Flackern
         const keep = deskSource !== '' && !deskForce && deskAsked === 0
-        const div = keep ? desk.divergence(now, fNow) : 0
+        const div = keep ? desk.divergence(now, fNow, strain) : 0
         const left = keep ? desk.remaining(now) : 0
         if (keep && div > DESK_LEAD && left > DESK_LEAD) {
           // Der Wächter bittet kurz vor der Abweichung bzw. dem Ende um die nächste Zeichnung (Runden zählen ab der letzten echten)
