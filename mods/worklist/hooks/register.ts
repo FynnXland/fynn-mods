@@ -49,6 +49,11 @@ const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit']
 
 // $.state: Laufzustand über einen Hot Reload hinweg (types/index.d.ts)
 const rtAtom = atom({ plugin: 'worklist', key: 'rt' }, freshRuntime(''))
+// Neuzeichnen nur der Seitenleiste: Sie liest diesen Zähler beim Zeichnen und abonniert ihn so; ein Schreiben zeichnet nur sie neu
+// (docs/raw/en/interface.md:716). $.ui.invalidate('ui.render') zeichnete dagegen auch jede Nachricht im Chat neu, weil die
+// UserMessage- und AssistantMessage-Matcher keine requestId nennen (types: $.ui.invalidate); im Desktop flackerte so die
+// Hover-Leiste der Nachrichten (Kopieren, Neu senden, Forken), solange Claude arbeitete.
+const paintAtom = atom({ plugin: 'worklist', key: 'paint' }, 0)
 
 // ---------- Zustand (Modul) ----------
 
@@ -101,7 +106,7 @@ function once($: EngineInterface, ms: number, fn: () => void): Timer {
 }
 
 function redraw($: EngineInterface) {
-  $.ui.invalidate('ui.render')
+  update($, paintAtom, (n) => n + 1).catch((err: unknown) => $.ui.log(`worklist: redraw: ${String(err)}`, { to: 'debug' }))
 }
 
 async function persist($: EngineInterface) {
@@ -1000,7 +1005,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   on('tool.call', async ($, e, next) => {
     if (!e.agentId) {
-      activity = describe(e.tool, e as unknown as Record<string, unknown>)
+      activity = clamp(describe(e.tool, e as unknown as Record<string, unknown>), 200, 1)
       if (EDIT_TOOLS.includes(e.tool)) filesChanged = true
       redraw($)
     }
@@ -1174,6 +1179,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE) return next(e)
     try {
+      // Abonnieren: redraw() zeichnet über diesen Wert neu
+      await read($, paintAtom)
       rendered = true
       nowMs = await $.clock.now()
       // Nach /clear, /resume, /branch: neue Session-ID ohne session.start. Abgleich über den Timer, nicht im Zeichnen

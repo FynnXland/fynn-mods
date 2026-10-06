@@ -21,6 +21,8 @@ declare module 'claude-code' {
         expectOwn: string | null
         lastResult: string
       }
+      // Zähler zum Neuzeichnen: nur die Seitenleiste liest ihn, also zeichnet ein Schreiben nur sie neu
+      paint: number
     }
   }
 }

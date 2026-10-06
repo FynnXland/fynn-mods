@@ -1,6 +1,6 @@
 {
   "name": "worklist",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "To-do sidebar next to the chat: queue tasks, even while Claude is working. When Claude is clearly done, the to-do is checked off and the next one starts; otherwise the list pauses with a reason and buttons. History per project. /todo",
   "author": { "name": "Fynn Hansen" },
   "license": "MIT",

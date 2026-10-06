@@ -4,7 +4,7 @@ A to-do list as a sidebar next to the chat. You queue tasks, even while Claude i
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.290** (desktop app: 2.1.286) · Plugin version **0.2.1**
+Tested with Claude Code **v2.1.290** (desktop app: 2.1.286) · Plugin version **0.2.2**
 
 **Cost:** when the rules can't decide whether Claude is done, worklist asks Haiku (measured at about 0.05 US cents per case). These calls run through your session and count toward your usage. You can switch this off with the `haiku` option (see [Configuration](#configuration)); the list then stops in those cases instead.
 
@@ -90,7 +90,9 @@ A standalone "Done." (or "Fertig.") as the last line of an answer is hidden in t
 
 ```text
 hooks: session.start, command.run{command=todo}, command.run{command=todos}, prompt.submit, turn.start, tool.call, tool.call{tool=TaskCreate}, tool.call{tool=TaskUpdate}, tool.call{tool=TodoWrite}, classic.Stop, classic.StopFailure, turn.complete, ui.render{component=UserMessage}, ui.render{component=AssistantMessage}, ui.render{component=Pane}
-calls: $.agent.list, $.clock.every, $.clock.now, $.command.register, $.model.complete, $.prompt.submit, $.session.id, $.session.root, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.set, $.ui.close, $.ui.focus, $.ui.invalidate, $.ui.log, $.ui.open, $.ui.resolve, $.ui.toast
+calls: $.agent.list, $.clock.every, $.clock.now, $.command.register, $.model.complete, $.prompt.submit, $.session.id, $.session.root, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.set, $.ui.close, $.ui.focus, $.ui.log, $.ui.open, $.ui.resolve, $.ui.toast
+state writes: worklist.paint, worklist.rt
+state reads: worklist.paint, worklist.rt
 ```
 
 In plain language:
@@ -99,7 +101,7 @@ In plain language:
 - `$.model.complete`: Haiku, only in stage 9, and it can be switched off.
 - `$.agent.list`: reads whether helpers are still running (stage 4).
 - `$.session.id`, `$.session.root`: list per chat, history per project.
-- `$.store`, `$.state`: list, history, cost, run state. `$.store.delete` only deletes this chat's list once it has become empty.
+- `$.store`, `$.state`: list, history, cost, run state, and a redraw counter for the sidebar. `$.store.delete` only deletes this chat's list once it has become empty.
 - `$.ui.*`, `$.clock.*`, `$.command.register`: sidebar, toast, clock, `/todo` and `/todos`.
 - `ui.render{component=AssistantMessage}`: hides a standalone "Done." or "Fertig." at the end of Claude's answers (display only; the stored answer stays unchanged). This applies in every session where worklist is loaded, not only for to-dos.
 - `ui.render{component=UserMessage}`: shows a sent to-do in the transcript as an orange line with a box instead of the speech bubble (display only; your own messages stay unchanged).
