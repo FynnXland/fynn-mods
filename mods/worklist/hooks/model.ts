@@ -172,17 +172,75 @@ const ALL_DONE_LINES = [
   '(Arbeitsliste: Ist etwas unklar, stell am Ende eine klare Rückfrage. Sonst erledige die Aufgabe vollständig und schließe mit „Fertig.“)',
 ]
 
-/** Text, der für ein To-do gesendet wird (SPEC → Ablauf 1); die Schlusszeile folgt der Spracheinstellung. */
-export function promptFor(t: Todo, n: number, m: number, doneLine: boolean, lang: Lang): string {
-  return `[To-do ${n}/${m}] ${t.text}${doneLine ? `\n\n${DONE_LINES[lang]}` : ''}`
-}
-
-/** Erkennt den gesendeten Text in `turn.start` wieder. */
+/** Bis 0.2.2 gesendet: `[To-do n/m] <Text>` plus Schlusszeile. Erkennt solche Texte in `turn.start` wieder (Fallback). */
 export function isTodoPrompt(text: string): boolean {
   return /^\[To-do \d+\/\d+\] /.test(text)
 }
 
-/** Zerlegt einen gesendeten To-do-Text für die Anzeige im Verlauf: Nummer, Gesamtzahl, To-do ohne Schlusszeile. */
+// ---------- Gesendete To-dos (ab 0.3.0 ohne Rahmen) ----------
+
+/**
+ * Ein gesendetes To-do, pro Chat gemerkt: Daran erkennen `turn.start` und die Zeile im Chat den Text wieder, denn beim
+ * Modell kommt ab 0.3.0 genau Fynns Text an, ohne Präfix. Statt des Texts nur eine Prüfsumme (Store 4 MiB).
+ */
+export type SentRec = { id: string; h: string; n: number; m: number }
+
+const SENT_MAX = 50
+
+/** Prüfsumme eines gesendeten Texts (FNV-1a, 32 Bit, mit Länge); Leerraum am Rand zählt nicht. */
+export function textHash(text: string): string {
+  const s = text.trim()
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return `${h.toString(36)}.${s.length.toString(36)}`
+}
+
+export function cleanSent(v: unknown): SentRec[] {
+  if (!Array.isArray(v)) return []
+  const out: SentRec[] = []
+  for (const x of v) {
+    if (!x || typeof x !== 'object') continue
+    const r = x as Record<string, unknown>
+    if (typeof r.id !== 'string' || typeof r.h !== 'string' || typeof r.n !== 'number' || typeof r.m !== 'number') continue
+    out.push({ id: r.id, h: r.h, n: r.n, m: r.m })
+  }
+  return out.slice(-SENT_MAX)
+}
+
+/** Neuer Eintrag hinten, die ältesten fallen weg. */
+export function pushSent(list: readonly SentRec[], r: SentRec): SentRec[] {
+  return [...list, r].slice(-SENT_MAX)
+}
+
+/** Der zuletzt gesendete Eintrag mit genau diesem Text. */
+export function findSent(list: readonly SentRec[], text: string): SentRec | undefined {
+  const h = textHash(text)
+  for (let i = list.length - 1; i >= 0; i--) if (list[i]?.h === h) return list[i]
+  return undefined
+}
+
+/** Ein To-do, das mit `/name` beginnt, ist ein Befehl: Name ohne Schrägstrich (auch `plugin:skill`), Rest als Argumente. */
+export function parseCommand(text: string): { name: string; args: string } | null {
+  const m = text.trim().match(/^\/([^\s/]+)(?:\s+([\s\S]*))?$/u)
+  if (!m || !m[1]) return null
+  return { name: m[1], args: (m[2] ?? '').trim() }
+}
+
+/**
+ * Der Turn, den ein Skill-Befehl auslöst, beginnt mit `<command-name>/name</command-name>` (CLI 2.1.290, Prototyp). Liefert
+ * den Befehl als `/name args`, sonst null.
+ */
+export function commandOfTurn(text: string): string | null {
+  const name = text.match(/<command-name>\/?([^<\s]+)<\/command-name>/u)?.[1]
+  if (!name) return null
+  const args = (text.match(/<command-args>([\s\S]*?)<\/command-args>/u)?.[1] ?? '').trim()
+  return `/${name}${args ? ` ${args}` : ''}`
+}
+
+/** Zerlegt einen bis 0.2.2 gesendeten To-do-Text für die Anzeige im Verlauf: Nummer, Gesamtzahl, To-do ohne Schlusszeile. */
 export function parseSent(text: string): { n: number; m: number; text: string; withLine: boolean } | null {
   const m = text.trim().match(/^\[To-do (\d+)\/(\d+)\] ([\s\S]*)$/)
   if (!m) return null
@@ -218,6 +276,10 @@ export type Runtime = {
   plan: PlanItem[]
   sessionDone: number
   expectOwn: string | null
+  // Befehls-To-do gesendet (`$.command.run`): Name ohne Schrägstrich, bis sein Turn beginnt oder es ohne Turn abgehakt ist
+  expectCmd: string | null
+  // Gesendete To-dos dieses Chats (auch in `$.store` `sent:<sessionId>`, damit der Rahmen im Chat nach Resume bleibt)
+  sent: SentRec[]
   lastResult: string // Kurz-Ergebnis (erster Satz) der letzten Antwort, nicht die ganze Antwort
 }
 
@@ -236,6 +298,8 @@ export function freshRuntime(sid: string): Runtime {
     plan: [],
     sessionDone: 0,
     expectOwn: null,
+    expectCmd: null,
+    sent: [],
     lastResult: '',
   }
 }

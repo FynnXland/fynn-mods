@@ -2,21 +2,25 @@
 // der Prüfung „sicher frei“ (check.ts, Stufen 1–9, Stufe 10 hier) fertig, wird das laufende To-do abgehakt, wandert in den
 // projektweiten Verlauf, und das nächste startet über den einmaligen Timer. Sonst hält die Liste an: Toast und Hinweisblock.
 // Im Zweifel wird nie gesendet. Alle beobachtenden Hooks geben das Ergebnis von next(e) unverändert weiter und hängen keinen
-// Kontext an Fynns Nachrichten. Texte auf Englisch oder Deutsch (userConfig `language`, i18n.ts).
+// Kontext an Fynns Nachrichten; nur worklists eigene To-dos bekommen den unsichtbaren Schluss-Hinweis. Beim Modell kommt genau
+// der To-do-Text an; ein To-do, das mit `/name` beginnt, läuft als Befehl. Texte auf Englisch oder Deutsch (i18n.ts).
 // Vorbild für Ideen und Abläufe: arbeitsliste (nikisge/niklas-mods, ohne Lizenz, kein Code übernommen).
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
 import { BUSY_STATUS, decideHaiku, decideRules, haikuCost, haikuPrompt, haikuSystem, parseHaiku } from './check.ts'
 import type { Decision, StopFacts } from './check.ts'
-import { T, cents, hhmm, shortDate } from './i18n.ts'
+import { DONE_HINTS, T, cents, hhmm, shortDate } from './i18n.ts'
 import type { Strings } from './i18n.ts'
 import {
   add,
   cleanCost,
   cleanHistory,
   cleanQueue,
+  cleanSent,
   cleanSettings,
   cleanText,
+  commandOfTurn,
+  findSent,
   firstSentence,
   freshRuntime,
   hideDoneMarker,
@@ -24,14 +28,16 @@ import {
   move,
   nextOpen,
   openItems,
+  parseCommand,
   parseSent,
-  promptFor,
   pushHistory,
+  pushSent,
   remove,
   reopen,
   requeue,
   running,
   setStatus,
+  textHash,
 } from './model.ts'
 import type { Cost, HistoryEntry, Queue, Runtime, Settings, Todo } from './model.ts'
 import { ORANGE, clamp, duration, renderPane } from './view.ts'
@@ -41,11 +47,17 @@ const PANE = 'worklist'
 const TITLE = 'To-dos'
 // Fynns eigene Nachrichten: im Desktop `composer`, in -p/SDK `sdk`, vom Handy `bridge` (types: PromptOrigin)
 const FYNN = ['composer', 'sdk', 'bridge']
-// Herkünfte, bei denen eine To-do-Zeile im Chat am Text erkannt wird (der Desktop meldet worklists To-dos als `sdk`)
-const TEXT_ORIGINS = ['composer', 'sdk', 'bridge', 'unclassified']
+// Herkünfte, bei denen eine To-do-Zeile im Chat am Text erkannt wird (der Desktop meldet worklists To-dos als `sdk`). Ohne
+// `composer`: Das ist im Desktop Fynns eigene Eingabe; tippt er den Text eines To-dos nach, bleibt es seine Nachricht
+const TEXT_ORIGINS = ['sdk', 'bridge', 'unclassified']
 // Nach einem Knopfdruck kurz warten statt der vollen Beruhigungszeit: Fynn hat selbst entschieden
 const PRESS_SETTLE_MS = 300
 const EDIT_TOOLS = ['Edit', 'Write', 'NotebookEdit', 'MultiEdit']
+// Nach der Rückkehr von $.command.run: so lange auf den Turn warten, den ein Skill-Befehl auslöst. Im Prototyp (CLI 2.1.290)
+// kam dessen prompt.submit 6 ms, sein turn.start 100 ms nach der Rückkehr. Lokale Befehle (/cost) lösen keinen aus.
+const CMD_TURN_WAIT_MS = 1500
+// Befehle von worklist selbst: $.command.run überspringt den eigenen Hook (Debug-Log: „command.run skipped: re-entry“)
+const OWN_COMMANDS = ['todo', 'todos']
 
 // $.state: Laufzustand über einen Hot Reload hinweg (types/index.d.ts)
 const rtAtom = atom({ plugin: 'worklist', key: 'rt' }, freshRuntime(''))
@@ -76,6 +88,11 @@ let lastDecision = '–'
 let lastHaiku = '–'
 // Fakten des letzten Turn-Endes (nur im Speicher): für die Prüfung, wenn danach ein To-do eingereiht wird
 let lastSnap: Snapshot | null = null
+// Unsichtbarer Schluss-Hinweis: Prüfsumme des gerade gesendeten To-dos, bis classic.UserPromptSubmit ihn anhängt
+let hintFor: string | null = null
+let lastHint: '' | 'attached' | 'missing' = ''
+// Befehls-To-do: dessen prompt.submit (Skill-Befehl, Herkunft worklist) ist schon durch, der Turn folgt gleich
+let cmdPrompt = false
 let storeWarned = false
 let draft = ''
 let historyOpen = false
@@ -142,6 +159,16 @@ async function saveQueue($: EngineInterface) {
   }
 }
 
+/** Gesendete To-dos dieses Chats sichern: Daran erkennt die Zeile im Chat sie auch nach Resume wieder. */
+async function saveSent($: EngineInterface) {
+  try {
+    await $.store.set(`sent:${rt.sid}`, rt.sent)
+  } catch (err) {
+    $.ui.log(`worklist: sent list not saved: ${String(err)}`, { to: 'debug' })
+    warnStore($)
+  }
+}
+
 /** Speichern scheitert (z. B. 4 MiB voll): einmal pro Prozess Bescheid geben, die Liste lebt dann nur im Speicher. */
 function warnStore($: EngineInterface) {
   if (storeWarned) return
@@ -183,7 +210,9 @@ async function syncSession($: EngineInterface): Promise<boolean> {
   if (id === rt.sid) return false
   cancelSettle()
   rt = freshRuntime(id)
+  hintFor = null
   q = await loadQueue($, id)
+  rt.sent = cleanSent(await loadSafe($, `sent:${id}`))
   // Liste eines anderen Chats (z. B. per /resume): laufendes To-do zurück auf offen, pausiert übernehmen
   const r = running(q)
   if (r) q = reopen(q, r.id)
@@ -298,6 +327,20 @@ async function afterSettle($: EngineInterface, why: 'auto' | 'manual', seq: numb
 }
 
 async function send($: EngineInterface, todo: Todo, why: 'auto' | 'manual') {
+  const command = parseCommand(todo.text)
+  let name = ''
+  let listed = false
+  if (command) {
+    // Befehl: erst nachschlagen. worklists eigene Befehle → Hinweis und Halt; ein unbekannter scheitert unten an $.command.run
+    const found = await findCommand($, command.name)
+    if (found.problem) {
+      raise($, found.problem, todo.id)
+      await commit($)
+      return
+    }
+    name = found.name
+    listed = found.listed
+  }
   const t = await now($)
   const n = rt.sessionDone + 1
   const m = rt.sessionDone + q.items.length
@@ -307,11 +350,21 @@ async function send($: EngineInterface, todo: Todo, why: 'auto' | 'manual') {
   rt.state = 'idle'
   rt.stateReason = ''
   if (why === 'auto') rt.autoRun += 1
+  // Merken, was gesendet wurde: turn.start und die Zeile im Chat erkennen das To-do am genauen Text (ohne Präfix)
+  rt.sent = pushSent(rt.sent, { id: todo.id, h: textHash(command ? `/${name}${command.args ? ` ${command.args}` : ''}` : todo.text), n, m })
+  await saveSent($)
   await commit($)
+  if (command) {
+    await runCommand($, todo, name, command.args, listed)
+    return
+  }
+  // Der Schluss-Hinweis geht unsichtbar mit (classic.UserPromptSubmit unten); beim Modell kommt sonst genau der To-do-Text an
+  hintFor = settings.doneLine ? textHash(todo.text) : null
+  lastHint = settings.doneLine ? 'missing' : ''
   try {
     // Mit asUser liest Claude das To-do als Fynns Nachricht (types: PromptSubmitArgs). worklists eigener prompt.submit-Hook
     // sieht es nicht: Das Debug-Log meldet „prompt.submit skipped: re-entry (the plugin's own code raised it)“
-    const r = await $.prompt.submit({ text: promptFor(todo, n, m, settings.doneLine, settings.lang), asUser: true })
+    const r = await $.prompt.submit({ text: todo.text, asUser: true })
     if ('drop' in r && r.drop !== undefined) await sendFailed($, todo.id, tx().sendRejected(r.drop))
   } catch (err) {
     await sendFailed($, todo.id, tx().sendFailed(String(err)))
@@ -321,8 +374,82 @@ async function send($: EngineInterface, todo: Todo, why: 'auto' | 'manual') {
 async function sendFailed($: EngineInterface, id: string, reason: string) {
   q = reopen(q, id)
   rt.expectOwn = null
+  rt.expectCmd = null
+  hintFor = null
   raise($, reason, id)
   await commit($)
+}
+
+// ---------- Befehle in der Warteschlange ----------
+
+/**
+ * Den Befehl in dieser Session nachschlagen ($.command.list, types: CommandInfo): Liefert den Namen, wie die Liste ihn führt.
+ * Die Liste ist nicht vollständig: `/cost` fehlte darin, lief aber über $.command.run (Smoke 0.3.0, CLI 2.1.290). Fehlt ein
+ * Name, entscheidet deshalb $.command.run selbst; es lehnt unbekannte Namen ab („no command named /x“, types: $.command.run).
+ */
+async function findCommand(
+  $: EngineInterface,
+  name: string,
+): Promise<{ name: string; listed: boolean; problem?: undefined } | { name?: undefined; listed?: undefined; problem: string }> {
+  if (OWN_COMMANDS.includes(name.toLowerCase())) return { problem: tx().cmdOwn(name) }
+  try {
+    const list = await $.command.list()
+    const hit = list.find((c) => c.name === name) ?? list.find((c) => c.name.toLowerCase() === name.toLowerCase())
+    if (hit) return { name: hit.name, listed: true }
+  } catch (err) {
+    $.ui.log(`worklist: command list: ${String(err)}`, { to: 'debug' })
+  }
+  return { name, listed: false }
+}
+
+/**
+ * Befehl ausführen statt ihn als Text zu senden (types: `$.command.run`, „queued and run once the session is idle“; ein
+ * unbekannter Name wirft). Wann er als erledigt gilt (Prototyp, CLI 2.1.290): Ein Skill-Befehl kehrt sofort zurück und
+ * löst danach einen Turn aus; dann entscheidet dessen Ende über die Prüfung. Ein lokaler Befehl (/cost) löst keinen aus;
+ * dann ist er mit der Rückkehr erledigt.
+ */
+async function runCommand($: EngineInterface, todo: Todo, name: string, args: string, listed: boolean) {
+  rt.expectCmd = name
+  cmdPrompt = false
+  const seq = rt.turnSeq
+  let text = ''
+  try {
+    const r = await $.command.run({ command: name, args })
+    text = r.text ?? ''
+  } catch (err) {
+    // Nicht in der Liste und abgelehnt, oder „no command named“: unbekannt. Sonst der Fehler selbst. Nie still
+    const msg = String(err)
+    await sendFailed($, todo.id, !listed || /no command named/i.test(msg) ? tx().cmdUnknown(name) : tx().cmdFailed(msg))
+    return
+  }
+  once($, CMD_TURN_WAIT_MS, () => void afterCommand($, todo.id, seq, text, false))
+}
+
+/** Nach der Rückkehr eines Befehls: Kam kein Turn, gilt er als erledigt (WEITER ohne Prüfung des Texts). */
+async function afterCommand($: EngineInterface, id: string, seq: number, text: string, again: boolean) {
+  try {
+    // Ein Turn hat begonnen: dessen Ende prüft
+    if (rt.turnSeq !== seq || rt.busy || rt.expectCmd === null) return
+    const todo = running(q)
+    if (!todo || todo.id !== id) return
+    // Sein prompt.submit ist schon durch, der Turn kommt gleich: noch einmal länger warten
+    if (cmdPrompt && !again) {
+      once($, CMD_TURN_WAIT_MS * 3, () => void afterCommand($, id, seq, text, true))
+      return
+    }
+    const L = tx()
+    rt.expectCmd = null
+    rt.expectOwn = null
+    rt.turn = { startedAt: todo.startedAt ?? 0, todoId: id, text: clamp(todo.text, 200, 1), fromFynn: false }
+    rt.lastResult = firstSentence(text)
+    const d: Decision = { outcome: 'WEITER', stage: 0, reason: L.cmdRan }
+    lastDecision = describeDecision(await now($), d, L.ofTodo(clamp(todo.text, 40, 1)))
+    await apply($, d, todo)
+  } catch (err) {
+    $.ui.log(`worklist: command: ${String(err)}`, { to: 'debug' })
+  } finally {
+    await commit($)
+  }
 }
 
 // ---------- Die Prüfung am Turn-Ende ----------
@@ -376,7 +503,9 @@ async function evaluate($: EngineInterface, s: Snapshot) {
     let d: Decision
     try {
       const rules = decideRules({ ...s, busyAgents: await busyAgents($), plan: rt.plan }, L)
-      d = rules ?? (settings.haiku ? await askHaiku($, todo?.text ?? '', s) : { outcome: 'FRAGEN', stage: 9, reason: L.haikuOff })
+      // Ein Befehls-To-do heißt für Haiku „führe /x aus“: der Text allein wäre nur der Befehlsname
+      const task = todo ? (parseCommand(todo.text) ? `Run the slash command ${todo.text}` : todo.text) : ''
+      d = rules ?? (settings.haiku ? await askHaiku($, task, s) : { outcome: 'FRAGEN', stage: 9, reason: L.haikuOff })
     } catch (err) {
       // Im Zweifel nie senden (SPEC → Fehlerverhalten)
       d = { outcome: 'FRAGEN', stage: 0, reason: L.checkFailed(String(err)) }
@@ -733,7 +862,7 @@ function statusText(): string {
     L.statusState(state, rt.stateReason, rt.hold),
     L.statusDecision(lastDecision),
     L.statusHaiku(settings.haiku, lastHaiku, cost.calls, cents(settings.lang, cost.usd)),
-    L.statusRun(rt.autoRun, settings.maxAutoRun, settings.settleSeconds, settings.doneLine),
+    L.statusRun(rt.autoRun, settings.maxAutoRun, settings.settleSeconds, settings.doneLine, lastHint === 'attached' ? L.hintAttached : lastHint === 'missing' ? L.hintMissing : ''),
     L.statusHistory(history.length),
   ].join('\n')
 }
@@ -869,6 +998,29 @@ function describe(tool: string, input: Record<string, unknown>): string {
   }
 }
 
+/** Beginnt mit diesem Text der Turn des gesendeten To-dos? Genauer Vergleich mit dem gemerkten Text bzw. Befehl; Fallback: Präfix bis 0.2.2. */
+function isOwnTurn(id: string, text: string): boolean {
+  const rec = rt.sent.filter((r) => r.id === id).at(-1)
+  if (rec) {
+    if (textHash(text) === rec.h) return true
+    const c = commandOfTurn(text)
+    if (c !== null && textHash(c) === rec.h) return true
+  }
+  return isTodoPrompt(text)
+}
+
+/** Ein gesendetes To-do in einer Nachricht im Chat: Nummer, Gesamtzahl, angezeigter Text. Ab 0.3.0 über die gemerkten Sendungen, sonst Präfix bis 0.2.2. */
+function sentOf(text: string, o: { kind: string; name?: string }): { n: number; m: number; text: string } | null {
+  const own = o.kind === 'plugin' && o.name === 'worklist'
+  const shown = commandOfTurn(text) ?? text.trim()
+  const rec = findSent(rt.sent, shown)
+  // Fremde Herkünfte (Peers, Kanäle, Benachrichtigungen) nie; der Desktop meldet worklists To-dos als `sdk`
+  if (rec && (own || TEXT_ORIGINS.includes(o.kind))) return { n: rec.n, m: rec.m, text: shown }
+  const old = parseSent(text)
+  if (old && (own || (old.withLine && TEXT_ORIGINS.includes(o.kind)))) return old
+  return null
+}
+
 const isError = (r: unknown) => !!r && typeof r === 'object' && (('isError' in r && (r as { isError?: unknown }).isError === true) || 'deny' in r)
 
 export function register(on: On, options: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
@@ -887,6 +1039,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         // Hot Reload (/reload-plugins): Laufzustand übernehmen. Der Reload bricht offene Timer ab (types: $.clock), also eine
         // laufende Prüfung, Haiku oder Beruhigungszeit: aufräumen statt hängen zu bleiben
         rt = { ...freshRuntime(sid), ...saved }
+        // Ein Laufzustand von 0.2.2 hat keine gesendeten To-dos: aus dem Store nehmen
+        rt.sent = Array.isArray(saved.sent) ? cleanSent(saved.sent) : cleanSent(await loadSafe($, `sent:${sid}`))
+        // Ein Befehl, auf dessen Turn gewartet wurde: Der Reload hat den Timer abgebrochen, der Hinweis unten fängt es auf
+        rt.expectCmd = null
         if (rt.state === 'checking') rt.state = 'idle'
         if (rt.state === 'unclear') {
           rt.state = 'blocked'
@@ -902,6 +1058,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       } else {
         // Neuer Prozess (Start, --resume): ein laufendes To-do zurück auf offen, Liste pausiert
         rt = freshRuntime(sid)
+        rt.sent = cleanSent(await loadSafe($, `sent:${sid}`))
         const r = running(q)
         if (r) q = reopen(q, r.id)
         if (openItems(q).length > 0) q = { ...q, paused: true }
@@ -955,7 +1112,21 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // In einen laufenden Turn eingespeist (turnId gesetzt): beginnt keinen eigenen Turn, die Herkunft gilt nicht für den nächsten
     if (!e.turnId) pendingOrigin = e.origin.kind
     if (FYNN.includes(e.origin.kind)) fynnActed()
+    // Ein Skill-Befehl aus $.command.run kommt hier als `/name` mit Herkunft worklist an (Prototyp, CLI 2.1.290): Sein Turn folgt
+    if (rt.expectCmd && e.origin.kind === 'plugin' && e.origin.name === 'worklist') cmdPrompt = true
     return next(e)
+  })
+
+  // Unsichtbarer Schluss-Hinweis nur zu worklists eigenem To-do: als `additionalContext` (types: ClassicResultFields
+  // UserPromptSubmit; „text handed to the model with the event“). Fynn sieht ihn nicht im Chat, das Modell liest ihn als
+  // System-Hinweis. Feuert auch bei worklists eigener Sendung (Prototyp, CLI 2.1.290), anders als prompt.submit.
+  // Erkannt an der Prüfsumme des gerade gesendeten Texts; alles andere geht unverändert durch.
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const r = await next(e)
+    if (!hintFor || textHash(e.prompt) !== hintFor) return r
+    hintFor = null
+    lastHint = 'attached'
+    return { ...r, additionalContext: [...(r.additionalContext ?? []), DONE_HINTS[settings.lang]] }
   })
 
   on('turn.start', async ($, e, next) => {
@@ -968,10 +1139,13 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       cancelSettle()
       rt.turnSeq += 1
       rt.busy = true
+      // Der Hinweis gilt nur für diese eine Sendung
+      hintFor = null
       let todoId: string | null = null
-      if (rt.expectOwn && isTodoPrompt(e.text)) {
+      if (rt.expectOwn && isOwnTurn(rt.expectOwn, e.text)) {
         todoId = rt.expectOwn
         rt.expectOwn = null
+        rt.expectCmd = null
       } else {
         todoId = running(q)?.id ?? null
       }
@@ -1127,16 +1301,13 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     return r
   })
 
-  // Gesendetes To-do im Chat: statt der Sprechblase (mit Schlusszeile) eine orange Zeile und ein oranger Rahmen, wie sidekick
-  // eine gesendete Fassung zeigt (mods/sidekick/hooks/register.ts). Nur die Anzeige ändert sich, gespeicherte Nachricht und
-  // Modell bleiben (types: RenderPropsOf UserMessage). Erkannt an der Herkunft oder am unverwechselbaren Text samt Schlusszeile;
-  // Nachrichten von Peers, Kanälen oder Benachrichtigungen bleiben, wie sie sind.
+  // Gesendetes To-do im Chat: statt der Sprechblase eine orange Zeile und ein oranger Rahmen, wie sidekick eine gesendete
+  // Fassung zeigt (mods/sidekick/hooks/register.ts). Nur die Anzeige ändert sich, gespeicherte Nachricht und Modell bleiben
+  // (types: RenderPropsOf UserMessage). Erkannt am genauen Text einer gemerkten Sendung dieses Chats (ab 0.3.0), bei älteren
+  // Nachrichten am Präfix samt Schlusszeile; Nachrichten von Peers, Kanälen oder Benachrichtigungen bleiben, wie sie sind.
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
-    const o = e.props.origin
-    const sent = parseSent(e.props.text)
+    const sent = sentOf(e.props.text, e.props.origin)
     if (!sent) return next(e)
-    const ours = (o.kind === 'plugin' && o.name === 'worklist') || (sent.withLine && TEXT_ORIGINS.includes(o.kind))
-    if (!ours) return next(e)
     try {
       const L = tx()
       const line = L.sentLine(sent.n, sent.m)

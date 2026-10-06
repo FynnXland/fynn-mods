@@ -2,8 +2,8 @@ import type { Engine, On, RenderNode } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { decideHaiku, decideRules, haikuSystem, isDone, isProblem, isQuestion, parseHaiku } from '../hooks/check.ts'
 import type { Facts } from '../hooks/check.ts'
-import { DONE_LINES, T, cents, cleanLang, dayDate, hhmm, shortDate } from '../hooks/i18n.ts'
-import { firstSentence, hideDoneMarker, move, parseSent, promptFor } from '../hooks/model.ts'
+import { DONE_HINTS, DONE_LINES, T, cents, cleanLang, dayDate, hhmm, shortDate } from '../hooks/i18n.ts'
+import { commandOfTurn, findSent, firstSentence, hideDoneMarker, move, parseCommand, parseSent, pushSent, textHash } from '../hooks/model.ts'
 import type { Queue } from '../hooks/model.ts'
 import { renderPane } from '../hooks/view.ts'
 import type { Actions, View } from '../hooks/view.ts'
@@ -145,12 +145,10 @@ test('Stufe 9: Haiku-Antworten auswerten', async () => {
   }
 })
 
-test('Modell: Kurz-Ergebnis, Prompt mit Schlusszeile, Verschieben', async () => {
+test('Modell: Kurz-Ergebnis, Verschieben', async () => {
   expect(firstSentence('**Fertig:** README ergänzt. Danach noch Tests.')).toBe('Fertig: README ergänzt.')
   expect(firstSentence('x'.repeat(300)).length).toBe(120)
   expect(firstSentence('1. **Blau** – Komplementärfarbe. 2. Grau.')).toBe('Blau – Komplementärfarbe.')
-  expect(promptFor({ id: 'a', text: 'Tu was', status: 'open', createdAt: 0 }, 2, 5, true, 'de')).toBe(`[To-do 2/5] Tu was\n\n${DONE_LINES.de}`)
-  expect(promptFor({ id: 'a', text: 'Tu was', status: 'open', createdAt: 0 }, 1, 1, false, 'de')).toBe('[To-do 1/1] Tu was')
   const q: Queue = {
     paused: false,
     items: [
@@ -163,6 +161,28 @@ test('Modell: Kurz-Ergebnis, Prompt mit Schlusszeile, Verschieben', async () => 
   expect(move(q, 'a', -1).items.map((t) => t.id)).toEqual(['r', 'a', 'b'])
 })
 
+test('Modell 0.3.0: Prüfsumme, gemerkte Sendungen, Befehle erkennen', async () => {
+  expect(textHash('Tu was')).toBe(textHash('  Tu was \n'))
+  expect(textHash('Tu was')).not.toBe(textHash('Tu was.'))
+  expect(textHash('a'.repeat(5000))).not.toBe(textHash('a'.repeat(4999)))
+  let sent = pushSent([], { id: 'a', h: textHash('Eins'), n: 1, m: 2 })
+  sent = pushSent(sent, { id: 'b', h: textHash('Zwei'), n: 2, m: 2 })
+  sent = pushSent(sent, { id: 'c', h: textHash('Eins'), n: 3, m: 3 })
+  // Gleicher Text zweimal gesendet: der jüngste zählt
+  expect(findSent(sent, 'Eins')).toMatchObject({ id: 'c', n: 3 })
+  expect(findSent(sent, 'Drei')).toBeUndefined()
+  for (let i = 0; i < 80; i++) sent = pushSent(sent, { id: `x${i}`, h: textHash(`t${i}`), n: i, m: i })
+  expect(sent).toHaveLength(50)
+  expect(parseCommand('/review')).toEqual({ name: 'review', args: '' })
+  expect(parseCommand('  /my-plugin:skill  mach das \n gründlich')).toEqual({ name: 'my-plugin:skill', args: 'mach das \n gründlich' })
+  for (const t of ['/etc/hosts prüfen', 'README /review', '/ leer', 'nur Text']) expect(parseCommand(t), t).toBe(null)
+  expect(commandOfTurn('<command-message>wlproto:echo-skill</command-message>\n<command-name>/wlproto:echo-skill</command-name>')).toBe('/wlproto:echo-skill')
+  expect(commandOfTurn('<command-name>/review</command-name>\n<command-args>PR 12</command-args>')).toBe('/review PR 12')
+  expect(commandOfTurn('Normale Nachricht')).toBe(null)
+  expect(DONE_HINTS.en).toContain('"Done."')
+  expect(DONE_HINTS.de).toContain('„Fertig.“')
+})
+
 // ---------- Welt für die Hook-Tests ----------
 
 type Agent = { id: string; description: string; type: string; status: string }
@@ -170,13 +190,30 @@ type BgTask = { id: string; type: string; status: string; description: string }
 
 function world(
   on: On,
-  o: { idThrows?: { on: boolean }; haikuFails?: boolean; submitDrop?: boolean; submitThrows?: boolean; agentsThrow?: { on: boolean }; registerThrows?: boolean; storeFail?: { get: boolean; set: boolean } } = {},
+  o: {
+    idThrows?: { on: boolean }
+    haikuFails?: boolean
+    submitDrop?: boolean
+    submitThrows?: boolean
+    agentsThrow?: { on: boolean }
+    registerThrows?: boolean
+    storeFail?: { get: boolean; set: boolean }
+    // Befehle in der Warteschlange (0.3.0): welche es gibt, was ein Lauf ausgibt, Fehler
+    commands?: string[]
+    // laufen, stehen aber nicht in $.command.list (wie /cost im Smoke-Test, CLI 2.1.290)
+    unlisted?: string[]
+    cmdText?: string
+    cmdListFails?: boolean
+    cmdRunFails?: boolean
+  } = {},
 ) {
   const clock = mock.clock(on, { now: NOW })
   const saved = new Map<string, unknown>()
   const toasts: string[] = []
   const opened: unknown[] = []
   const sent: string[] = []
+  const cmdRuns: string[] = []
+  const hints: (readonly string[] | undefined)[] = []
   const haikuCalls: string[] = []
   const haikuSystems: string[] = []
   let sid = 's1'
@@ -225,9 +262,24 @@ function world(
     if (o.haikuFails) throw new Error('Netz weg')
     return { value: reply as never }
   })
+  const listed = o.commands ?? ['review', 'cost', 'my-plugin:skill']
+  on('command.list', () => {
+    if (o.cmdListFails) return { deny: 'keine Liste' }
+    return { value: listed.map((name) => ({ name, description: name, source: 'plugin' })) as never }
+  })
+  on('command.run', ($, e) => {
+    cmdRuns.push(`/${e.command}${e.args ? ` ${e.args}` : ''}`)
+    // Wie die Engine: ein unbekannter Name wird abgelehnt (types: $.command.run). Der werfende Stub wird übersprungen
+    // (docs/raw/en/test.md:182), dann lehnt das Kit den Aufruf ab („no implementation for command.run“)
+    if (![...listed, ...(o.unlisted ?? [])].includes(e.command)) throw new Error(`no command named /${e.command} in this session`)
+    if (o.cmdRunFails) throw new Error('Befehl abgestürzt')
+    return o.cmdText === undefined ? {} : { text: o.cmdText }
+  })
+  on('classic.UserPromptSubmit', () => ({}))
   on('prompt.submit', ($, e) => {
-    // Nur was worklist selbst sendet (origin plugin); Fynns Nachrichten laufen hier ebenfalls durch
-    if (e.origin.kind === 'plugin') sent.push(e.text)
+    // Nur was worklist selbst sendet (origin plugin); Fynns Nachrichten laufen hier ebenfalls durch. Ein `/name` mit Herkunft
+    // worklist ist der Prompt eines Skill-Befehls aus $.command.run, kein gesendetes To-do
+    if (e.origin.kind === 'plugin' && !e.text.startsWith('/')) sent.push(e.text)
     if (o.submitDrop && e.origin.kind === 'plugin') return { drop: 'nein' }
     if (o.submitThrows && e.origin.kind === 'plugin') throw new Error('nicht jetzt')
     return { text: e.text }
@@ -250,6 +302,8 @@ function world(
     stops: () => toasts.filter((t) => !/^(Eingereiht|Queued) \(/.test(t)),
     opened,
     sent,
+    cmdRuns,
+    hints,
     haikuCalls,
     haikuSystems,
     setSid: (s: string) => (sid = s),
@@ -276,10 +330,24 @@ function world(
       await $.turn.start({ turnId: `t${n}`, text: '<task-notification>' })
       await flush()
     },
-    /** Der Turn des zuletzt gesendeten To-dos beginnt (die eigene Nachricht sieht unser prompt.submit-Hook nicht). */
+    /**
+     * Der Turn des zuletzt gesendeten To-dos beginnt (die eigene Nachricht sieht unser prompt.submit-Hook nicht). Davor
+     * classic.UserPromptSubmit wie in der Engine (Prototyp, CLI 2.1.290); dessen `additionalContext` landet in `hints`.
+     */
     todoTurn: async ($: Engine) => {
+      const text = sent[sent.length - 1] ?? ''
+      const r = await $.classic.UserPromptSubmit({ hook_event_name: 'UserPromptSubmit', prompt: text } as never)
+      hints.push((r as { additionalContext?: readonly string[] }).additionalContext)
       n += 1
-      await $.turn.start({ turnId: `t${n}`, text: sent[sent.length - 1] ?? '' })
+      await $.turn.start({ turnId: `t${n}`, text })
+      await flush()
+    },
+    /** Der Turn, den ein Skill-Befehl nach $.command.run auslöst: erst sein `/name` mit Herkunft worklist, dann der Turn. */
+    cmdTurn: async ($: Engine, name: string, args = '') => {
+      await $.prompt.submit({ text: `/${name}${args ? ` ${args}` : ''}`, wait: false, origin: { kind: 'plugin', name: 'worklist' } } as never)
+      n += 1
+      const tagArgs = args ? `\n<command-args>${args}</command-args>` : ''
+      await $.turn.start({ turnId: `t${n}`, text: `<command-message>${name}</command-message>\n<command-name>/${name}</command-name>${tagArgs}` })
       await flush()
     },
     /** Turn-Ende: erst classic.Stop (außer bei Abbruch, Phase 0), dann turn.complete, dann die Prüfung über den Timer. */
@@ -341,16 +409,18 @@ test('Zwei To-dos laufen nacheinander durch: Beruhigungszeit, Senden, Abhaken, V
   expect(w.sent).toEqual([])
   await tick(w.clock, 200)
   expect(w.sent).toHaveLength(1)
-  expect(w.sent[0]).toStartWith('[To-do 1/2] README ergänzen')
-  expect(w.sent[0]).toContain('„Fertig.“')
+  // Beim Modell kommt genau der To-do-Text an (0.3.0); der Schluss-Hinweis geht unsichtbar über classic.UserPromptSubmit mit
+  expect(w.sent[0]).toBe('README ergänzen')
   await w.todoTurn($)
+  expect(w.hints[0]).toEqual([DONE_HINTS.de])
   await w.end($, 'README ist ergänzt.\n\nFertig.')
   expect(w.history()[0]).toMatchObject({ text: 'README ergänzen', how: 'auto', result: 'README ist ergänzt.' })
   expect(w.haikuCalls).toEqual([]) // Stufe 8: ohne Haiku
   await tick(w.clock, 3000)
   expect(w.sent).toHaveLength(2)
-  expect(w.sent[1]).toStartWith('[To-do 2/2] Tests schreiben')
+  expect(w.sent[1]).toBe('Tests schreiben')
   await w.todoTurn($)
+  expect(w.hints[1]).toEqual([DONE_HINTS.de])
   await w.end($, DONE)
   await tick(w.clock, 3000)
   expect(w.sent).toHaveLength(2)
@@ -403,7 +473,7 @@ test('Stufe 3 im Ablauf: Hintergrundarbeit → WARTEN, danach leere Liste → we
   await w.end($, 'Build ist grün. Fertig.')
   await tick(w.clock, 3000)
   expect(w.sent).toHaveLength(2)
-  expect(w.sent[1]).toStartWith('[To-do 2/2] B')
+  expect(w.sent[1]).toBe('B')
   // Geplanter Weckauftrag → ebenfalls WARTEN
   await w.todoTurn($)
   await w.end($, DONE, { crons: 1 })
@@ -609,7 +679,7 @@ test('Nach Fynns eigener Nachricht: FRAGEN startet nichts (still), WEITER starte
   await w.end($, 'Alles klar, erledigt.')
   await tick(w.clock, 3000)
   expect(w.sent).toHaveLength(1)
-  expect(w.sent[0]).toStartWith('[To-do 1/1] A')
+  expect(w.sent[0]).toBe('A')
 })
 
 test('Subagent-Turns lösen keine Prüfung aus', DE, async ($, on) => {
@@ -891,7 +961,7 @@ test('Review 3, S1: Einreihen im Fenster zwischen Turn-Ende und Prüfung → war
   await cmd($, 'B')
   await tick(w.clock, 3100)
   expect(w.sent).toHaveLength(1)
-  expect(w.sent[0]).toContain('] A')
+  expect(w.sent[0]).toBe('A')
 })
 
 test('Review 3, K7: zweimal schnell einreihen im Zustand „unklar“ → nur eine Haiku-Prüfung', DE, async ($, on) => {
@@ -1003,14 +1073,14 @@ test('Hinweisblock: Abhaken und Weiter per Knopf', DE, async ($, on) => {
   await press($, 'mark-done')
   await tick(w.clock, 300)
   expect(w.history()[0]).toMatchObject({ text: 'A', how: 'manual' })
-  expect(w.sent.at(-1)).toContain('] B')
+  expect(w.sent.at(-1)).toBe('B')
   // Weiter: B ans Ende, C startet
   await w.todoTurn($)
   await w.end($, 'Soll ich?')
   await cmd($, 'C')
   await press($, 'proceed')
   await tick(w.clock, 300)
-  expect(w.sent.at(-1)).toContain('] C')
+  expect(w.sent.at(-1)).toBe('C')
   // C läuft (vorn), B wartet dahinter
   expect(w.queue().items.map((t) => `${t.text}:${t.status}`)).toEqual(['C:running', 'B:open'])
 })
@@ -1048,29 +1118,39 @@ test('Zwischengespeicherter Baum: ohne Datenänderung dasselbe Objekt, mit Ände
   expect(d[0]).not.toBe(a[0]) // andere Breite → neu
 })
 
-test('Gesendetes To-do im Verlauf: orange Zeile und Rahmen statt Sprechblase, ohne Schlusszeile; fremde Zeilen unverändert', DE, async ($, on) => {
+test('Gesendetes To-do im Chat: orange Zeile und Rahmen am genauen Text (0.3.0), alte Nachrichten mit Präfix weiter; fremde unverändert', DE, async ($, on) => {
   on('ui.render', ($, e) => ({ type: 'Text', props: {}, children: [`engine:${String((e.props as { text?: string }).text ?? '')}`] }))
   const w = world(on)
   await w.start($)
-  const text = promptFor({ id: 'a', text: 'Nenne drei Farben, die zu Orange passen.', status: 'open', createdAt: 0 }, 2, 5, true, 'de')
+  await cmd($, 'Erstes')
+  await cmd($, 'Nenne drei Farben, die zu Orange passen.')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, DONE)
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['Erstes', 'Nenne drei Farben, die zu Orange passen.'])
+  const text = w.sent[1] ?? ''
   const row = (surface: 'desktop' | 'terminal' | 'vscode', origin: unknown, isExpanded = true, body = text) =>
     $.ui.mount({ plugin: 'worklist', component: 'UserMessage', requestId: 'm1', surface, props: { text: body, origin, isExpanded } } as never)
   for (const surface of ['desktop', 'terminal'] as const) {
     const ui = await row(surface, { kind: 'plugin', name: 'worklist', asUser: true })
-    expect(JSON.stringify(await ui.find({ key: 'worklist-line' })), surface).toContain('· worklist: To-do 2/5 gesendet')
+    expect(JSON.stringify(await ui.find({ key: 'worklist-line' })), surface).toContain('· worklist: To-do 2/2 gesendet')
     const frame = await ui.find({ key: 'worklist-sent' })
     expect(frame?.props, surface).toMatchObject({ borderStyle: 'round', borderColor: '#D77757' })
     expect(JSON.stringify(frame), surface).toContain('Nenne drei Farben, die zu Orange passen.')
-    expect(JSON.stringify(frame), surface).not.toContain('Arbeitsliste')
     expect(await ui.find({ text: /^engine:/ }), surface).toBeUndefined()
     await ui.unmount()
   }
-  // Andere Herkunft (z. B. sdk im Desktop), aber unverwechselbarer Text mit Schlusszeile → trotzdem unser Rahmen
-  for (const origin of [{ kind: 'sdk' }, { kind: 'unclassified' }, { kind: 'composer' }]) {
+  // Andere Herkunft (der Desktop meldet worklists To-dos als sdk), aber genau der gesendete Text → unser Rahmen
+  for (const origin of [{ kind: 'sdk' }, { kind: 'unclassified' }]) {
     const ui = await row('desktop', origin)
     expect(await ui.find({ key: 'worklist-sent' }), origin.kind).toBeDefined()
     await ui.unmount()
   }
+  // Fynn tippt im Desktop (composer) genau denselben Text: seine Nachricht bleibt seine (Review 0.3.0, K1)
+  const typed = await row('desktop', { kind: 'composer' })
+  expect(await typed.find({ key: 'worklist-sent' })).toBeUndefined()
+  await typed.unmount()
   // Terminal kompakt: nur die Zeile
   const compact = await row('terminal', { kind: 'plugin', name: 'worklist' }, false)
   expect(await compact.find({ key: 'worklist-line' })).toBeDefined()
@@ -1078,18 +1158,45 @@ test('Gesendetes To-do im Verlauf: orange Zeile und Rahmen statt Sprechblase, oh
   await compact.unmount()
   // VS Code: nur Text
   const vs = await row('vscode', { kind: 'plugin', name: 'worklist' })
-  expect(JSON.stringify(await vs.drawn())).toContain('engine:· worklist: To-do 2/5 gesendet')
+  expect(JSON.stringify(await vs.drawn())).toContain('engine:· worklist: To-do 2/2 gesendet')
   await vs.unmount()
-  // Fynns eigene Nachricht, ein anderer Mod, ein fremder Text: unverändert
+  // Alte Nachricht (bis 0.2.2) mit Präfix und Schlusszeile: weiter erkannt, ohne Schlusszeile gezeigt
+  const old = await row('desktop', { kind: 'sdk' }, true, `[To-do 3/7] Alt\n\n${DONE_LINES.de}`)
+  expect(JSON.stringify(await old.find({ key: 'worklist-line' }))).toContain('To-do 3/7 gesendet')
+  expect(JSON.stringify(await old.find({ key: 'worklist-sent' }))).not.toContain('Arbeitsliste')
+  await old.unmount()
+  // Fynns eigene Nachricht, ein anderer Text, ein Peer mit genau dem To-do-Text: unverändert
   for (const [origin, body] of [
     [{ kind: 'composer' }, '[To-do 1/1] Selbst getippt, ohne Schlusszeile'],
+    [{ kind: 'composer' }, 'Nenne drei Farben, die zu Orange passen. Bitte.'],
     [{ kind: 'plugin', name: 'worklist' }, 'kein To-do'],
+    [{ kind: 'peer' }, text],
   ] as const) {
     const ui = await row('desktop', origin, true, body)
-    expect(await ui.find({ key: 'worklist-line' })).toBeUndefined()
-    expect(await ui.find({ text: /^engine:/ })).toBeDefined()
+    expect(await ui.find({ key: 'worklist-line' }), body).toBeUndefined()
+    expect(await ui.find({ text: /^engine:/ }), body).toBeDefined()
     await ui.unmount()
   }
+})
+
+test('Rahmen im Chat nach Neustart bzw. Resume: gemerkte Sendungen kommen aus dem Store', DE, async ($, on) => {
+  on('ui.render', ($, e) => ({ type: 'Text', props: {}, children: [`engine:${String((e.props as { text?: string }).text ?? '')}`] }))
+  const w = world(on)
+  w.saved.set('sent:s1', [{ id: 'x', h: textHash('Von gestern'), n: 4, m: 6 }, { kaputt: true }])
+  await w.start($)
+  const ui = await $.ui.mount({ plugin: 'worklist', component: 'UserMessage', requestId: 'm1', surface: 'desktop', props: { text: 'Von gestern', origin: { kind: 'sdk' }, isExpanded: true } } as never)
+  expect(JSON.stringify(await ui.find({ key: 'worklist-line' }))).toContain('To-do 4/6 gesendet')
+  await ui.unmount()
+  // Ein anderer Chat (/resume, neue Session-ID): dessen Sendungen, nicht die alten
+  w.saved.set('sent:s2', [{ id: 'y', h: textHash('Aus Chat zwei'), n: 1, m: 1 }])
+  w.setSid('s2')
+  await cmd($, 'status')
+  const two = await $.ui.mount({ plugin: 'worklist', component: 'UserMessage', requestId: 'm2', surface: 'desktop', props: { text: 'Aus Chat zwei', origin: { kind: 'sdk' }, isExpanded: true } } as never)
+  expect(await two.find({ key: 'worklist-sent' })).toBeDefined()
+  await two.unmount()
+  const one = await $.ui.mount({ plugin: 'worklist', component: 'UserMessage', requestId: 'm3', surface: 'desktop', props: { text: 'Von gestern', origin: { kind: 'sdk' }, isExpanded: true } } as never)
+  expect(await one.find({ key: 'worklist-sent' })).toBeUndefined()
+  await one.unmount()
 })
 
 test('„Fertig.“ am Ende einer Antwort nur in der Anzeige ausgeblendet; mitten im Satz oder „Erledigt.“ bleiben', DE, async ($, on) => {
@@ -1155,7 +1262,7 @@ test('Review 4: Peer-Nachricht im To-do-Format bleibt unverändert; „Fertig.�
   on('ui.render', ($, e) => ({ type: 'Text', props: {}, children: [`engine:${String((e.props as { text?: string }).text ?? '')}`] }))
   const w = world(on)
   await w.start($)
-  const text = promptFor({ id: 'a', text: 'Etwas', status: 'open', createdAt: 0 }, 1, 1, true, 'de')
+  const text = `[To-do 1/1] Etwas\n\n${DONE_LINES.de}`
   const peer = await $.ui.mount({ plugin: 'worklist', component: 'UserMessage', requestId: 'p1', surface: 'desktop', props: { text, origin: { kind: 'peer' }, isExpanded: true } } as never)
   expect(await peer.find({ key: 'worklist-sent' })).toBeUndefined()
   await peer.unmount()
@@ -1214,12 +1321,9 @@ test('i18n: Haiku antwortet in der eingestellten Sprache', async () => {
   expect(haikuSystem(T.de)).toContain('in German')
 })
 
-test('i18n: Schlusszeile je Sprache; alle Fassungen werden im Chat erkannt', async () => {
-  const todo = { id: 'a', text: 'Do it', status: 'open' as const, createdAt: 0 }
-  expect(promptFor(todo, 1, 2, true, 'en')).toBe(`[To-do 1/2] Do it\n\n${DONE_LINES.en}`)
-  expect(DONE_LINES.en).toContain('"Done."')
-  expect(DONE_LINES.de).toContain('„Fertig.“')
-  for (const lang of ['en', 'de'] as const) expect(parseSent(promptFor(todo, 1, 2, true, lang))).toMatchObject({ text: 'Do it', withLine: true })
+test('i18n: Schlusszeilen bis 0.2.2 je Sprache; alle Fassungen werden im Chat weiter erkannt', async () => {
+  for (const lang of ['en', 'de'] as const) expect(parseSent(`[To-do 1/2] Do it\n\n${DONE_LINES[lang]}`)).toMatchObject({ text: 'Do it', withLine: true, n: 1, m: 2 })
+  expect(parseSent('[To-do 1/2] Do it')).toMatchObject({ text: 'Do it', withLine: false })
   const old = '[To-do 1/1] Alt\n\n(Arbeitsliste: Ist etwas unklar, stell am Ende eine klare Rückfrage. Sonst erledige die Aufgabe vollständig und schließe mit „Fertig.“)'
   expect(parseSent(old)).toMatchObject({ text: 'Alt', withLine: true })
 })
@@ -1244,8 +1348,9 @@ test('Englisch (Standard): Ablauf, Toast, Seitenleiste, Chat-Zeile, Status', asy
   expect(w.toasts.at(-1)).toBe('Queued (1 open): Write the README')
   await cmd($, 'Add tests')
   await tick(w.clock, 3000)
-  expect(w.sent[0]).toBe(`[To-do 1/2] Write the README\n\n${DONE_LINES.en}`)
+  expect(w.sent[0]).toBe('Write the README')
   await w.todoTurn($)
+  expect(w.hints[0]).toEqual([DONE_HINTS.en])
   await w.end($, 'README written.\n\nDone.')
   expect(w.history()[0]).toMatchObject({ text: 'Write the README', result: 'README written.' })
   await tick(w.clock, 3000)
@@ -1276,6 +1381,203 @@ test('Englisch (Standard): Ablauf, Toast, Seitenleiste, Chat-Zeile, Status', asy
   expect(status).toContain('0.00 ¢')
   expect((await cmd($, 'help')).text).toContain('Usage:')
   expect((await cmd($, 'history')).text).toContain('History (1, newest first)')
+})
+
+// ---------- 0.3.0: unsichtbarer Schluss-Hinweis ----------
+
+test('Schluss-Hinweis nur zum eigenen To-do und nur einmal; Fynns Nachrichten bleiben ohne; Status zeigt, ob er ankam', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  // Fynns eigene Nachricht: kein Kontext
+  const mine = await $.classic.UserPromptSubmit({ hook_event_name: 'UserPromptSubmit', prompt: 'Hallo' } as never)
+  expect((mine as { additionalContext?: unknown }).additionalContext).toBeUndefined()
+  await w.user($, 'Hallo')
+  await w.end($, DONE)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['A'])
+  // Eine andere Nachricht vor dem To-do (gleicher Moment, anderer Text) bekommt ihn nicht
+  const other = await $.classic.UserPromptSubmit({ hook_event_name: 'UserPromptSubmit', prompt: 'B' } as never)
+  expect((other as { additionalContext?: unknown }).additionalContext).toBeUndefined()
+  await w.todoTurn($)
+  expect(w.hints).toEqual([[DONE_HINTS.de]])
+  // Nach dem Turn-Start nicht mehr: derselbe Text später im Chat bekommt ihn nicht erneut
+  const again = await $.classic.UserPromptSubmit({ hook_event_name: 'UserPromptSubmit', prompt: 'A' } as never)
+  expect((again as { additionalContext?: unknown }).additionalContext).toBeUndefined()
+  expect((await cmd($, 'status')).text).toContain('unsichtbarer Schluss-Hinweis an (letztes To-do: angehängt)')
+})
+
+test('Schluss-Hinweis: kommt classic.UserPromptSubmit nicht, meldet der Status „nicht angehängt“; der Turn wird trotzdem erkannt', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  await $.turn.start({ turnId: 'tx', text: 'A' })
+  await flush()
+  expect((await cmd($, 'status')).text).toContain('(letztes To-do: nicht angehängt)')
+  await $.classic.Stop({ stop_hook_active: false, last_assistant_message: DONE, background_tasks: [], session_crons: [] } as never)
+  await $.turn.complete({ turnId: 'tx', answer: DONE, durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await tick(w.clock, 10)
+  expect(w.history()[0]).toMatchObject({ text: 'A', how: 'auto' })
+})
+
+test('Schluss-Hinweis aus (doneLine: false): kein Kontext, Status „aus“', { options: { doneLine: false, language: 'de' } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  expect(w.hints).toEqual([undefined])
+  expect((await cmd($, 'status')).text).toContain('unsichtbarer Schluss-Hinweis aus')
+})
+
+test('Turn eines eigenen To-dos am genauen Text erkannt; ein anderer Turn dazwischen zählt zum laufenden To-do, nicht als „von Fynn“', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await cmd($, 'B')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  // Antwort ohne Marke: Haiku entscheidet (Stufe 9) und bekommt den To-do-Text ohne Präfix
+  await w.end($, 'Ich habe die Datei angepasst.')
+  expect(w.haikuCalls[0]).toContain('Task: A\n')
+  expect(w.history()[0]).toMatchObject({ text: 'A', how: 'auto' })
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['A', 'B'])
+})
+
+// ---------- 0.3.0: Befehle in der Warteschlange ----------
+
+test('Befehl als To-do: Skill-Befehl läuft per $.command.run, sein Turn zählt zum To-do, Haiku prüft „führe /x aus“', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, '/my-plugin:skill mach das')
+  await cmd($, 'Danach')
+  await tick(w.clock, 3000)
+  expect(w.cmdRuns).toEqual(['/my-plugin:skill mach das'])
+  // Nichts als Text gesendet, kein Hinweis
+  expect(w.sent).toEqual([])
+  expect(w.queue().items[0]).toMatchObject({ text: '/my-plugin:skill mach das', status: 'running' })
+  await w.cmdTurn($, 'my-plugin:skill', 'mach das')
+  // Erst nach der Wartezeit: der Turn läuft, nichts wird ohne Turn abgehakt
+  await tick(w.clock, 6000)
+  expect(w.history()).toEqual([])
+  await w.end($, 'KIWI')
+  expect(w.haikuCalls[0]).toContain('Task: Run the slash command /my-plugin:skill mach das')
+  expect(w.history()[0]).toMatchObject({ text: '/my-plugin:skill mach das', how: 'auto', result: 'KIWI' })
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['Danach'])
+})
+
+test('Befehl als To-do: lokaler Befehl ohne Turn gilt mit der Rückkehr als erledigt; Großschreibung egal', DE, async ($, on) => {
+  on('ui.render', ($, e) => ({ type: 'Text', props: {}, children: [`engine:${String((e.props as { text?: string }).text ?? '')}`] }))
+  const w = world(on, { cmdText: 'Kosten bisher: 1,20 $. Mehr unter /usage.' })
+  await w.start($)
+  await cmd($, '/Cost')
+  await cmd($, 'Danach')
+  await tick(w.clock, 3000)
+  expect(w.cmdRuns).toEqual(['/cost'])
+  await tick(w.clock, 1400)
+  expect(w.history()).toEqual([])
+  await tick(w.clock, 200)
+  expect(w.history()[0]).toMatchObject({ text: '/Cost', how: 'auto', result: 'Kosten bisher: 1,20 $.' })
+  expect(w.haikuCalls).toEqual([])
+  expect((await cmd($, 'status')).text).toContain('Befehl ausgeführt (ohne Turn)')
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['Danach'])
+})
+
+test('Befehl als To-do: sein prompt.submit kam, der Turn kommt spät → länger warten statt abhaken', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, '/review')
+  await tick(w.clock, 3000)
+  await $.prompt.submit({ text: '/review', wait: false, origin: { kind: 'plugin', name: 'worklist' } } as never)
+  await tick(w.clock, 1600)
+  expect(w.queue().items[0]).toMatchObject({ status: 'running' })
+  expect(w.history()).toEqual([])
+  await $.turn.start({ turnId: 'late', text: '<command-message>review</command-message>\n<command-name>/review</command-name>' })
+  await flush()
+  await tick(w.clock, 5000)
+  expect(w.history()).toEqual([])
+  await $.classic.Stop({ stop_hook_active: false, last_assistant_message: DONE, background_tasks: [], session_crons: [] } as never)
+  await $.turn.complete({ turnId: 'late', answer: DONE, durationMs: 1, isAborted: false, reason: 'answer' } as never)
+  await tick(w.clock, 10)
+  expect(w.history()[0]).toMatchObject({ text: '/review', how: 'auto' })
+})
+
+test('Befehl als To-do, Fehlerpfade: unbekannt, eigener Befehl → Hinweis und Halt, nichts gesendet', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, '/gibtsnicht jetzt')
+  await tick(w.clock, 3000)
+  // Nicht in der Liste: $.command.run entscheidet und lehnt ab
+  expect(w.cmdRuns).toEqual(['/gibtsnicht jetzt'])
+  expect(w.sent).toEqual([])
+  expect(w.stops().at(-1)).toBe('To-do-Liste angehalten: Unbekannter Befehl /gibtsnicht: Das To-do wurde nicht gesendet.')
+  expect(w.queue().items[0]).toMatchObject({ text: '/gibtsnicht jetzt', status: 'open' })
+  const pane = await $.ui.mount(PANE('desktop'))
+  expect(JSON.stringify(await pane.drawn())).toContain('Unbekannter Befehl /gibtsnicht')
+  await pane.unmount()
+  // Abhaken per Knopf geht weiter
+  await press($, 'mark-done')
+  expect(w.history()[0]).toMatchObject({ text: '/gibtsnicht jetzt', how: 'manual' })
+  await cmd($, '/todos pause')
+  await tick(w.clock, 3000)
+  expect(w.stops().at(-1)).toContain('/todos ist ein Befehl von worklist selbst')
+  expect(w.cmdRuns).toEqual(['/gibtsnicht jetzt'])
+})
+
+test('Befehl als To-do: nicht in $.command.list, aber ausführbar (wie /cost) → läuft; Liste nicht lesbar → läuft trotzdem', DE, async ($, on) => {
+  const w = world(on, { commands: ['review'], unlisted: ['cost'], cmdText: 'Kosten: 0 $.' })
+  await w.start($)
+  await cmd($, '/cost')
+  await tick(w.clock, 3000)
+  expect(w.cmdRuns).toEqual(['/cost'])
+  await tick(w.clock, 1600)
+  expect(w.history()[0]).toMatchObject({ text: '/cost', how: 'auto' })
+  expect(w.stops()).toEqual([])
+})
+
+test('Befehl als To-do: Befehlsliste nicht lesbar → $.command.run entscheidet', DE, async ($, on) => {
+  const w = world(on, { cmdListFails: true })
+  await w.start($)
+  await cmd($, '/review')
+  await tick(w.clock, 3000)
+  expect(w.cmdRuns).toEqual(['/review'])
+  expect(w.stops()).toEqual([])
+  expect(w.queue().items[0]).toMatchObject({ status: 'running' })
+})
+
+test('Befehl als To-do, Fehlerpfade: $.command.run wirft → To-do wieder offen, Hinweis', DE, async ($, on) => {
+  const w = world(on, { cmdRunFails: true })
+  await w.start($)
+  await cmd($, '/review')
+  await tick(w.clock, 3000)
+  expect(w.cmdRuns).toEqual(['/review'])
+  // In der Liste, aber das Ausführen scheitert: der Fehler selbst, nicht „unbekannt“
+  expect(w.stops().at(-1)).toStartWith('To-do-Liste angehalten: Der Befehl lief nicht:')
+  expect(w.queue().items[0]).toMatchObject({ text: '/review', status: 'open' })
+  await tick(w.clock, 5000)
+  expect(w.history()).toEqual([])
+})
+
+test('Befehls-To-do im Chat: der ausgelöste Skill-Prompt bekommt den orangen Rahmen', DE, async ($, on) => {
+  on('ui.render', ($, e) => ({ type: 'Text', props: {}, children: [`engine:${String((e.props as { text?: string }).text ?? '')}`] }))
+  const w = world(on)
+  await w.start($)
+  await cmd($, '/review PR 12')
+  await tick(w.clock, 3000)
+  const ui = await $.ui.mount({
+    plugin: 'worklist',
+    component: 'UserMessage',
+    requestId: 'c1',
+    surface: 'desktop',
+    props: { text: '<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>PR 12</command-args>', origin: { kind: 'plugin', name: 'worklist' }, isExpanded: true },
+  } as never)
+  expect(JSON.stringify(await ui.find({ key: 'worklist-line' }))).toContain('To-do 1/1 gesendet')
+  expect(JSON.stringify(await ui.find({ key: 'worklist-sent' }))).toContain('/review PR 12')
+  await ui.unmount()
 })
 
 // ---------- /todo ----------

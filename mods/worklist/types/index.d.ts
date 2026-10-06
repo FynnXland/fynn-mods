@@ -19,6 +19,9 @@ declare module 'claude-code' {
         plan: { id: string; text: string; status: 'pending' | 'in_progress' | 'completed' }[]
         sessionDone: number
         expectOwn: string | null
+        // ab 0.3.0: Befehls-To-do, auf dessen Turn gewartet wird, und die gesendeten To-dos des Chats (Prüfsumme statt Text)
+        expectCmd: string | null
+        sent: { id: string; h: string; n: number; m: number }[]
         lastResult: string
       }
       // Zähler zum Neuzeichnen: nur die Seitenleiste liest ihn, also zeichnet ein Schreiben nur sie neu

@@ -34,7 +34,16 @@ export function cents(lang: Lang, usd: number): string {
   return lang === 'de' ? `${v.replace('.', ',')} ct` : `${v} ¢`
 }
 
-/** Schlusszeile an jedem gesendeten To-do; die Marke darin ist „Done.“ bzw. „Fertig.“ */
+/**
+ * Ab 0.3.0: unsichtbarer Hinweis zu jedem gesendeten To-do (classic.UserPromptSubmit, `additionalContext`). Fynn sieht ihn
+ * im Chat nicht, das Modell liest ihn als System-Hinweis neben dem To-do. Die Marke darin ist „Done.“ bzw. „Fertig.“
+ */
+export const DONE_HINTS: Record<Lang, string> = {
+  en: 'This message is a task from the user\'s to-do list (worklist). If anything is unclear, end your answer with a clear question and don\'t write "Done.". Otherwise finish the task completely and end your answer with "Done." on a line of its own.',
+  de: 'Diese Nachricht ist eine Aufgabe aus der To-do-Liste des Nutzers (worklist). Ist etwas unklar, schließ deine Antwort mit einer klaren Rückfrage und schreib kein „Fertig.“. Sonst erledige die Aufgabe vollständig und schließ deine Antwort mit „Fertig.“ in einer eigenen Zeile.',
+}
+
+/** Bis 0.2.2 sichtbare Schlusszeile an jedem gesendeten To-do; bleibt, damit alte Nachrichten im Chat erkannt werden. */
 export const DONE_LINES: Record<Lang, string> = {
   en: '(Worklist: If anything is unclear, end with a clear question and don\'t write "Done.". Otherwise finish the task completely and end with "Done.")',
   de: '(Arbeitsliste: Ist etwas unklar, stell am Ende eine klare Rückfrage und schreib dann kein „Fertig.“. Sonst erledige die Aufgabe vollständig und schließe mit „Fertig.“)',
@@ -73,6 +82,10 @@ const en = {
   checking: 'checking whether Claude is clearly done …',
   sendRejected: (why: string) => `Sending was refused: ${why}`,
   sendFailed: (err: string) => `Sending failed: ${err}`,
+  cmdUnknown: (name: string) => `Unknown command /${name}: the to-do was not sent.`,
+  cmdOwn: (name: string) => `/${name} is worklist's own command and can't run as a to-do.`,
+  cmdFailed: (err: string) => `The command didn't run: ${err}`,
+  cmdRan: 'Command ran (without a turn).',
   holdTwice: 'Stopped twice on this to-do. Please decide yourself.',
   secondTime: 'Second time on this to-do: the list waits for you.',
   unclearFree: 'Unclear whether Claude is free.',
@@ -185,8 +198,10 @@ const en = {
   statusState: (state: string, reason: string, hold: boolean) => `Check state: ${state}${reason ? ` (${reason})` : ''}${hold ? ' · loop guard active' : ''}`,
   statusDecision: (d: string) => `Last decision: ${d}`,
   statusHaiku: (on: boolean, last: string, calls: number, cost: string) => `Haiku: ${on ? 'on' : 'off'} · last ${last} · so far ${calls}× in this project, ${cost}`,
-  statusRun: (auto: number, max: number, settle: number, line: boolean) =>
-    `In a row without your input: ${auto}/${max} · settle time ${settle} s · closing line ${line ? 'on' : 'off'}`,
+  statusRun: (auto: number, max: number, settle: number, hint: boolean, last: string) =>
+    `In a row without your input: ${auto}/${max} · settle time ${settle} s · hidden closing hint ${hint ? 'on' : 'off'}${last ? ` (last to-do: ${last})` : ''}`,
+  hintAttached: 'attached',
+  hintMissing: 'not attached',
   statusHistory: (n: number) => `History in this project: ${n} entries`,
 
   // /todos history
@@ -227,6 +242,10 @@ const de: Strings = {
   checking: 'prüft, ob Claude sicher fertig ist …',
   sendRejected: (why) => `Senden abgelehnt: ${why}`,
   sendFailed: (err) => `Senden ging nicht: ${err}`,
+  cmdUnknown: (name) => `Unbekannter Befehl /${name}: Das To-do wurde nicht gesendet.`,
+  cmdOwn: (name) => `/${name} ist ein Befehl von worklist selbst und kann nicht als To-do laufen.`,
+  cmdFailed: (err) => `Der Befehl lief nicht: ${err}`,
+  cmdRan: 'Befehl ausgeführt (ohne Turn).',
   holdTwice: 'Zweimal angehalten bei diesem To-do. Bitte selbst entscheiden.',
   secondTime: 'Zum zweiten Mal bei diesem To-do: Die Liste wartet auf dich.',
   unclearFree: 'Unklar, ob Claude frei ist.',
@@ -331,7 +350,10 @@ const de: Strings = {
   statusState: (state, reason, hold) => `Prüfstand: ${state}${reason ? ` (${reason})` : ''}${hold ? ' · Schleifenschutz aktiv' : ''}`,
   statusDecision: (d) => `Letzte Entscheidung: ${d}`,
   statusHaiku: (on, last, calls, cost) => `Haiku: ${on ? 'an' : 'aus'} · zuletzt ${last} · bisher ${calls}× im Projekt, ${cost}`,
-  statusRun: (auto, max, settle, line) => `In Folge ohne Eingriff: ${auto}/${max} · Beruhigungszeit ${settle} s · Schlusszeile ${line ? 'an' : 'aus'}`,
+  statusRun: (auto, max, settle, hint, last) =>
+    `In Folge ohne Eingriff: ${auto}/${max} · Beruhigungszeit ${settle} s · unsichtbarer Schluss-Hinweis ${hint ? 'an' : 'aus'}${last ? ` (letztes To-do: ${last})` : ''}`,
+  hintAttached: 'angehängt',
+  hintMissing: 'nicht angehängt',
   statusHistory: (n) => `Verlauf im Projekt: ${n} Einträge`,
 
   historyNone: 'Verlauf: noch nichts erledigt in diesem Projekt.',
