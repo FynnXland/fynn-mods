@@ -1,0 +1,592 @@
+import type { Engine, On, RenderNode } from 'claude-code'
+import { expect, mock, test } from 'claude-code/testing'
+import { joinBand, layer, LEVEL, levelOf, nameOf, splitBand } from '../hooks/band.ts'
+
+type Over = { isWorking?: boolean; hasSurvey?: boolean }
+type Surface = 'terminal' | 'desktop'
+const props = (bodyColumns: number, over: Over = {}) =>
+  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {}, ...over }) as const
+const band = (surface: Surface, bodyColumns = 120, over: Over = {}) =>
+  ({ plugin: 'quick-replies', component: 'AbovePrompt', requestId: 'above-prompt', props: props(bodyColumns, over), surface }) as const
+
+type Node = { type: string; props: Record<string, unknown>; children: Node[] }
+const usage = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+type Fork = 'ok' | 'junk' | 'unanswered' | 'nothing' | 'deny' | 'slow'
+
+// Grundausstattung: ein Mod weiter innen (clawd), Kern-Stubs, Uhr, Store, Fork-Stub
+function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'deny' | 'drop'; stored?: unknown } = {}) {
+  const clock = mock.clock(on, { now: 0 })
+  const w = {
+    clock,
+    sid: 's1',
+    sent: [] as { text: string; asUser?: boolean }[],
+    toasts: [] as string[],
+    forks: [] as string[],
+    registered: [] as string[],
+    descriptions: [] as string[],
+    store: new Map<string, unknown>(opts.stored === undefined ? [] : [['settings', opts.stored]]),
+  }
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', props: {}, children: ['clawd'] }))
+  on('session.start', () => ({ cwd: '/work' }))
+  on('session.id', () => (w.sid === 'DENY' ? { deny: 'kaputt' } : { value: w.sid }))
+  on('command.register', ($, e) => {
+    w.registered.push(e.name)
+    w.descriptions.push(e.description ?? '')
+    return { value: undefined }
+  })
+  on('store.get', ($, e) => ({ value: w.store.get(e.key) }))
+  on('store.set', ($, e) => {
+    w.store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('ui.log', () => ({ value: undefined }))
+  on('prompt.suggest', () => ({ isShown: true }))
+  on('prompt.edit', ($, e) => ({ text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end), cursor: e.start + e.inputText.length }))
+  on('prompt.submit', ($, e) => {
+    w.sent.push({ text: e.text, asUser: e.origin.kind === 'plugin' ? e.origin.asUser : undefined })
+    if (opts.submit === 'drop') return { drop: 'blockiert' }
+    return opts.submit === 'deny' ? { deny: 'nein' } : { text: e.text }
+  })
+  on('ui.toast', ($, e) => {
+    w.toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('model.fork', async ($, e) => {
+    w.forks.push(e.prompt)
+    const kind = opts.fork ?? 'ok'
+    if (kind === 'deny') return { deny: 'kein Fork' }
+    if (kind === 'nothing') return { value: { isAnswered: false, reason: 'nothing-to-fork' } }
+    if (kind === 'unanswered') return { value: { isAnswered: false, reason: 'aborted', usage } }
+    if (kind === 'junk') return { value: { isAnswered: true, text: 'Ich würde weitermachen.', usage } }
+    if (kind === 'slow') await clock.sleep(9000)
+    return { value: { isAnswered: true, text: '["Lauf die Tests","Committe das","Zeig den Diff"]', usage } }
+  })
+  return w
+}
+
+const LONG = 'Ich habe die Funktion umgebaut und die Tests angepasst. Soll ich das noch committen?'
+const finish = ($: Engine, answer = LONG, more: { agentId?: string; isAborted?: boolean; reason?: 'answer' | 'error' } = {}) =>
+  $.turn.complete({
+    turnId: 't1',
+    answer,
+    durationMs: 10,
+    isAborted: more.isAborted ?? false,
+    reason: more.isAborted ? 'aborted' : (more.reason ?? 'answer'),
+    agentId: more.agentId,
+    usage: null,
+  })
+const suggest = ($: Engine, text: string) => $.prompt.suggest({ text, origin: { kind: 'suggestion' } })
+const type = ($: Engine, text: string, inputText: string) =>
+  $.prompt.edit({ origin: { kind: 'composer' }, text, cursor: text.length, start: text.length, end: text.length, inputText })
+// Prompt leeren (Backspace über alles)
+const clear = ($: Engine, text: string) =>
+  $.prompt.edit({ origin: { kind: 'composer' }, text, cursor: text.length, start: 0, end: text.length, inputText: '' })
+const labels = async (ui: { find: (q: { key: string }) => Promise<{ props: Record<string, unknown> } | undefined> }) => {
+  const out: string[] = []
+  for (const n of [1, 2, 3, 4]) {
+    const b = await ui.find({ key: `reply-${n}` })
+    if (b) out.push(String(b.props.label))
+  }
+  return out
+}
+
+// Session starten und einmal zeichnen: erst das Band nennt die Oberfläche (Lehre 9)
+async function boot($: Engine, surface: Surface = 'desktop') {
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  return $.ui.mount(band(surface))
+}
+
+test('vor dem ersten Turn und ohne Vorschlag: keine Pille, fremder Inhalt unverändert, keine zusätzliche Höhe', async ($, on) => {
+  world(on)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await boot($, surface)
+    expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+    expect(await ui.drawn()).toMatchObject({ type: 'Text', children: ['clawd'] })
+    // Turn fertig, aber Claude Code schlägt nichts vor und der Fork ist aus: weiterhin nichts
+    await finish($)
+    await ui.find({ type: 'Text', text: 'clawd' })
+    expect(await ui.drawn()).toMatchObject({ type: 'Text', children: ['clawd'] })
+    await ui.unmount()
+  }
+})
+
+test('Standard: nur der eine Vorschlag von Claude Code als einzelner Knopf, auf beiden Oberflächen; kein Fork', async ($, on) => {
+  const w = world(on)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await boot($, surface)
+    await finish($)
+    await w.clock.advance(100)
+    const r = await suggest($, 'Committe die Änderungen')
+    // Der graue Vorschlag im Prompt bleibt: next(e) unverändert
+    expect(r).toEqual({ isShown: true })
+    expect(await labels(ui)).toEqual(['Committe die Änderungen'])
+    expect((await ui.find({ key: 'reply-1' }))?.props).toMatchObject({ hotkey: '1', plain: true })
+    const tree = (await ui.drawn()) as Node
+    // Wurzel des Bands (band.ts): oben die eigene Ebene, darin die Pille; darunter der Grund
+    expect(tree).toMatchObject({ type: 'Box', props: { key: 'band', flexDirection: 'column', justifyContent: 'flex-end' } })
+    expect(tree.children[0].props).toMatchObject({ key: 'layer:20:quick-replies', flexShrink: 0 })
+    const pill = tree.children[0].children[0]
+    expect(pill.props).toMatchObject({ key: 'quick-replies', flexShrink: 0 })
+    expect(pill.props.borderStyle).toBe(surface === 'desktop' ? 'round' : undefined)
+    // theirs nie direkt in der Spalte (Lehre 4)
+    expect(tree.children[1].props).toMatchObject({ key: 'band-base', flexDirection: 'row', alignItems: 'flex-end' })
+    expect(tree.children[1].children[0].props).toMatchObject({ flexGrow: 1 })
+    expect(tree.children[1].children[0].children[0]).toMatchObject({ type: 'Text', children: ['clawd'] })
+    await ui.unmount()
+  }
+  expect(w.forks).toEqual([])
+})
+
+test('Vorschlag eines Plugins zählt nicht', async ($, on) => {
+  world(on)
+  const ui = await boot($)
+  await finish($)
+  await $.prompt.suggest({ text: 'Fremd', origin: { kind: 'plugin', name: 'x' } })
+  expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('more an: Fork über den Timer nach dem Turn, Claude Code vorn, bis zu 4 im 2 × 2 (links 1/3, rechts 2/4)', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  const ui = await boot($, 'terminal')
+  await finish($)
+  // turn.complete wartet nicht auf den Fork: erst der Timer stößt ihn an (Lehre 12)
+  expect(w.forks.length).toBe(0)
+  await suggest($, 'Committe die Änderungen')
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(1)
+  // Standard englisch: die Vorschläge kommen auf Englisch
+  expect(w.forks[0]).toContain('JSON array')
+  expect(w.forks[0]).toContain('written in English')
+  expect(await labels(ui)).toEqual(['Committe die Änderungen', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+  const pill = ((await ui.drawn()) as Node).children[0].children[0]
+  expect(pill.children.length).toBe(2)
+  expect(pill.children[0].children.map((c) => c.children[0].props.key)).toEqual(['reply-1', 'reply-2'])
+  await ui.unmount()
+  const narrow = await $.ui.mount(band('terminal', 40))
+  expect(((await narrow.drawn()) as Node).children[0].children[0].children.length).toBe(4)
+  await narrow.unmount()
+})
+
+test('more an: kommt der Fork vor Claude Code, rückt Claude Codes Vorschlag trotzdem auf 1', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  const ui = await boot($, 'terminal')
+  await finish($)
+  await w.clock.advance(100)
+  expect(await labels(ui)).toEqual(['Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+  await suggest($, 'Committe die Änderungen')
+  expect(await labels(ui)).toEqual(['Committe die Änderungen', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+  await ui.unmount()
+})
+
+test('more gilt global: eine andere Session stellt um, diese folgt ab der nächsten Antwort', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: false } })
+  const ui = await boot($)
+  await finish($)
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(0)
+  // /replies more on in einer anderen Session schreibt nur in den gemeinsamen Store
+  w.store.set('settings', { enabled: true, more: true })
+  await finish($)
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(1)
+  w.store.set('settings', { enabled: true, more: false })
+  await finish($)
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(1)
+  await ui.unmount()
+})
+
+test('Fork-Fehlerpfade: Müll, keine Antwort, nichts zu forken, abgelehnt → nur Claude Codes Vorschlag, kein Toast', async ($, on) => {
+  const w = world(on, { fork: 'junk', stored: { enabled: true, more: true } })
+  const ui = await boot($)
+  await finish($)
+  await suggest($, 'Weiter')
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(1)
+  expect(await labels(ui)).toEqual(['Weiter'])
+  expect(w.toasts).toEqual([])
+  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork no suggestions')
+  await ui.unmount()
+})
+
+test('de: Fork verlangt deutsche Vorschläge, Status nennt den Fork-Zustand deutsch', { options: { language: 'de' } }, async ($, on) => {
+  const w = world(on, { fork: 'junk', stored: { enabled: true, more: true } })
+  const ui = await boot($)
+  await finish($)
+  await suggest($, 'Weiter')
+  await w.clock.advance(100)
+  expect(w.forks[0]).toContain('written in German')
+  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork keine Vorschläge')
+  await ui.unmount()
+})
+
+for (const kind of ['unanswered', 'nothing', 'deny'] as const) {
+  test(`Fork ${kind} → nur Claude Codes Vorschlag, kein Wurf, kein Toast`, async ($, on) => {
+    const w = world(on, { fork: kind, stored: { enabled: true, more: true } })
+    const ui = await boot($)
+    await finish($)
+    await suggest($, 'Weiter')
+    await w.clock.advance(100)
+    expect(w.forks.length).toBe(1)
+    expect(await labels(ui)).toEqual(['Weiter'])
+    expect(w.toasts).toEqual([])
+    await ui.unmount()
+  })
+}
+
+test('kein Fork: aus, kurze Antwort, ohne gezeichnetes Band (-p), Subagent, Abbruch, Fehler-Turn', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: false } })
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  await $.command.run({ command: 'replies', args: 'more on' })
+  // ohne Band (wie -p): kein Fork
+  await finish($)
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(0)
+  const ui = await $.ui.mount(band('desktop'))
+  await finish($, 'OK')
+  await finish($, LONG, { agentId: 'a1' })
+  await finish($, LONG, { isAborted: true })
+  await finish($, LONG, { reason: 'error' })
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(0)
+  await $.command.run({ command: 'replies', args: 'more off' })
+  await finish($)
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(0)
+  await $.command.run({ command: 'replies', args: 'more on' })
+  await finish($)
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(1)
+  // Ein Turn, der vor dem Timer endet, forkt für die alte Antwort nicht mehr
+  await finish($)
+  await $.turn.start({ turnId: 't3', text: 'noch was' })
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(1)
+  await ui.unmount()
+})
+
+test('Druck sendet den vollen Text als Nachricht des Nutzers, danach ist die Pille weg bis zum nächsten Turn', async ($, on) => {
+  const w = world(on)
+  const ui = await boot($)
+  await finish($)
+  const long = 'Bitte prüfe alle Tests noch einmal sehr gründlich und berichte'
+  await suggest($, long)
+  expect(String((await ui.find({ key: 'reply-1' }))?.props.label).endsWith('…')).toBe(true)
+  await ui.press({ key: 'reply-1' })
+  expect(w.sent).toEqual([{ text: long, asUser: true }])
+  expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: 'clawd' })).toBeDefined()
+  await $.turn.start({ turnId: 't2', text: long })
+  await finish($, 'Erledigt, alles grün.')
+  await suggest($, 'Committe das')
+  expect(await labels(ui)).toEqual(['Committe das'])
+  await ui.unmount()
+})
+
+test('Senden von Claude Code abgelehnt ({ drop }) → Toast mit dem Text, Pille kommt zurück', async ($, on) => {
+  const w = world(on, { submit: 'drop' })
+  const ui = await boot($, 'desktop')
+  await finish($)
+  await suggest($, 'Run the tests')
+  await ui.press({ key: 'reply-1' })
+  expect(w.toasts).toEqual(['Sending failed. Please send it yourself: Run the tests'])
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('de: Toast beim Fehlschlag deutsch', { options: { language: 'de' } }, async ($, on) => {
+  const w = world(on, { submit: 'drop' })
+  const ui = await boot($, 'desktop')
+  await finish($)
+  await suggest($, 'Lauf die Tests')
+  await ui.press({ key: 'reply-1' })
+  expect(w.toasts).toEqual(['Senden ging nicht. Bitte selbst senden: Lauf die Tests'])
+  await ui.unmount()
+})
+
+test('Senden: abgelehnter Aufruf → Toast', async ($, on) => {
+  const w = world(on, { submit: 'deny' })
+  const ui = await boot($, 'terminal')
+  await finish($)
+  await suggest($, 'Lauf die Tests')
+  await ui.press({ key: 'reply-1' })
+  expect(w.toasts.some((t) => t.includes('Lauf die Tests'))).toBe(true)
+  await ui.unmount()
+})
+
+test('leer bei isWorking, hasSurvey, Text im Prompt, Subagent-Ansicht und /replies off', async ($, on) => {
+  const w = world(on)
+  await (await boot($)).unmount()
+  await finish($)
+  await suggest($, 'Weiter')
+  for (const over of [{ isWorking: true }, { hasSurvey: true }]) {
+    const ui = await $.ui.mount(band('desktop', 120, over))
+    expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+    expect(await ui.drawn()).toMatchObject({ type: 'Text', children: ['clawd'] })
+    await ui.unmount()
+  }
+  const sub = await $.ui.mount({ ...band('desktop'), props: { ...props(120), view: { agentId: 'a1' } } })
+  expect(await sub.find({ key: 'reply-1' })).toBeUndefined()
+  await sub.unmount()
+  const ui = await $.ui.mount(band('desktop'))
+  await type($, '', 'x')
+  expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+  // Ein Befehl ohne Turn: danach gilt der Prompt wieder als leer
+  await $.command.run({ command: 'replies', args: 'status' })
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  await $.command.run({ command: 'replies', args: 'off' })
+  expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+  expect(w.store.get('settings')).toEqual({ enabled: false, more: false })
+  await ui.unmount()
+})
+
+test('Ziffer als erstes Zeichen im leeren Prompt sendet den Vorschlag sofort, die Ziffer landet nicht im Prompt', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    w.sent.length = 0
+    const ui = await boot($, surface)
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    // über die 2 s Ruhe nach der letzten Eingabe hinaus
+    await w.clock.advance(2100)
+    expect(await labels(ui)).toEqual(['Committe die Änderungen', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+    expect(await type($, '', '3')).toMatchObject({ text: '', cursor: 0 })
+    await ui.find({ type: 'Text', text: 'clawd' })
+    expect(w.sent).toEqual([{ text: 'Committe das', asUser: true }])
+    expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+    // Pille weg bis zum nächsten Turn: Ziffern sind wieder normaler Text
+    expect(await type($, '', '1')).toMatchObject({ text: '1' })
+    expect(w.sent.length).toBe(1)
+    await clear($, '1')
+    await $.turn.start({ turnId: 't2', text: 'Committe das' })
+    await ui.unmount()
+  }
+})
+
+test('Ziffer bleibt normaler Text: nach anderem Text, über der Zahl der Vorschläge, eingefügt, ohne sichtbare Pille', async ($, on) => {
+  const w = world(on)
+  // Vorschlag da, aber das Band wurde noch nie mit Pille gezeichnet
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  await finish($)
+  await suggest($, 'Weiter')
+  expect(await type($, '', '1')).toMatchObject({ text: '1' })
+  await clear($, '1')
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  // nur ein Vorschlag: 2 ist Text
+  expect(await type($, '', '2')).toMatchObject({ text: '2' })
+  await clear($, '2')
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  // eingefügt oder mehrere Zeichen auf einmal: Text
+  expect(await type($, '', '12')).toMatchObject({ text: '12' })
+  await clear($, '12')
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  // Ziffer nach Text: Text
+  await type($, '', 'a')
+  expect(await type($, 'a', '1')).toMatchObject({ text: 'a1' })
+  await clear($, 'a1')
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  // Claude arbeitet: keine Pille, also auch kein Senden
+  await ui.unmount()
+  const busy = await $.ui.mount(band('desktop', 120, { isWorking: true }))
+  await busy.find({ type: 'Text', text: 'clawd' })
+  expect(await type($, '', '1')).toMatchObject({ text: '1' })
+  await busy.unmount()
+  expect(w.sent).toEqual([])
+})
+
+test('Stabilität: späte Vorschläge innerhalb von 2 s nach einer Eingabe werden verzögert', async ($, on) => {
+  const w = world(on, { fork: 'slow', stored: { enabled: true, more: true } })
+  const ui = await boot($)
+  await finish($)
+  await suggest($, 'Weiter')
+  await w.clock.advance(100)
+  expect(await labels(ui)).toEqual(['Weiter'])
+  // Der Nutzer tippt kurz vor dem Eintreffen der Fork-Antwort (nach 9 s) etwas und löscht es wieder
+  await w.clock.advance(8000)
+  await type($, '', 'x')
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: 'x', cursor: 1, start: 0, end: 1, inputText: '' })
+  await w.clock.advance(1500)
+  expect(await labels(ui)).toEqual(['Weiter'])
+  await w.clock.advance(600)
+  expect(await labels(ui)).toEqual(['Weiter', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+  await ui.unmount()
+})
+
+test('/clear: neue Session-ID ohne session.start verwirft den alten Vorschlag', async ($, on) => {
+  const w = world(on)
+  const ui = await boot($, 'terminal')
+  await finish($)
+  await suggest($, 'Weiter')
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  await ui.unmount()
+  w.sid = 's2'
+  const again = await $.ui.mount(band('terminal'))
+  expect(await again.find({ key: 'reply-1' })).toBeUndefined()
+  await again.unmount()
+})
+
+test('eigener Fehler beim Zeichnen → Bandinhalt unverändert, Clawd bleibt', async ($, on) => {
+  const w = world(on)
+  await (await boot($, 'terminal')).unmount()
+  await finish($)
+  await suggest($, 'Weiter')
+  w.sid = 'DENY'
+  const ui = await $.ui.mount(band('terminal'))
+  expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+  expect(await ui.drawn()).toMatchObject({ type: 'Text', children: ['clawd'] })
+  await ui.unmount()
+})
+
+const REPLIES = {
+  en: { head: 'quick-replies: off · more suggestions via fork off', surface: 'Surface: desktop', on: 'quick-replies on', moreOn: 'via fork on', moreOff: 'more suggestions off', usage: 'Usage', registered: 'Reply suggestions above Clawd' },
+  de: { head: 'quick-replies: aus · weitere Vorschläge per Fork aus', surface: 'Oberfläche: desktop', on: 'quick-replies an', moreOn: 'per Fork an', moreOff: 'weitere Vorschläge aus', usage: 'Nutzung', registered: 'Antwort-Vorschläge über Clawd' },
+} as const
+
+for (const language of ['en', 'de'] as const) {
+  test(`/replies status, on, off, more on|off, Hilfe (${language}); session.start registriert und lädt die Einstellungen`, { options: { language } }, async ($, on) => {
+    const x = REPLIES[language]
+    const w = world(on, { stored: { enabled: false, more: false } })
+    await boot($)
+    expect(w.registered).toEqual(['replies'])
+    expect(w.descriptions[0]).toContain(x.registered)
+    const run = async (args: string) => String((await $.command.run({ command: 'replies', args })).text)
+    expect(await run('')).toContain(x.head)
+    expect(await run('status')).toContain(x.surface)
+    expect(await run('on')).toBe(x.on)
+    expect(await run('more on')).toContain(x.moreOn)
+    expect(w.store.get('settings')).toEqual({ enabled: true, more: true })
+    expect(await run('more off')).toContain(x.moreOff)
+    expect(await run('quatsch')).toContain(x.usage)
+    // Argumente sind englisch, in beiden Sprachen; das frühere deutsche `mehr` gibt es seit 0.1.0 nicht mehr
+    expect(await run('mehr on')).toContain(x.usage)
+  })
+}
+
+test('nach /clear sendet ein Druck nicht den Vorschlag des alten Chats', async ($, on) => {
+  const w = world(on)
+  const ui = await boot($, 'desktop')
+  await finish($)
+  await suggest($, 'Committe das')
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  // Im Desktop prüft das Zeichnen die Session-ID nur gedrosselt; der Druck prüft sie immer
+  w.sid = 's2'
+  await ui.press({ key: 'reply-1' })
+  expect(w.sent).toEqual([])
+  expect(w.toasts).toEqual([])
+  await ui.unmount()
+})
+
+// ---- Reihenfolge der Mods (band.ts, docs/BAND.md): das Band sieht immer gleich aus, egal wer in der Kette außen liegt
+
+type Tier = 'prepend' | 'append'
+// Partner-Mods laufen in eigener Umgebung (keine Importe aus dem Test): darum hier eine knappe eigene Fassung des Protokolls,
+// so wie ein anderer Mod es nach docs/BAND.md umsetzen würde
+// Wie limit-bars: Balken links neben den Grund, Ebenen bleiben oben
+const bars = (tier: Tier) => ({
+  name: `bars-${tier}`,
+  tier,
+  register(on: On) {
+    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+      type N = { props?: Record<string, unknown>; children?: unknown[] }
+      const key = (n: unknown) => String((n as N)?.props?.key ?? '')
+      const layers: unknown[] = []
+      const lift = (n: unknown): unknown => {
+        if (!n || typeof n !== 'object') return n
+        if (key(n).startsWith('layer:')) return (layers.push(n), null)
+        if (key(n) === 'band') {
+          for (const c of (n as N).children ?? []) if (key(c).startsWith('layer:')) layers.push(c)
+          const wrap = ((n as N).children ?? []).find((c) => key(c) === 'band-base') as N | undefined
+          return lift((wrap?.children?.[0] as N | undefined)?.children?.[0] ?? null)
+        }
+        return Array.isArray((n as N).children) ? { ...(n as N), children: (n as N).children!.map(lift).filter((c) => c !== null) } : n
+      }
+      const base = lift(await next(e))
+      const mine = { type: 'Box', props: { key: 'limit-bars' }, children: ['5h 7d'] }
+      const row = { type: 'Box', props: { flexDirection: 'row' }, children: base ? [mine, base] : [mine] }
+      if (layers.length === 0) return row as RenderNode
+      layers.sort((a, b) => Number(key(b).split(':')[1]) - Number(key(a).split(':')[1]))
+      const ground = { type: 'Box', props: { key: 'band-base', flexDirection: 'row' }, children: [{ type: 'Box', props: { flexGrow: 1 }, children: [row] }] }
+      return { type: 'Box', props: { key: 'band', flexDirection: 'column' }, children: [...layers, ground] } as RenderNode
+    })
+  },
+})
+// Wie sidekick während der Übergabe: oberste Ebene, Quick-Replies ausgeblendet
+const busy = (tier: Tier) => ({
+  name: `busy-${tier}`,
+  tier,
+  register(on: On) {
+    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+      type N = { props?: Record<string, unknown>; children?: unknown[] }
+      const key = (n: unknown) => String((n as N)?.props?.key ?? '')
+      const theirs = (await next(e)) as N
+      const box = { type: 'Box', props: { key: 'layer:30:sidekick', flexDirection: 'column' }, children: [{ type: 'Box', props: { key: 'sidekick-busy' }, children: ['sidekick'] }] }
+      // Liegt schon eine Wurzel vor: Pille raus, eigene Ebene obenauf; sonst eine neue Wurzel über dem Grund
+      if (key(theirs) === 'band') {
+        const kids = (theirs.children ?? []).filter((c) => key(c) !== 'layer:20:quick-replies')
+        return { ...theirs, children: [box, ...kids] } as RenderNode
+      }
+      const ground = { type: 'Box', props: { key: 'band-base', flexDirection: 'row' }, children: [{ type: 'Box', props: { flexGrow: 1 }, children: [theirs] }] }
+      return { type: 'Box', props: { key: 'band', flexDirection: 'column' }, children: [box, ground] } as RenderNode
+    })
+  },
+})
+const keys = (n: Node): string[] => (n && typeof n === 'object' ? [String(n.props?.key ?? ''), ...(n.children ?? []).flatMap(keys)] : [])
+
+for (const tier of ['prepend', 'append'] as const) {
+  test(`Reihenfolge: Balken ${tier === 'prepend' ? 'außen' : 'innen'} → Pille über Balken und Clawd, nie daneben`, { plugins: [bars(tier)] }, async ($, on) => {
+    world(on)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await boot($, surface)
+      await finish($)
+      await suggest($, 'Committe die Änderungen')
+      const tree = (await ui.drawn()) as Node
+      expect(tree.props.key).toBe('band')
+      expect(tree.children.length).toBe(2)
+      expect(tree.children[0].props.key).toBe('layer:20:quick-replies')
+      // Der Grund: Balken und Clawd in einer Zeile, die Pille steckt nicht darin
+      const ground = keys(tree.children[1])
+      expect(ground).toContain('limit-bars')
+      expect(ground).not.toContain('quick-replies')
+      expect(JSON.stringify(tree.children[1])).toContain('clawd')
+      await ui.unmount()
+    }
+  })
+}
+
+for (const [qrTier, skTier] of [['prepend', 'append'], ['append', 'prepend']] as const) {
+  test(`Reihenfolge: sidekick ${skTier === 'prepend' ? 'außen' : 'innen'}, Balken ${qrTier === 'prepend' ? 'außen' : 'innen'} → sidekick zuoberst, Pille ausgeblendet`, { plugins: [bars(qrTier), busy(skTier)] }, async ($, on) => {
+    world(on)
+    const ui = await boot($, 'desktop')
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    const tree = (await ui.drawn()) as Node
+    expect(tree.props.key).toBe('band')
+    // sidekick rückt auf die Höhe der Pille: direkt über dem Grund
+    expect(tree.children.map((c) => c.props.key)).toEqual(['layer:30:sidekick', 'band-base'])
+    expect(keys(tree)).not.toContain('quick-replies')
+    expect(keys(tree.children[1])).toContain('limit-bars')
+    await ui.unmount()
+  })
+}
+
+test('band.ts: höchste Ebene oben, ohne Ebenen bleibt der Grund unverändert, eine fremde Hülle gibt ihre Ebenen frei', () => {
+  const ground = { type: 'Text', props: {}, children: ['clawd'] } as RenderNode
+  expect(joinBand([], ground)).toBe(ground)
+  expect(splitBand(ground)).toEqual({ layers: [], base: ground })
+  const a = layer(20, 'quick-replies', 'A')
+  const b = layer(30, 'sidekick', 'B')
+  const joined = joinBand([a, b], ground) as Node
+  expect(joined.children.map((c) => c.props.key)).toEqual(['layer:30:sidekick', 'layer:20:quick-replies', 'band-base'])
+  // Ein Mod ohne Protokoll packt die Wurzel in seine Zeile: die Ebenen kommen trotzdem heraus, der Grund bleibt in der Hülle
+  const foreign = { type: 'Box', props: { flexDirection: 'row' }, children: ['x', joined] } as RenderNode
+  const s = splitBand(foreign)
+  expect(s.layers.map(nameOf)).toEqual(['sidekick', 'quick-replies'])
+  expect(s.base).toEqual({ type: 'Box', props: { flexDirection: 'row' }, children: ['x', ground] })
+  expect(levelOf(a)).toBe(20)
+  expect(levelOf(ground)).toBe(-1)
+  expect(joinBand([a], null)).toMatchObject({ props: { key: 'band' }, children: [a] })
+})

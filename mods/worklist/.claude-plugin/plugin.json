@@ -1,0 +1,45 @@
+{
+  "name": "worklist",
+  "version": "0.2.1",
+  "description": "To-do sidebar next to the chat: queue tasks, even while Claude is working. When Claude is clearly done, the to-do is checked off and the next one starts; otherwise the list pauses with a reason and buttons. History per project. /todo",
+  "author": { "name": "Fynn Hansen" },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the mod's texts and of its model prompts. en: English, de: Deutsch.",
+      "default": "en",
+      "options": ["en", "de"]
+    },
+    "haiku": {
+      "type": "boolean",
+      "title": "Haiku for unclear cases",
+      "description": "When the rules can't tell whether Claude is done, worklist briefly asks Haiku (measured at about 0.05 US cents per case). Off: the list stops in those cases instead.",
+      "default": true
+    },
+    "doneLine": {
+      "type": "boolean",
+      "title": "Closing line in the to-do",
+      "description": "Appends to every sent to-do the request to end with a clear question or with \"Done.\" (German: \"Fertig.\"). Makes the detection more reliable.",
+      "default": true
+    },
+    "settleSeconds": {
+      "type": "number",
+      "title": "Settle time (seconds)",
+      "description": "How long worklist waits before sending the next to-do, then checks again that Claude is free.",
+      "default": 3,
+      "min": 1,
+      "max": 30
+    },
+    "maxAutoRun": {
+      "type": "number",
+      "title": "To-dos in a row",
+      "description": "At most this many to-dos run one after another without your input; then the list stops.",
+      "default": 15,
+      "min": 1,
+      "max": 100
+    }
+  }
+}

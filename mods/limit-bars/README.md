@@ -1,0 +1,140 @@
+# limit-bars
+
+Two slim bars on the left of the band above the prompt show live how much of the 5-hour and the weekly limit is used and when each window resets. Next to them, a ring shows how long this chat's prompt cache stays warm. On top of that comes a cache guard: a question before an expensive cold send, a notice shortly before the cache expires, and the commands `/cache`, `/handoff` and `/keepwarm`. Everything fits next to Clawd (clawd-buddy).
+
+Texts are English by default; set `language` to `de` for German.
+
+Tested with Claude Code **v2.1.290** · Plugin version **0.3.1**
+
+## Display
+
+| Surface | Appearance |
+|---|---|
+| Desktop app's Code tab (main surface) | One image, 242 × 56 px (ring only: 58 × 56), left of Clawd and aligned to the bottom. Stacked: on top `5h 71% · in 2 h 14 min`, below it `7d 18% · Mon 09:00`, each with a segmented bar (44 segments). The cache ring sits to the right |
+| Terminal | 2 lines, both windows side by side, at most 44 columns: the label on top, a bar made of `▄` below. When space gets tight it switches to short forms (`71% 2h14`), then shows only 5h, then nothing. The cache block (`◔ 42m`, `○ cold`) follows if it fits and is the first thing to go |
+
+- **Color** of the fill and the percentage: green below 60 %, yellow from 60 %, red from 85 %. The empty part is dark grey, the `5h`/`7d` tag orange (#D77757).
+- **From `highlightAt`** (default 90 %) the tag and percentage turn bold. From 100 % it reads `full` and the bar is all red.
+- **After a reset**, until a new measurement arrives: `0% · fresh`, dimmed, with an empty bar.
+- **Before Claude Code knows the limits** (new chat, before the first reply), the desktop app shows empty, dimmed bars with `5h –` and `7d –`, and the ring shows `–`. In the terminal the bars only appear once there are values.
+- **Data source:** `$.session.usage()` at start and every 10 s, plus every measurement (`session.measure`, after each turn). `usage()` returns the values of the latest API response, so it updates even in the middle of a long turn. The 10 s tick polls but only redraws when a displayed number or color changes (otherwise buttons of other mods in the band flicker); it stops when the band is no longer drawn.
+
+Runs in: the desktop app's Code tab and the terminal. In `claude -p`, the Agent SDK, VS Code and mobile it draws nothing and starts no tick.
+
+## Cache ring
+
+Every message sends the whole conversation. Served from the prompt cache that is cheap; once the cache has expired, the next message writes everything again. Example with Opus 5.5 at 400k context: warm ≈ $0.08, cold ≈ $3.20 (API value; on a subscription it counts against your quota, there is no bill).
+
+- **Ring:** 28 segments; the filled part is the remaining cache time, emptying clockwise from 12 o'clock. In the middle the remaining time (`42m`), below it the context size (`412k`): grey below 80k, orange from 80k, red from "big" (`/cache big`, default 150k). The ring itself only shows the cache state.
+- **Colors:** green = warm · yellow = last 5 min (with a 5-minute cache, the last minute) · cold is grey, from "big" (default 150k) all red · `–` before the first request · a small dot in the middle = being kept warm.
+- **Cache duration:** default 60 min (measured on a subscription: after a 6.8 min pause the cache was read, not rewritten). The mod re-checks: a cache hit after a pause of more than 5.5 min confirms 60, a rewrite after 5.5 to 60 min indicates 5. Override with `/cache ttl 5|60|auto`.
+- **Data source:** every request of the main loop (`turn.step`; subagents don't count), and between turns `$.session.usage()` on the 10 s tick. The state is kept in `$.store` under `cache:<session ID>`, so the ring knows how warm the cache is after a restart. Entries older than 7 days are deleted at start.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `/cache` | Everything at a glance: state and remaining time, cache duration and its source, model, context, cost of the next message warm and cold, last request (read/written), cold restarts in this session, session cost, limits, keep-warm, settings |
+| `/cache ttl 5`, `ttl 60`, `ttl auto` · `warn on`/`off` · `big 150k` (big threshold) · `hints on`/`off` (notice before expiry) | Settings, stored in `$.store`; they apply immediately in all open chats |
+| `/handoff` | Claude writes a short handoff (≤ 400 words) with the skill `uebergabe`, in the language set in `language`. Then the mod asks: **New chat with handoff** clears this chat (`/clear`; the old one stays reachable via `/resume`) and sends the handoff as the first message, so the cache starts small. **Keep working here** leaves everything as it is |
+| `/handoff continue` · `/handoff show` | Apply the last handoff afterwards (clear and continue with it), or show it (the last 3 are kept in `$.store`) |
+| `/keepwarm [hours]` · `/keepwarm off` | Keep the cache warm, default 2 h, at most 4 h. **Off by default**, because every ping costs quota. `/keepwarm` without a number turns off a running keep-warm |
+
+The German arguments of earlier versions still work: `warnung an|aus`, `gross`/`groß`, `hinweise an|aus` (and the older `guard`, `alerts`), `/handoff weiter|zeigen`, `/keepwarm aus`.
+
+**Question before a cold send:** If the cache is cold and the chat is big (≥ 150k), the next typed message asks **Send anyway** · **Compact first** · **Cancel**, with the cost in the question text. Compacting also reads everything once and saves little with a cold cache; the mod then holds the message back, compacts, and sends it afterwards on its own (this option is not offered with attachments or `@file` in the text, because they would be missing when resent). If you close the dialog, the message goes out unchanged (fail-open). Slash commands, messages during a turn, and messages from plugins never trigger the question.
+
+**Notice shortly before expiry:** When a big chat enters the yellow phase, a notice appears once: keep going right away → just write; stopping → run `/handoff` now while it is cheap; coming back to this chat later → `/keepwarm`. The handoff pays off **before** expiry: with a cold cache, writing the handoff itself already rereads everything.
+
+**Keep-warm and cost:** A ping via `$.model.fork` reads the cache about 8 min before it expires (with a 5-minute cache, 90 s before), i.e. roughly every 52 min. At 400k context that is ≈ $0.08 per ping, over 3 h ≈ $0.30 instead of $3.20 for a rewrite. Useful, for example, when a background render runs longer than 60 min and you continue in the same chat afterwards. If a ping rewrites instead of reading, or gets no reply, keep-warm turns itself off and tells you. The `/cache` settings apply to all chats. After `/clear` or a restart keep-warm is off.
+
+The cache guard is modeled on Cache Keeper by Nate Herk (MIT); the skill `uebergabe` is based on its `session-handoff` skill. It has an English and a German template; `/handoff` passes the language as the skill's argument. See `THIRD-PARTY-NOTICES.md` in this folder.
+
+## Configuration
+
+`/config` → limit-bars:
+
+| Key | Title in `/config` | Meaning | Default |
+|---|---|---|---|
+| `language` | Language / Sprache | `en`: English · `de`: German. Covers the bars, the ring, `alt` texts, `/cache`, `/handoff`, `/keepwarm`, questions, notices, and the language of the handoff the skill writes | `en` |
+| `resetStyle` | Reset display | `mixed`: 5h as a countdown, week as a clock time · `clock`: both as clock times · `countdown`: both as countdowns | `mixed` |
+| `highlightAt` | Highlight from (%) | from this percentage the tag and value are bold (50 to 100) | 90 |
+| `onlyFiveHour` | 5-hour limit only | don't draw the weekly limit | off |
+
+## Language
+
+- `language` is `en` by default. Set it to `de` in `/config` → limit-bars for German texts (`71 %`, `Mo 09:00`, `≈ 3,30 $`, `/cache` card in German).
+- Formats: en `71%`, `Mon 09:00`, `in 2 d 4 h`, `≈ $3.30`, `1.2M`; de `71 %`, `Mo 09:00`, `in 2 T 4 h`, `≈ 3,30 $`, `1,2M`.
+- Commands and arguments are English in both languages; the German arguments stay valid as aliases.
+- The settings titles in `/config` are English only.
+
+## Rights
+
+`claude plugin validate` shows:
+
+```text
+hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, command.run{command=cache}, command.run{command=handoff}, command.run{command=keepwarm}, session.measure, ui.render{component=AbovePrompt}
+calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.fork, $.prompt.submit, $.session.compact, $.session.id, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
+```
+
+No file system, no processes, no network, no environment variables, no tokens or credentials. In the terminal band, limit-bars passes on the space it uses to the mods further in (smaller `bodyColumns`).
+
+In plain language:
+
+- `$.session.usage`: limits, context size and session cost at start and on every tick (without `breakdown`, free)
+- Hook `session.measure`: takes the percentage and reset time of `five_hour` and `seven_day` after every measurement
+- Hook `turn.step`: reads, for every request of the main loop, how much was read from the cache and how much was written; changes nothing
+- Hook `turn.complete`: notes the end of a turn and captures the reply of the handoff turn
+- Hook `session.compact`: notes a compaction (the first request afterwards does not count as a cold restart)
+- Hook `prompt.submit`: the question before a cold send (only for a big chat with a cold cache), otherwise passes through unchanged
+- Hooks `command.run` for `cache`, `handoff`, `keepwarm` and `$.command.register`: the three commands
+- `$.command.list`, `$.command.run`: find and start the skill `uebergabe` (with the language as its argument); `/clear` for "clear and continue"
+- `$.prompt.submit`: the handoff as the first message in the cleared chat, or the held-back message after compacting
+- `$.session.compact`: **Compact first** in the question
+- `$.model.fork`: only with `/keepwarm` on, the keep-warm ping
+- `$.session.id`, `$.store.*`: per-chat state, settings, last 3 handoffs; cleanup after 7 days
+- `$.ui.ask`, `$.ui.toast`: questions and notices
+- `$.ui.invalidate`, `$.ui.resolve`: redraw; components `Box`, `Text`, `Svg`
+- `$.clock.now`, `$.clock.every`: time of day; 10 s tick while the band is drawn; 30 s tick only while keeping warm; one-shot timers to start commands outside a hook
+
+## Installation
+
+Add the marketplace once, then install the mod:
+
+```bash
+claude plugin marketplace add FynnXland/fynn-mods
+claude plugin install limit-bars@fynn-mods
+```
+
+Inside a session the same works with `/plugin marketplace add FynnXland/fynn-mods` and `/plugin install limit-bars@fynn-mods`.
+The mod loads in the next session, or after `/reload-plugins`.
+
+**Check:** `/plugin` shows `… mod active · limit-bars`.
+
+**Update:** `claude plugin update limit-bars@fynn-mods`, or turn on auto-update for `fynn-mods` under **Marketplaces** in `/plugin`.
+
+**Remove:** disable it under **Installed** in `/plugin`, or run `claude plugin uninstall limit-bars@fynn-mods`.
+
+**Try it for one session without installing** (from a clone of the repo):
+
+```bash
+claude --plugin-dir <path-to-clone>/mods/limit-bars
+```
+
+## Working with clawd-buddy
+
+Both mods draw into the same band above the prompt. Claude Code does not define the order in which they run; either way, the bars end up left of Clawd, aligned to the bottom. In the terminal, Clawd gets the width that is left after the bars.
+
+## Known limitations
+
+- **Before the first API response** Claude Code knows no limits; the bars appear with the first response (at most 10 s later). The CLI queries at startup by itself, the desktop app apparently only with the first message.
+- **Clawd on the left** (clawd-buddy `side: left`): the bars and Clawd can both end up on the left. There is no separate option for this.
+- **Countdown in both windows** (`resetStyle: countdown`): the long forms need up to 46 columns. The terminal then shows the short forms (`2h14`, `2d23h`), the desktop app always the long forms.
+- **Commands from hooks:** Claude Code rejects `$.command.run`, `$.prompt.submit` and `$.session.compact` from inside a running hook. `/handoff`, "clear and continue" and **Compact first** therefore run a moment later via a one-shot timer.
+- **Notice shortly before expiry** only appears while this chat's band is being drawn (10 s tick). Keep-warm has its own tick and also runs without the band.
+- **Cache estimate:** the ring counts from the start of the last main-loop request. If something else reads the same cache, it does not see that.
+- **Fixed colors in the desktop image:** the Svg is an image and does not follow the theme. The grey `#9A9A9A` and the level colors are chosen for the dark theme; legibility in the light theme has not been checked yet.
+- **Exactly 100 %?** It is not documented whether an exhausted 5-hour or weekly window reports exactly 100. `full` applies from ≥ 100; 99.6 % shows `99%`.
+- **Terminal narrower than 53 columns:** no bars.
+- **Giving up space in the terminal** relies on observed behavior: Claude Code's type definitions call `bodyColumns` read-only but allow rewriting props, and current Claude Code versions accept it. If a later version rejects it, a single render fails and limit-bars then stacks its 2 lines above the rest (the band gets 2 lines taller).
+- **Time zone:** the clock-time display uses the local time of the hooks runtime (`new Date`). Which time zone that is, is not documented; check that `Mon 09:00` matches your own clock.

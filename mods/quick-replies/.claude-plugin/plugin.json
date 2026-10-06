@@ -1,0 +1,38 @@
+{
+  "name": "quick-replies",
+  "version": "0.2.1",
+  "description": "Claude Code's own next-message suggestion as a button above Clawd; click it or type 1 in the empty prompt to send it. With /replies more on, up to three more suggestions from a fork of the session.",
+  "author": {
+    "name": "Fynn Hansen"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the mod's texts and of its model prompts. en: English, de: Deutsch.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
+      ]
+    },
+    "more": {
+      "type": "boolean",
+      "title": "More suggestions via fork",
+      "description": "Besides Claude Code's own suggestion, ask a fork of the session for up to three more after every answer. Costs roughly one short answer per answer, mostly from the cache. /replies more on|off overrides this for all sessions.",
+      "default": false
+    },
+    "layout": {
+      "type": "string",
+      "title": "Layout",
+      "description": "auto: 2 × 2 if the labels fit, otherwise one per row. grid: always 2 × 2. list: always one per row.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "grid",
+        "list"
+      ]
+    }
+  }
+}

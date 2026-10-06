@@ -1,0 +1,39 @@
+{
+  "name": "fynn-mods",
+  "description": "Fynn's daily-driver Claude Code mods: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies, a to-do worklist and a cost ledger.",
+  "owner": {
+    "name": "Fynn Hansen"
+  },
+  "plugins": [
+    {
+      "name": "clawd-buddy",
+      "source": "./mods/clawd-buddy",
+      "description": "Animated pixel mascot Clawd above the prompt: reacts to Claude's work, waiting times, idle time, time of day, the mouse and a mood that builds up over the session."
+    },
+    {
+      "name": "limit-bars",
+      "source": "./mods/limit-bars",
+      "description": "Bars for the 5-hour and weekly usage limits above the prompt, plus a ring showing how long the prompt cache stays warm. Cache guard: asks before an expensive cold send; /cache, /handoff, /keepwarm."
+    },
+    {
+      "name": "sidekick",
+      "source": "./mods/sidekick",
+      "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Sonnet: a hint line under your message or a question (new chat with handoff, a skill, a clearer version, or \"wrong chat?\" when the message belongs to another project). Names due maintenance once per chat (/skill-doctor, prompt-audit, consolidate-memory, /init). /savings shows cost per model and measurable savings."
+    },
+    {
+      "name": "quick-replies",
+      "source": "./mods/quick-replies",
+      "description": "Claude Code's own next-message suggestion as a button above Clawd; click it or type 1 in the empty prompt to send it. With /replies more on, up to three more suggestions from a fork of the session."
+    },
+    {
+      "name": "worklist",
+      "source": "./mods/worklist",
+      "description": "To-do sidebar next to the chat: queue tasks, even while Claude is working. When Claude is clearly done, the to-do is checked off and the next one starts; otherwise the list pauses with a reason and buttons. History per project. /todo"
+    },
+    {
+      "name": "cost-ledger",
+      "source": "./mods/cost-ledger",
+      "description": "Cost ledger across all chats: after every answer it records the chat cost (as /cost), tokens per model and model calls made by other mods. /ledger shows today, 7 and 30 days, total, history by model (days or weeks), projects and the most expensive chats. Observer only, no model calls."
+    }
+  ]
+}

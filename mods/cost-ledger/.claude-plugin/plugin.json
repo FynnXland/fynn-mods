@@ -1,0 +1,38 @@
+{
+  "name": "cost-ledger",
+  "version": "0.4.1",
+  "description": "Cost ledger across all chats: after every answer it records the chat cost (as /cost), tokens per model and model calls made by other mods. /ledger shows today, 7 and 30 days, total, history by model (days or weeks), projects and the most expensive chats. Observer only, no model calls.",
+  "author": { "name": "Fynn Hansen" },
+  "license": "MIT",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the mod's texts and of its model prompts. en: English, de: Deutsch.",
+      "default": "en",
+      "options": ["en", "de"]
+    },
+    "keepDays": {
+      "type": "number",
+      "title": "Retention (days)",
+      "description": "Chats that have not been recorded for this many days are deleted by cost-ledger at the next /ledger.",
+      "default": 365,
+      "min": 1,
+      "max": 3650
+    },
+    "dayYellow": {
+      "type": "number",
+      "title": "Daily amount yellow from ($)",
+      "description": "From this daily amount, the amount in the daily history turns yellow.",
+      "default": 3,
+      "min": 0
+    },
+    "dayRed": {
+      "type": "number",
+      "title": "Daily amount red from ($)",
+      "description": "From this daily amount, the amount in the daily history turns red.",
+      "default": 8,
+      "min": 0
+    }
+  }
+}

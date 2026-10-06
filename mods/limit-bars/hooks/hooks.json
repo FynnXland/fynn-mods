@@ -1,0 +1,4 @@
+{
+  "description": "limit-bars – hooks module",
+  "modules": ["./register.ts"]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "sidekick",
+  "version": "0.5.0",
+  "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Sonnet: a hint line under your message or a question (new chat with handoff, a skill, a clearer version, or \"wrong chat?\" when the message belongs to another project). Names due maintenance once per chat (/skill-doctor, prompt-audit, consolidate-memory, /init). /savings shows cost per model and measurable savings.",
+  "author": {
+    "name": "Fynn Hansen"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the mod's texts and of its model prompts. en: English, de: Deutsch.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
+      ]
+    }
+  }
+}

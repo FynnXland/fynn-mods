@@ -1,0 +1,4 @@
+{
+  "description": "worklist – hooks module",
+  "modules": ["./register.ts"]
+}

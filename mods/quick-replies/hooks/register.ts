@@ -1,0 +1,403 @@
+// quick-replies: Hooks-Modul. Nach jeder Antwort von Claude stehen vorgeschlagene nächste Nachrichten als eigene Pille über Clawd
+// im Band über dem Prompt (AbovePrompt, docs/raw/en/interface.md:207-213). Klick oder Ziffer 1–4 als erstes Zeichen im leeren
+// Prompt (prompt.edit, types@2.1.289:8128-8203) schickt den Vorschlag als Nachricht des Nutzers ab ($.prompt.submit mit asUser,
+// types@2.1.289:8516-8529).
+// Quellen: der eine Vorschlag von Claude Codes eigenem Dienst (prompt.suggest); auf Wunsch (/replies more on) bis zu drei weitere
+// aus einem Fork der Session ($.model.fork, voller Kontext, gleicher Cache), nach dem Vorbild von next-steps.
+// Der Mod beobachtet nur: Jeder Event-Hook gibt das Ergebnis von next(e) weiter; nur eine Ziffer, die einen Vorschlag sendet,
+// landet nicht im Prompt. Er sendet nie von selbst, nur auf Klick oder Taste.
+import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
+import { joinBand, layer, LEVEL, nameOf, splitBand } from './band.ts'
+import { forkStateText, langOf, T } from './i18n.ts'
+import type { ForkState, Lang, Position } from './i18n.ts'
+import { forkPrompt, MIN_ANSWER, merge, parseFork } from './logic.ts'
+import type { Reply } from './logic.ts'
+import { chooseLayout, GAP, label } from './view.ts'
+import type { Layout, LayoutPref } from './view.ts'
+
+const CMD = 'replies'
+// Rahmen (2) und Innenabstand (2) der eigenen Pille (nur Desktop)
+const FRAME = 4
+// Keine Neubelegung so lange nach einer Eingabe (SPEC → Stabilität)
+const QUIET_MS = 2000
+
+type Settings = { enabled: boolean; more: boolean }
+
+// Einstellungen: userConfig als Standard, /replies überschreibt in $.store. Der Store ist eine Datei des Plugins im Benutzerordner
+// (types@2.1.289:3243-3248), gilt also für alle Projekte und Sessions; jede Session liest ihn nach jeder Antwort neu.
+let defaults: Settings = { enabled: true, more: false }
+let settings: Settings = { ...defaults }
+let layoutPref: LayoutPref = 'auto'
+let lang: Lang = 'en'
+
+// Vorschläge der Hauptsession (flüchtig, pro Session-ID)
+let sid = ''
+let ready = false // ein Turn ist fertig und seither wurde kein Vorschlag gesendet
+let engine = ''
+let fork: string[] = []
+let replies: Reply[] = []
+let forkGen = 0
+let forkState: ForkState = { kind: 'idle' }
+
+// Eingabe und Stabilität
+let promptText = ''
+// Die Pille stand beim letzten Zeichnen (nur dann schickt eine Ziffer im leeren Prompt den Vorschlag ab)
+let shown = false
+let quiet: Timer | null = null
+let pending = false
+
+// Zeichnen: die Pille bleibt dasselbe Objekt, solange sich nichts ändert. Clawd zeichnet das Band im Desktop etwa 13-mal pro
+// Sekunde neu; neu gebaute Knöpfe nahmen dort keinen Klick an.
+let cached: { sig: string; node: RenderNode } | null = null
+let surface = ''
+let bodyColumns = 0
+let layout: Layout | '' = ''
+let position: Position | '' = ''
+let engineSeen = 0
+// /clear-Prüfung im Desktop nicht bei jedem der ~13 Bilder pro Sekunde: bei neuen Vorschlägen und sonst jedes 10. Zeichnen.
+// Im Terminal wird das Band nur bei Änderungen gezeichnet, dort jedes Mal.
+const SID_EVERY = 10
+let sidCheck = SID_EVERY
+
+/** Einstellungen aus dem Store; ohne Store oder ohne Eintrag gilt der Standard aus userConfig. */
+async function load($: EngineInterface) {
+  try {
+    settings = cleanSettings(await $.store.get('settings'), defaults)
+  } catch {
+    // bleibt beim Stand dieser Session
+  }
+}
+
+function cleanSettings(v: unknown, base: Settings): Settings {
+  const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+  return {
+    enabled: typeof o.enabled === 'boolean' ? o.enabled : base.enabled,
+    more: typeof o.more === 'boolean' ? o.more : base.more,
+  }
+}
+
+function promptEmpty(text: string): boolean {
+  return text.trim() === ''
+}
+
+function resetTurn() {
+  ready = false
+  engine = ''
+  fork = []
+  replies = []
+  forkGen += 1
+  pending = false
+}
+
+function recompute() {
+  replies = merge(engine, fork)
+  sidCheck = SID_EVERY
+}
+
+/** Später ankommende Vorschläge (Engine, Fork): sofort einsetzen, außer der Nutzer hat in den letzten 2 s getippt oder gedrückt. */
+function arrive($: EngineInterface) {
+  if (!ready) return
+  // Die Ruhe schützt nur, was schon zu sehen ist; ohne sichtbaren Vorschlag kommt der neue sofort
+  if (quiet && replies.length > 0) {
+    pending = true
+    return
+  }
+  recompute()
+  $.ui.invalidate('ui.render')
+}
+
+/** Eingabe oder Druck: 2 s Ruhe für die Plätze (einmaliger Timer: erster Tick, dann cancel()). */
+function markInput($: EngineInterface) {
+  quiet?.cancel()
+  const t = $.clock.every(QUIET_MS, () => {
+    t.cancel()
+    if (quiet !== t) return
+    quiet = null
+    if (pending) {
+      pending = false
+      if (ready) {
+        recompute()
+        $.ui.invalidate('ui.render')
+      }
+    }
+  })
+  quiet = t
+}
+
+/** Fork nach dem Turn, außerhalb von turn.complete (Lehre 12). Fehler, Unsinn oder nichts: es bleibt beim Vorschlag der Engine. */
+function askFork($: EngineInterface, gen: number) {
+  forkState = { kind: 'running' }
+  $.model
+    .fork({ prompt: forkPrompt(lang) })
+    .then((r) => {
+      if (gen !== forkGen) return
+      if (!r.isAnswered) {
+        forkState = { kind: 'unanswered', reason: r.reason }
+        return
+      }
+      const list = parseFork(r.text)
+      forkState = list.length > 0 ? { kind: 'found', count: list.length } : { kind: 'none' }
+      if (list.length === 0) return
+      fork = list
+      arrive($)
+    })
+    .catch((err: unknown) => {
+      if (gen === forkGen) forkState = { kind: 'error', message: String(err) }
+    })
+}
+
+/** Sendet einen Vorschlag als Nachricht des Nutzers; die Pille verschwindet sofort. Nur auf Klick oder Taste. */
+function send($: EngineInterface, text: string) {
+  // Schon gesendet (Klick und Ziffer kurz nacheinander): nicht doppelt
+  if (!ready) return
+  ready = false
+  markInput($)
+  $.ui.invalidate('ui.render')
+  // Nach /clear nie den Vorschlag des alten Chats in den neuen schicken
+  $.session
+    .id()
+    .then((now) => {
+      if (sid && now !== sid) {
+        sid = now
+        resetTurn()
+        return
+      }
+      return $.prompt.submit({ text, asUser: true }).then((r) => {
+        if (r.drop !== undefined) fail($, text)
+      })
+    })
+    .catch(() => fail($, text))
+}
+
+function fail($: EngineInterface, text: string) {
+  ready = replies.length > 0
+  $.ui.invalidate('ui.render')
+  // Der Host nennt den Mod beim Toast selbst (docs/raw/en/api.md:133)
+  $.ui.toast(T[lang].sendFailed(text))
+}
+
+/** Wo quick-replies in der Kette sitzt: Der Kern antwortet ohne weitere Mods mit `{type:'engine'}` (types@2.1.289:9160-9170). */
+function positionOf(theirs: RenderNode | null | undefined): Position {
+  if (theirs === null || theirs === undefined) return 'alone'
+  if (typeof theirs === 'object' && 'type' in theirs && theirs.type === 'engine') return 'inner'
+  return 'outer'
+}
+
+function status(): string {
+  const t = T[lang]
+  const onOff = (v: boolean) => (v ? t.on : t.off)
+  const source = (r: Reply) => (r.source === 'engine' ? t.sourceEngine : t.sourceFork)
+  const list = replies.length > 0 ? replies.map((r, i) => `  ${i + 1}: ${r.text} (${source(r)})`) : ['  –']
+  return [
+    `quick-replies: ${onOff(settings.enabled)} · ${t.moreViaFork} ${onOff(settings.more)}`,
+    `${t.suggestions}${ready ? '' : t.hidden}:`,
+    ...list,
+    `${t.lastSources}: ${t.sourceEngine} ${engine ? t.yes : t.no} · ${t.sourceFork} ${settings.more ? forkStateText(t, forkState) : t.off}`,
+    `${t.engineSeen}: ${engineSeen}×`,
+    `${t.surface}: ${surface || t.notDrawn} · ${t.band(bodyColumns)} · ${t.layout} ${layout || '–'} · ${t.position} ${position ? t.positions[position] : '–'}`,
+  ].join('\n')
+}
+
+export function register(on: On, options: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
+  defaults = { enabled: true, more: options.more === true }
+  settings = { ...defaults }
+  layoutPref = options.layout === 'grid' || options.layout === 'list' ? options.layout : 'auto'
+  lang = langOf(options.language)
+
+  on('session.start', async ($, e, next) => {
+    await load($)
+    try {
+      sid = await $.session.id()
+    } catch {
+      sid = ''
+    }
+    resetTurn()
+    // Commands zuletzt und in try/catch: ein belegter Name wirft (docs/raw/en/api.md:45)
+    try {
+      await $.command.register({ name: CMD, description: T[lang].description, argumentHint: '[status|on|off|more on|more off]' })
+    } catch (err) {
+      $.ui.log(`/${CMD} not registered: ${String(err)}`, { to: 'debug' })
+    }
+    return next(e)
+  })
+
+  on('turn.start', async ($, e, next) => {
+    resetTurn()
+    // Der Prompt wurde gerade abgeschickt
+    promptText = ''
+    $.ui.invalidate('ui.render')
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (!e.agentId && !e.isAborted && e.reason === 'answer') {
+      try {
+        // Nach /clear gibt es eine neue Session-ID ohne session.start (Lehre 13)
+        sid = await $.session.id()
+      } catch {
+        // bleibt beim bisherigen Wert
+      }
+      // Eine andere Session kann /replies umgestellt haben: die Einstellung gilt global
+      await load($)
+      // Die Vorschläge kommen danach: der von Claude Code über prompt.suggest, die weiteren aus dem Fork
+      ready = true
+      pending = false
+      recompute()
+      $.ui.invalidate('ui.render')
+      // Fork nur, wo gezeichnet wird (erst das Band nennt die Oberfläche, Lehre 9), also nie in -p, SDK, VS Code oder mobil
+      if (settings.enabled && settings.more && surface && e.answer.trim().length >= MIN_ANSWER) {
+        const gen = forkGen
+        const t = $.clock.every(10, () => {
+          t.cancel()
+          // Inzwischen ein neuer Turn: kein Fork mehr für die alte Antwort
+          if (gen === forkGen) askFork($, gen)
+        })
+      }
+    }
+    return next(e)
+  })
+
+  // Vorschlag von Claude Codes eigenem Dienst nach einem Turn (types@2.1.289:8653-8691): nur lesen, der graue Vorschlag bleibt
+  on('prompt.suggest', async ($, e, next) => {
+    if (e.origin.kind === 'suggestion' && e.text.trim()) {
+      engineSeen += 1
+      engine = e.text
+      arrive($)
+    }
+    return next(e)
+  })
+
+  // Wird getippt, verschwindet die Pille; jede Eingabe hält die Plätze 2 s fest (Limit 50 ms: nur next wird abgewartet)
+  on('prompt.edit', async ($, e, next) => {
+    const r = await next(e)
+    // Ziffer als erstes Zeichen in den leeren Prompt, während die Pille steht: Vorschlag sofort senden, die Ziffer landet nicht im
+    // Prompt (Antwort mit leerem Text, types@2.1.289:8191-8203). Die Pause des Band-Hotkeys (docs/raw/en/reference.md:244) greift im
+    // Desktop nicht, solange der Prompt den Fokus hat.
+    const pick = e.text === '' && /^[1-4]$/.test(e.inputText) ? replies[Number(e.inputText) - 1] : undefined
+    if (pick && shown && ready && r.text === e.inputText) {
+      promptText = ''
+      send($, pick.text)
+      return { ...r, text: '', cursor: 0 }
+    }
+    const was = promptEmpty(promptText)
+    promptText = r.text
+    markInput($)
+    if (was !== promptEmpty(promptText)) $.ui.invalidate('ui.render')
+    return r
+  })
+
+  on('command.run', { command: CMD }, async ($, e) => {
+    // Der Befehl stand gerade im Prompt; ob das Leeren beim Absenden prompt.edit auslöst, ist nicht belegt
+    if (!promptEmpty(promptText)) {
+      promptText = ''
+      $.ui.invalidate('ui.render')
+    }
+    const args = e.args.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    // Vorher neu lesen, damit eine zweite Session ihre Einstellung nicht verliert
+    const change = async (patch: Partial<Settings>) => {
+      try {
+        settings = cleanSettings(await $.store.get('settings'), settings)
+      } catch {
+        // bleibt beim Stand dieser Session
+      }
+      settings = { ...settings, ...patch }
+      try {
+        await $.store.set('settings', settings)
+      } catch {
+        // gilt dann nur bis zum Reload
+      }
+      $.ui.invalidate('ui.render')
+    }
+    const t = T[lang]
+    if (args.length === 0 || args[0] === 'status') return { text: status() }
+    if (args.length === 1 && (args[0] === 'on' || args[0] === 'off')) {
+      await change({ enabled: args[0] === 'on' })
+      return { text: `quick-replies ${settings.enabled ? t.on : t.off}` }
+    }
+    if (args.length === 2 && args[0] === 'more' && (args[1] === 'on' || args[1] === 'off')) {
+      await change({ more: args[1] === 'on' })
+      return { text: settings.more ? t.moreOn : t.moreOff }
+    }
+    return { text: t.usage }
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    let called = false
+    let nextFailed = false
+    let theirs: RenderNode | null | undefined = null
+    shown = false
+    // Das Band gibt es nur auf Terminal und Desktop (types@2.1.289:9711)
+    if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e)
+    try {
+      called = true
+      try {
+        theirs = await next(e)
+      } catch (err) {
+        nextFailed = true
+        throw err
+      }
+      // Die Oberfläche nennt erst das Zeichnen zuverlässig (Lehre 9)
+      surface = e.surface
+      bodyColumns = e.props.bodyColumns
+      position = positionOf(theirs)
+      // Nur zeichnen, wenn alles passt; sonst den Bandinhalt unverändert lassen, keine zusätzliche Höhe (Lehren 3 und 8)
+      if (!settings.enabled || !ready || replies.length === 0) return theirs
+      if (e.props.hasSurvey || e.props.isWorking || !promptEmpty(promptText)) return theirs
+      // Transkript eines Subagents offen: die Vorschläge gehören zur Hauptsession (types@2.1.289:9750-9758)
+      if (e.props.view.agentId) return theirs
+      // Nach /clear: neue Session-ID, die Vorschläge gehören zum alten Chat (Lehre 13)
+      sidCheck += 1
+      if (e.surface === 'terminal' || sidCheck >= SID_EVERY) {
+        sidCheck = 0
+        const now = await $.session.id()
+        if (sid && now !== sid) {
+          sid = now
+          resetTurn()
+          // Auch der Prompt mit „/clear“ ist abgeschickt
+          promptText = ''
+          return theirs
+        }
+      }
+
+      const { Box, Button } = $.ui.resolve(e)
+      // Desktop: gerahmte Pille. Terminal: kompakt ohne Rahmen und Abstand, sonst läuft das Band neben Clawd über („n more“)
+      const framed = e.surface === 'desktop'
+      const inner = e.props.bodyColumns - (framed ? FRAME : 0)
+      const texts = replies.map((r) => r.text)
+      layout = chooseLayout(texts, inner, layoutPref)
+      const sig = `${e.surface}|${inner}|${layout}|${texts.join('\u0000')}`
+      if (!cached || cached.sig !== sig) {
+        const half = Math.floor((inner - GAP) / 2)
+        const buttons = texts.map((text, i) =>
+          Button({ key: `reply-${i + 1}`, label: label(text), hotkey: String(i + 1), plain: true, onPress: () => send($, text) }),
+        )
+        const cell = (b: RenderNode) => Box({ width: e.surface === 'terminal' ? half : '50%', flexShrink: 0, children: [b] })
+        const rows: RenderNode[] = []
+        if (layout === 'grid') {
+          // 2 × 2: links 1/3, rechts 2/4
+          for (let i = 0; i < buttons.length; i += 2) {
+            rows.push(Box({ flexDirection: 'row', columnGap: GAP, flexShrink: 0, children: buttons.slice(i, i + 2).map(cell) }))
+          }
+        } else {
+          for (const b of buttons) rows.push(Box({ flexDirection: 'row', flexShrink: 0, children: [b] }))
+        }
+        // Eigene Pille: gedimmter Rahmen, eine Zeile Abstand zu Clawd und den Balken darunter
+        const node = framed
+          ? Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, borderStyle: 'round', borderDimColor: true, paddingX: 1, marginBottom: 1, children: rows })
+          : Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, children: rows })
+        cached = { sig, node }
+      }
+      // Eigene Ebene über dem Grund (Clawd, Balken), unter sidekick; gilt in jeder Reihenfolge der Mods (band.ts, docs/BAND.md)
+      const { layers, base } = splitBand(theirs)
+      // Während sidekick einen neuen Chat startet, keine Pille; sidekick weiter innen sieht sie nicht
+      if (layers.some((l) => nameOf(l) === 'sidekick')) return joinBand(layers, base)
+      shown = true
+      return joinBand([...layers, layer(LEVEL.quickReplies, 'quick-replies', cached.node)], base)
+    } catch (err) {
+      // Fehler aus der Kette weiterwerfen (docs/raw/en/events.md:313-316); eigener Fehler: Clawd und Balken bleiben stehen
+      if (nextFailed) throw err
+      $.ui.log(`quick-replies ui.render: ${String(err)}`, { to: 'debug' })
+      return called ? theirs : next(e)
+    }
+  })
+}

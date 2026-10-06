@@ -1,0 +1,4 @@
+{
+  "description": "clawd-buddy – hooks module",
+  "modules": ["./register.ts"]
+}

@@ -1,0 +1,67 @@
+{
+  "name": "clawd-buddy",
+  "version": "0.4.1",
+  "description": "Animated pixel mascot Clawd above the prompt: reacts to Claude's work, waiting times, idle time, time of day, the mouse and a mood that builds up over the session.",
+  "author": {
+    "name": "Fynn Hansen"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "nightStart": {
+      "type": "number",
+      "title": "Night starts (hour)",
+      "description": "From this hour (0 to 23) he gets tired when idle and falls asleep.",
+      "default": 23,
+      "min": 0,
+      "max": 23
+    },
+    "nightEnd": {
+      "type": "number",
+      "title": "Night ends (hour)",
+      "description": "Night time lasts until this hour (0 to 23). If it is before the start, the night spans midnight.",
+      "default": 6,
+      "min": 0,
+      "max": 23
+    },
+    "idleSeconds": {
+      "type": "number",
+      "title": "Idle time before pastimes (seconds)",
+      "description": "How long without activity before he passes the time.",
+      "default": 45,
+      "min": 10,
+      "max": 600
+    },
+    "reducedMotion": {
+      "type": "boolean",
+      "title": "Reduced motion",
+      "description": "Only the base pose and calm variants, no pastimes.",
+      "default": false
+    },
+    "side": {
+      "type": "string",
+      "title": "Position in the band",
+      "description": "Right or left above the prompt.",
+      "default": "right",
+      "options": [
+        "right",
+        "left"
+      ]
+    },
+    "birthday": {
+      "type": "string",
+      "title": "Birthday (DD.MM.)",
+      "description": "On this day he celebrates with you (cake, party hat). Empty = off.",
+      "default": "05.01."
+    },
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the mod's texts and of its model prompts. en: English, de: Deutsch.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
+      ]
+    }
+  }
+}
