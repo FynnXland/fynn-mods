@@ -7,7 +7,7 @@
 import type { EngineInterface, On, Timer } from 'claude-code'
 import { joinBand, splitBand } from './band.ts'
 import { ALL_CLIPS } from './library.ts'
-import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, deriveTemper, shellKind, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
+import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
 import type { Strain } from './mood.ts'
 import { createDesk, DESK_TICK } from './desk.ts'
 import { T, clipLabel, langOf, num as fmt } from './i18n.ts'
@@ -32,6 +32,8 @@ let strain: Strain = { ...NO_STRAIN } // Laune: Rückschläge, Erfolge, Arbeitsz
 let turnHadError = false
 const agentSeen = new Map<string, number>() // laufende Subagenten: agentId → letzte Aktivität (ms)
 let askTool = ''
+let ctxWarned = 0 // zuletzt gemeldete Stufe des Kontextfensters (mood.ts → CTX_WARN)
+let ctxPending = false // neue Stufe erreicht, wird am Turn-Ende gezeigt
 let typingPerf = 0 // performance.now() des letzten Tastendrucks (synchron lesbar, ohne `$`-Aufruf pro Taste)
 let typingInvalidatedPerf = -1e9
 // Rückkehr nach langer Pause (Begrüßung): letzte Anwesenheit (ms, auch über Sitzungen hinweg gespeichert) und Drosseln
@@ -55,19 +57,27 @@ let deskTimer: Timer | null = null
 let deskChecks = 0 // Wächter-Runden seit der letzten Zeichnung
 let deskPlanMs = 0 // Länge der zuletzt gezeichneten Animation
 let deskAsked = 0 // Wächter-Runden, seit um eine neue Zeichnung gebeten wurde (0 = keine Bitte offen)
+// Flackern (Fynn, 2026-10-06: „Es darf nicht flackern“): Ein neues `source` lässt den Rahmen neu laden, die Figur blinkt dabei kurz.
+// Das Band wird aber auch für andere Mods neu gezeichnet (limit-bars, sidekick, quick-replies) und bei Ereignissen, die an der laufenden
+// Animation nichts ändern. Dann geht dasselbe Svg noch einmal hinaus; neu gerechnet wird erst kurz bevor die neuen Fakten etwas anderes
+// zeigen (desk.divergence) oder die Animation endet. Eingriffe (`/clawd demo|nap|boop|on`) erzwingen eine neue Zeichnung.
+let deskSource = ''
+let deskDrawnAt = 0 // Uhrzeit der letzten echten Zeichnung
+let deskForce = false
 // Messung für `/clawd status` (Fynn, 2026-10-05: Clawd wirkt bei mehreren Agenten verzögert). Zählt seit dem letzten `/clawd status`,
 // mit performance.now() (synchron, kein `$`-Aufruf): Zeichnungen, Länge und Bildwechsel der Animationen, Rechen- und Zeichendauer.
-type DeskMeter = { since: number; draws: number; planSecs: number; changes: number; chars: number; calcSum: number; calcMax: number; drawSum: number; drawMax: number; othersSum: number }
-const newMeter = (): DeskMeter => ({ since: performance.now(), draws: 0, planSecs: 0, changes: 0, chars: 0, calcSum: 0, calcMax: 0, drawSum: 0, drawMax: 0, othersSum: 0 })
+type DeskMeter = { since: number; draws: number; reused: number; planSecs: number; changes: number; chars: number; calcSum: number; calcMax: number; drawSum: number; drawMax: number; othersSum: number }
+const newMeter = (): DeskMeter => ({ since: performance.now(), draws: 0, reused: 0, planSecs: 0, changes: 0, chars: 0, calcSum: 0, calcMax: 0, drawSum: 0, drawMax: 0, othersSum: 0 })
 let meter = newMeter()
 function meterText(lang: Lang, m: DeskMeter, at: number): string {
   const s = (at - m.since) / 1000
   if (m.draws === 0) return T[lang].deskNone
   const avg = (sum: number) => fmt(lang, sum / m.draws)
+  const avgAll = (sum: number) => fmt(lang, sum / (m.draws + m.reused))
   return T[lang].desk({
-    secs: s.toFixed(0), draws: m.draws, perMin: fmt(lang, s > 0 ? (m.draws * 60) / s : 0), planSecs: avg(m.planSecs), changes: avg(m.changes),
-    kb: fmt(lang, m.chars / m.draws / 1000), calcAvg: avg(m.calcSum), calcMax: fmt(lang, m.calcMax), drawAvg: avg(m.drawSum),
-    drawMax: fmt(lang, m.drawMax), others: avg(m.othersSum),
+    secs: s.toFixed(0), draws: m.draws, reused: m.reused, perMin: fmt(lang, s > 0 ? (m.draws * 60) / s : 0), planSecs: avg(m.planSecs), changes: avg(m.changes),
+    kb: fmt(lang, m.chars / m.draws / 1000), calcAvg: avg(m.calcSum), calcMax: fmt(lang, m.calcMax), drawAvg: avgAll(m.drawSum),
+    drawMax: fmt(lang, m.drawMax), others: avgAll(m.othersSum),
   })
 }
 
@@ -151,12 +161,29 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } catch (err) {
       $.ui.log(`clawd-buddy: limits not read: ${String(err)}`, { to: 'debug' })
     }
+    // Kontextfenster: nur die Prozentzahl (types:10771). Eine neue Stufe zeigt er am Turn-Ende; fällt sie (Komprimieren), ist sie wieder scharf.
+    try {
+      const pct = e.context?.percent
+      if (typeof pct === 'number' && Number.isFinite(pct)) {
+        const lvl = ctxLevel(pct)
+        if (lvl > ctxWarned) ctxPending = true
+        ctxWarned = lvl
+        if (ctxPending && !facts.turnActive) {
+          const at = await $.clock.now()
+          ctxPending = false // erst nach dem Lesen der Uhr: wirft sie, bleibt die Warnung für das Turn-Ende stehen
+          facts = { ...facts, ctxAt: at }
+          $.ui.invalidate('ui.render')
+        }
+      }
+    } catch (err) {
+      $.ui.log(`clawd-buddy: context not read: ${String(err)}`, { to: 'debug' })
+    }
     return next(e)
   })
 
   // ---- Fakten aus den Events
   on('turn.start', async ($, e, next) => {
-    facts = { ...facts, turnActive: true, endedKind: '' }
+    facts = { ...facts, turnActive: true, endedKind: '', lastTool: undefined }
     try {
       if (!strain.turnSince) strain = strainTurnStart(strain, await $.clock.now())
       turnHadError = false
@@ -190,7 +217,12 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       }
       running.clear()
       askTool = ''
-      facts = { ...facts, turnActive: false, tool: null, ask: false, endedAt: now, endedKind: e.reason === 'answer' ? 'done' : 'oops' }
+      const turnMs = strain.turnSince ? Math.max(0, now - strain.turnSince) : 0
+      facts = { ...facts, turnActive: false, tool: null, ask: false, endedAt: now, endedKind: e.reason === 'answer' ? 'done' : 'oops', turnMs }
+      if (ctxPending) {
+        ctxPending = false
+        facts = { ...facts, ctxAt: now }
+      }
       strain = strainTurnEnd(strain, now, e.reason === 'answer', !turnHadError)
       // Erfolgsserie erreicht eine Marke (5, 10, 15 …): Pokal/Medaille statt des normalen Abschlusses
       if (strain.streak > 0 && strain.streak % STREAK_STEP === 0) facts = { ...facts, streakAt: now }
@@ -226,7 +258,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const now = await $.clock.now()
     // Shell-Befehle genauer: Commit/Push bzw. Tests/Checks (nur Mustervergleich, der Befehl wird nicht gespeichert)
     const base = toolKind(e.tool)
-    running.set(id, { kind: base === 'shell' ? shellKind((e as { command?: unknown }).command) : base, since: now })
+    const kind = base === 'shell' ? shellKind((e as { command?: unknown }).command) : base
+    running.set(id, { kind, since: now })
     facts = { ...facts, tool: latestTool(), ask: isQuestion || facts.ask, askSince: isQuestion && !facts.ask ? now : facts.askSince }
     $.ui.invalidate('ui.render')
     let res: Awaited<ReturnType<typeof next>> | undefined
@@ -247,7 +280,14 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         askTool = ''
         facts = { ...facts, ask: false }
       }
-      facts = { ...facts, tool: latestTool() }
+      // Nachlauf (mood.ts TOOL_LINGER_MS): seine Arbeit bleibt kurz die Stimmung, auch wenn das Tool schon fertig ist
+      let endedAt = now
+      try {
+        endedAt = await $.clock.now()
+      } catch {
+        // ohne Uhr zählt der Beginn als Ende: der Nachlauf wird nur kürzer
+      }
+      facts = { ...facts, tool: latestTool(), lastTool: isQuestion ? facts.lastTool : { kind, endedAt } }
       $.ui.invalidate('ui.render')
     }
   })
@@ -267,6 +307,34 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       $.ui.invalidate('ui.render')
     }
     return decision
+  })
+
+  // Komprimieren des Hauptgesprächs (nicht das Vorausrechnen `precompute`, nicht das eines Subagenten): solange es läuft
+  on('session.compact', async ($, e, next) => {
+    if (e.agentId || e.trigger === 'precompute') return next(e)
+    try {
+      facts = { ...facts, compactSince: await $.clock.now() }
+      $.ui.invalidate('ui.render')
+    } catch (err) {
+      $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+    }
+    try {
+      return await next(e)
+    } finally {
+      facts = { ...facts, compactSince: undefined }
+      $.ui.invalidate('ui.render')
+    }
+  })
+
+  // Ein Skill startet: kurz zeigen (nur der Name zählt als Ereignis, der Text wird nicht gelesen)
+  on('skill.prompt', async ($, e, next) => {
+    try {
+      facts = { ...facts, skillAt: await $.clock.now() }
+      $.ui.invalidate('ui.render')
+    } catch (err) {
+      $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+    }
+    return next(e)
   })
 
   on('prompt.edit', async ($, e, next) => {
@@ -313,6 +381,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // Desktop: die Engine steht beim Anfang der gezeigten Animation; vor einem Eingriff erst auf jetzt nachziehen
     const deskCatchUp = async () => {
       if (!desk) return
+      deskForce = true
       try {
         desk.catchUp(await $.clock.now())
       } catch (err) {
@@ -331,6 +400,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
     if (sub === 'on' || sub === 'off') {
       enabled = sub === 'on'
+      deskForce = true
       if (!enabled) {
         deskTimer?.cancel()
         deskTimer = null
@@ -411,6 +481,15 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       // (band.ts, docs/BAND.md). Clawd kommt nur neben den Grund (z. B. die Limit-Balken).
       const { layers, base } = splitBand(theirs)
       const now = await $.clock.now()
+      // Schnittstelle zu sidekick: dessen `$.state`-Wert lesen. Das Lesen beim Zeichnen abonniert ihn, ein Schreiben von sidekick
+      // zeichnet das Band neu (types:3308-3313). Ohne sidekick bleibt er leer.
+      try {
+        const sk = await $.state.get({ plugin: 'sidekick', key: 'buddy' })
+        const v = sidekickValue(sk.value)
+        if (JSON.stringify(v) !== JSON.stringify(facts.sidekick ?? null)) facts = { ...facts, sidekick: v }
+      } catch (err) {
+        $.ui.log(`clawd-buddy: sidekick state not read: ${String(err)}`, { to: 'debug' })
+      }
       // Client-Props dürfen kein `undefined` enthalten (die Engine lehnt sie ab): leere Felder weglassen
       const f: Facts = JSON.parse(JSON.stringify(facts)) as Facts
       if (typingPerf > 0) f.typingAt = now - (performance.now() - typingPerf)
@@ -440,9 +519,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         if (!desk) {
           desk = createDesk({ seed, nightStart, nightEnd, idleSeconds, reduced, flip, birthday })
         }
-        deskChecks = 0
-        deskAsked = 0
         if (!deskTimer) {
+          deskForce = true // die Sitzung wird (wieder) angezeigt: der Rahmen ist ohnehin neu
           // Der Wächter startet neu: die Sitzung wird (wieder) angezeigt, Fynn schaut also hin
           try {
             await noteSeen($, now)
@@ -464,19 +542,35 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
             }
           })
         }
-        // Stand so auf jetzt nachziehen, wie die gezeigte Animation lief, dann ab jetzt mit den neuen Fakten vorausrechnen
         const calcStart = performance.now()
-        const plan = desk.draw(now, deskFacts(now), strain, DESK_SCALE)
-        deskPlanMs = plan.ticks * DESK_TICK
-        const calc = performance.now() - calcStart
+        const fNow = deskFacts(now)
+        // Ändern die neuen Fakten an der gezeigten Animation (vorerst) nichts, bleibt das Svg dasselbe: kein Neuladen, kein Flackern
+        const keep = deskSource !== '' && !deskForce && deskAsked === 0
+        const div = keep ? desk.divergence(now, fNow) : 0
+        const left = keep ? desk.remaining(now) : 0
+        if (keep && div > DESK_LEAD && left > DESK_LEAD) {
+          // Der Wächter bittet kurz vor der Abweichung bzw. dem Ende um die nächste Zeichnung (Runden zählen ab der letzten echten)
+          deskPlanMs = now - deskDrawnAt + Math.min(div, left)
+          meter.reused += 1
+        } else {
+          // Stand so auf jetzt nachziehen, wie die gezeigte Animation lief, dann ab jetzt mit den neuen Fakten vorausrechnen
+          const plan = desk.draw(now, fNow, strain, DESK_SCALE)
+          deskSource = plan.source
+          deskDrawnAt = now
+          deskForce = false
+          deskPlanMs = plan.ticks * DESK_TICK
+          deskChecks = 0
+          deskAsked = 0
+          const calc = performance.now() - calcStart
+          meter.draws += 1
+          meter.planSecs += deskPlanMs / 1000
+          meter.changes += plan.changes
+          meter.chars += plan.source.length
+          meter.calcSum += calc
+          meter.calcMax = Math.max(meter.calcMax, calc)
+        }
         const { Svg } = $.ui.resolve(e)
         const drawMs = performance.now() - drawStart
-        meter.draws += 1
-        meter.planSecs += deskPlanMs / 1000
-        meter.changes += plan.changes
-        meter.chars += plan.source.length
-        meter.calcSum += calc
-        meter.calcMax = Math.max(meter.calcMax, calc)
         meter.drawSum += drawMs
         meter.drawMax = Math.max(meter.drawMax, drawMs)
         meter.othersSum += othersMs
@@ -491,8 +585,11 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
               key: 'buddy',
               flexDirection: 'column',
               justifyContent: 'flex-end',
+              // Nie zusammendrücken: sonst schneidet ein schmales Band (Seitenbereich offen) das 400-px-Bild rechts ab, und mit ihm die Hand
+              // (Fynn, 2026-10-06). Schmaler wird die linke Seite mit flexGrow.
+              flexShrink: 0,
               // isInteractive: im Rahmen ohne Skripte, damit SMIL läuft (types:11957); als Bild stünde nur das erste Bild
-              children: [Svg({ source: plan.source, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, isInteractive: true })],
+              children: [Svg({ source: deskSource, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, isInteractive: true })],
             }),
           ],
         }))

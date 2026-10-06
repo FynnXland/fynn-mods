@@ -4,7 +4,7 @@ An animated pixel mascot ("Clawd") sits to the right above the prompt. It reacts
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.290** · Plugin version **0.4.2**
+Tested with Claude Code **v2.1.291** (terminal and desktop app) · Plugin version **0.6.0**
 
 ## What it does
 
@@ -12,16 +12,20 @@ Clawd runs on his own. What he does depends on what is happening:
 
 | Situation | What he does (examples) |
 |---|---|
-| Claude reads, writes, uses the shell (own animations for commit/push and tests/checks), the web, or subagents. Each running subagent (background ones too) gets a small helper standing next to him (from 7 on, in a second row). They mostly work quietly side by side and chat now and then. When a subagent finishes, its helper hands over the result (a note, a stack, a folder, an envelope, or a present) | magnifying glass, laptop (types slowly to fast), terminal and log windows, floppy disk, upload cloud, clipboard, test tube, globe |
+| Claude reads, writes, uses the shell (own animations for commit/push and tests/checks), the web, or subagents. Each running subagent (background ones too) gets a small helper in a lighter Claude color standing next to him (from 7 on, in a second row). They mostly work quietly side by side, think, report and talk things over; a wave or fist bump is rare. When a subagent finishes, its helper hands over the result (a note, a stack, a folder, an envelope, or a present) or they high-five | magnifying glass, laptop (types slowly to fast), terminal and log windows, floppy disk, upload cloud, clipboard, test tube, globe |
 | A tool runs longer than 10 s or 60 s | taps his foot, clock, hourglass, sits or lies down |
-| Claude is waiting for you (question, permission) | waves with a question mark, holds up a sign; if the question is open for more than 45 s, he knocks on the input |
-| Turn finished or aborted | jumps for joy or shrugs; every 5 successes in a row a trophy or medal |
+| Claude compacts the conversation (`/compact` or automatically) | squashes a paper stack into a tied package or crumples sheets into a box |
+| A skill starts | briefly opens a book or grabs a wrench from a toolbox |
+| With **sidekick** installed: it checks your message, holds it back with a question, or starts a new chat with a handoff | holds the magnifying glass to the input; holds up a stop sign; writes a letter and sends it off, then opens it in the new chat and waves |
+| Claude is waiting for you (question, permission) | waves with a question mark, holds up a sign, points at the input, asks with a speech bubble; if the question is open for more than 45 s, he knocks on the input |
+| Turn finished or aborted | jumps for joy or shrugs; every 5 successes in a row a trophy or medal; after a long turn (5 min or more) a big "phew" or a finish flag |
+| The context window is getting full (70 % and again at 85 %, shown once at the end of the turn) | a box of paper that won't close, or a wobbly paper stack: time for `/compact` or a new chat |
 | You are typing | reads along, takes notes, rubs his hands |
 | Idle | pastimes by time of day: whistling and a little dance in the morning, juggling, soap bubbles, a flower at midday, calmer in the evening; at night a tea light, counting sheep, stargazing, then sleep |
 | Birthday (setting) or New Year's Eve | cake with candles, party hat; fireworks, sparkler |
-| Usage limit reached (5-hour or weekly) | 5 h: turns the hourglass, dozes with an alarm clock, spins a top, is annoyed or sad (can't keep working); weekly: sits on a suitcase, goes fishing, tends a potted plant. After the reset: a jump for joy or a confetti cannon (always plays to the end) |
+| Usage limit reached (5-hour or weekly) | 5 h: turns the hourglass, dozes with an alarm clock, spins a top, is annoyed or sad (can't keep working); weekly: sits on a suitcase, goes fishing, tends a potted plant, paints, knits a scarf, builds a sandcastle. After the reset: a jump for joy or a confetti cannon (always plays to the end) |
 | Night (default 23:00 to 6:00) | yawns, nods off, sleeps with a nightcap |
-| You come back after at least 2 h (first input, or the desktop session becomes visible again), at any time of day | gets up or rubs his eyes, then stretches, has a coffee or brushes his teeth |
+| You come back after at least 2 h (first input, or the desktop session becomes visible again), at any time of day | gets up or rubs his eyes, then stretches, has a coffee, brushes his teeth, does jumping jacks or waters a flower |
 | Mood | Piling errors make him irritable (facepalm, stomping, steam); successes in a row put him in a good mood; long stretches of work make him tired. Everything wears off again. |
 
 | Input | Effect |
@@ -61,8 +65,9 @@ Texts are English by default; set `language` to `de` for German (`/config` → c
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, session.measure, turn.start, turn.complete, tool.call, tool.check, prompt.edit, ui.message, command.run{command=clawd}, ui.render{component=AbovePrompt}
-calls: $.command.register, $.store.get, $.store.set, $.ui.invalidate, $.ui.resolve, $.clock.now, $.clock.every, $.ui.log
+hooks: session.start, session.measure, turn.start, turn.complete, tool.call, tool.check, session.compact, skill.prompt, prompt.edit, ui.message, command.run{command=clawd}, ui.render{component=AbovePrompt}
+calls: $.command.register, $.store.get, $.store.set, $.ui.invalidate, $.ui.resolve, $.clock.now, $.clock.every, $.ui.log, $.state.get
+state reads: sidekick.buddy
 ```
 
 All event hooks **only observe** and pass everything through unchanged. No file system, no processes, no network, no model calls.
@@ -74,9 +79,12 @@ In plain language:
 - `$.ui.invalidate`: redraws the band when something changes (turn, tool, typing at most once per second; in the desktop app typing at most every 3 s, plus once before each animation runs out, usually every 15 to 30 s; 2 to 3 times a minute when idle).
 - `$.ui.resolve`: fetches the drawing components (Box, Client, Svg).
 - `$.clock.now`: time of day for day/night, waiting times, mood, and the break before the welcome.
-- Hook `session.measure`: reads only the percentage and reset time of the 5-hour and weekly limits (for the limit animations).
+- Hook `session.measure`: reads only the percentage and reset time of the 5-hour and weekly limits (for the limit animations) and the fill percentage of the context window (for the "context almost full" hint); never the conversation itself.
 - `$.clock.every`: a watcher (every 250 ms, no drawing of its own) **only in the desktop app**, while it draws the band and Clawd is on; it asks for the next animation shortly before the current one ends. In the terminal the client ticks on its own.
 - `$.ui.log`: error messages to the debug log.
+- Hook `session.compact`: notices only that the main conversation is being compacted and when it ends. Never reads the conversation.
+- Hook `skill.prompt`: notices only that a skill starts. Never reads the skill's text.
+- `$.state.get` (`sidekick.buddy`): reads what the sidekick mod is doing right now (check, question, new chat), a kind and a timestamp, no texts. Without sidekick it stays empty. sidekick does not need to be installed.
 
 From tool results he reads only the "error" (`isError`) and "denied" (`deny`) flags, never contents or texts.
 
@@ -108,7 +116,7 @@ To just hide him without uninstalling, use `/clawd off`.
 
 ## Known limitations
 
-- **Desktop app:** The client frame does not load there. The hooks module computes up to the next 30 seconds ahead and sends them as one SVG with SMIL animation, which the app plays in a script-less frame (`isInteractive`). Pastimes with many different frames get shorter animations, down to about 5 s. The band is redrawn only on events (turn, tool, question, typing) and shortly before the animation runs out. Every redraw of the band makes the app also re-request the rows other mods hook (for example your own messages with sidekick), which made their hover bar flicker in 0.4.1 at about 5 redraws per second. While Claude works, tool calls still redraw the band now and then. No mouse (clicking, dragging) in the desktop app; `/clawd boop|demo|nap` work. The app draws the dark area behind the band itself and it cannot be hidden, so he does not sit quite flush on the input. In very narrow windows the 400 px wide image may be cut off.
+- **Desktop app:** The client frame does not load there. The hooks module computes up to the next 30 seconds ahead and sends them as one SVG with SMIL animation, which the app plays in a script-less frame (`isInteractive`). Pastimes with many different frames get shorter animations, down to about 5 s. The band is redrawn only on events (turn, tool, question, typing) and shortly before the animation runs out. If the band is redrawn for another mod, or an event changes nothing in what is currently shown, the same SVG is passed on unchanged, so the frame does not reload (a reload made the figure blink briefly); a new animation is computed only shortly before something actually changes. `/clawd status` shows how often that happened. Every redraw of the band makes the app also re-request the rows other mods hook (for example your own messages with sidekick), which made their hover bar flicker in 0.4.1 at about 5 redraws per second. While Claude works, tool calls still redraw the band now and then. No mouse (clicking, dragging) in the desktop app; `/clawd boop|demo|nap` work. The app draws the dark area behind the band itself and it cannot be hidden, so he does not sit quite flush on the input. In very narrow windows the 400 px wide image may be cut off.
 - **Mouse in the terminal** only works where the terminal delivers mouse events (fullscreen). After a click on the figure it may keep the keyboard focus until you press Esc.
 - **After a hidden desktop session is shown again**, the figure may stand still (last frame of the animation) until the next event (turn, tool, typing) if the app reuses the last drawing.
 - **Mood** is per Claude Code process and is not saved. "Working on the same feature for a long time" is approximated by the time spent working in one stretch (the mod cannot see what the work is about).

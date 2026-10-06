@@ -30,16 +30,38 @@ import {
   ttlOf,
 } from './cache.ts'
 import type { CacheMem, KeepWarm, ReportLimit, Settings, StepUsage } from './cache.ts'
-import { CACHE_ARGS, CACHE_HINT, HANDOFF_HINT, T, hhmm, langOf, usd } from './i18n.ts'
+import { BARS_HINT, CACHE_ARGS, CACHE_HINT, HANDOFF_HINT, T, hhmm, langOf, usd } from './i18n.ts'
+import { PARTS, cleanOverrides, displayFromOptions, effectiveDisplay, parseBars } from './display.ts'
+import type { Display, Overrides } from './display.ts'
 import type { Lang } from './i18n.ts'
 import { ringFilled } from './ring.ts'
+import {
+  PROBE_SCRIPT,
+  PS_ABS,
+  SCAN_SCRIPT,
+  diskView,
+  driveOf,
+  parseProbe,
+  parseScan,
+  storageMarkdown,
+  storageReport,
+  storageSvg,
+  storageTerminal,
+} from './storage.ts'
+import type { Drive, Scan, StorageReport } from './storage.ts'
 import { desktopSvg } from './svg.ts'
 import { EMPTY, ORANGE, filled, layoutTerminal, pickWindows, placeholderWindows, shownWindows } from './view.ts'
-import type { Opts, ResetStyle, Win } from './view.ts'
+import type { Opts, ResetStyle, Shown, Win } from './view.ts'
 
 // Optionen aus userConfig, in register() gesetzt
 let lang: Lang = 'en'
 let opts: Opts = { resetStyle: 'mixed', highlightAt: 90, onlyFiveHour: false, lang }
+// Welche Teile zu sehen sind (display.ts): userConfig, darüber die `/bars`-Werte aus `$.store` (`display`), die jeder Takt
+// neu liest, damit ein `/bars` in einem anderen Chat hier binnen 10 s wirkt
+let baseDisplay: Display = displayFromOptions({})
+let overrides: Overrides = {}
+const shownParts = () => effectiveDisplay(baseDisplay, overrides)
+let displayPinned = false // /bars konnte nicht speichern: der lokale Wert gilt, der Takt liest ihn nicht neu
 
 // Limits: flüchtig (Kontingent gehört zum Konto und kommt mit jeder Messung neu)
 let wins: Win[] = []
@@ -76,6 +98,22 @@ let pinging = false
 let forking = false // ein Warmhalte-Ping ist unterwegs
 // Übergabe: /handoff startet den Skill, turn.complete fängt dessen Antwort ab
 const H = { pending: false, armed: false, notTurn: '', text: '', continuing: false }
+
+// Speicher-Ring (SPEC.md, Ausbau v0.4.0): Laufwerk aus `userConfig.storagePath` (leer = aus, nur Windows). Gesamt/frei über
+// `probe`, Bytes je Dateiart über `scan` (beides `powershell.exe` per `$.process.run`, Pfad nur über LB_PATH). Der Stand liegt
+// in `$.store` unter `storage`, damit der Ring nach einem Neustart sofort da ist und der Scan nur einmal am Tag läuft.
+let storagePath = ''
+let disk: { d?: Drive; scan?: Scan } = {}
+let diskLoaded = false
+let diskStarted = false // startDisk angestoßen (von session.start oder, falls das die Oberfläche nicht nannte, vom ersten Zeichnen)
+let scanRun: Promise<void> | null = null
+const PROBE_EVERY = 60 // Ticks: alle 10 min
+const SCAN_MAX_AGE = 60 * 60000 // /disk scannt neu, wenn der letzte Scan älter ist
+const SCAN_LOCK = 5 * 60000 // ein Scan, der in einer anderen Sitzung gerade läuft, gilt so lange als laufend
+const SCAN_PAUSE = 24 * 60 * 60000 // nach einem gescheiterten Scan keine automatischen Scans (/disk refresh geht immer)
+// Daten der /disk-Ansichten für das Zeichnen der Befehlszeile (Kennung im Text, wie cost-ledger /ledger)
+const reports = new Map<string, StorageReport>()
+let reportNo = 0
 
 const STYLES: readonly ResetStyle[] = ['mixed', 'clock', 'countdown']
 const KEEP_MAX_H = 4
@@ -283,23 +321,193 @@ async function clearAndContinue($: EngineInterface) {
   }
 }
 
-/** Was Balken, Ring und Terminal-Block jetzt zeigen; gemeinsam für das Zeichnen und den Änderungsschlüssel. */
+/** Was Balken, Ringe und Terminal-Blöcke jetzt zeigen; gemeinsam für das Zeichnen und den Änderungsschlüssel. */
 function snapshot(now: number) {
-  const shown = wins.length > 0 ? shownWindows(wins, now, opts) : []
+  const sh = shownParts()
+  // Woche aus: wie das alte onlyFiveHour; 5h aus: danach herausfiltern (Platzhalter ebenso)
+  const o: Opts = { ...opts, onlyFiveHour: !sh.weekly }
+  const only = (list: Shown[]) => list.filter((x) => (x.tag === '5h' ? sh.fiveHour : sh.weekly))
+  const shown = wins.length > 0 ? only(shownWindows(wins, now, o)) : []
   const ttl = ttlOf(mem, settings)
   const st = cacheState(mem.lastActivity, ttl, now, !!keep)
   const big = mem.ctx >= settings.bigTokens
-  return { shown, ring: ringFor(st, ttl, mem.ctx, big, lang), block: terminalBlock(st, big, lang) }
+  const drive = driveOf(storagePath)
+  const dv = sh.storage && drive && disk.d ? diskView(drive, disk.d, disk.scan, lang) : undefined
+  return {
+    shown,
+    // Desktop: ohne Limits Platzhalter (5h –, 7d –), damit die Balken sofort sichtbar sind; nur die eingeschalteten
+    bars: wins.length > 0 ? shown : only(placeholderWindows(o)),
+    ring: sh.cache ? ringFor(st, ttl, mem.ctx, big, lang) : undefined,
+    block: sh.cache ? terminalBlock(st, big, lang) : null,
+    disk: dv,
+    diskBlock: dv ? `${dv.label} ${dv.main}${dv.sub}` : undefined,
+  }
 }
 
 /** Alles, was im Band sichtbar ist, als Schlüssel: ändert er sich, muss neu gezeichnet werden, sonst nicht. */
 function keyOf(v: ReturnType<typeof snapshot>): string {
   const r = v.ring
   return JSON.stringify([
-    v.shown.map((x) => [x.tag, x.pct.long, x.reset?.long ?? '', x.color, x.strong, x.fresh, Math.round(x.ratio * 44)]),
-    [r.main, r.sub ?? '', r.subColor ?? '', r.color, r.mainColor, ringFilled(r.fill), r.kept],
+    v.bars.map((x) => [x.tag, x.pct.long, x.reset?.long ?? '', x.color, x.strong, x.fresh, Math.round(x.ratio * 44)]),
+    r ? [r.main, r.sub ?? '', r.subColor ?? '', r.color, r.mainColor, ringFilled(r.fill), r.kept] : null,
     v.block?.text ?? '',
+    v.disk ? [v.disk.main, v.disk.sub, v.disk.arcs.map((a) => [a.color, Math.round(a.to * 360)])] : null,
   ])
+}
+
+// ---------- Speicher-Ring ----------
+
+type StoredDisk = { path: string; total: number; free: number; probedAt: number; scan?: Scan; scanStartedAt?: number; scanFailedAt?: number }
+
+function storedDisk(v: unknown): StoredDisk | undefined {
+  const s = v as StoredDisk | undefined
+  if (!s || typeof s !== 'object' || typeof s.path !== 'string' || !(s.total > 0) || !(s.free >= 0)) return undefined
+  return s
+}
+
+/**
+ * Stand aus dem Store übernehmen, wenn er zum eingestellten Pfad gehört. Mehrere Sitzungen schreiben denselben Eintrag:
+ * ein neuerer Scan (aus einer anderen Sitzung) ersetzt den eigenen, Gesamt/frei nur, solange noch keine eigene Probe da ist.
+ */
+async function readDisk($: EngineInterface): Promise<StoredDisk | undefined> {
+  diskLoaded = true
+  let s: StoredDisk | undefined
+  try {
+    s = storedDisk(await $.store.get('storage'))
+  } catch {
+    return undefined
+  }
+  if (!s || s.path !== storagePath) return undefined
+  if (!disk.d) disk = { ...disk, d: { total: s.total, free: s.free } }
+  if (s.scan && (!disk.scan || s.scan.at > disk.scan.at)) disk = { ...disk, scan: s.scan }
+  return s
+}
+
+type DiskPatch = { scanStartedAt?: number | null; scanFailedAt?: number | null }
+let saving: Promise<void> = Promise.resolve()
+
+/**
+ * Schreiben nach erneutem Lesen: Sperre und Fehlerzeit anderer Sitzungen bleiben, außer `patch` setzt (Zahl) oder löscht
+ * (null) sie. Innerhalb der Sitzung nacheinander, damit eine Probe nicht die gerade gelöste Sperre zurückschreibt.
+ */
+function saveDisk($: EngineInterface, now: number, patch: DiskPatch = {}): Promise<void> {
+  saving = saving.then(() => writeDisk($, now, patch))
+  return saving
+}
+
+async function writeDisk($: EngineInterface, now: number, patch: DiskPatch): Promise<void> {
+  const prev = await readDisk($)
+  if (!disk.d) return
+  const pick = (v: number | null | undefined, old: number | undefined) => (v === null ? undefined : (v ?? old))
+  const v: StoredDisk = {
+    path: storagePath,
+    total: disk.d.total,
+    free: disk.d.free,
+    probedAt: now,
+    scan: disk.scan,
+    scanStartedAt: pick(patch.scanStartedAt, prev?.scanStartedAt),
+    scanFailedAt: pick(patch.scanFailedAt, prev?.scanFailedAt),
+  }
+  try {
+    await $.store.set('storage', v)
+  } catch {
+    // ohne Gedächtnis: der nächste Start fragt neu ab
+  }
+}
+
+/**
+ * Eines der festen Skripte über den absoluten Pfad `PS_ABS` (storage.ts); der Pfad nur über die Umgebung (SPEC: Datenquelle
+ * und Sicherheit). Kein zweiter Versuch mit anderem Programm: eine Ablehnung durch einen Hook bleibt eine Ablehnung
+ * (Review 0.4.0, S5). Fehler kommen übersetzt.
+ */
+async function runPs($: EngineInterface, script: string, timeoutMs: number): Promise<string> {
+  const t = T[lang]
+  const r = await $.process.run([PS_ABS, '-NoProfile', '-NonInteractive', '-Command', script], { env: { LB_PATH: storagePath }, timeoutMs })
+  if (r.exitCode === 2) throw new Error(t.errMissing)
+  if (r.exitCode === 3) throw new Error(t.errUnreadable)
+  if (r.exitCode !== 0) throw new Error(`exit ${r.exitCode}${r.stderr.trim() ? `: ${r.stderr.trim().slice(0, 120)}` : ''}`)
+  if (r.isStdoutTruncated) throw new Error(t.errTruncated)
+  return r.stdout
+}
+
+/** Gesamt und frei holen (0,2 s); scheitert es, bleibt der letzte Stand. */
+async function probeDisk($: EngineInterface): Promise<void> {
+  // Auch wenn session.start die Oberfläche nicht nannte: erst den Store lesen, sonst ginge der gespeicherte Scan verloren
+  if (!diskLoaded) await readDisk($)
+  const d = parseProbe(await runPs($, PROBE_SCRIPT, 30000))
+  if (!d) throw new Error(T[lang].errNoData)
+  disk = { ...disk, d }
+  const now = await $.clock.now()
+  await saveDisk($, now)
+  refresh($, now)
+}
+
+/** Bytes je Dateiart (etwa 10 s Festplattenlast). Läuft nie doppelt: ein zweiter Aufruf wartet auf denselben Scan. */
+function scanDisk($: EngineInterface): Promise<void> {
+  if (scanRun) return scanRun
+  scanRun = (async () => {
+    const started = await $.clock.now()
+    await saveDisk($, started, { scanStartedAt: started })
+    let failed = false
+    try {
+      const s = parseScan(await runPs($, SCAN_SCRIPT, 120000), await $.clock.now())
+      if (!s) throw new Error(T[lang].errNoData)
+      disk = { ...disk, scan: s }
+    } catch (err) {
+      failed = true
+      throw err
+    } finally {
+      // Sperre in jedem Fall lösen; ein gescheiterter Scan lässt den alten Stand stehen und pausiert die automatischen Scans
+      const now = await $.clock.now()
+      await saveDisk($, now, { scanStartedAt: null, scanFailedAt: failed ? now : null })
+      refresh($, now)
+    }
+  })().finally(() => {
+    scanRun = null
+  })
+  return scanRun
+}
+
+const dayOf = (ms: number) => new Date(ms).toDateString()
+
+/** Darf ein automatischer Scan laufen? Nicht, wenn eine andere Sitzung gerade scannt oder ein Scan in den letzten 24 h scheiterte. */
+function scanAllowed(s: StoredDisk | undefined, now: number): boolean {
+  if (s?.scanStartedAt !== undefined && now - s.scanStartedAt < SCAN_LOCK) return false
+  return !(s?.scanFailedAt !== undefined && now - s.scanFailedAt < SCAN_PAUSE)
+}
+
+/** Nach dem Sitzungsstart oder dem ersten Zeichnen: Stand frisch holen, einmal am Tag nach Dateiart scannen. */
+async function startDisk($: EngineInterface): Promise<void> {
+  diskStarted = true
+  // Inzwischen per /bars ausgeblendet: kein PowerShell; ein späteres Einschalten startet neu (Review 0.6.0, S1)
+  if (!shownParts().storage) {
+    diskStarted = false
+    return
+  }
+  await readDisk($)
+  refresh($, await $.clock.now())
+  await probeDisk($)
+  const now = await $.clock.now()
+  const s = await readDisk($)
+  if (shownParts().storage && scanAllowed(s, now) && (!disk.scan || dayOf(disk.scan.at) !== dayOf(now))) await scanDisk($)
+}
+
+/** `/bars`-Werte aus dem Store; abgelehnt: es bleibt beim bisherigen Stand. */
+async function readDisplay($: EngineInterface): Promise<void> {
+  // Ließ sich ein /bars-Wert nicht speichern, gilt er in diesem Chat bis zum nächsten erfolgreichen Schreiben (Review 0.6.0, S2)
+  if (displayPinned) return
+  try {
+    overrides = cleanOverrides(await $.store.get('display'))
+  } catch {
+    // bisheriger Stand
+  }
+}
+
+/** Speicher-Ring starten, wenn er gezeigt werden soll und noch nicht läuft (Sitzungsstart, erstes Zeichnen, Takt). */
+function maybeStartDisk($: EngineInterface): void {
+  if (diskStarted || !driveOf(storagePath) || !shownParts().storage) return
+  diskStarted = true
+  later($, 2000, () => void startDisk($).catch(() => {}))
 }
 
 /** Neu zeichnen nur bei sichtbarer Änderung (Minute, Prozent, Kontext, Zustand). */
@@ -318,12 +526,17 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     onlyFiveHour: options.onlyFiveHour === true,
     lang,
   }
+  storagePath = typeof options.storagePath === 'string' ? options.storagePath.trim() : ''
+  baseDisplay = displayFromOptions(options)
 
   on('session.start', async ($, e, next) => {
     // Nur wo das Band gezeichnet wird (types@2.1.288:9576); `-p`/SDK liefern null, VS Code und mobil zeichnen kein Band
     if (e.surface === 'terminal' || e.surface === 'desktop') {
+      await readDisplay($)
       await loadWindows($)
       if (wins.length > 0) $.ui.invalidate('ui.render')
+      // Speicher-Ring: außerhalb des Hooks, der Sitzungsstart wartet nicht auf PowerShell; ausgeblendet kein PowerShell
+      maybeStartDisk($)
     }
     try {
       settings = cleanSettings(await $.store.get('settings'))
@@ -341,6 +554,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       { name: 'cache', description: t.cmdCache, argumentHint: CACHE_HINT },
       { name: 'handoff', description: t.cmdHandoff, argumentHint: HANDOFF_HINT },
       { name: 'keepwarm', description: t.cmdKeepwarm, argumentHint: t.hintKeepwarm },
+      { name: 'disk', description: t.cmdStorage, argumentHint: '[refresh]' },
+      { name: 'bars', description: t.cmdBars, argumentHint: BARS_HINT },
     ]) {
       try {
         await $.command.register(c)
@@ -576,6 +791,126 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
   })
 
+  // /bars: Teile der Anzeige ein- und ausblenden (SPEC.md, Ausbau v0.6.0). Gespeichert in `$.store` unter `display`, damit es
+  // in allen offenen Chats gilt (der Takt liest neu); vor dem Schreiben neu lesen, wie bei den /cache-Einstellungen.
+  on('command.run', { command: 'bars' }, async ($, e) => {
+    const t = T[lang]
+    const c = parseBars(e.args)
+    if (c.kind === 'bad') return { text: t.unknownArg(e.args.trim(), BARS_HINT) }
+    await readDisplay($)
+    let note = ''
+    if (c.kind === 'reset') {
+      overrides = {}
+      try {
+        await $.store.delete('display')
+        displayPinned = false
+      } catch (err) {
+        displayPinned = true
+        note = t.barsSaveFailed(msg(err))
+      }
+    } else if (c.kind === 'set') {
+      // Speicher-Ring ohne Laufwerk: nichts speichern, sondern sagen, wo der Pfad hingehört
+      if (c.part === 'storage' && c.on && !driveOf(storagePath)) return { text: storagePath ? t.storageWindowsOnly : t.storageOff }
+      overrides = { ...overrides, [c.part]: c.on }
+      try {
+        await $.store.set('display', overrides)
+        displayPinned = false
+      } catch (err) {
+        displayPinned = true
+        note = t.barsSaveFailed(msg(err))
+      }
+    }
+    try {
+      refresh($, await $.clock.now())
+      maybeStartDisk($)
+    } catch {
+      // Anzeige folgt mit dem nächsten Zeichnen
+    }
+    const sh = shownParts()
+    const rows = PARTS.map((p) => {
+      const state = !sh[p] ? t.barsOff : p !== 'storage' || driveOf(storagePath) ? t.barsOn : storagePath ? t.barsNotWindows : t.barsNoPath
+      return `| ${t.barsPart[p]} | ${state} | ${overrides[p] !== undefined ? t.barsByCommand : t.barsBySetting} |`
+    })
+    const lines: string[] = []
+    if (c.kind === 'set') lines.push(t.barsSet(t.barsPart[c.part], c.on ? t.barsOn : t.barsOff), '')
+    if (c.kind === 'reset') lines.push(t.barsReset, '')
+    lines.push(t.barsTitle, '', t.barsHead, '|---|---|---|', ...rows, '', t.barsUsage)
+    // Cache-Ring aus heißt nur: Anzeige weg (Fynn); Rückfrage und Hinweise bleiben
+    if (c.kind === 'set' && c.part === 'cache' && !c.on) lines.push(t.barsCacheNote)
+    if (note) lines.push('', note)
+    return { text: lines.join('\n') }
+  })
+
+  // /disk: Belegung nach Dateiart. Antwortet mit Markdown; auf Terminal und Desktop zeichnet der CommandOutput-Hook darunter
+  // stattdessen den großen Ring mit Legende (types@2.1.290:9695-9725, Vorbild cost-ledger /ledger).
+  on('command.run', { command: 'disk' }, async ($, e) => {
+    const t = T[lang]
+    const arg = e.args.trim().toLowerCase()
+    if (arg && arg !== 'refresh') return { text: t.unknownArg(e.args.trim(), 'refresh') }
+    if (!storagePath) return { text: t.storageOff }
+    const drive = driveOf(storagePath)
+    if (!drive) return { text: t.storageWindowsOnly }
+    try {
+      await probeDisk($)
+    } catch (err) {
+      if (!disk.d) return { text: t.storageFailed(drive, msg(err)) }
+    }
+    let note = ''
+    const now = await $.clock.now()
+    const s = await readDisk($)
+    const wanted = !disk.scan || now - disk.scan.at > SCAN_MAX_AGE
+    // Ein eigener laufender Scan (etwa vom Sitzungsstart): auf ihn warten statt ihn als fremde Sperre zu melden
+    if (arg === 'refresh' || (wanted && (scanRun || scanAllowed(s, now)))) {
+      try {
+        await scanDisk($)
+      } catch (err) {
+        note = t.storageScanFailed(msg(err))
+      }
+    } else if (wanted && s?.scanStartedAt !== undefined && now - s.scanStartedAt < SCAN_LOCK) {
+      // 0.4.1 (Fynn, 2026-10-06): sonst stand nur „noch nicht gescannt“ da, ohne Grund
+      note = t.storageScanRunning(hhmm(s.scanStartedAt))
+    } else if (s?.scanFailedAt !== undefined && now - s.scanFailedAt < SCAN_PAUSE) {
+      note = t.storageScanPaused(hhmm(s.scanFailedAt))
+    }
+    const d = disk.d
+    if (!d) return { text: t.storageFailed(drive, '–') }
+    const r = storageReport(drive, d, disk.scan, await $.clock.now(), lang)
+    const tag = `#${(++reportNo).toString(36)}${now.toString(36).slice(-5)}`
+    reports.set(tag, r)
+    while (reports.size > 10) reports.delete(reports.keys().next().value as string)
+    return { text: storageMarkdown(r, tag, lang, note) }
+  })
+
+  // Die Zeile von /disk: eigener Baum statt Markdown. Unbekannte Kennung (nach Neustart, Hinweise), Fehlerzeile oder eine
+  // andere Oberfläche: die Engine zeichnet den Text.
+  on('ui.render', { component: 'CommandOutput', props: { command: 'disk' } }, async ($, e, next) => {
+    if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
+    const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
+    const r = tag ? reports.get(tag) : undefined
+    if (!r) return next(e)
+    try {
+      const { Box, Text } = $.ui.resolve(e)
+      if (e.surface === 'desktop') {
+        const { Svg } = $.ui.resolve(e)
+        const pic = storageSvg(r, lang)
+        return Box({ key: 'disk', flexDirection: 'column', children: [Svg({ source: pic.source, alt: pic.alt, width: pic.width, height: pic.height })] })
+      }
+      const v = storageTerminal(r, e.viewport?.columns ?? 80, lang)
+      return Box({
+        key: 'disk',
+        flexDirection: 'column',
+        children: [
+          Text({ bold: true, children: [r.view.alt] }),
+          Box({ flexDirection: 'row', children: v.bar.map((b) => Text({ color: b.color, children: ['█'.repeat(b.n)] })) }),
+          ...v.lines.map((l) => Box({ flexDirection: 'row', children: [Text({ color: l.color, children: ['■ '] }), Text({ children: [l.text] })] })),
+          Text({ dimColor: true, children: [v.footer] }),
+        ],
+      })
+    } catch {
+      return next(e)
+    }
+  })
+
   on('session.measure', async ($, e, next) => {
     // Bei jeder Messung übernehmen, nicht nur wenn `changed` `rateLimits` nennt; ein fehlendes Fenster verschwindet
     try {
@@ -604,7 +939,12 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     try {
       if (e.surface !== 'terminal' && e.surface !== 'desktop') return await pass(e)
       // Nennt `session.start` die Oberfläche nicht (z. B. eine App, die als SDK startet), holt das erste Zeichnen den Anfangsstand
-      if (!usageAsked) await loadWindows($)
+      // Ersatzweg, wenn session.start die Oberfläche nicht nannte: auch die /bars-Werte holen (Review 0.6.0, S1)
+      if (!usageAsked) {
+        await readDisplay($)
+        await loadWindows($)
+      }
+      maybeStartDisk($)
       const now = await $.clock.now()
       awaitingRender = false
       // Eine abgelehnte Periode beendet das Intervall still: bleiben zwei Ticks aus, wird der Takt neu gestartet
@@ -626,6 +966,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           }
           // Kostenlos ohne `breakdown`; leer heißt "noch keine Antwort", dann bleibt der bisherige Stand
           bindSession($)
+            .then(() => readDisplay($))
+            .then(() => maybeStartDisk($))
             .then(() => $.session.usage())
             .then((u) => {
               const fresh = pickWindows(u.rateLimits)
@@ -642,27 +984,40 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
             .catch(() => {
               // abgelehnt: es bleibt beim letzten Stand
             })
+          // Speicher-Ring: Gesamt/frei alle 10 min (nur solange gezeichnet wird, wie der ganze Takt)
+          if (ticks % PROBE_EVERY === 0 && driveOf(storagePath) && shownParts().storage) probeDisk($).catch(() => {})
         })
       }
       // Eine Umfrage hält das Band; ein Hook weicht ihr (types@2.1.288:9580)
       if (e.props.hasSurvey) return await pass(e)
       const view = snapshot(now)
       drawnKey = keyOf(view)
+      // Alles ausgeblendet: nichts Eigenes und kein freigehaltener Platz (bodyColumns unverändert); der Takt läuft weiter,
+      // damit ein `/bars` aus einem anderen Chat und die Hinweise vor Ablauf hier ankommen
+      if (view.bars.length === 0 && !view.ring && !view.disk) return await pass(e)
       const { Box, Text } = $.ui.resolve(e)
       let mine: RenderNode
       let stack = false
       if (e.surface === 'desktop') {
-        // Desktop: Ring immer (vor der ersten Anfrage grau mit „–“), Balken mit Werten, sobald es Limits gibt; kein Umschreiben von
+        // Desktop: was eingeschaltet ist (Cache-Ring vor der ersten Anfrage grau mit „–“), Balken mit Werten, sobald es Limits gibt; kein Umschreiben von
         // bodyColumns, weil Clawds Svg eine feste Größe hat
         theirs = await pass(e)
         const { Svg } = $.ui.resolve(e)
         // Ohne Limits stehen Platzhalter da (5h –, 7d –), damit die Balken wie der Ring sofort sichtbar sind
-        const pic = desktopSvg(view.shown.length > 0 ? view.shown : placeholderWindows(opts), view.ring)
+        const pic = desktopSvg(view.bars, view.ring, view.disk)
         // Unten bündig mit Clawds Füßen, auch wenn die Desktop-App alignItems der äußeren Zeile nicht umsetzt (Spalte + flex-end)
         mine = Box({ key: 'limit-bars', flexShrink: 0, flexDirection: 'column', justifyContent: 'flex-end', children: [Svg({ source: pic.source, alt: pic.alt, width: pic.width, height: pic.height })] })
       } else {
-        const block = view.block
-        const lay = layoutTerminal(view.shown, e.props.bodyColumns, block?.text)
+        // Hinter den Balken: Cache-Block, dahinter der Speicher-Block; wird es eng, fällt der Speicher-Block zuerst weg
+        const cacheP = view.block ? [{ text: view.block.text, color: view.block.color, dim: false }] : []
+        const diskP = view.diskBlock ? [{ text: view.diskBlock, color: undefined, dim: true }] : []
+        let parts = [...cacheP, ...diskP]
+        const joined = (p: typeof parts) => (p.length > 0 ? p.map((x) => x.text).join('  ') : undefined)
+        let lay = layoutTerminal(view.shown, e.props.bodyColumns, joined(parts))
+        if (diskP.length > 0 && !lay?.extra) {
+          parts = cacheP
+          lay = layoutTerminal(view.shown, e.props.bodyColumns, joined(parts))
+        }
         if (!lay) return await pass(e)
         if (noRewrite) {
           theirs = await pass(e)
@@ -705,9 +1060,13 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
             ],
           })
         })
-        // Cache-Block hinter den Balken, auf der Zeile der Beschriftungen
-        if (lay.extra && block) {
-          children.push(Box({ key: 'cache', flexDirection: 'column', flexShrink: 0, children: [Text({ color: block.color, children: [lay.extra] }), Text({ children: [' '] })] }))
+        // Cache- und Speicher-Block hinter den Balken, auf der Zeile der Beschriftungen
+        if (lay.extra && parts.length > 0) {
+          const line = parts.flatMap((p, i) => [
+            ...(i > 0 ? [Text({ children: ['  '] })] : []),
+            p.dim ? Text({ dimColor: true, children: [p.text] }) : Text({ color: p.color, children: [p.text] }),
+          ])
+          children.push(Box({ key: 'cache', flexDirection: 'column', flexShrink: 0, children: [Box({ flexDirection: 'row', children: line }), Text({ children: [' '] })] }))
         }
         mine = Box({
           key: 'limit-bars',

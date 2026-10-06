@@ -1,8 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { aggregate, callCost, cleanRec, cleanRemote, dayBefore, dayKey, isoWeek, modelKey, modelName, newRec, priceFor, projectOf, summaryText, titleFromPrompt, weekStart } from '../hooks/logic.ts'
+import { aggregate, callCost, partLabel, cleanRec, cleanRemote, dayBefore, dayKey, isoWeek, modelKey, modelName, newRec, priceFor, projectOf, summaryText, titleFromPrompt, weekStart } from '../hooks/logic.ts'
 import { T, dateTime, fullDate, langOf, rangeLabel, shortDate, tokens, usd, weekLabel } from '../hooks/i18n.ts'
-import { stackedBar } from '../hooks/view.ts'
+import { modelColors, stackedBar } from '../hooks/view.ts'
 import type { Rec } from '../hooks/logic.ts'
 
 const NOW = new Date(2026, 9, 6, 12, 0).getTime() // 06.10.2026 12:00 lokal
@@ -453,6 +453,38 @@ test('Verlauf: Chat-Kosten je Tag nach Modell-Anteilen geteilt; ohne Modell-Date
   expect(weekLabel(isoWeek(r.series.weeks[1]!.key), 'de')).toBe('KW 40')
 })
 
+test('Verlauf: Mod-Aufrufe je Modell als eigene Teile; Rest ohne Modell „mod:unbekannt“; auch an Tagen ohne Chat', () => {
+  const d0 = TODAY
+  const d1 = dayBefore(NOW, 1)
+  const md = (usd: number, n = 1) => ({ in: 0, out: 0, cr: 0, cw: 0, usd, n })
+  const a = recOf('P', { [d0]: 2 }, {
+    models: { 'opus-5-5': { days: { [d0]: md(0.4) } } },
+    // sidekick: 0,30 $ heute, davon 0,25 $ mit Modell; gestern nur Mods (alter Stand ohne Modell)
+    mods: { sidekick: { days: { [d0]: { usd: 0.3, calls: 3 }, [d1]: { usd: 0.1, calls: 1 } } } },
+    modModels: { 'sonnet-5-5': { days: { [d0]: md(0.25, 2) } } },
+  })
+  const r = aggregate([{ id: 'A', rec: a }], NOW, {})
+  const today = r.series.days[0]!
+  near(today.usd, 2.3) // Chat 2 + Mods 0,30
+  expect(today.parts.map((p) => p.key)).toEqual(['opus-5-5', 'mod:sonnet-5-5', 'mod:unbekannt'])
+  near(today.parts[1]!.usd, 0.25)
+  near(today.parts[2]!.usd, 0.05)
+  expect(r.series.days[1]!.parts).toEqual([{ key: 'mod:unbekannt', usd: 0.1 }])
+  near(r.series.weeks[0]!.usd, 2.4)
+  expect(summaryText(r, 'weeks', 30, '', 'de')).toMatch(/Wochen \(Chat \+ Mods\): KW 41 2,40 \$/)
+  // Farben: Chat-Modelle zuerst, Mod-Teile dahinter, beide „ohne Angabe“ gedimmt
+  const colors = modelColors([{ key: d0, usd: 9, parts: [{ key: 'mod:opus-5-5', usd: 5 }, { key: 'haiku-4-5', usd: 1 }, { key: 'mod:unbekannt', usd: 1 }, { key: 'unbekannt', usd: 2 }] }])
+  expect([...colors.entries()]).toEqual([['haiku-4-5', 'claude'], ['mod:opus-5-5', 'suggestion'], ['unbekannt', 'inactive'], ['mod:unbekannt', 'inactive']])
+  expect(partLabel('mod:sonnet-5-5', 'de')).toBe('Sonnet 5.5 · Mods')
+  expect(partLabel('mod:sonnet-5-5', 'en')).toBe('Sonnet 5.5 · mods')
+  expect(partLabel('mod:unbekannt', 'de')).toBe('Mods ohne Angabe')
+  expect(partLabel('opus-5-5', 'de')).toBe('Opus 5.5')
+  expect(partLabel('unbekannt', 'de')).toBe('ohne Angabe')
+  // Rundungsrest aus r8 ergibt keinen eigenen Teil
+  const b = recOf('P', {}, { mods: { x: { days: { [d0]: { usd: 0.1, calls: 1 } } } }, modModels: { 'haiku-4-5': { days: { [d0]: md(0.0999999995) } } } })
+  expect(aggregate([{ id: 'B', rec: b }], NOW, {}).series.days[0]!.parts.map((p) => p.key)).toEqual(['mod:haiku-4-5'])
+})
+
 test('stackedBar Terminal: Zellen nach größtem Rest, Summe stimmt', () => {
   const b = stackedBar('terminal', 1, 10, [{ color: 'claude', share: 0.55 }, { color: 'success', share: 0.3 }, { color: 'suggestion', share: 0.15 }]) as any
   const segs = b.children[0].children as any[]
@@ -466,7 +498,7 @@ test('/ledger weeks: Übersicht mit 14 Wochen und Legende', DE, async ($, on) =>
   await w.start($)
   await w.turn($, 1, { usage: U('claude-opus-5-5', 100, 100) })
   const text = await w.ledger($, 'weeks')
-  expect(text).toMatch(/Wochen: KW 41 1,00 \$/)
+  expect(text).toMatch(/Wochen \(Chat \+ Mods\): KW 41 1,00 \$/)
   const ui = await mountLedger($, text, 'terminal')
   expect(await ui.find({ type: 'Text', text: 'Letzte 14 Wochen' })).toBeDefined()
   expect(await ui.findAll({ type: 'Text', text: /^KW \d+$/ })).toHaveLength(14)
@@ -709,7 +741,11 @@ async function mountLedger($: any, text: string, surface: string, columns = 120)
 for (const surface of ['terminal', 'desktop'] as const)
   test(`UI ${surface}: vier Kennzahlen, 14 Balken, Projekte und Chats, Farben nur am Balken`, DE, async ($, on) => {
     const saved = new Map<string, unknown>([
-      ['s:A', recOf('Handy', { [dayBefore(NOW, 1)]: 9 }, { title: 'Handy-App' })],
+      ['s:A', recOf('Handy', { [dayBefore(NOW, 1)]: 9 }, {
+        title: 'Handy-App',
+        mods: { sidekick: { days: { [dayBefore(NOW, 3)]: { usd: 0.05, calls: 2 }, [dayBefore(NOW, 4)]: { usd: 0.02, calls: 1 } } } },
+        modModels: { 'sonnet-5-5': { days: { [dayBefore(NOW, 3)]: { in: 0, out: 0, cr: 0, cw: 0, usd: 0.05, n: 2 } } } },
+      })],
     ])
     const w = world(on, { saved })
     await w.start($, 'S1', 'startup', 'fynn-orchestrator v1.0')
@@ -729,6 +765,8 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect((await ui.find({ type: 'Text', text: '9,00 $' }))?.props.color).toBe('error')
     expect(await ui.find({ type: 'Text', text: 'ohne Angabe' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Sonnet 5.5 · Mods' })).toBeDefined() // Mod-Aufruf aus dem Verlauf, getrennt vom Chat
+    expect(await ui.find({ type: 'Text', text: 'Mods ohne Angabe' })).toBeDefined() // Mod-Kosten vor 0.3.0 ohne Modell
     if (surface === 'terminal') {
       const bars = await ui.findAll({ type: 'Text', text: /▄/ })
       expect(bars.some((t: any) => t.props.color === 'inactive')).toBe(true)
@@ -874,7 +912,7 @@ test('Englisch (Standard): Kurzfassung für Claude, Skript-Läufe, Chat-Name ohn
   expect(text).toMatch(/Most expensive chats \(30 days\): Chat from Oct 6 12:00 \$1\.25/)
   expect(text).toMatch(/counts against your usage limits/)
   expect(text.split('\n').length <= 10).toBe(true)
-  expect(await w.ledger($, 'weeks')).toMatch(/Weeks: W41 \$1\.25/)
+  expect(await w.ledger($, 'weeks')).toMatch(/Weeks \(chat \+ mods\): W41 \$1\.25/)
 })
 
 for (const surface of ['terminal', 'desktop'] as const)

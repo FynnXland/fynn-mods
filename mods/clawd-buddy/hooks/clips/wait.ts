@@ -7,7 +7,7 @@
 import { clip, rep } from '../clipdef.ts'
 import type { ClipDef, Frame } from '../clipdef.ts'
 import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, fetchOut, walk } from '../macros.ts'
+import { armBlock, fetchIn, fetchOut } from '../macros.ts'
 
 // ---- Requisiten ------------------------------------------------------------------------------------------------------------------
 
@@ -89,6 +89,62 @@ const padRows = (n: number): string[] => {
   return g.map((r) => r.join(''))
 }
 const brickRows = (c: string): string[] => ['.cc.cc.', 'cWWcccc', 'ccccccc', 'ccccccc', 'ccccccc'].map((r) => r.replaceAll('c', c))
+
+/** Sprechblase 9×7 (weiß, runde Ecken) mit Inhalt: `dots` = 0 bis 3 Punkte („…“, er redet), `q` = schwarzes „?“. Der Zipfel ist eine eigene
+ *  Requisite (wait_btail), damit er beim Spiegeln mitgedreht wird, die Schrift in der Blase aber nicht (noFlip). */
+const bubbleRows = (dots: number, q = false): string[] => {
+  const g = ['.WWWWWWW.', 'WWWWWWWWW', 'WWWWWWWWW', 'WWWWWWWWW', 'WWWWWWWWW', 'WWWWWWWWW', '.WWWWWWW.'].map((r) => r.split(''))
+  for (const x of [2, 4, 6].slice(0, dots)) g[3][x] = 'K'
+  if (q) ['KKK', '..K', '.KK', '...', '.K.'].forEach((r, y) => r.split('').forEach((c, x) => { if (c === 'K') g[1 + y][3 + x] = 'K' }))
+  return g.map((r) => r.join(''))
+}
+
+/**
+ * Strickzeug 11×10, EIN Stück (Nadeln, Schal, Faden und Knäuel hängen zusammen, damit beim Stricken nichts einzeln auftaucht):
+ * zwei graue Nadeln mit gelben Köpfen über Kreuz (Stellung a/b = die Nadeln klappern), darunter der blau-weiß geringelte Schal
+ * (`len` Zeilen ab Zeile 4; 6 = bis auf den Boden), ein blauer Faden läuft zum Wollknäuel rechts unten auf dem Boden.
+ * `ph` schiebt die Ringel nach unten: der Schal wird länger und hängt hinter die Linie.
+ */
+const knitRows = (len: number, ph: number, b: boolean): string[] => {
+  const g = Array.from({ length: 10 }, () => Array.from({ length: 11 }, () => '.'))
+  const put = (x: number, y: number, c: string): void => { g[y][x] = c }
+  const n1 = b ? [[1, 0], [1, 1], [2, 2], [3, 3]] : [[0, 0], [1, 1], [2, 2], [3, 3]]
+  const n2 = b ? [[3, 0], [3, 1], [2, 2], [1, 3]] : [[4, 0], [3, 1], [2, 2], [1, 3]]
+  for (const [x, y] of [...n1, ...n2]) put(x, y, 'G')
+  put(n1[0][0], 0, 'Y')
+  put(n2[0][0], 0, 'Y')
+  for (let r = 0; r < len; r++) for (let x = 1; x <= 3; x++) put(x, 4 + r, ((((r - ph) % 4) + 4) % 4) < 2 ? 'B' : 'W')
+  put(4, 4, 'B') // Faden …
+  put(5, 5, 'B')
+  ;['.BBB.', 'BLBBB', 'BBLBB', 'BBBLB', '.BBB.'].forEach((row, y) => row.split('').forEach((c, x) => { if (c !== '.') put(6 + x, 5 + y, c) })) // … zum Knäuel
+  return g.map((r) => r.join(''))
+}
+
+/**
+ * Sandburg 9×8 in fünf Stufen. Die unterste Zeile liegt hinter der Linie: Die Burg wächst aus dem Strandsand (der Linie) heraus und die Flut
+ * nimmt sie dorthin wieder mit. 0/1 = Haufen, 2 = festgeklopfter Block, 3 = zwei Türme (Mitte eingedrückt), 4 = Zinnen und dunkles Tor.
+ */
+const CASTLE_ROWS: readonly (readonly string[])[] = [
+  ['.........', '.........', '.........', '.........', '.........', '..YYYYY..', '.YYYYYYY.', 'YYYYYYYYY'],
+  ['.........', '.........', '.........', '...YYY...', '..YYYYY..', '.YYYYYYY.', 'YYYYYYYYY', 'YYYYYYYYY'],
+  ['.........', '..YYYYY..', '.YYYYYYY.', 'YYYYYYYYY', 'YYYYYYYYY', 'YYYYYYYYY', 'YYYYYYYYY', 'YYYYYYYYY'],
+  ['YYY...YYY', 'YYY...YYY', 'YYYYYYYYY', 'YYYYYYYYY', 'YYYYYYYYY', 'YYYYYYYYY', 'YYYYYYYYY', 'YYYYYYYYY'],
+  ['Y.Y...Y.Y', 'YYY.Y.YYY', 'YYYYYYYYY', 'YYYYYYYYY', 'YYYYDYYYY', 'YYYDDDYYY', 'YYYDDDYYY', 'YYYYYYYYY'],
+]
+/** Welle 12×10: weiße Schaumkrone über hellblauem Wasser, unten dunkler; die unteren Zeilen liegen immer hinter der Linie. Zwei Schaumstellungen. */
+const waveRows = (k: number): string[] => [
+  k ? '...WWWW.....' : '..WWWW......',
+  k ? '..WLLLLWWWWW' : '.WLLLLWWWWWW',
+  k ? '.WLLLLLLLLLL' : 'WLLLLLLLLLLL',
+  k ? 'WLLLLLLLLLLL' : 'LLLLLLLLLLLL',
+  'LLLLLLLLLLLL',
+  'LLLLLLLLLLLL',
+  'BLLLLLLLLLLB',
+  'BBBBBBBBBBBB',
+  'BBBBBBBBBBBB',
+  'BBBBBBBBBBBB',
+]
+
 export const PROPS: Readonly<Record<string, PropSprite>> = {
   wait_clock0: { rows: clockRows(0) },
   wait_clock1: { rows: clockRows(1) },
@@ -146,6 +202,38 @@ export const PROPS: Readonly<Record<string, PropSprite>> = {
   wait_drop: { rows: ['..L..', '.LLL.', 'LLLLL', 'LWLLL', 'LLLLL', '.LLL.'], effect: true },
   // Fragezeichen-Schild 7×10: gelbe Tafel mit schwarzem ?, Pfosten unten
   wait_sign: { rows: ['YYYYYYY', 'YWKKKWY', 'YWWWKWY', 'YWWKKWY', 'YWWWWWY', 'YWWKWWY', 'YYYYYYY', '...R...', '...R...', '...R...'] },
+  // Pfeil nach unten (Effekt an der Hand): klein, dann groß (dicker Schaft, breite Spitze, damit er nicht wie ein Funkeln wirkt)
+  wait_arrow0: { rows: ['YYY', '.Y.'], effect: true },
+  wait_arrow1: { rows: ['.YYY.', '.YYY.', 'YYYYY', '.YYY.', '..Y..'], effect: true },
+  // Sprechblase (Effekt am Kopf): wächst klein → mittel → groß; groß leer, mit 1–3 Punkten, mit „?“; dazu der Zipfel zum Kopf
+  wait_bubble0: { rows: ['.WW.', 'WWWW', '.WW.'], effect: true },
+  wait_bubble1: { rows: ['.WWWW.', 'WWWWWW', 'WWWWWW', 'WWWWWW', '.WWWW.'], effect: true },
+  wait_bubble2: { rows: bubbleRows(0), effect: true, noFlip: true },
+  wait_bubble3: { rows: bubbleRows(1), effect: true, noFlip: true },
+  wait_bubble4: { rows: bubbleRows(2), effect: true, noFlip: true },
+  wait_bubble5: { rows: bubbleRows(3), effect: true, noFlip: true },
+  wait_bubble6: { rows: bubbleRows(0, true), effect: true, noFlip: true },
+  wait_btail: { rows: ['.W', 'W.'], effect: true },
+  // Strickzeug: 0–3 = Schal wächst (2 bzw. 4 Zeilen, Nadeln a/b), 4–7 = Schal bis zum Boden, Ringel rücken nach unten (Nadeln a/b/a/b)
+  wait_knit0: { rows: knitRows(2, 0, false) },
+  wait_knit1: { rows: knitRows(2, 0, true) },
+  wait_knit2: { rows: knitRows(4, 0, false) },
+  wait_knit3: { rows: knitRows(4, 0, true) },
+  wait_knit4: { rows: knitRows(6, 0, false) },
+  wait_knit5: { rows: knitRows(6, 1, true) },
+  wait_knit6: { rows: knitRows(6, 2, false) },
+  wait_knit7: { rows: knitRows(6, 3, true) },
+  // Sandschaufel 3×6 (brauner Stiel, blaues Blatt), 1 = Sand auf dem Blatt; Sandkörner (Effekt); Sandburg; Welle
+  wait_spade0: { rows: ['.R.', '.R.', '.R.', 'BBB', 'BBB', '.B.'] },
+  wait_spade1: { rows: ['.R.', '.R.', 'YRY', 'BBB', 'BBB', '.B.'] },
+  wait_grain: { rows: ['Y.Y', '.Y.'], effect: true },
+  wait_castle0: { rows: CASTLE_ROWS[0] },
+  wait_castle1: { rows: CASTLE_ROWS[1] },
+  wait_castle2: { rows: CASTLE_ROWS[2] },
+  wait_castle3: { rows: CASTLE_ROWS[3] },
+  wait_castle4: { rows: CASTLE_ROWS[4] },
+  wait_wave0: { rows: waveRows(0) },
+  wait_wave1: { rows: waveRows(1) },
 }
 
 const out: ClipDef[] = []
@@ -211,71 +299,46 @@ C('sit_wait', 'Sitzt und wartet', 'wait10', { from: 'sit', loop: true, interrupt
 C('lie_wait', 'Liegt und wartet', 'wait60', { from: 'lie', loop: true, interruptible: true, frames: [
   { eyes: 'half', t: 14 }, { eyes: 'open', look: [1, 0], t: 8 }, { look: [0, 0], t: 6 }, { eyes: 'half', t: 12 }, { eyes: 'closed', t: 6 }] });
 
-// Türmchen: Er holt nacheinander drei Spielzeug-Bausteine (blau, gelb, grün; mit Noppen wie Steckbausteine) aus der Tasche (Hocke, Hand wühlt,
-// der Stein kommt klein hoch und wächst), nimmt jeden am Abholplatz, trägt ihn sieben Schritte nach links und setzt ihn aufs Türmchen. Er freut
-// sich (ein Hüpfer), dann baut er den Turm von oben nach unten ab: jeden Stein trägt er zurück und packt ihn wieder in die Tasche (er wird
-// kleiner und verschwindet dort). Nichts rollt über den Rand und nichts bleibt liegen. Einmaliger Ablauf; Gesicht ruhig: Augen offen, Blick
-// zum Stein, nur beim Hüpfen froh. Nicht unterbrechbar, damit nie ein halber Turm herumsteht.
+// Türmchen: Er holt nacheinander drei Spielzeug-Bausteine (blau, gelb, grün; mit Noppen wie Steckbausteine) aus der Tasche und setzt jeden
+// direkt neben sich auf das Türmchen. Beim dritten wackelt die Spitze, er hält kurz die Luft an, sie bleibt stehen; er freut sich (ein
+// Hüpfer) und packt die Steine von oben nach unten wieder ein. Er bleibt dabei an seinem Platz: früher trug er jeden Stein sieben
+// Schritte hin und wieder zurück, das war unruhig (Fynn, 2026-10-06: „dass er da die ganze Zeit hin und her läuft“). Nichts rollt über
+// den Rand und nichts bleibt liegen. Gesicht ruhig: Augen offen, Blick zum Stein, nur beim Hüpfen froh. Nicht unterbrechbar, damit nie
+// ein halber Turm herumsteht.
 const BW = 7 // Steinbreite
-const STG = -7 // Abholplatz: direkt neben der Figur, die Hand (Länge 3) deckt die rechte Kante
-const STEPS = 7 // Schritte beim Tragen
-const TX = STG - STEPS // Turm: linke Spalte (g), direkt links vom Abholplatz
+const TX = -7 // Turm: direkt neben der Figur, die Hand (Länge 3) deckt die rechte Kante
 const BLOCKS = ['wait_blkB', 'wait_blkY', 'wait_blkE']
 const yRest = (k: number): number => 5 - 4 * k // Oberkante des k-ten Steins im Turm (die oberen Steine decken die Noppen des unteren)
 const blockAt = (k: number, x: number, y: number): PropRef => [BLOCKS[k], x, y, 'g']
 const placed = (n: number): PropRef[] => Array.from({ length: n }, (_, k) => blockAt(k, TX, yRest(k)))
-/** Blockhand greift den Stein 2 Zeilen unter seiner Oberkante (nie über den Körperrand hinaus: Mindesthöhe 0). */
-const grab = (y: number) => armBlock('L', 3, Math.max(0, y + 2))
-const brick = (k: number) => ({ name: BLOCKS[k], size: [BW, 5] as const, side: 'L' as const, grip: 2 })
-const stepLegs = (i: number): string => (i % 2 ? 'stepA' : 'stepB')
+/** Stein k auf dem Turm; die Hand greift 2 Zeilen unter der Oberkante, nie über den Körperrand hinaus (der oberste Stein liegt höher). */
+const brick = (k: number) => ({ name: BLOCKS[k], size: [BW, 5] as const, at: [TX, yRest(k)] as const, side: 'L' as const, grip: Math.max(2, -yRest(k)) })
 
-/** Stein k aus der Tasche holen, hochnehmen, zum Turm tragen und aufsetzen; danach (außer beim letzten) zurück zum Abholplatz. */
-function build(k: number): Frame[] {
-  const done = placed(k)
-  const carry = yRest(k) - 1
-  const fr: Frame[] = fetchIn({ ...brick(k), at: [STG, 5], keep: done })
-  // greift den Stein am Abholplatz und hebt ihn an; Blick bleibt beim Stein
-  fr.push({ look: [-2, 1], eyes: 'open', mouth: null, ...grab(5), props: [...done, blockAt(k, STG, 5)], t: 2 })
-  for (let y = 5; y > carry;) {
-    y = Math.max(carry, y - 2)
-    fr.push({ ...grab(y), props: [...done, blockAt(k, STG, y)], t: 1 })
-  }
-  for (let i = 1; i <= STEPS; i++) fr.push({ fx: -i, legs: stepLegs(i), ...grab(carry), props: [...done, blockAt(k, STG - i, carry)], t: 1 })
-  // absetzen (ein Pixel nach unten), loslassen
-  fr.push({ legs: 'stand', ...grab(yRest(k)), props: [...done, blockAt(k, TX, yRest(k))], t: 1 })
-  fr.push({ armL: 'down', props: placed(k + 1), t: 2 })
-  if (k < 2) fr.push(...walk(-STEPS, 0, { props: placed(k + 1) }))
-  return fr
+/** Stein k aus der Tasche holen und oben auf das Türmchen setzen. */
+const build = (k: number): Frame[] => [...fetchIn({ ...brick(k), keep: placed(k) }), { look: [-2, 0], t: 3 }]
+
+/** Die Spitze wackelt (einen Pixel hin und her), er hält die Luft an und schaut gebannt; sie bleibt stehen. */
+function wobble(): Frame[] {
+  const top = (dx: number): PropRef[] => [...placed(2), blockAt(2, TX + dx, yRest(2))]
+  return [
+    { eyes: 'wide', mouth: 'o', look: [-2, -1], props: top(-1), t: 2 }, { props: top(0), t: 2 }, { props: top(-1), t: 2 }, { props: top(0), t: 4 },
+    { eyes: 'open', mouth: null, by: 1, props: placed(3), t: 3 }, { by: 0, t: 2 },
+  ]
 }
 
 /** Freut sich über das Türmchen: Lächeln, ein Hüpfer mit hochgerissenen Armen. */
 function cheer(): Frame[] {
   const fr: Frame[] = [{ eyes: 'happy', mouth: 'smile', look: [-2, 0], props: placed(3), t: 4 }]
   for (const [fy, legs, arm] of [[-1, 'tuck', 'up2'], [-2, 'tuck', 'up2'], [-1, 'tuck', 'up2'], [0, 'stand', 'down']] as const) fr.push({ fy, legs, armL: arm, armR: arm, t: 1 })
-  fr.push({ eyes: 'open', mouth: null, look: [-2, 1], t: 2 })
+  fr.push({ eyes: 'open', mouth: null, look: [-2, 1], t: 4 })
   return fr
 }
 
-/** Obersten Stein k vom Turm nehmen, zurücktragen und in die Tasche packen; danach (außer beim letzten) wieder zum Turm gehen. */
-function pack(k: number): Frame[] {
-  const rest = placed(k)
-  const carry = yRest(k) - 1
-  const y0 = Math.max(0, carry) // Höhe, auf der er den Stein in die Tasche führt
-  const fr: Frame[] = [{ look: [-2, 1], eyes: 'open', mouth: null, ...grab(yRest(k)), props: [...rest, blockAt(k, TX, yRest(k))], t: 2 }]
-  fr.push({ ...grab(carry), props: [...rest, blockAt(k, TX, carry)], t: 1 })
-  for (let i = 1; i <= STEPS; i++) fr.push({ fx: -STEPS + i, legs: stepLegs(i), ...grab(carry), props: [...rest, blockAt(k, TX + i, carry)], t: 1 })
-  fr.push({ legs: 'stand', ...grab(carry), props: [...rest, blockAt(k, STG, carry)], t: 1 })
-  for (let y = carry; y < y0;) {
-    y = Math.min(y0, y + 2)
-    fr.push({ ...grab(y), props: [...rest, blockAt(k, STG, y)], t: 1 })
-  }
-  fr.push(...fetchOut({ ...brick(k), at: [STG, y0], keep: rest }))
-  if (k > 0) fr.push(...walk(0, -STEPS, { props: rest }))
-  return fr
-}
+/** Obersten Stein k vom Turm nehmen und in die Tasche packen. */
+const pack = (k: number): Frame[] => [...fetchOut({ ...brick(k), keep: placed(k) }), { look: [-2, 0], t: 2 }]
 
 C('build_tower', 'Baut ein Türmchen', 'wait60', { frames: [
-  ...build(0), ...build(1), ...build(2), ...cheer(), ...pack(2), ...pack(1), ...pack(0),
+  ...build(0), ...build(1), ...build(2), ...wobble(), ...cheer(), ...pack(2), ...pack(1), ...pack(0),
   { eyes: 'open', mouth: null, look: [0, 0], t: 3 }] });
 
 // Sanduhr: wird links neben ihn gestellt; der Sand rinnt in sechs Stufen, am Ende nimmt er sie, dreht sie um (Kantenansicht) und
@@ -355,23 +418,72 @@ C('sign_question', 'Hält ein Fragezeichen-Schild hoch', 'waitUser', { loop: tru
     { armL: 'down', t: 4 }],
   outro: fetchOut(SIGN) });
 
+// Zeigt auf die Eingabe: Er wendet sich halb zur Seite und streckt den Blockarm tief nach außen, an der Hand entsteht ein gelber Pfeil, der nach
+// unten auf die Linie (= deine Eingabe) zeigt und wippt. Er schaut abwechselnd dich und die Eingabe an, blinzelt fragend und nimmt den Arm
+// wieder herunter (der Pfeil schrumpft in die Hand zurück). Ohne Gegenstand; alle Frames stehen, also überall unterbrechbar.
+const arrowR = (big: boolean, dy = 0): readonly PropRef[] => (big ? [['wait_arrow1', 19, 4 + dy]] : [['wait_arrow0', 19, 5]])
+const bobArrow = (n: number, extra: Frame = {}): Frame[] =>
+  Array.from({ length: n }, (_, i): Frame => ({ ...(i === 0 ? extra : {}), props: arrowR(true, i % 2), t: 2 }))
+C('point_prompt', 'Zeigt auf die Eingabe', 'waitUser', { loop: true, interruptible: true, frames: [
+  { look: [0, 1], eyes: 'open', mouth: null, armR: 'down', props: [], t: 4 },
+  // Arm geht seitlich hinaus und tief, der Pfeil entsteht an der Hand
+  { look: [1, 1], ...armBlock('R', 2, 4), t: 2 },
+  { ...armBlock('R', 3, 5), props: arrowR(false), t: 2 },
+  ...bobArrow(4),
+  // schaut zu dir (fragend, große Augen), dann wieder hinunter zur Eingabe
+  ...bobArrow(4, { look: [0, 0], eyes: 'wide' }),
+  ...bobArrow(1, { eyes: 'closed' }), ...bobArrow(3, { eyes: 'open', look: [1, 1] }),
+  ...bobArrow(4, { look: [0, 0], eyes: 'wide' }),
+  // Pfeil schrumpft in die Hand, Arm wieder herunter; er schaut zur Eingabe und wartet
+  { eyes: 'open', props: arrowR(false), t: 2 },
+  { ...armBlock('R', 2, 4), props: [], t: 2 },
+  { armR: 'down', look: [0, 1], t: 10 },
+  { look: [0, 0], t: 4 }] });
+
+// Sprechblase: Neben seinem Kopf geht eine Sprechblase auf (sie wächst aus dem Kopf heraus, der Zipfel zeigt auf ihn). Er „redet“: drei Punkte
+// erscheinen nacheinander, dann steht ein „?“ darin. Er schaut dich fragend an, dann hinunter zur Eingabe, blinzelt, die Blase schrumpft wieder
+// in den Kopf zurück. Ruhige Schleife ohne Gegenstand; alle Frames stehen.
+const BX = 17 // Blase: linke Spalte (Figurkoordinaten), unten bündig mit Zeile 2
+const TAIL: PropRef = ['wait_btail', 16, 2]
+const bub = (n: number): readonly PropRef[] => {
+  if (n < 0) return []
+  const size = [[3, 0], [5, -2]] // Höhe → oberste Zeile der kleinen und mittleren Blase
+  return [n < 2 ? ['wait_bubble' + n, BX, size[n][1]] : ['wait_bubble' + n, BX, -4], TAIL]
+}
+C('bubble_question', 'Fragt mit einer Sprechblase', 'waitUser', { loop: true, interruptible: true, frames: [
+  { look: [0, 0], eyes: 'open', mouth: null, props: [], t: 6 },
+  // die Blase geht auf
+  { look: [1, -1], props: bub(0), t: 1 }, { props: bub(1), t: 1 }, { props: bub(2), t: 2 },
+  // er „redet“: … erscheint Punkt für Punkt
+  { look: [0, 0], props: bub(3), t: 3 }, { props: bub(4), t: 3 }, { props: bub(5), t: 4 },
+  // jetzt die Frage
+  { props: bub(6), eyes: 'wide', t: 8 },
+  { look: [0, 1], eyes: 'open', t: 8 },
+  { eyes: 'closed', t: 1 }, { eyes: 'open', t: 2 },
+  { look: [0, 0], eyes: 'wide', t: 8 },
+  // die Blase geht zu (schrumpft zum Kopf), er wartet und schaut zur Eingabe
+  { look: [1, -1], eyes: 'open', props: bub(1), t: 1 }, { props: bub(0), t: 1 }, { props: [], t: 2 },
+  { look: [0, 1], t: 12 }] });
+
 // ---- Du tippst -------------------------------------------------------------------------------------------------------------------
 C('peek_prompt', 'Liest beim Tippen mit', 'watching', { loop: true, interruptible: true, frames: [
   { look: [0, 1], t: 8 }, { look: [-1, 1], t: 5 }, { look: [1, 1], t: 5 }, { by: 1, t: 1 }, { by: 0, t: 2 }] });
 C('nod', 'Nickt zustimmend', 'watching', { interruptible: true, frames: [
   { eyes: 'happy', by: 1, t: 2 }, { by: 0, t: 2 }, { by: 1, t: 2 }, { by: 0, t: 3 }, { eyes: 'open', t: 3 }] });
 
-// Liest mit: Der Prompt liegt unter ihm. Die Pupillen wandern zeilenweise von links nach rechts (Gesicht und Pupille zusammen, 5 Stellungen), springen
-// zurück in die nächste Zeile, ab und zu nickt er. Ruhig: nur die Augen und ein kleiner Nicker.
-const SCAN: readonly (readonly [number, number])[] = [[-1, -1], [-1, 0], [0, 0], [0, 1], [1, 1]] // [face, look x]
-const scanLine = (): Frame[] => SCAN.map(([face, lx], i): Frame => ({ face, look: [lx, 1], t: i === 4 ? 3 : 2 }))
+// Liest mit: Der Prompt liegt unter ihm. Er beugt sich vor (ein Pixel tiefer) und fährt mit der Hand die Zeile entlang, die Augen folgen ihr; am
+// Zeilenende springt die Hand zurück an den Anfang der nächsten Zeile (eine tiefer). Nach zwei Zeilen nickt er und richtet sich auf. Vorher wanderten
+// nur die Pupillen, das sah aus wie Leerlauf (Fynn, 2026-10-06).
+const readLine = (y: number): Frame[] => [2, 3, 4, 5].map((out, i): Frame => ({ ...armBlock('R', out, y), face: i < 2 ? 0 : 1, look: [i < 1 ? 0 : 1, 1], t: 3 }))
 C('read_along', 'Liest mit (Zeile für Zeile)', 'watching', { loop: true, interruptible: true, frames: [
-  { eyes: 'open', mouth: null, face: -1, look: [-1, 1], t: 2 },
-  ...scanLine(), ...scanLine(),
-  { face: 0, look: [0, 1], t: 3 },
-  { eyes: 'happy', by: 1, t: 2 }, { by: 0, t: 2 }, { eyes: 'open', t: 2 },
-  ...scanLine(),
-  { face: 0, look: [0, 0], t: 4 }] });
+  { eyes: 'open', mouth: null, face: 0, look: [0, 1], by: 1, t: 3 },
+  { ...armBlock('R', 2, 5), t: 2 },
+  ...readLine(5),
+  { ...armBlock('R', 2, 6), face: 0, look: [0, 1], t: 2 },
+  ...readLine(6),
+  { face: 0, look: [0, 1], t: 2 },
+  { armR: 'down', eyes: 'happy', by: 2, t: 2 }, { by: 1, eyes: 'open', t: 2 },
+  { by: 0, look: [0, 0], t: 4 }] });
 
 // Notizen: Er holt ein kleines Notizbuch aus der Tasche (rechts von ihm), schreibt mit der Blockhand mit (die Schrift wächst Zeile für Zeile),
 // schaut zwischendurch zum Prompt und nickt, blättert um und packt das Buch beim Verlassen wieder ein.
@@ -593,6 +705,126 @@ C('limit_paint', 'Malt ein Bild', 'limit_week', { loop: true, interruptible: tru
     { look: [1, 1], mouth: null, t: 3 },
     { ...armBlock('R', 3, 1), t: 2 }, { ...armBlock('R', 3, 2), props: easelAt(0), t: 2 }, { armR: 'down', t: 3 }],
   outro: fetchOut(EASEL) });
+
+// Wochenlimit (e): Er strickt einen Schal. Wie die Angel zieht er das Strickzeug hinter der Linie hervor (zu sperrig für die Tasche): die Blockhand
+// tastet unten, dann kommen Nadeln, Schalanfang und Wollknäuel zusammen hoch. Er setzt sich, hält die Nadeln seitlich neben sich, die Nadeln
+// klappern (Hand stößt vor und zurück), der Schal wächst bis auf den Boden; danach rücken die Ringel weiter nach unten, er wird immer länger
+// und hängt hinter die Linie. Zwischendurch schaut er am Schal hinunter und freut sich. Beim Verlassen steht er auf und lässt alles wieder hinter
+// der Linie versinken. Loop: 64 Ticks (die Ringel laufen genau zwölf Zeilen weiter, damit die Schleife nahtlos ist).
+const KX = 17 // Strickzeug: linke Spalte (g); die Hand (Länge 3) hält die Nadeln an ihrem unteren Ende
+const knitAt = (v: number, y = 0): readonly PropRef[] => [['wait_knit' + v, KX, y, 'g']]
+/** Stehend: Hand an den Nadeln (Zeile 2 des Strickzeugs), höchstens bis zur Linie. */
+const knitHand = (y: number): Frame => armBlock('R', 3, Math.min(9, y + 2))
+/** Ein Maschenpaar: die Hand stößt vor (Nadeln klappern), dann zurück; sitzend (Körperoberkante 2). */
+const stitch = (v: number, f: Frame = {}): Frame[] => [
+  { ...f, ...armBlock('R', 4, 0), props: knitAt(v), t: 2 },
+  { ...armBlock('R', 3, 0), props: knitAt(v), t: 2 },
+]
+const stitches = (from: number, n: number, f: Frame = {}): Frame[] =>
+  Array.from({ length: n }, (_, i) => stitch(4 + ((from + i) % 4), i === 0 ? f : {})).flat()
+C('limit_knit', 'Strickt einen Schal', 'limit_week', { loop: true, interruptible: true,
+  intro: [
+    { look: [2, 1], eyes: 'winkL', mouth: null, t: 2 }, { ...armBlock('R', 2, 8), t: 2 }, { ...armBlock('R', 3, 9), t: 2 },
+    ...[8, 6, 4, 2, 0].map((y): Frame => ({ ...knitHand(y), look: [1, 0], eyes: 'open', props: knitAt(0, y), t: 1 })),
+    { t: 2 },
+    // hinsetzen, die Hand bleibt an den Nadeln
+    { by: 1, ...armBlock('R', 3, 1), t: 2 }, { by: 2, ...armBlock('R', 3, 0), look: [1, 1], t: 2 },
+    // die ersten Reihen: der Schal wächst bis auf den Boden
+    ...stitch(0), ...stitch(1), ...stitch(2), ...stitch(3)],
+  frames: [
+    ...stitches(0, 4, { look: [1, 1], eyes: 'open', mouth: null }),
+    ...stitches(4, 4, { eyes: 'half' }),
+    // schaut am Schal hinunter bis zur Linie: so lang schon! freut sich
+    { ...armBlock('R', 3, 0), look: [1, 1], eyes: 'wide', props: knitAt(4), t: 4 },
+    { look: [0, 0], eyes: 'happy', mouth: 'smile', t: 6 },
+    { look: [1, 1], eyes: 'open', mouth: null, t: 2 },
+    ...stitches(8, 4)],
+  outro: [
+    { by: 1, ...armBlock('R', 3, 1), look: [1, 1], eyes: 'open', mouth: null, props: knitAt(4), t: 2 },
+    { by: 0, ...knitHand(0), t: 2 },
+    ...[2, 4, 6, 8, 10].map((y): Frame => ({ ...knitHand(y), props: knitAt(4, y), t: 1 })),
+    { ...armBlock('R', 3, 9), props: [], t: 2 }, { armR: 'down', look: [0, 0], t: 2 }] });
+
+// Wochenlimit (f): Er baut eine Sandburg. Die kleine Sandschaufel kommt aus der Tasche. Er hockt sich hin, sticht die Schaufel in den Sand (hinter
+// die Linie), trägt die volle Schaufel ein paar Schritte nach links und schüttet sie aus (Sandkörner rieseln auf den Haufen); zweimal, dann klopft er
+// den Haufen in der Mitte fest (zwei Türme) und sticht ein Tor hinein. Er bewundert die Burg, da steigt hinter ihr eine Welle auf: er flieht
+// zurück, die Burg sackt vor der Welle in sich zusammen, das Wasser läuft ab. Seufzer, Schulterzucken, von vorn. Die Burg wächst aus dem Strand (der
+// Linie) und verschwindet mit der Flut dorthin; nichts taucht aus dem Nichts auf. Nur der Anfang/das Ende der Schleife (Schaufel abgestellt,
+// keine Burg) ist ein sicherer Frame: sonst hockt er (by 1) oder steht nicht am Heimatplatz, damit nie eine halbe Burg stehen bleibt.
+const SPADE = { name: 'wait_spade0', size: [3, 6] as const, at: [-3, 4] as const, side: 'L' as const, grip: 0 }
+const CAX = -12 // Sandburg: linke Spalte (g)
+const DUMP = -6 // dort steht er beim Ausschütten: die Schaufel ist dann genau über der Burgmitte
+const castleAt = (n: number): readonly PropRef[] => (n < 0 ? [] : [['wait_castle' + n, CAX, 3, 'g']])
+const spadeAt = (fx: number, y: number, full = false): PropRef => [full ? 'wait_spade1' : 'wait_spade0', fx - 3, y, 'g']
+/** Blockhand am Schaufelstiel (Oberkante in g-Zeilen; `by` = wie tief er hockt). */
+const spH = (gy: number, by = 0): Frame => armBlock('L', 3, gy - by)
+/** Geht mit der Schaufel (Höhe y) von `from` nach `to`; `extra(i)` liefert je Schritt weitere Requisiten (z. B. die Welle). */
+const carry = (from: number, to: number, y: number, full: boolean, cs: number, extra: (i: number) => readonly PropRef[] = () => []): Frame[] => {
+  const dir = Math.sign(to - from)
+  const fr: Frame[] = []
+  for (let x = from + dir, i = 0; ; x += dir, i++) {
+    fr.push({ fx: x, by: 0, legs: i % 2 ? 'stepA' : 'stepB', ...spH(y), look: [dir, 0], props: [...castleAt(cs), spadeAt(x, y, full), ...extra(i)], t: 1 })
+    if (x === to) break
+  }
+  return fr
+}
+/** Ein Schaufelgang: Sand stechen, hinübertragen, auf Höhe `hy` ausschütten (die Burg wird von Stufe `was` zu `cs`), zurückgehen und hocken (`stay`: drüben bleiben). */
+function shovel(was: number, cs: number, hy: number, grains: readonly number[], stay = false): Frame[] {
+  const c = castleAt(was)
+  const fr: Frame[] = [
+    { by: 1, look: [-2, 1], eyes: 'open', mouth: null, ...spH(4, 1), props: [...c, spadeAt(0, 4)], t: 2 },
+    { ...spH(6, 1), eyes: 'winkR', props: [...c, spadeAt(0, 6)], t: 2 },
+    { ...spH(7, 1), props: [...c, spadeAt(0, 7)], t: 2 },
+    { ...spH(5, 1), eyes: 'open', props: [...c, spadeAt(0, 5, true)], t: 1 },
+    { ...spH(3, 1), props: [...c, spadeAt(0, 3, true)], t: 1 },
+    { ...spH(1, 1), look: [-1, 0], props: [...c, spadeAt(0, 1, true)], t: 1 },
+    ...carry(0, DUMP, 1, true, was),
+    { legs: 'stand', look: [-2, 1], ...spH(0), props: [...c, spadeAt(DUMP, 0, true)], t: 1 },
+    { ...spH(hy), props: [...c, spadeAt(DUMP, hy, true)], t: 2 },
+  ]
+  // ausschütten: der Sand verlässt das Blatt und rieselt auf den Haufen
+  for (const gy of grains) fr.push({ props: [...c, spadeAt(DUMP, hy), ['wait_grain', DUMP - 3, gy, 'g']], t: 1 })
+  fr.push({ props: [...castleAt(cs), spadeAt(DUMP, hy)], t: 2 })
+  if (stay) return fr // bleibt drüben (zum Festklopfen)
+  fr.push({ ...spH(1), props: [...castleAt(cs), spadeAt(DUMP, 1)], t: 1 })
+  fr.push(...carry(DUMP, 0, 1, false, cs))
+  // daheim: hocken, Schaufel ablegen
+  fr.push({ legs: 'stand', by: 1, look: [-2, 1], ...spH(3, 1), props: [...castleAt(cs), spadeAt(0, 3)], t: 1 })
+  return fr
+}
+const wave = (y: number, k: number): PropRef => ['wait_wave' + (k % 2), -15, y, 'g'] // 12 breit, rechts bündig mit der Burg
+C('limit_sandcastle', 'Baut eine Sandburg', 'limit_week', { loop: true, interruptible: true,
+  intro: fetchIn(SPADE),
+  frames: [
+    { look: [-2, 1], eyes: 'open', mouth: null, armL: 'down', props: [spadeAt(0, 4)], t: 3 },
+    ...shovel(-1, 1, -1, [5, 7]), ...shovel(1, 2, -2, [4], true),
+    // gleich drüben: festklopfen (die Mitte wird eingedrückt, zwei Türme) und ein Tor hineinstechen
+    { ...spH(-1), props: [...castleAt(3), spadeAt(DUMP, -1)], t: 2 },
+    { ...spH(-2), t: 2 }, { ...spH(-1), t: 2 }, { ...spH(-2), t: 2 },
+    { ...spH(1), props: [...castleAt(3), spadeAt(DUMP, 1)], t: 1 },
+    { ...spH(3), eyes: 'winkR', props: [...castleAt(3), spadeAt(DUMP, 3)], t: 2 },
+    { ...spH(1), eyes: 'open', props: [...castleAt(4), spadeAt(DUMP, 1)], t: 2 },
+    // bewundert sie
+    { look: [-2, 0], eyes: 'happy', mouth: 'smile', t: 6 },
+    // da steigt hinter der Burg eine Welle auf (das Meer liegt hinter dem Strand, die Burg steht davor): er erschrickt und flieht mit der Schaufel nach Hause
+    { eyes: 'wide', mouth: 'o', look: [-2, 1], props: [wave(9, 0), ...castleAt(4), spadeAt(DUMP, 1)], t: 2 },
+    // die Schaufel hebt er dabei hoch über die Burg (Blockhand 3 hoch, damit sie am Körper bleibt)
+    { ...spH(-1), props: [wave(9, 1), ...castleAt(4), spadeAt(DUMP, -1)], t: 1 },
+    ...carry(DUMP, 0, -3, false, 4).map((f, i): Frame => ({ ...f, armL: { out: 3, y: -3, h: 3 }, props: [wave([8, 7, 6, 5, 1, 1][i], i), ...(f.props ?? [])] })),
+    { by: 0, legs: 'stand', ...spH(1), props: [wave(1, 1), ...castleAt(4), spadeAt(0, 1)], t: 1 },
+    { legs: 'stand', by: 1, look: [-2, 0], ...spH(3, 1), props: [wave(1, 0), ...castleAt(4), spadeAt(0, 3)], t: 1 },
+    // die Welle schlägt zusammen: die Burg sackt in sich zusammen und versinkt im Sand, dann läuft das Wasser ab
+    { ...spH(4, 1), props: [wave(1, 1), ...castleAt(2), spadeAt(0, 4)], t: 2 },
+    { props: [wave(1, 0), ...castleAt(1), spadeAt(0, 4)], t: 2 },
+    { props: [wave(1, 1), ...castleAt(0), spadeAt(0, 4)], t: 2 },
+    ...[1, 3, 5, 7, 9].map((y, i): Frame => ({ props: [wave(y, i), spadeAt(0, 4)], t: 1 })),
+    { armL: 'down', props: [spadeAt(0, 4)], t: 2 },
+    // Seufzer, Schulterzucken, von vorn
+    { eyes: 'half', mouth: 'flat', props: [spadeAt(0, 4), ['puff', 16, 3, 'g']], t: 3 },
+    { props: [spadeAt(0, 4), ['puff', 17, 2, 'g']], t: 3 },
+    { by: 0, armL: 'up2', armR: 'up2', eyes: 'closed', props: [spadeAt(0, 4)], t: 4 },
+    { armL: 'down', armR: 'down', eyes: 'open', mouth: null, look: [0, 0], t: 3 }],
+  outro: fetchOut(SPADE) });
 
 // Limit zurückgesetzt, es geht weiter (einmalig, kurz). (a) Er springt auf und jubelt: zwei Hüpfer, Funken stehen fest neben ihm.
 const spk = (a: number): readonly PropRef[] => (a ? [['sparkle', 18, 1, 'g'], ['dotY', -3, -1, 'g']] : [['sparkle', -4, 1, 'g'], ['dotY', 19, -1, 'g']])

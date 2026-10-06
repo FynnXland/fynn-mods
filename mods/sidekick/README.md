@@ -4,7 +4,7 @@ Checks your message just before it is sent: first with fixed rules, and only whe
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.290** · Plugin version **0.7.0**
+Tested with Claude Code **v2.1.290** · Plugin version **0.8.1**
 
 **Cost:** sidekick calls Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
 
@@ -99,18 +99,21 @@ Some commands only help if you remember to run them. **Once per chat**, on your 
   - skills used, with a pointer to `/skill-doctor`
   - maintenance hints per rule (shown, accepted)
 
-## Button under the hint line (since 0.7.0)
+## Button under the hint line (since 0.7.0, runs directly since 0.8.1)
 
-When a blue line under your message names a command (a maintenance hint such as `/claude-api prompt-audit`, `/skill-doctor`, `/init`, `/consolidate-memory`, or a skill sidekick suggests), a button sits next to it:
+When a blue line under your message names a command, a button sits next to it. That is a maintenance hint such as `/claude-api prompt-audit`, `/skill-doctor`, `/init`, `/consolidate-memory`, a skill sidekick suggests, or since 0.8.1 a command in the sentence that exists in this session (from a plugin, your own command or skill, or `/skill-doctor` and `/init`; other built-in commands and MCP prompts get no button):
 
-- **Add as to-do**: when the **worklist** mod offers `/todo` and the command is a skill Claude can run itself. sidekick runs `/todo Run <command>.`; worklist queues it and sends it to Claude once the current task is done, in this chat. The line then reads "✓ queued as to-do". According to the types, commands run through `$.command.run` wait until the session is idle.
-- **Put in prompt**: otherwise. The command goes into the prompt box at the cursor; with an empty box you only press Enter. Text you already typed is never overwritten (the command is then inserted where the cursor is). Built-in commands like `/skill-doctor` and `/init` always go here, because Claude cannot run them itself (a to-do for them would do nothing).
-- What the button says is what it does: the target is decided when the line is drawn. Right after `/clear` or `/resume`, before sidekick has loaded the command list, it says **Put in prompt**.
+- **Run /command**: the default. The button names the command, one click runs it, as if you had typed it and pressed Enter. If Claude is still working, it runs once the current turn is done. The line then reads "✓ ran"; a maintenance hint counts as done.
+- **Add as to-do**: when the **worklist** mod offers `/todo` and the command is a skill Claude can run itself. sidekick runs `/todo Run <command>.`; worklist queues it and sends it to Claude once the current task is done. The line then reads "✓ queued as to-do". Built-in commands like `/skill-doctor` and `/init` always use **Run**, because Claude cannot run them itself.
+- **Handoff:** a line that suggests the handoff skill (`/uebergabe`, `limit-bars:uebergabe`) shows and runs limit-bars' **`/handoff`** instead: the skill writes the handoff, then you are asked whether to start a new chat with it. Without `/handoff` the full skill name is used.
+- Short names are resolved: `/uebergabe` finds `limit-bars:uebergabe` when exactly one plugin has it. Unknown or ambiguous names, file paths like `/hooks/hooks.json` or `/init.ts`, and words without a slash get no button. `/clear`, `/exit`, `/quit`, `/login`, `/logout` and `/rewind` never get one.
+- What the button says is what it does: the target is decided when the line is drawn.
 - Lines without a command (e.g. "new topic, a fresh chat would be cheaper") get no button. Other surfaces (VS Code) show the line as text, without a button.
-- If the prompt box is not available (a dialog is open) or `/todo` fails, a toast shows the command so you can type it.
+- If Claude Code refuses the command, it goes into the prompt box at the cursor and a toast says so (Enter sends it). If that is not possible either (a dialog is open) or `/todo` fails, the toast shows the command so you can type it.
 
 ## Working with other mods
 
+- **clawd-buddy** shows what sidekick does: while it checks your message, holds it back with a question, or starts a new chat. sidekick writes only the kind of state and a timestamp to `$.state` (`sidekick.buddy`), which clawd-buddy reads. Neither mod needs the other.
 - **limit-bars** stays a display. To avoid two dialogs in a row, turn off its cold-cache warning once: **`/cache warn off`** (the German `/cache warnung aus` works too). sidekick's question replaces it.
 - Claude Code's built-in plugin **`cc-plugin-you-should-know`** (off by default, availability depends on your organization) complements sidekick: it watches Claude's work, not your messages. `/savings` does **not** include its costs.
 
@@ -152,7 +155,8 @@ Texts are English by default. For German, set `language` to `de`. Amounts then r
 
 ```text
 hooks: session.start, turn.step, tool.call{tool=Bash|PowerShell}, prompt.submit, skill.prompt, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}
-calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.complete, $.prompt.fill, $.prompt.submit, $.session.id, $.session.messages, $.session.root, $.session.surfaces, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
+calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.complete, $.prompt.fill, $.prompt.submit, $.session.id, $.session.messages, $.session.root, $.session.surfaces, $.session.usage, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
+state writes: sidekick.buddy
 ```
 
 In plain language:
@@ -163,8 +167,8 @@ In plain language:
 - `skill.prompt`: counts which skill ran and detects maintenance skills as done. Changes nothing.
 - `ui.render{component=UserMessage}`: appends the hint line to the display of your message, with a button when the line names a command.
 - `$.ui.resolve`: builds that button (a button carries its click handler, so it cannot be plain data).
-- `$.prompt.fill`: on a click, puts the command into the prompt box at the cursor. Never sends it, never overwrites what you typed.
-- `$.command.run`: also runs worklist's `/todo` on a click, when worklist is installed and the command is a skill.
+- `$.command.run` (on a click): runs the command shown in the line, as if you typed it. Only commands from plugins, your own commands and skills, and the built-in maintenance commands `/skill-doctor` and `/init`; never MCP prompts, never `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`. Or worklist's `/todo`, when worklist is installed and the command is a skill.
+- `$.prompt.fill`: only as a fallback, when Claude Code refuses the command: puts it into the prompt box at the cursor. Never sends it, never overwrites what you typed.
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=AbovePrompt}`: only while a new chat is being started, a small blue box above the prompt shows progress and seconds. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
 - `$.model.complete`: Sonnet 5.5 for the check (effort `low`) and the handoff (effort `medium`), the only model calls. Your messages reach the model only through your session's own login.
@@ -173,10 +177,11 @@ In plain language:
 - `$.session.root`: project root as the key for maintenance hints. The path only.
 - `$.session.surfaces`: detects the desktop app, because there typed messages carry the origin `sdk` like `claude -p`.
 - `$.session.id`: detects a new session after `/clear`.
-- `$.command.run`, `$.prompt.submit`: only for "New chat with handoff" (`/clear`, then send).
+- `$.command.run`, `$.prompt.submit`: for "New chat with handoff" (`/clear`, then send). `$.command.run` also for the button, see above.
 - `$.store.*`: settings, summary, cache measurement, balance.
 - `$.ui.ask`, `$.ui.toast`, `$.ui.invalidate`: question dialog, notices, redrawing the line.
 - `$.clock.*`: time and a one-off timer for `/clear`.
+- `$.state.set`: writes `sidekick.buddy` for clawd-buddy: only `check`, `stop`, `handoff` or `fresh` and a timestamp, never your message.
 
 Explicitly not used: `$.fs`, `$.env`, `$.http`, `$.settings`, `$.model.fork`; no tokens or credentials.
 

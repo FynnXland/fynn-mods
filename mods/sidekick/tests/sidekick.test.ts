@@ -11,6 +11,7 @@ import {
   dayRows,
   compareNote,
   hintLine,
+  lineCommand,
   factorText,
   wrongChatChoices,
   applySetting,
@@ -224,6 +225,7 @@ type W = {
   clearFails?: boolean
   submitFails?: boolean
   handoffDelayMs?: number
+  stateFails?: () => boolean // $.state.set lehnt ab (Schnittstelle clawd-buddy)
   // Wartungs-Hinweise (SPEC Nachtrag 0.2.0)
   root?: string | null // null: $.session.root() wirft
   memory?: { path: string; type: string; tokens: number }[]
@@ -232,6 +234,7 @@ type W = {
   cmds?: { name: string; description: string; source: string; plugin?: string }[]
   fillFails?: boolean // $.prompt.fill: Dialog hält die Tasten
   todoFails?: boolean // /todo von worklist scheitert
+  runFails?: boolean // ein anderer Befehl als /todo und /clear scheitert (Nachtrag 0.8.1)
   usageFails?: boolean
   noBreakdown?: boolean // breakdown fehlt in der Antwort
 }
@@ -317,6 +320,7 @@ function world(on: On, o: W = {}) {
     commands.push(e.command)
     commandArgs.push(`${e.command} ${e.args ?? ''}`.trim())
     if (o.todoFails && e.command === 'todo') throw new Error('kein todo')
+    if (o.runFails && e.command !== 'todo' && e.command !== 'clear') throw new Error('nicht erlaubt')
     // Ein werfender Stub wird übersprungen (docs/raw/en/test.md:182); ohne weitere Antwort scheitert der Aufruf
     if (o.clearFails && e.command === 'clear') throw new Error('nicht jetzt')
     if (e.command === 'clear') id = 'sess-2'
@@ -338,6 +342,15 @@ function world(on: On, o: W = {}) {
     return { text: e.text }
   })
   on('skill.prompt', ($, e) => ({ text: e.text }))
+  // Schnittstelle zu clawd-buddy: jede Änderung von sidekick.buddy (Art bzw. null)
+  const buddy: (string | null)[] = []
+  let buddyVersion = 0
+  on('state.set', ($: unknown, e: any) => {
+    if (o.stateFails?.()) throw new Error('state abgelehnt')
+    if (e.plugin === 'sidekick' && e.key === 'buddy') buddy.push(e.value?.kind ?? null)
+    buddyVersion += 1
+    return { value: { isSet: true, version: buddyVersion } }
+  })
   let bandTree: unknown = null
   on('ui.render', ($, e) => (e.component === 'AbovePrompt' && bandTree ? (bandTree as never) : { type: 'Text', props: {}, children: [String((e.props as { text?: string }).text ?? '')] }))
   let next: StepU = stepUsage(0, 0)
@@ -366,6 +379,7 @@ function world(on: On, o: W = {}) {
     handoffs,
     handoffReqs,
     handoffSystems,
+    buddy,
     step,
     setAnswer: (a: string | null) => (answer = a),
     setReply: (r: unknown) => (reply = r),
@@ -1935,22 +1949,37 @@ async function mountLine($: Engine, text: string, requestId: string, surface = '
   return $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId, surface, props: { text, origin: { kind: 'composer' }, isExpanded: true } } as never)
 }
 
-deTest('0.7.0: ohne worklist schreibt der Button den Befehl ins Eingabefeld, an der Cursor-Position', async ($, on) => {
+deTest('0.8.1: ohne worklist führt der Button den Befehl direkt aus, einmal; danach steht „ausgeführt“ (Desktop und Terminal)', async ($, on) => {
   const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
   await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'b1', 'desktop')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('ausführen')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.commandArgs).toContain('claude-api prompt-audit')
+  expect(w.fills).toEqual([])
+  await flush(120)
+  expect(wStore(w).regeln.audit?.doneAt).toBe(NOW)
+  expect(today(w.ledger()).wartung.audit?.angenommen).toBe(1)
   for (const surface of ['desktop', 'terminal']) {
-    const ui = await mountLine($, 'los gehts', 'b1', surface)
-    const line = JSON.stringify(await ui.find({ key: 'sidekick-line' }))
-    expect(line).toContain('Ins Eingabefeld')
-    await ui.press({ key: 'sidekick-use' })
-    await flush()
-    await ui.unmount()
+    const again = await mountLine($, 'los gehts', 'b1', surface)
+    expect(JSON.stringify(await again.find({ key: 'sidekick-line' }))).toContain('✓ ausgeführt')
+    expect(await again.find({ key: 'sidekick-use' })).toBeFalsy()
+    await again.unmount()
   }
-  expect(w.fills).toEqual([
-    { text: '/claude-api prompt-audit', mode: 'insert' },
-    { text: '/claude-api prompt-audit', mode: 'insert' },
-  ])
-  expect(w.commandArgs.filter((c) => c.startsWith('todo'))).toEqual([])
+  expect(w.commandArgs.filter((c) => c.startsWith('claude-api')).length).toBe(1)
+})
+
+deTest('0.8.1: im Terminal hat die Zeile denselben Button', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'b1t', 'terminal')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('ausführen')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.commandArgs).toContain('claude-api prompt-audit')
 })
 
 deTest('0.7.0: mit worklist wird ein Skill-Befehl zum To-do, einmal; danach steht „eingereiht“', async ($, on) => {
@@ -1971,17 +2000,18 @@ deTest('0.7.0: mit worklist wird ein Skill-Befehl zum To-do, einmal; danach steh
   expect(w.commandArgs.filter((c) => c.startsWith('todo')).length).toBe(1)
 })
 
-deTest('0.7.0: eingebaute Befehle (/skill-doctor, /init) gehen auch mit worklist ins Eingabefeld', async ($, on) => {
+deTest('0.7.0/0.8.1: eingebaute Befehle (/skill-doctor, /init) laufen auch mit worklist direkt, nicht als To-do', async ($, on) => {
   const w = world(on, { memory: [projectFile(500)], cmds: [...ALL_CMDS, WORKLIST], skills: { totalSkills: 61, includedSkills: 52, tokens: 4800, skillFrontmatter: [{ name: 'claude-api', source: 'bundled', tokens: 10 }] } })
   await $.prompt.submit(userPrompt('los gehts'))
   const ui = await mountLine($, 'los gehts', 'b3')
   const line = JSON.stringify(await ui.find({ key: 'sidekick-line' }))
   expect(line).toContain('/skill-doctor')
-  expect(line).toContain('Ins Eingabefeld')
+  expect(line).toContain('ausführen')
   await ui.press({ key: 'sidekick-use' })
   await flush()
   await ui.unmount()
-  expect(w.fills).toEqual([{ text: '/skill-doctor', mode: 'insert' }])
+  expect(w.commands).toContain('skill-doctor')
+  expect(w.fills).toEqual([])
   expect(w.commandArgs.filter((c) => c.startsWith('todo'))).toEqual([])
 })
 
@@ -2006,14 +2036,28 @@ deTest('0.7.0: Skill-Hinweis der Prüfung bekommt den Button; Zeile ohne Befehl 
   await plain.unmount()
 })
 
-deTest('0.7.0 Fehlerpfade: Eingabefeld unter einem Dialog und gescheitertes /todo melden sich per Toast', async ($, on) => {
-  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, fillFails: true })
+deTest('0.8.1 Fehlerpfade: abgelehnter Befehl kommt ins Eingabefeld; Button bleibt für einen neuen Versuch', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, runFails: true })
   await $.prompt.submit(userPrompt('los gehts'))
   const ui = await mountLine($, 'los gehts', 'b6')
   await ui.press({ key: 'sidekick-use' })
   await flush()
   await ui.unmount()
-  expect(w.toasts.some((x) => x.includes('Eingabefeld gerade nicht verfügbar. Befehl: /claude-api prompt-audit'))).toBe(true)
+  expect(w.fills).toEqual([{ text: '/claude-api prompt-audit', mode: 'insert' }])
+  expect(w.toasts.some((x) => x.includes('/claude-api prompt-audit ließ sich nicht starten') && x.includes('Enter schickt ihn ab'))).toBe(true)
+  const again = await mountLine($, 'los gehts', 'b6')
+  expect(await again.find({ key: 'sidekick-use' })).toBeTruthy()
+  await again.unmount()
+})
+
+deTest('0.8.1 Fehlerpfad: Befehl abgelehnt und Eingabefeld unter einem Dialog → Toast mit dem Befehl', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, runFails: true, fillFails: true })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'b6b')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.toasts.some((x) => x.includes('/claude-api prompt-audit ließ sich nicht starten (') && !x.includes('Enter'))).toBe(true)
 })
 
 deTest('0.7.0 Fehlerpfad: /todo scheitert → Toast, Button bleibt für einen neuen Versuch', async ($, on) => {
@@ -2056,4 +2100,139 @@ deTest('0.7.0 Review: Doppelklick legt ein To-do an; Skill bei anderer Art gibt 
   expect(await plain.find({ key: 'sidekick-use' })).toBeFalsy()
   await plain.unmount()
   expect(hintLine('Mit limit-bars:uebergabe sichern.', 'uebergabe')).toBe('Mit limit-bars:uebergabe sichern. (/uebergabe)')
+})
+
+deTest('Schnittstelle clawd-buddy: sidekick.buddy zeigt Prüfung, Rückfrage und neuen Chat; ohne Prüfung bleibt er leer', async ($, on) => {
+  const w = world(on)
+  w.setCtx(1000)
+  // Kein Auslöser (nicht die erste Nachricht, kleiner Kontext): nichts geschrieben
+  await w.step($, stepUsage(0, 1000))
+  await $.prompt.submit(userPrompt('kleine Frage'))
+  await flush()
+  // Höchstens ein erstes „leer“ (nach dem Laden ist der Stand unbekannt, Review S1), nie eine Art
+  expect(w.buddy.filter((k) => k !== null)).toEqual([])
+  w.buddy.length = 0
+  // Rückfrage, Fynn sendet trotzdem: prüft → hält an → wieder leer
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neuer Chat?' }), usage: MODEL_USAGE })
+  w.setAnswer('Trotzdem senden')
+  await $.prompt.submit(userPrompt('weiter so'))
+  await flush()
+  expect(w.buddy).toEqual(['check', 'stop', null])
+  // Neuer Chat mit Übergabe: prüft → hält an → leer → baut den neuen Chat → neuer Chat ist da
+  w.buddy.length = 0
+  w.setCtx(300000)
+  w.setAnswer('Neuer Chat mit Übergabe')
+  await $.prompt.submit(userPrompt('jetzt die Tests'))
+  await w.clock.advance(400)
+  await flush()
+  expect(w.buddy).toEqual(['check', 'stop', null, 'handoff', 'fresh'])
+})
+
+deTest('Schnittstelle clawd-buddy: Schreiben scheitert → Prüfung und Nachricht laufen normal; Dialog geschlossen → Wert wieder leer', async ($, on) => {
+  let fail = true
+  const w = world(on, { stateFails: () => fail })
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neuer Chat?' }), usage: MODEL_USAGE })
+  w.setAnswer('Trotzdem senden')
+  expect(await $.prompt.submit(userPrompt('weiter so'))).toMatchObject({ text: 'weiter so' })
+  expect(w.asks.length).toBe(1)
+  // Dialog geschlossen (Esc): Nachricht geht durch, der Wert endet leer
+  fail = false
+  w.buddy.length = 0
+  w.setAnswer(null)
+  expect(await $.prompt.submit(userPrompt('und nochmal'))).toMatchObject({ text: 'und nochmal' })
+  await flush()
+  expect(w.buddy.at(-1)).toBeNull()
+})
+
+// ---------- 0.8.1: Befehl im Satz, /uebergabe → /handoff, Klick führt aus ----------
+
+const UEBERGABE = { name: 'limit-bars:uebergabe', description: 'Handoff', source: 'plugin', plugin: 'limit-bars' }
+const HANDOFF_CMD = { name: 'handoff', description: 'Handoff + new chat', source: 'plugin', plugin: 'limit-bars' }
+
+deTest('0.8.1: lineCommand findet Befehle im Satz, Kurznamen, die Übergabe über /handoff, nie /clear', async () => {
+  const cmds = [UEBERGABE, HANDOFF_CMD, { name: 'mod-review', source: 'user' }, { name: 'clear', source: 'builtin' }, { name: 'a:dup', source: 'plugin' }, { name: 'b:dup', source: 'plugin' }]
+  const z = 'Kontext ist mit 437k Tokens sehr groß; für neue Arbeit bald /uebergabe und frischen Chat erwägen.'
+  expect(lineCommand(z, '', cmds)).toEqual({ line: 'Kontext ist mit 437k Tokens sehr groß; für neue Arbeit bald /handoff und frischen Chat erwägen.', cmd: '/handoff' })
+  // Ohne /handoff von limit-bars: der volle Skill-Name
+  expect(lineCommand(z, '', [UEBERGABE])?.cmd).toBe('/limit-bars:uebergabe')
+  expect(lineCommand(z, '', [UEBERGABE])?.line).toContain('bald /limit-bars:uebergabe und')
+  // Skill-Hinweis: Name ohne Schrägstrich im Satz
+  expect(lineCommand('limit-bars:uebergabe nutzen: Stand dokumentieren.', 'limit-bars:uebergabe', cmds)).toEqual({ line: '/handoff nutzen: Stand dokumentieren.', cmd: '/handoff' })
+  expect(lineCommand('Ein Skill prüft Mods.', 'mod-review', cmds)).toEqual({ line: 'Ein Skill prüft Mods. (/mod-review)', cmd: '/mod-review' })
+  // Skill-Hinweis ohne geladene Befehlsliste: der geprüfte Name gilt
+  expect(lineCommand('Ein Skill prüft Mods.', 'mod-review', [])?.cmd).toBe('/mod-review')
+  // Unbekannt, mehrdeutig, Uhrzeit, Pfad, /clear: kein Button
+  expect(lineCommand('Vielleicht /gibtsnicht nutzen.', '', cmds)).toBeNull()
+  expect(lineCommand('Mit /dup geht das.', '', cmds)).toBeNull()
+  expect(lineCommand('Um 12:30 und in src/mod-review/x.ts.', '', cmds)).toBeNull()
+  expect(lineCommand('Am besten /clear und neu anfangen.', '', cmds)).toBeNull()
+  expect(lineCommand('Nur ein Hinweis.', '', cmds)).toBeNull()
+})
+
+deTest('0.8.1: Zeile „bald /uebergabe … erwägen“ (Art sonstiges) bekommt den Button; Klick startet /handoff', async ($, on) => {
+  const w = world(on, { cmds: [UEBERGABE, HANDOFF_CMD] })
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'sonstiges', zeile: 'Kontext ist sehr groß; für neue Arbeit bald /uebergabe und frischen Chat erwägen.' }), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt('und jetzt noch das nächste thema bitte'))
+  const ui = await mountLine($, 'und jetzt noch das nächste thema bitte', 'u1')
+  const line = JSON.stringify(await ui.find({ key: 'sidekick-line' }))
+  expect(line).toContain('bald /handoff und frischen Chat')
+  expect(line).not.toContain('uebergabe')
+  expect(line).toContain('ausführen')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.commandArgs).toContain('handoff')
+})
+
+test('0.8.1 en: run button and failure text in English', async ($, on) => {
+  setLang('en')
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, runFails: true })
+  await $.prompt.submit(userPrompt('lets go now'))
+  const ui = await mountLine($, 'lets go now', 'e1')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Run /claude-api prompt-audit')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.toasts.some((x) => x.includes('could not be started') && x.includes('Enter sends it'))).toBe(true)
+})
+
+deTest('0.8.1 Review: eingebaute Befehle außer Wartung, MCP, Pfade und Wörter ohne Schrägstrich geben keinen Button', async () => {
+  const b = (name: string) => ({ name, source: 'builtin' })
+  const cmds = [
+    ...['compact', 'fast', 'model', 'remote-control', 'hooks', 'context', 'skill-doctor', 'init', 'exit', 'quit', 'login', 'logout', 'rewind'].map(b),
+    { name: 'mcp__github__review', source: 'mcp' },
+    { name: 'memory', source: 'user' },
+    { name: 'mod-ship', source: 'user' },
+  ]
+  // S1: nur die eingebauten der Wartung
+  for (const c of ['compact', 'fast', 'model', 'remote-control', 'mcp__github__review', 'exit', 'quit', 'login', 'logout', 'rewind'])
+    expect(lineCommand(`Jetzt /${c} nutzen.`, '', cmds)).toBeNull()
+  expect(lineCommand('Jetzt /skill-doctor nutzen.', '', cmds)?.cmd).toBe('/skill-doctor')
+  expect(lineCommand('Jetzt /mod-ship nutzen.', '', cmds)?.cmd).toBe('/mod-ship')
+  // Erster erlaubter Befehl: /compact wird übersprungen
+  expect(lineCommand('Erst /compact, dann /init.', '', cmds)?.cmd).toBe('/init')
+  // S2: Pfade
+  expect(lineCommand('Pfad /hooks/hooks.json prüfen.', '', cmds)).toBeNull()
+  expect(lineCommand('Datei /init.ts ansehen.', '', cmds)).toBeNull()
+  expect(lineCommand('Pfad ~/memory/foo ansehen.', '', cmds)).toBeNull()
+  expect(lineCommand('Am Satzende /init.', '', cmds)?.line).toBe('Am Satzende /init.')
+  // K1: ein Wort ohne Schrägstrich wird nicht zum Befehl
+  expect(lineCommand('Mit /init anlegen, init dauert kurz.', '', cmds)?.line).toBe('Mit /init anlegen, init dauert kurz.')
+  // K2: /handoff auch mit Plugin-ID samt Marketplace
+  const viaId = [{ ...UEBERGABE, plugin: 'limit-bars@fynn-mods' }, { ...HANDOFF_CMD, plugin: 'limit-bars@fynn-mods' }]
+  expect(lineCommand('Bald /uebergabe machen.', '', viaId)?.cmd).toBe('/handoff')
+  expect(lineCommand('Die uebergabe bald machen.', 'limit-bars:uebergabe', viaId)?.line).toBe('Die /handoff bald machen.')
+})
+
+deTest('0.8.1 Review: Doppelklick auf „ausführen“ startet den Befehl einmal', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'r9')
+  await Promise.all([ui.press({ key: 'sidekick-use' }), ui.press({ key: 'sidekick-use' })])
+  await flush()
+  await ui.unmount()
+  expect(w.commandArgs.filter((c) => c.startsWith('claude-api')).length).toBe(1)
 })

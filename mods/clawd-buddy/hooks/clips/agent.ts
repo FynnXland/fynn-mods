@@ -9,7 +9,7 @@
 // Interaktionen (`companion: true`): Der Helfer ist darin eine 'g'-Requisite auf Platz 0 (x -8, y 5, 6×5 Pixel); jeder Clip beginnt und endet mit
 // `agent_s` genau dort, dann übernimmt die Engine nahtlos. Kein Aufsteigen und Absinken in diesen Clips.
 //
-// Helfer-Design ("Blobb"): kleines hellblaues, rundes Wesen mit zwei Augen und dunkelblauen Stummelarmen, deutlich anders als der orange Clawd.
+// Helfer-Design ("Blobb"): kleines rundes Wesen in hellerer Claude-Farbe mit zwei Augen und dunkleren Stummelarmen, kleiner und heller als Clawd (Fynn, 2026-10-06: statt Blau).
 // Alle Posen heißen `agent_s<Ziffer>` (gleiche Familie `agent_s`, damit die Prüfung sie als dieselbe Figur verfolgt).
 //
 // Stil der Hände (Fynn, überall gleich): Clawds Arme sind Blöcke (2 Pixel dick, kurze Stummel, höchstens 6 lang), die in ganzen Pixelschritten auf und ab
@@ -20,30 +20,30 @@ import type { ClipDef, Frame } from '../clipdef.ts'
 import type { PropRef, PropSprite } from '../stage.ts'
 import { fetchOut } from '../macros.ts'
 
-// ---- Der Helfer (6×5): L = hellblau (Körper), N = Marine (Stummelarme), K = Augen. Zeile 4 = Füße. Er schaut Clawd an (Clawd steht rechts von ihm).
+// ---- Der Helfer (6×5): A = helle Claude-Farbe (Körper), F = dunklere (Stummelarme), K = Augen. Zeile 4 = Füße. Er schaut Clawd an (Clawd steht rechts von ihm).
 // 0 (`agent_s`) steht, `agent_sb`/6 blinzelt, 1 winkt (rechter Arm hoch), 2 winkt (Arm halb), 3 beide Arme hoch (jubelt), 4 redet, 5 duckt sich froh
 // (Kopf eine Zeile tiefer, wenn man ihn tätschelt oder er nickt), 7 schaut zur Seite zu Clawd (Augen rechts).
-const MATE_STAND = ['.LLLL.', 'LKLLKL', 'NLLLLN', '.LLLL.', '.L..L.']
-const MATE_BLINK = ['.LLLL.', 'LNLLNL', 'NLLLLN', '.LLLL.', '.L..L.']
+const MATE_STAND = ['.AAAA.', 'AKAAKA', 'FAAAAF', '.AAAA.', '.A..A.']
+const MATE_BLINK = ['.AAAA.', 'AFAAFA', 'FAAAAF', '.AAAA.', '.A..A.']
 const helperProps: Record<string, PropSprite> = {
   agent_s: { rows: MATE_STAND },
   agent_sb: { rows: MATE_BLINK },
-  // Hintere Reihe (Plätze 7–12): dieselbe Gestalt als dunklere blaue Silhouette ohne Einzelheiten
-  agent_sback: { rows: ['.NNNN.', 'NKNNKN', 'NNNNNN', '.NNNN.', '.N..N.'] },
-  agent_s1: { rows: ['.LLLLN', 'LKLLKN', 'NLLLLL', '.LLLL.', '.L..L.'] },
-  agent_s2: { rows: ['.LLLL.', 'LKLLKN', 'NLLLLL', '.LLLL.', '.L..L.'] },
-  agent_s3: { rows: ['NLLLLN', 'NKLLKN', 'LLLLLL', '.LLLL.', '.L..L.'] },
-  agent_s4: { rows: ['.LLLL.', 'LKLLKL', 'NLKKLN', '.LLLL.', '.L..L.'] },
-  agent_s5: { rows: ['......', '.LLLL.', 'LNLLNL', 'NLLLLN', '.L..L.'] },
+  // Hintere Reihe (Plätze 7–12): dieselbe Gestalt als dunklere Silhouette in Claude-Farbe ohne Einzelheiten
+  agent_sback: { rows: ['.FFFF.', 'FKFFKF', 'FFFFFF', '.FFFF.', '.F..F.'] },
+  agent_s1: { rows: ['.AAAAF', 'AKAAKF', 'FAAAAA', '.AAAA.', '.A..A.'] },
+  agent_s2: { rows: ['.AAAA.', 'AKAAKF', 'FAAAAA', '.AAAA.', '.A..A.'] },
+  agent_s3: { rows: ['FAAAAF', 'FKAAKF', 'AAAAAA', '.AAAA.', '.A..A.'] },
+  agent_s4: { rows: ['.AAAA.', 'AKAAKA', 'FAKKAF', '.AAAA.', '.A..A.'] },
+  agent_s5: { rows: ['......', '.AAAA.', 'AFAAFA', 'FAAAAF', '.A..A.'] },
   agent_s6: { rows: MATE_BLINK },
   // Arbeits-Posen: Blick nach unten auf das winzige Gerät (grauer Streifen am Bauch), die Stummelarme tippen abwechselnd
-  agent_s8: { rows: ['.LLLL.', 'LLLLLL', 'LKLLKL', 'NGGGGL', '.L..L.'] },
-  agent_s9: { rows: ['.LLLL.', 'LLLLLL', 'LKLLKL', 'LGGGGN', '.L..L.'] },
-  agent_s7: { rows: ['.LLLL.', 'LLKLLK', 'NLLLLN', '.LLLL.', '.L..L.'] },
-  // Sprechblase (7×4) mit ein, zwei, drei Punkten: Effekt, der vom Sprecher ausgeht
-  agent_bub1: { rows: ['.WWWWW.', 'WGWWWWW', '.WWWWW.', '...W...'], effect: true },
-  agent_bub2: { rows: ['.WWWWW.', 'WGWGWWW', '.WWWWW.', '...W...'], effect: true },
-  agent_bub3: { rows: ['.WWWWW.', 'WGWGWGW', '.WWWWW.', '...W...'], effect: true },
+  agent_s8: { rows: ['.AAAA.', 'AAAAAA', 'AKAAKA', 'FGGGGA', '.A..A.'] },
+  agent_s9: { rows: ['.AAAA.', 'AAAAAA', 'AKAAKA', 'AGGGGF', '.A..A.'] },
+  agent_s7: { rows: ['.AAAA.', 'AAKAAK', 'FAAAAF', '.AAAA.', '.A..A.'] },
+  // Sprechblase (9×4) mit ein, zwei, drei Punkten, außen je zwei Pixel Rand (vorher 7 breit: der letzte Punkt klebte am Rand, Fynn 2026-10-06)
+  agent_bub1: { rows: ['.WWWWWWW.', 'WWGWWWWWW', '.WWWWWWW.', '....W....'], effect: true },
+  agent_bub2: { rows: ['.WWWWWWW.', 'WWGWGWWWW', '.WWWWWWW.', '....W....'], effect: true },
+  agent_bub3: { rows: ['.WWWWWWW.', 'WWGWGWGWW', '.WWWWWWW.', '....W....'], effect: true },
   // Denk-Spinner (6×3, genau über dem Kopf des Helfers): drei Punkte (hell, grau, dunkel) laufen im Kreis um die Mitte; th7 = gelbes Funkeln (Idee)
   agent_th1: { rows: ['..DG..', '....W.', '......'], effect: true },
   agent_th2: { rows: ['...D..', '....G.', '...W..'], effect: true },
@@ -82,7 +82,9 @@ const C = (name: string, label: string, cat: string, def: Partial<Omit<ClipDef, 
   out.push(clip(name, label, cat, def))
 }
 
-// ---- Interaktionen mit dem Helfer (work_agent): Platz 0 des Begleiters. Alle Clips sind Schleifen ohne Intro/Outro, der Helfer ist eine 'g'-Requisite
+// ---- Interaktionen mit dem Helfer (work_agent): Platz 0 des Begleiters. Gewichtet nach dem, was zwischen Agenten wirklich passiert (Fynn, 2026-10-06:
+// „sinnvolle Interaktionen“, mehr reden, weniger abklatschen): meist arbeitet der Helfer für sich, denkt nach oder berichtet, sie besprechen sich;
+// Gesten (Winken, Faustgruß, Tätscheln, Hüpfen) sind selten und laufen nur einmal statt in Schleife. Ohne Intro/Outro, der Helfer ist eine 'g'-Requisite
 // auf [-8, 5] und kehrt immer in `agent_s` dorthin zurück. Er hat ihn die ganze Zeit; nur Pose (und beim Hüpfen die Höhe) wechselt.
 const MX = -8
 const MYH = 5
@@ -102,7 +104,7 @@ const hopBeats = (n: number, c: (dy: number) => Frame): Beat[] =>
 // 1. Winken hin und her (der ruhigste Clip, wird bei reduzierter Bewegung genommen): Clawd hebt den Armstummel in Schritten, der Helfer winkt zurück.
 // Beide winken dreimal im Wechsel, dann blinzelt der Helfer.
 C('wave_helper', 'Winkt dem Helfer', 'work_agent', {
-  loop: true, interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 1,
+  interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 0.5,
   frames: beats([
     [3, FL, HS(0)],
     [1, { ...FL, armL: A(2, 3) }, HS(2)],
@@ -113,13 +115,14 @@ C('wave_helper', 'Winkt dem Helfer', 'work_agent', {
   ]),
 })
 
-// 2. High five: Der Helfer hüpft mit erhobener Hand, Clawd hebt den Stummel dem Helfer entgegen; im höchsten Punkt klatschen die Hände ab
+// 2. High five, nur wenn ein Helfer fertig ist (agent_done, neben den Übergaben): Während der Arbeit klatschten sie viel zu oft ab, das passt
+// erst zum Schluss (Fynn, 2026-10-06). Der Helfer hüpft mit erhobener Hand, Clawd hebt den Stummel dem Helfer entgegen; im höchsten Punkt klatschen die Hände ab
 // (Funke darüber, Clawd hüpft mit). Dann freuen sich beide.
 const POW_A: PropRef = ['agent_pow', -6, -2, 'g']
 const POW_B: PropRef = ['agent_powB', -6, -2, 'g']
 const POW_S: PropRef = ['agent_pow2', -5, -1, 'g']
-C('high_five_helper', 'High five mit Helfer', 'work_agent', {
-  loop: true, interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 0.3,
+C('high_five_helper', 'Klatscht mit dem fertigen Helfer ab', 'agent_done', {
+  mirror: false, companion: true, weight: 0.6,
   frames: beats([
     [4, FL, HS(0)],
     [1, { ...FL, armL: A(2, 5) }, HS(0)],
@@ -130,14 +133,14 @@ C('high_five_helper', 'High five mit Helfer', 'work_agent', {
     [1, { ...HAP, armL: A(4, 3), fy: -1 }, HS(1, 0, -2), POW_A],
     [1, { ...HAP, armL: A(3, 4), fy: 0 }, HS(3, 0, -1), POW_S],
     [1, { ...HAP, armL: A(2, 5) }, HS(3, 0, 0)],
-    [2, HAP, HS(5)], [2, HAP, HS(0)], [1, FL, HS(6)], [5, FL, HS(0)],
+    [2, HAP, HS(5)], [2, HAP, HS(0)], [1, FL, HS(6)], [5, FL, HS(0)], [2, {}, HS(0)],
   ]),
 })
 
 // 3. Faustgruß: Clawd streckt den Stummel in Schritten aus, bis er die Faust (Stummelarm) des Helfers berührt; kurz ausholen, anstoßen (Funke), beide freuen sich.
 const SPARK: PropRef = ['agent_pow2', -3, 3, 'g']
 C('fist_bump_helper', 'Faustgruß mit Helfer', 'work_agent', {
-  loop: true, interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 0.5,
+  interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 0.2,
   frames: beats([
     [4, FL, HS(0)],
     [1, { ...FL, armL: A(2, 6) }, HS(0)],
@@ -154,10 +157,10 @@ C('fist_bump_helper', 'Faustgruß mit Helfer', 'work_agent', {
 
 // 4. Kleines Gespräch: Punkte-Sprechblasen wandern abwechselnd über den Helfer und über Clawd (ein, zwei, drei Punkte), der jeweils andere nickt.
 // Zum Schluss freut sich der Helfer mit einem Hüpfer.
-const BH = (n: number): PropRef => [`agent_bub${n}`, -8, 0, 'g'] // über dem Helfer (Schwanz über seiner Kopfmitte, x -5)
-const BC = (n: number): PropRef => [`agent_bub${n}`, 5, -4, 'g'] // über Clawd (Schwanz über seiner Kopfmitte, x 8)
+const BH = (n: number): PropRef => [`agent_bub${n}`, -9, 0, 'g'] // über dem Helfer (Schwanz über seiner Kopfmitte, x -5)
+const BC = (n: number): PropRef => [`agent_bub${n}`, 4, -4, 'g'] // über Clawd (Schwanz über seiner Kopfmitte, x 8)
 C('chat_helper', 'Plaudert mit dem Helfer', 'work_agent', {
-  loop: true, interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 1.5,
+  loop: true, interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 3,
   frames: beats([
     [2, FL, HS(0)],
     [2, FL, HS(4), BH(1)], [2, { ...FL, by: 1 }, HS(0), BH(2)], [2, FL, HS(4), BH(3)], [2, { ...FL, by: 1 }, HS(0), BH(3)],
@@ -173,7 +176,7 @@ C('chat_helper', 'Plaudert mit dem Helfer', 'work_agent', {
 const clap = (dy: number): Frame => ({ ...HAP, armL: dy < 0 ? A(3, -1) : A(3, 1) })
 const clawdHop = (n: number, h: (fy: number) => Beat): Beat[] => rep(n, [0, -1, -1, 0].map(h))
 C('hop_with_helper', 'Hüpft mit dem Helfer', 'work_agent', {
-  loop: true, interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 0.2,
+  interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 0.1,
   frames: beats([
     [3, FL, HS(0)],
     ...hopBeats(2, clap),
@@ -187,7 +190,7 @@ C('hop_with_helper', 'Hüpft mit dem Helfer', 'work_agent', {
 // Dann geht der Helfer zurück auf seinen Platz.
 const HEART = (y: number): PropRef => ['agent_hs', -6, y, 'g']
 C('pat_helper', 'Tätschelt den Helfer', 'work_agent', {
-  loop: true, interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 0.5,
+  interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 0.3,
   frames: beats([
     [3, FL, HS(0)],
     [1, FL, HS(0, 1)], [1, FL, HS(0, 2)],
@@ -206,7 +209,7 @@ const TH = (n: number): PropRef => [`agent_th${n}`, -8, 1, 'g'] // Spinner genau
 
 // 7. Erzählt: Sprechblasen nur beim Helfer, er redet ruhig in zwei Absätzen; Clawd hört zu und nickt.
 C('helper_report', 'Helfer erzählt', 'work_agent', {
-  loop: true, interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 1,
+  loop: true, interruptible: true, mirror: false, companion: true, outro: SETTLE, weight: 2.5,
   frames: beats([
     [3, FL, HS(0)],
     [2, FL, HS(4), BH(1)], [2, FL, HS(0), BH(2)], [2, FL, HS(4), BH(3)], [3, FL, HS(0), BH(3)],
@@ -297,7 +300,7 @@ C('helper_doze', 'Döst neben dem Helfer', 'work_agent', {
 // ---- Mehrere Helfer (minMates): Die Helfer auf den Plätzen 1, 2 … zeichnet die Engine; diese Clips (nicht companion) zeichnen nur Effekte und lassen Clawd
 // zu ihnen schauen. Eine Sprechblase muss nahe an Clawd entstehen und vergehen (Prüfung "nichts taucht auf"); sie wandert deshalb als Nachricht von Clawd über die
 // Reihe zum zweiten Helfer (Platz 1, Kopf bei x -15) und als Antwort wieder zurück.
-const BF = (n: number, x: number, y: number): PropRef => [`agent_bub${n}`, x, y, 'g']
+const BF = (n: number, x: number, y: number): PropRef => [`agent_bub${n}`, x - 1, y, 'g'] // Zipfel bei x + 3 wie bei der alten, schmaleren Blase
 const TALK2: Frame = { ...FL, mouth: 'o' }
 
 // 12. Gespräch mit dem zweiten Helfer: Clawd sagt etwas (Blase über ihm), die Blase wandert zum Helfer auf Platz 1, der antwortet (die Blase kommt zurück), Clawd nickt.

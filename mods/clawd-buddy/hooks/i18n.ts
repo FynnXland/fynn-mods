@@ -26,7 +26,7 @@ type Texts = {
   status: (o: { on: boolean; mood: string; temper: string; tired: number; annoy: number; desk: string }) => string
   mood: { veryGrumpy: string; grumpy: string; great: string; good: string; even: string }
   deskNone: string
-  desk: (o: { secs: string; draws: number; perMin: string; planSecs: string; changes: string; kb: string; calcAvg: string; calcMax: string; drawAvg: string; drawMax: string; others: string }) => string
+  desk: (o: { secs: string; draws: number; reused: number; perMin: string; planSecs: string; changes: string; kb: string; calcAvg: string; calcMax: string; drawAvg: string; drawMax: string; others: string }) => string
   alt: string
 }
 
@@ -46,7 +46,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     mood: { veryGrumpy: 'very grumpy', grumpy: 'grumpy', great: 'in a great mood', good: 'in a good mood', even: 'calm' },
     deskNone: 'Desktop drawing: no data (only runs in the desktop app while the band is drawn)',
     desk: (o) =>
-      `Desktop drawing, last ${o.secs} s: ${o.draws} draws (${o.perMin}/min), animations avg ${o.planSecs} s with ${o.changes} frame changes, ` +
+      `Desktop drawing, last ${o.secs} s: ${o.draws} draws (${o.perMin}/min), ${o.reused} times kept unchanged (no reload), animations avg ${o.planSecs} s with ${o.changes} frame changes, ` +
       `${o.kb} kB; compute avg ${o.calcAvg} / max ${o.calcMax} ms, draw avg ${o.drawAvg} / max ${o.drawMax} ms (other mods avg ${o.others} ms)`,
     alt: 'Clawd, the mascot',
   },
@@ -65,7 +65,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     mood: { veryGrumpy: 'sehr gereizt', grumpy: 'gereizt', great: 'bester Laune', good: 'gut gelaunt', even: 'ausgeglichen' },
     deskNone: 'Desktop-Zeichnung: keine Daten (läuft nur im Desktop, während das Band gezeichnet wird)',
     desk: (o) =>
-      `Desktop-Zeichnung, letzte ${o.secs} s: ${o.draws} Zeichnungen (${o.perMin}/min), Animationen Ø ${o.planSecs} s mit ${o.changes} Bildwechseln, ` +
+      `Desktop-Zeichnung, letzte ${o.secs} s: ${o.draws} Zeichnungen (${o.perMin}/min), ${o.reused}-mal unverändert weitergegeben (kein Neuladen), Animationen Ø ${o.planSecs} s mit ${o.changes} Bildwechseln, ` +
       `${o.kb} kB; Rechnen Ø ${o.calcAvg} / max ${o.calcMax} ms, Zeichnen Ø ${o.drawAvg} / max ${o.drawMax} ms (davon andere Mods Ø ${o.others} ms)`,
     alt: 'Clawd, das Maskottchen',
   },
@@ -127,7 +127,7 @@ export const CLIP_EN: Readonly<Record<string, string>> = {
   git_push: 'Pushes up into the cloud',
   test_tube: 'Shakes a test tube',
   wave_helper: 'Waves to the helper',
-  high_five_helper: 'High five with the helper',
+  high_five_helper: 'High five with the finished helper',
   fist_bump_helper: 'Fist bump with the helper',
   chat_helper: 'Chats with the helper',
   hop_with_helper: 'Hops with the helper',
@@ -207,6 +207,30 @@ export const CLIP_EN: Readonly<Record<string, string>> = {
   turn_back: 'turn back',
   lift: 'stand → lifted',
   drop: 'lifted → stand',
+  // sidekick (Schnittstelle zum Mod sidekick)
+  sk_read_check: 'Reads your message carefully',
+  sk_lens_check: 'Checks your message with a magnifier',
+  sk_hold_on: 'Raises a hand: hold on!',
+  sk_stop_sign: 'Holds up a stop sign',
+  sk_write_letter: 'Writes a handoff letter',
+  sk_open_letter: 'Opens the letter from the new chat',
+  // dünne Gruppen ergänzt (2026-10-06)
+  point_prompt: 'Points at the input',
+  bubble_question: 'Asks with a speech bubble',
+  limit_knit: 'Knits a scarf',
+  limit_sandcastle: 'Builds a sandcastle',
+  morning_jacks: 'Morning workout (jumping jacks)',
+  morning_water: 'Waters the flower',
+  // Komprimieren und Skill-Start
+  compact_press: 'Squashes a paper stack',
+  compact_box: 'Crumples paper into a box',
+  skill_book: 'Opens a book',
+  skill_tools: 'Grabs a wrench',
+  // Hinweise am Turn-Ende: Kontext fast voll, langer Turn geschafft
+  ctx_box: 'Box overflows (context almost full)',
+  ctx_stack: 'Wobbly paper stack (context almost full)',
+  long_phew: 'Phew, done (long turn)',
+  long_flag: 'Waves the finish flag (long turn)',
 }
 
 /** Bezeichnung eines Clips in der eingestellten Sprache. */

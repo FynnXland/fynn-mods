@@ -111,11 +111,20 @@ Two slim bars left of Clawd show how much of the 5-hour and the weekly limit you
 next to them shows how long this chat's prompt cache stays warm, and the context size. The cache guard asks before
 you send into a large chat with a cold cache, which would re-write the whole context.
 
+An optional third ring shows how full a drive is, split by file type (programs, media, AI models, code …), with
+`/disk` for the details. It is **off by default** and Windows only for now: set `storagePath` in `/config` to turn it on.
+
+**Make it yours:** every part (5-hour bar, weekly bar, cache ring, storage ring) can be hidden on its own, with
+`/bars show cache off` (applies to all open chats right away) or permanently with `showFiveHour`, `showWeekly`,
+`showCache` and `showStorage` in `/config`. Hiding the cache ring keeps the cold-send question; turn that off with
+`/cache warn off`.
+
 - **Commands:** `/cache` (overview and settings), `/handoff [continue|show]` (write a handoff and continue in a fresh
-  chat), `/keepwarm [hours|off]`
+  chat), `/keepwarm [hours|off]`, `/disk [refresh]`, `/bars [show <part> on|off | reset]`
 - **Rights in short:** reads limits, context size and cache statistics; can hold a message back to ask you first; runs
-  `/clear` and `/compact` and sends a handoff only after you choose so; `$.model.fork` only while `/keepwarm` runs.
-  No files, processes, network or environment variables.
+  `/clear` and `/compact` and sends a handoff only after you choose so; `$.model.fork` only while `/keepwarm` runs;
+  only with `storagePath` set, runs Windows PowerShell with two fixed, read-only scripts (drive size, sizes by file
+  extension). No files, network or environment variables.
 - **Details:** [mods/limit-bars](mods/limit-bars/README.md)
 
 ### sidekick
@@ -135,8 +144,8 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
 - **Wrong chat:** if a message clearly belongs to a different project than the chat, sidekick holds it back and asks
   whether you're in the wrong chat, before it lands in (and pays for) the wrong context.
 - **Due maintenance:** once per chat it names at most one due command (`/skill-doctor`, prompt audit, memory
-  consolidation, `/init`), based on a free local estimate. A button next to the line puts the command into the prompt
-  or, with worklist installed, queues it as a to-do.
+  consolidation, `/init`), based on a free local estimate. A button next to the line (also for a command a hint names, e.g.
+  `/handoff`) runs it with one click or, with worklist installed, queues a skill as a to-do.
 - **Savings you can check:** `/savings` shows what sidekick cost and what it measurably saved; `/savings detail` adds
   the calculation, a model comparison and a day-by-day history.
 
@@ -146,8 +155,10 @@ If a check fails or times out, your message goes through unchanged.
   `/savings [today|week|all]`, `/savings detail`
 - **Rights in short:** reads your message before it is sent; holds it back or replaces it only after your choice in
   the dialog; Sonnet via `$.model.complete` with a short running summary and your last 3 messages, never the whole
-  history; on a button click it fills the prompt (never sends) or runs worklist's `/todo`; reads the project root
-  path. No files, environment, network or settings.
+  history; on a button click it runs the command shown in the line (plugin and your own commands, `/skill-doctor`,
+  `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) or worklist's `/todo`, and fills
+  the prompt if the command is refused; reads the project root path; tells clawd-buddy via `$.state` only the kind of
+  event and the time, never your message. No files, environment, network or settings.
 - **Details:** [mods/sidekick](mods/sidekick/README.md)
 
 ### quick-replies
@@ -202,6 +213,8 @@ your projects and the most expensive chats, drawn in Claude Code's own style.
   `/cache warn off`, so you don't get two dialogs in a row; sidekick's question replaces it.
 - **sidekick hands tasks to worklist.** With both installed, the button next to a maintenance hint queues the command
   as a to-do; worklist sends it once the current task is done.
+- **Clawd acts out what sidekick does.** With both installed, Clawd holds a magnifying glass to the input while
+  sidekick checks, holds up a stop sign when it asks, and writes a letter when it starts a new chat with a handoff.
 - **cost-ledger books the others.** Model calls of sidekick, worklist, quick-replies and limit-bars don't show up in
   `/cost`; cost-ledger records them separately, so `/ledger` shows what each mod costs.
 

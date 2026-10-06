@@ -26,6 +26,8 @@ export type Facts = {
   turnActive: boolean
   /** Zuletzt gestartetes, noch laufendes Tool des Hauptagenten (nicht der Subagenten). */
   tool: { kind: ToolKind; since: number } | null
+  /** Zuletzt beendetes Tool des Hauptagenten in diesem Turn und wann es endete (ms): Nachlauf, siehe TOOL_LINGER_MS. */
+  lastTool?: { kind: ToolKind; endedAt: number }
   /** Eine Frage an den Nutzer ist offen (AskUserQuestion bzw. Berechtigung `ask`). */
   ask: boolean
   /** Zeitpunkt der letzten Eingabe im Prompt (ms, 0 = nie). */
@@ -51,6 +53,22 @@ export type Facts = {
   limits?: { five?: number; fiveReset?: number; week?: number; weekReset?: number }
   /** Zeitpunkt (ms), an dem Fynn nach mindestens AWAY_MS Pause zurückkam (erste Eingabe bzw. Sitzung wieder sichtbar): Begrüßung. */
   backAt?: number
+  /**
+   * Was der Mod sidekick gerade tut, aus dessen `$.state`-Wert `sidekick.buddy` (types/index.d.ts): prüft die Nachricht, hält sie an,
+   * baut einen neuen Chat, neuer Chat eben gestartet. Ohne sidekick leer.
+   */
+  sidekick?: { kind: 'check' | 'stop' | 'handoff' | 'fresh'; at: number } | null
+  /** Seit wann der Verlauf komprimiert wird (session.compact des Hauptgesprächs, ms; fehlt = gerade nicht). */
+  compactSince?: number
+  /** Zeitpunkt (ms), an dem zuletzt ein Skill startete (skill.prompt): kurz `skill`. */
+  skillAt?: number
+  /**
+   * Zeitpunkt (ms), an dem er zeigt, dass das Kontextfenster voll wird (eine Stufe aus CTX_WARN überschritten; gezeigt am Turn-Ende,
+   * nie mitten in der Arbeit): kurz `ctx_full`. Nur die Prozentzahl aus `session.measure` zählt (types:10771), nie der Verlauf.
+   */
+  ctxAt?: number
+  /** Dauer des zuletzt beendeten Turns (ms): ab LONG_TURN_MS heißt „fertig“ `done_long` (Puh, geschafft). */
+  turnMs?: number
 }
 
 /** Ab so viel Prozent gilt ein Fenster als ausgeschöpft. */
@@ -75,6 +93,12 @@ export const WAIT_LONG_MS = 10_000
 export const WAIT_STRONG_MS = 60_000
 export const TYPING_MS = 6_000 // kurze Tipp-Pausen beenden das Mitlesen/Mitschreiben nicht
 export const ENDED_MS = 4_000
+/**
+ * Nachlauf: So lange nach dem Ende eines Tools bleibt dessen Arbeit die Stimmung, bis das nächste Tool beginnt. Read und Edit dauern
+ * meist unter 0,5 s und gingen sonst in der Entprellung unter (Laptop nie zu sehen); die Denkpausen zwischen zwei Tools ließen ihn
+ * alle paar Sekunden zwischen Arbeit und Grübeln wechseln (Fynn, 2026-10-06: „wechselt so mittendrin“; tools/flow.mjs).
+ */
+export const TOOL_LINGER_MS = 8_000
 
 export const NO_FACTS: Facts = { turnActive: false, tool: null, ask: false, typingAt: 0, endedAt: 0, endedKind: '' }
 
@@ -199,6 +223,41 @@ export function specialDay(now: number, birthday: string): '' | 'birthday' | 'ne
   return ''
 }
 
+/** So lange nach dem Start eines Skills zeigt er ihn (ms). */
+export const SKILL_MS = 4_000
+/** So lange nach dem Start eines neuen Chats durch sidekick freut er sich darüber (ms). */
+export const SK_FRESH_MS = 6_000
+/**
+ * Sicherheitsnetz, falls sidekick einen Zustand nicht mehr zurücksetzt (z. B. Neuladen mitten in der Prüfung): so lange gilt er
+ * höchstens (ms). Die Prüfung dauert sonst 1–6 s, der Dialog wartet auf Fynn, die Übergabe braucht bis ~45 s.
+ */
+export const SK_MAX_MS = { check: 30_000, stop: 10 * 60_000, handoff: 3 * 60_000, fresh: SK_FRESH_MS } as const
+/** Nur gültige Werte von sidekick übernehmen (ein dritter Mod könnte ihn umschreiben, Review K2), sonst `null`. */
+export function sidekickValue(v: unknown): Facts['sidekick'] {
+  if (!v || typeof v !== 'object') return null
+  const o = v as { kind?: unknown; at?: unknown }
+  const kinds = ['check', 'stop', 'handoff', 'fresh'] as const
+  const kind = kinds.find((k) => k === o.kind)
+  return kind && typeof o.at === 'number' && Number.isFinite(o.at) ? { kind, at: o.at } : null
+}
+
+/**
+ * Füllstände des Kontextfensters (Prozent), bei denen er einmal zeigt, dass es voll wird: Zeit für `/compact` oder einen neuen Chat.
+ * Jede Stufe meldet er nur einmal; fällt der Füllstand darunter (Komprimieren, `/clear`), ist sie wieder scharf.
+ */
+export const CTX_WARN = [70, 85] as const
+/** Höchste überschrittene Warnstufe zu `percent` (0 = keine). */
+export function ctxLevel(percent: number): number {
+  let lvl = 0
+  for (const l of CTX_WARN) if (percent >= l) lvl = l
+  return lvl
+}
+/** Ein Turn ab dieser Dauer gilt als lang: am Ende ein erleichtertes „Puh, geschafft“ statt des normalen Abschlusses. */
+export const LONG_TURN_MS = 5 * 60_000
+
+/** Ein Komprimieren ohne Ende (Hook-Fehler) gilt nach so langer Zeit als vorbei (ms). */
+export const COMPACT_MAX_MS = 5 * 60_000
+
 /** Ein Subagent ohne Aktivität so lange gilt als beendet (falls sein Ende nicht gemeldet wurde). */
 export const AGENT_STALE_MS = 600_000 // 10 min: Subagenten denken im Hintergrund auch mal länger ohne Tool-Aufruf
 /** Ab so vielen gleichzeitig laufenden Subagenten: Schwarm (Fynn: "ganz, ganz viele, ein bisschen übertrieben"). */
@@ -217,11 +276,21 @@ export function activeAgents(f: Facts, now: number): number {
 /** Engine-Stimmung zu den Fakten zur Zeit `now` (ms). */
 export function deriveMood(f: Facts, now: number): string {
   if (f.ask) return f.askSince && now - f.askSince >= WAIT_ASK_LONG_MS ? 'waitUserLong' : 'waitUser'
+  const sk = f.sidekick && now - f.sidekick.at < SK_MAX_MS[f.sidekick.kind] ? f.sidekick.kind : null
+  // sidekick fragt Fynn (Dialog offen): wie eine Rückfrage
+  if (sk === 'stop') return 'sk_stop'
   // Limit ausgeschöpft: Claude kann nicht arbeiten, das hat Vorrang vor allem außer einer offenen Rückfrage
   const lim = limitState(f, now)
   if (lim === 'week') return 'limit_week'
   if (lim === 'five') return 'limit_5h'
   if (lim === 'back' && !f.turnActive) return 'limit_back'
+  // Komprimieren hält alles an; danach geht es mit der Arbeit weiter
+  if (f.compactSince && now - f.compactSince < COMPACT_MAX_MS) return 'compact'
+  // sidekick baut einen neuen Chat bzw. hat ihn eben gestartet (der Turn darin beginnt sofort: die Freude geht kurz vor)
+  if (sk === 'handoff') return 'sk_handoff'
+  if (sk === 'fresh') return 'sk_fresh'
+  if (sk === 'check') return 'sk_check'
+  if (f.skillAt && now - f.skillAt < SKILL_MS) return 'skill'
   const ownTool = f.tool && f.turnActive && f.tool.kind !== 'agent' ? f.tool : null
   // Commits und Checks haben eigene Warte-Animationen: dort kein Wechsel ins allgemeine Warten
   if (ownTool && ownTool.kind !== 'git' && ownTool.kind !== 'test') {
@@ -233,9 +302,13 @@ export function deriveMood(f: Facts, now: number): string {
   // Ein Subagent ist eben fertig: sein Helfer bringt ein Geschenk (einmalig, vor eigener Arbeit und Schwarm)
   if (f.agentDoneAt && now - f.agentDoneAt < AGENT_DONE_MS) return 'agent_done'
   if (ownTool) return WORK[ownTool.kind]
+  const linger = f.turnActive && !f.tool && f.lastTool && f.lastTool.kind !== 'agent' && now - f.lastTool.endedAt < TOOL_LINGER_MS
+  if (linger) return WORK[f.lastTool!.kind]
   // Erfolgsserie erreicht eine Marke: einmal Pokal/Medaille (statt des normalen „fertig“)
+  // Kontext wird voll: wichtiger als Pokal und Fertig (Fynn sieht, dass bald komprimiert werden sollte)
+  if (!f.turnActive && f.ctxAt && now - f.ctxAt < ENDED_MS) return 'ctx_full'
   if (!f.turnActive && f.streakAt && now - f.streakAt < ENDED_MS) return 'streak'
-  if (!f.turnActive && f.endedKind && now - f.endedAt < ENDED_MS) return f.endedKind
+  if (!f.turnActive && f.endedKind && now - f.endedAt < ENDED_MS) return f.endedKind === 'done' && (f.turnMs ?? 0) >= LONG_TURN_MS ? 'done_long' : f.endedKind
   if (agents > 0) return 'work_agent'
   if (f.turnActive) return WORK[f.tool?.kind ?? 'think']
   if (f.typingAt && now - f.typingAt < TYPING_MS) return 'watching'

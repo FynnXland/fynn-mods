@@ -78,7 +78,11 @@ test('Effekte überlappen sich nie (Pfeif-Noten, Funken, Herzen …) und nicht m
             // Zwei verschiedene Requisiten auf demselben Pixel (mindestens eine ein Effekt) = Überlappung
             if (other !== undefined && other !== `${k}`) {
               const o = f.p.props[Number(other)]
-              if (sp.effect || propSprite(ALL_PROPS, o[0])!.effect) bad.push(`${c.name} Frame ${idx}: ${pr[0]} überlappt ${o[0]} bei (${x},${y})`)
+              const os = propSprite(ALL_PROPS, o[0])!
+              // Sichtbar ist das später gezeichnete: liegt ein Effekt oben, überdeckt er etwas (Fynn: Pfeif-Noten übereinander). Ein Effekt
+              // unter einem festen Gegenstand ist verdeckt (Knäuel fällt hinter den Kartonrand). Eine Hand (`hand`) liegt bewusst auf dem,
+              // was sie hält.
+              if (sp.effect && !sp.hand && !os.hand) bad.push(`${c.name} Frame ${idx}: ${pr[0]} überlappt ${o[0]} bei (${x},${y})`)
             }
             cells.set(key, `${k}`)
           }
@@ -394,6 +398,35 @@ test('Ruhe: flackernde Stimmungen (Tools im Sekundentakt) wechseln den Clip nich
   expect(repeats).toBeLessThanOrEqual(2)
 })
 
+test('Arbeitsfluss: von einer Tool-Arbeit zur nächsten erst nach ~10 s (ausgepackt bleibt eine Weile), aus dem Grübeln schnell', { timeoutMs: 30000 }, () => {
+  const e = newEngine(LIB, 21)
+  e.start()
+  e.setMood('work_shell')
+  for (let i = 0; i < 60; i++) e.tick() // 4,5 s Shell
+  expect(e.S.mood).toBe('work_shell')
+  const start = e.S.clipStart
+  e.setMood('work_read')
+  let at = -1
+  for (let i = 0; i < 300 && at < 0; i++) {
+    e.tick()
+    if (e.S.mood === 'work_read') at = e.S.ticks
+  }
+  // vorher genügten 3 s Mindestdauer und 0,75 s Entprellung
+  expect(at - start).toBeGreaterThanOrEqual(133)
+  // Aus dem Grübeln (ohne Gegenstände) in eine Tool-Arbeit: normale Mindestdauer
+  const t = newEngine(LIB, 22)
+  t.start()
+  t.setMood('work_think')
+  for (let i = 0; i < 45; i++) t.tick()
+  t.setMood('work_shell')
+  let n = 0
+  while (t.S.mood !== 'work_shell' && n < 300) {
+    t.tick()
+    n++
+  }
+  expect(n).toBeLessThanOrEqual(40)
+})
+
 test('Begleiter: je Subagent ein Helfer, steigt einmal auf, bleibt (auch bei eigener Arbeit, die dann rechts läuft), Übergabe des Ergebnisses zum Schluss, sinkt ab', { timeoutMs: 30000 }, () => {
   const e = newEngine(LIB, 15)
   e.start()
@@ -419,7 +452,7 @@ test('Begleiter: je Subagent ein Helfer, steigt einmal auf, bleibt (auch bei eig
     expect(always).toBe(true)
     expect(leftClear).toBe(true)
   }
-  // Subagent fertig: Übergabe (Zettel, Stapel, Mappe, Umschlag oder Geschenk), danach sinkt der Helfer ab
+  // Subagent fertig: Übergabe (Zettel, Stapel, Mappe, Umschlag oder Geschenk) oder Abklatschen, danach sinkt der Helfer ab
   e.set({ agents: 0 })
   e.setMood('agent_done')
   const seen: string[] = []
@@ -428,7 +461,7 @@ test('Begleiter: je Subagent ein Helfer, steigt einmal auf, bleibt (auch bei eig
     const n = e.S.play?.clip.name
     if (n && !seen.includes(n)) seen.push(n)
   }
-  expect(seen.some((n) => n.startsWith('handoff_') || n === 'helper_gift')).toBe(true)
+  expect(seen.some((n) => n.startsWith('handoff_') || n === 'helper_gift' || n === 'high_five_helper')).toBe(true)
   expect(e.S.mates.length).toBe(0)
   expect(mate()).toBeUndefined()
 })
@@ -662,4 +695,89 @@ test('Desktop: ein Ereignis wirkt ab seiner Zeichnung, nicht rückwirkend (nach 
   d.catchUp(t2)
   d.draw(t2, { ...done, backAt: t2 - 50 }, NO_STRAIN, 4)
   expect([...after(t2)]).toContain('welcome')
+})
+
+test('Nichts mittendrin abbrechen: ein Wechsel wartet aufs Ende des Durchgangs bzw. eine Ruhestelle; dringende Stimmungen kommen schnell', { timeoutMs: 30000 }, () => {
+  for (let seed = 1; seed <= 6; seed++) {
+    const e = newEngine(LIB, 300 + seed)
+    e.start()
+    e.setMood('work_think')
+    for (let i = 0; i < 200; i++) e.tick()
+    const pl = e.S.play!
+    expect(pl.clip.cat).toBe('work_think')
+    // ruhiger Wechsel: verlassen wird nur am Ende des Durchgangs oder an einer Ruhestelle (Ausgangspose, Arme unten)
+    e.setMood('watching')
+    let left = -1
+    for (let i = 0; i < 400 && left < 0; i++) {
+      const before = e.S.play!
+      const fi = before.fi
+      const phase = before.phase
+      e.tick()
+      if (before.interrupted && phase === 'body') {
+        // Ausstieg am nächsten Bild (die Engine prüft nach dem Weiterschalten) oder an der Schleifengrenze (letztes Bild)
+        const last = fi === before.body.length - 1
+        const f = before.body[Math.min(fi + 1, before.body.length - 1)]
+        const rest = f.p.armL === 'down' && f.p.armR === 'down' && f.p.fx === 0 && f.p.fy === 0
+        expect(rest || last, `${before.clip.name}: Ausstieg bei Bild ${fi + 1}`).toBe(true)
+        left = i
+      }
+      if (e.S.play!.clip.cat === 'watching') left = Math.max(left, i)
+    }
+    expect(left).toBeGreaterThanOrEqual(0)
+  }
+  // Rückkehr der Stimmung: der laufende Clip bleibt einfach (Schreiben hat im Hauptteil keine sicheren Bilder, spielt also zu Ende)
+  for (let seed = 41; seed <= 44; seed++) {
+    const r = newEngine(LIB, seed)
+    r.start()
+    r.setMood('work_write')
+    let k = 0
+    while (!(r.S.play!.clip.cat === 'work_write' && r.S.play!.phase === 'body' && r.S.play!.fi === 0) && k++ < 400) r.tick()
+    const same = r.S.play!
+    r.setMood('watching')
+    for (let i = 0; i < 60 && r.S.mood !== 'watching'; i++) r.tick()
+    expect(r.S.mood).toBe('watching')
+    expect(r.S.pending).toBe(true)
+    r.setMood('work_write')
+    for (let i = 0; i < 60 && r.S.mood !== 'work_write'; i++) r.tick()
+    r.tick()
+    expect(r.S.play, `${same.clip.name}: bleibt`).toBe(same)
+    expect(r.S.pending).toBe(false)
+    for (let i = 0; i < 100; i++) r.tick()
+    expect(r.S.play!.clip.name).toBe(same.clip.name)
+  }
+  // Einmal-Stimmung geht nicht verloren: Fertig, während er schreibt; nach 4 s wäre die Stimmung schon wieder Leerlauf
+  for (let seed = 50; seed < 58; seed++) {
+    const d = newEngine(LIB, seed)
+    d.start()
+    d.setMood('work_write')
+    let k = 0
+    while (!(d.S.play!.clip.cat === 'work_write' && d.S.play!.phase === 'body') && k++ < 400) d.tick()
+    d.setMood('done')
+    let seen = false
+    for (let i = 0; i < 300 && !seen; i++) {
+      if (i === 53) d.setMood('idle')
+      d.tick()
+      if (d.S.play!.clip.cat === 'done') seen = true
+    }
+    expect(seen, `Seed ${seed}: Fertig-Clip läuft`).toBe(true)
+  }
+  // dringend (wartet auf dich): spätestens nach ~2 s plus Ausstieg
+  const u = newEngine(LIB, 42)
+  u.start()
+  u.setMood('work_shell')
+  for (let i = 0; i < 200; i++) u.tick()
+  u.setMood('waitUser')
+  let n = 0
+  while (u.S.play!.clip.cat !== 'waitUser' && n < 200) {
+    u.tick()
+    n++
+  }
+  expect(n).toBeLessThanOrEqual(80)
+})
+
+test('Türmchen: er bleibt an seinem Platz (kein Hin- und Herlaufen), und Hinweis-Clips gibt es für beide neuen Stimmungen', () => {
+  const r = resolveClip(byName('build_tower'))
+  for (const f of [...r.intro, ...r.body, ...r.outro]) expect(f.p.fx).toBe(0)
+  expect(cat('ctx_full').length).toBeGreaterThanOrEqual(2)
+  expect(cat('done_long').length).toBeGreaterThanOrEqual(2)
 })

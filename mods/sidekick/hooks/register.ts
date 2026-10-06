@@ -29,6 +29,7 @@ import {
   handoffEstimate,
   handoffPrompt,
   hintLine,
+  lineCommand,
   handoffSystem,
   historyTail,
   isSuppressed,
@@ -73,8 +74,11 @@ const HEADER = 'Sidekick'
 // Farbe der sidekick-Zeile und des Fassungs-Rahmens (andere Farbe als die Nachricht)
 const ACCENT = '#6CB6FF'
 
-/** Eine Zeile unter einer eigenen Nachricht; `cmd`: Befehl für den Button, `queued`: schon als To-do eingereiht (Nachtrag 0.7.0). */
-type HintRow = { id: string; line: string; sent?: string; cmd?: string; queued?: boolean }
+/**
+ * Eine Zeile unter einer eigenen Nachricht; `cmd`: Befehl für den Button, `queued`: schon als To-do eingereiht (Nachtrag 0.7.0),
+ * `ran`: schon ausgeführt (Nachtrag 0.8.1).
+ */
+type HintRow = { id: string; line: string; sent?: string; cmd?: string; queued?: boolean; ran?: boolean }
 
 /** Was der Sidekick je Session weiß; `$.store` `sitzung:<sessionId>` (SPEC Zustand). */
 type Sitzung = {
@@ -110,6 +114,7 @@ function cleanSitzung(v: unknown): Sitzung {
         ...(typeof h.sent === 'string' ? { sent: h.sent } : {}),
         ...(typeof h.cmd === 'string' && h.cmd.startsWith('/') ? { cmd: h.cmd } : {}),
         ...(h.queued === true ? { queued: true } : {}),
+        ...(h.ran === true ? { ran: true } : {}),
       }))
       .slice(-30)
   if (o.last && typeof o.last.line === 'string') s.last = o.last
@@ -166,6 +171,26 @@ function later($: EngineInterface, ms: number, fn: () => void) {
     timer.cancel()
     fn()
   })
+}
+
+// ---- Schnittstelle zu clawd-buddy (types/index.d.ts): was sidekick gerade tut, als `$.state`-Wert, den Clawd beim Zeichnen liest.
+// Beiwerk: nie warten, ein Fehler ändert nichts an Prüfung oder Nachricht.
+type BuddyKind = 'check' | 'stop' | 'handoff' | 'fresh'
+// `undefined` = unbekannt (nach einem Neuladen): der nächste Aufruf schreibt sicher, auch `null` (Review S1)
+let buddyKind: BuddyKind | null | undefined = undefined
+// Schreibvorgänge nacheinander, damit ein schnelles `handoff` → `null` nicht vertauscht ankommt (Review K1)
+let buddyChain: Promise<unknown> = Promise.resolve()
+function buddy($: EngineInterface, kind: BuddyKind | null) {
+  if (kind === buddyKind) return
+  buddyKind = kind
+  try {
+    buddyChain = buddyChain
+      .then(() => $.clock.now())
+      .then((at) => $.state.set({ plugin: 'sidekick', key: 'buddy' }, kind ? { kind, at } : null))
+      .catch(() => {})
+  } catch {
+    // Beiwerk: nie die Prüfung oder Nachricht stören
+  }
 }
 
 /** Nach /clear oder /resume gibt es eine neue Session-ID (Probe: sofort nach `/clear`); dann deren Stand laden. */
@@ -247,15 +272,15 @@ async function loadSkills($: EngineInterface, now: number): Promise<Skill[]> {
 
 /**
  * Wohin ein Befehl geht: als To-do, wenn worklist `/todo` anbietet und der Befehl ein Skill ist, den Claude selbst aufrufen kann
- * (Name in der Skill-Liste der lokalen Schätzung); sonst ins Eingabefeld. Eingebaute Befehle wie `/skill-doctor` oder `/init`
- * kann Claude nicht ausführen, ein To-do dafür liefe ins Leere (rel/skills.md:899).
+ * (Name in der Skill-Liste der lokalen Schätzung); sonst direkt ausführen (Nachtrag 0.8.1, Fynn: „anklicken, und es wird gemacht“).
+ * Eingebaute Befehle wie `/skill-doctor` oder `/init` kann Claude nicht ausführen, ein To-do dafür liefe ins Leere (rel/skills.md:899).
  */
-function routeOf(base: typeof baseCache, cmd: string): 'todo' | 'fill' {
-  if (!base) return 'fill'
+function routeOf(base: typeof baseCache, cmd: string): 'todo' | 'run' {
+  if (!base) return 'run'
   const todo = base.cmds.some((c) => c.name === 'todo' && c.source === 'plugin' && /^worklist(@|$)/.test(c.plugin ?? ''))
   const name = cmd.replace(/^\//, '').split(/\s+/)[0] ?? ''
   const skill = (base.b?.skills?.skillFrontmatter ?? []).some((s) => s.name === name)
-  return todo && skill ? 'todo' : 'fill'
+  return todo && skill ? 'todo' : 'run'
 }
 
 // Laufende Klicks (Review 0.7.0 S1): die Sperre steht vor dem ersten `await`, ein Doppelklick legt nichts doppelt an
@@ -263,17 +288,18 @@ const pressing = new Set<string>()
 
 /**
  * Klick auf den Button. `route` ist das Ziel, das beim Zeichnen auf dem Button stand (Review S2: Beschriftung und Aktion gleich):
- * `/todo Führe … aus.` über worklist, oder der Befehl an der Cursor-Position ins Eingabefeld. „Eingereiht“ wird erst nach dem
- * erfolgreichen `/todo` gespeichert (Review K1); bis dahin gilt es nur im Speicher.
+ * `/todo Führe … aus.` über worklist, oder der Befehl selbst über `$.command.run`, „as if the person typed“ und hinter einem
+ * laufenden Turn eingereiht (types:2997-3003). Erledigt wird erst nach dem erfolgreichen Aufruf gespeichert (Review K1); bis dahin
+ * gilt es nur im Speicher. Lehnt die Engine den Befehl ab, kommt er als Rückfall ins Eingabefeld (Stand 0.7.0).
  */
-async function useHint($: EngineInterface, id: string, route: 'todo' | 'fill') {
+async function useHint($: EngineInterface, id: string, route: 'todo' | 'run') {
   const h = ses.hints.find((x) => x.id === id)
-  if (!h?.cmd || h.queued || pressing.has(id)) return
+  if (!h?.cmd || h.queued || h.ran || pressing.has(id)) return
   const cmd = h.cmd
   pressing.add(id)
+  $.ui.invalidate('ui.render')
   try {
     if (route === 'todo') {
-      $.ui.invalidate('ui.render')
       try {
         await $.command.run({ command: 'todo', args: t().todoText(cmd) })
       } catch (err) {
@@ -287,13 +313,28 @@ async function useHint($: EngineInterface, id: string, route: 'todo' | 'fill') {
       }
       return
     }
-    // An der Cursor-Position: bei leerem Feld steht nur der Befehl da, getippter Text bleibt. Ohne eigenes $.prompt.read liefert fill
-    // den Feldinhalt nicht zurück (types:8324-8355), darum kein Umstellen in eine eigene Zeile
+    const [name = '', ...rest] = cmd.replace(/^\//, '').split(/\s+/)
     try {
-      const r = await $.prompt.fill({ text: cmd, mode: 'insert' })
-      if (!r.isFilled) $.ui.toast(t().fillFailed(cmd), { timeoutMs: 15000 })
-    } catch {
-      $.ui.toast(t().fillFailed(cmd), { timeoutMs: 15000 })
+      await $.command.run({ command: name, ...(rest.length ? { args: rest.join(' ') } : {}) })
+    } catch (err) {
+      // An der Cursor-Position: getippter Text bleibt. Ohne eigenes $.prompt.read liefert fill den Feldinhalt nicht zurück
+      // (types:8324-8355), darum kein Umstellen in eine eigene Zeile
+      const why = msg(err)
+      try {
+        const r = await $.prompt.fill({ text: cmd, mode: 'insert' })
+        $.ui.toast(r.isFilled ? t().runFailedFilled(cmd, why) : t().runFailed(cmd, why), { timeoutMs: 15000 })
+      } catch {
+        $.ui.toast(t().runFailed(cmd, why), { timeoutMs: 15000 })
+      }
+      return
+    }
+    // Ein Wartungs-Befehl gilt als erledigt; ob $.command.run auch prompt.submit oder skill.prompt auslöst, ist nicht belegt (Review
+    // 0.8.1). Doppelt schadet nicht: nach doneAt zählt `accepted` nicht noch einmal (wartung.ts accepted)
+    void noteDone($, doneFromText(cmd))
+    const now = ses.hints.find((x) => x.id === id)
+    if (now) {
+      now.ran = true
+      saveSes($, await $.clock.now().catch(() => 0))
     }
   } finally {
     pressing.delete(id)
@@ -520,6 +561,7 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     commit: c ? `${c.sha} vor ${spanText(now - c.at)}` : 'keiner',
   })
   // Bricht der Nutzer ab, endet auch die Prüfung (types:2500-2501)
+  buddy($, 'check')
   const r = await $.model.complete({ ...CHECK, system: checkSystem(skills), prompt }, { signal })
   const done = await $.clock.now()
   // `usage` kommt auf jedem Arm, auch bei Abbruch (types:6131): immer buchen
@@ -624,6 +666,7 @@ let busy: { step: Step; since: number } | null = null
 let busyTimer: Timer | null = null
 
 async function showBusy($: EngineInterface, step: Step) {
+  buddy($, 'handoff')
   busy = { step, since: busy?.since ?? (await $.clock.now()) }
   // Sekunden mitzählen: alle 1 s neu zeichnen, nur solange die Box steht
   if (!busyTimer) busyTimer = $.clock.every(1000, () => $.ui.invalidate('ui.render'))
@@ -631,6 +674,8 @@ async function showBusy($: EngineInterface, step: Step) {
 }
 
 function hideBusy($: EngineInterface) {
+  // Abgebrochen oder gescheitert: Clawd hört auf, den Brief zu schreiben; „neuer Chat da“ bleibt stehen
+  if (buddyKind === 'handoff') buddy($, null)
   if (!busy) return
   busy = null
   busyTimer?.cancel()
@@ -694,6 +739,9 @@ async function freshChat($: EngineInterface, text: string, c: Check, handoff: st
   saveSes($, now)
   try {
     await $.prompt.submit({ text: handoff ? handoff + t().handoffSep + text : text, asUser: true })
+    // /clear hat den Wert zurückgesetzt; neu schreiben, auch wenn das Modul noch „handoff“ meint
+    buddyKind = null
+    buddy($, 'fresh')
     $.ui.toast(t().newChatStarted(!!handoff), { timeoutMs: 8000 })
   } catch (err) {
     $.ui.toast(t().sendAfterClearFailed(msg(err), handoff ? t().statusShowsHandoff : t().yourText(cut(text, 300))), { timeoutMs: 20000 })
@@ -806,6 +854,10 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   // userConfig `language` (en/de, Standard en); /config lädt das Modul neu (release/I18N.md §1)
   setLang(options?.language)
   on('session.start', async ($, e, next) => {
+    // Ein Neuladen mitten in Prüfung, Rückfrage oder Übergabe ließe den Wert in $.state stehen (er überlebt den Reload,
+    // en/interface.md:716): zurücksetzen, sonst hielte Clawd ihn bis zum Sicherheitsnetz fest (Review S1)
+    buddyKind = undefined
+    buddy($, null)
     try {
       settings = cleanSettings(await $.store.get('settings'))
       await bindSession($)
@@ -876,10 +928,14 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     try {
       g = await gate($, e.text, e.origin.kind, !!e.turnId || e.wait, next.signal)
     } catch {
+      buddy($, null)
       return next(e)
     }
     const c = g.c
-    if (!c) return sendWithWartung($, e, g.w, () => next(e))
+    if (!c) {
+      buddy($, null)
+      return sendWithWartung($, e, g.w, () => next(e))
+    }
     const v = c.verdict
     let now = 0
     let base = 20000
@@ -893,12 +949,15 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     // Mit Anhängen oder `@datei` kein neuer Chat: neu gesendet fehlten sie (types:8558-8561, limit-bars)
     const resendable = !e.attachments?.length && !/(^|\s)@\S/.test(e.text)
     const d = dialog(c, resendable, base)
+    buddy($, d ? 'stop' : null)
     if (!d) {
       if (v && v.urteil !== 'durch' && v.zeile) {
         // Zeile unter dieser Nachricht (Verhalten 5); bei einem „anhalten“ ohne mögliche Aktion ebenso
-        const line = v.art === 'skill' || (v.skill && v.zeile.includes(v.skill)) ? hintLine(v.zeile, v.skill) : v.zeile
-        // Button nur beim Skill-Hinweis: nur dort prüft parseVerdict den Namen gegen die Skill-Liste (Review 0.7.0 S3)
-        pending = { text: e.text, line, ...(v.art === 'skill' && v.skill ? { cmd: `/${v.skill}` } : {}) }
+        // Button für den Skill-Hinweis (Name gegen die Skill-Liste geprüft, Review 0.7.0 S3) und, seit 0.8.1, für jeden Befehl im
+        // Satz, den die Befehlsliste dieser Session kennt (Sonnet schrieb „bald /uebergabe … erwägen“ als Art „sonstiges“)
+        const hit = lineCommand(v.zeile, v.art === 'skill' ? v.skill : '', baseCache?.cmds ?? [])
+        const line = hit?.line ?? (v.skill && v.zeile.includes(v.skill) ? hintLine(v.zeile, v.skill) : v.zeile)
+        pending = { text: e.text, line, ...(hit ? { cmd: hit.cmd } : {}) }
         ses.open = { art: v.art, skill: v.skill, ctx: c.ctx }
         ses.last = { line, art: v.art, at: now }
         saveSes($, now)
@@ -920,7 +979,9 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     let answer: Choice = 'send'
     try {
       answer = choiceOf(await $.ui.ask(d.question, { options: d.options, header: HEADER }))
+      buddy($, null)
     } catch {
+      buddy($, null)
       // Dialog geschlossen oder niemand zu fragen: so senden, wie getippt. Ausnahme falscher Chat (Fynn: verweigern, Review S2):
       // nicht in den falschen Chat senden, der Text bleibt zum Kopieren
       if (d.art !== 'falscher_chat') return next(e)
@@ -1015,14 +1076,16 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       theirs = await next(e)
       // Elemente als reine Daten {type, props, children} (types:9215-9218); nur der Button kommt aus $.ui.resolve (Nachtrag 0.7.0)
       const line: RenderNode[] = [el('Text', { color: ACCENT }, [`· sidekick: ${hit.line}`])]
-      // Button für den Befehl der Zeile (Nachtrag 0.7.0): mit worklist und einem Skill als To-do, sonst ins Eingabefeld
+      // Button für den Befehl der Zeile (Nachtrag 0.7.0): mit worklist und einem Skill als To-do, sonst ausführen (0.8.1)
       const id = hit.id
       const cmd = hit.cmd
       if (cmd && hit.queued) line.push(el('Text', { dimColor: true }, [`  ${t().btnQueued}`]))
+      else if (cmd && hit.ran) line.push(el('Text', { dimColor: true }, [`  ${t().btnRan}`]))
+      else if (cmd && pressing.has(id)) line.push(el('Text', { dimColor: true }, [`  ${t().btnBusy}`]))
       else if (cmd) {
-        // Das Ziel steht beim Zeichnen fest und geht so in den Klick (Review S2); ohne geladene Befehlsliste: Eingabefeld
+        // Das Ziel steht beim Zeichnen fest und geht so in den Klick (Review S2); ohne geladene Befehlsliste: ausführen
         const route = routeOf(baseCache, cmd)
-        const label = route === 'todo' ? t().btnTodo : t().btnFill
+        const label = route === 'todo' ? t().btnTodo : t().btnRun(cmd)
         // Ein Button trägt eine Funktion und ist darum keine reine Daten-Zeichnung: über $.ui.resolve (Test: „not plain data“)
         line.push($.ui.resolve(e).Button({ key: 'sidekick-use', label, onPress: () => void useHint($, id, route) }) as RenderNode)
       }

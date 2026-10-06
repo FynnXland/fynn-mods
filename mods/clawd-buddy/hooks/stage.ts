@@ -16,6 +16,8 @@ export const PAL: Readonly<Record<string, string>> = {
   O: '#D77757', Q: '#A9573C', K: '#000000', W: '#F2F2F2', G: '#9A9A9A', D: '#4A4A4A',
   B: '#5B9BD5', E: '#6CC070', Y: '#F2C94C', P: '#F09A8A', C: '#E9D8BE', R: '#7A4A2A',
   L: '#8CCBF2', N: '#3E4C9A', T: '#2E2E2E', M: '#C9594B',
+  // Helfer (Subagenten): hellere Claude-Farbe für den Körper, dunklere für Arme und die hintere Reihe (Fynn, 2026-10-06: statt Blau)
+  A: '#EDA98A', F: '#B8664A',
 }
 
 /** Requisite: Palettenraster, '.' = durchsichtig. `effect`: kleiner Effekt (Funkeln, Note, …), der aus der Figur entsteht. */
@@ -24,6 +26,16 @@ export type PropSprite = {
   effect?: true
   /** Schrift/Zeichen/Uhr: beim Spiegeln nur den Platz wechseln, das Bild selbst nicht umdrehen (ein „?“ bleibt ein „?“). */
   noFlip?: true
+  /**
+   * Bild für die gespiegelte Figur (wird dann wie jedes andere gespiegelt): für Gegenstände, deren Form mitgespiegelt werden muss, deren Zeichen
+   * darin aber lesbar bleiben sollen (Denkblase mit „?“: die Spur hängt an der Figur). Darin steht das Zeichen seitenverkehrt.
+   */
+  mirrorRows?: readonly string[]
+  /**
+   * Verlängerung der Hand (Schattenton wie die Vorderarme), z. B. die schreibende Hand auf dem Blatt: gilt in den Prüfungen als Effekt
+   * an der Figur, darf aber auf dem Gegenstand liegen, den sie hält (anim.test „Effekte überlappen sich nie“).
+   */
+  hand?: true
 }
 /** Verweis auf eine Requisite im Frame: [Name, x, y, 'g'?]. Ohne 'g' relativ zur Figur, mit 'g' relativ zum Heimatplatz. */
 export type PropRef = readonly [name: string, x: number, y: number, flag?: 'g' | 'G']
@@ -265,8 +277,9 @@ export function compose(p: Pose, props: PropTable): Composed {
     const put = flag === 'G' && p.mirror ? (x: number, y: number, c: string, tag: string) => set(mx(x), y, c, tag) : set
     // Nicht spiegelbar (Schrift, Zeichen, Uhren): gespiegelt wird nur die Lage, die Spalten laufen rückwärts, damit das Bild gleich bleibt
     const keep = !!s.noFlip && !!p.mirror && flag !== 'G'
-    const w = Math.max(...s.rows.map((r) => r.length))
-    s.rows.forEach((row, ry) => {
+    const rows = p.mirror && flag !== 'G' && s.mirrorRows ? s.mirrorRows : s.rows
+    const w = Math.max(...rows.map((r) => r.length))
+    rows.forEach((row, ry) => {
       for (let rx = 0; rx < row.length; rx++) if (row[rx] !== '.') put(keep ? bx + w - 1 - rx : bx + rx, by + ry, row[rx], 'prop:' + name)
     })
   }

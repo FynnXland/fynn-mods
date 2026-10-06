@@ -390,7 +390,7 @@ export type ChatRow = { id: string; title: string; firstAt: number; project: str
 export type ProjectRow = { name: string; usd: number; chats: number }
 export type ModRow = { name: string; usd: number; calls: number }
 export type ModelRow = { key: string; in: number; out: number; cr: number; cw: number; usd: number; n: number }
-/** Ein Balken im Verlauf: Tag oder Woche (Montag), Chat-Kosten und ihre Aufteilung nach Modell. */
+/** Ein Balken im Verlauf: Tag oder Woche (Montag), Chat- und Mod-Kosten und ihre Aufteilung nach Modell (`MOD_PART`). */
 export type Bucket = { key: string; usd: number; parts: { key: string; usd: number }[] }
 export type Report = {
   now: number
@@ -509,9 +509,22 @@ export function isoWeek(monday: string): number {
   return 1 + Math.round(((thu.getTime() - week1.getTime()) / DAY - 3 + ((week1.getDay() + 6) % 7)) / 7)
 }
 
+/** Teil eines Verlaufsbalkens, der aus Mod-Aufrufen stammt: `mod:sonnet-5-5`, ohne Modell-Daten `mod:unbekannt`. */
+export const MOD_PART = 'mod:'
+
+/** Legendentext eines Verlaufsteils: `opus-5-5` → `Opus 5.5`, `mod:sonnet-5-5` → `Sonnet 5.5 · Mods`. */
+export function partLabel(key: string, lang: Lang): string {
+  const t = T[lang]
+  if (!key.startsWith(MOD_PART)) return key === UNKNOWN_MODEL ? t.noData : modelName(key, lang)
+  const model = key.slice(MOD_PART.length)
+  return model === UNKNOWN_MODEL ? t.modsNoData : t.modsPart(modelName(model, lang))
+}
+
 /**
  * Verlauf je Tag und je Woche. Die echten Chat-Kosten eines Tages werden je Chat nach den geschätzten Modell-Anteilen
- * dieses Tages aufgeteilt; ohne Modell-Daten fällt der Betrag unter `UNKNOWN_MODEL`.
+ * dieses Tages aufgeteilt; ohne Modell-Daten fällt der Betrag unter `UNKNOWN_MODEL`. Dazu kommen die Mod-Aufrufe je
+ * Modell als eigene Teile (`MOD_PART`); was in `mods` steht, aber nicht in `modModels` (Daten vor 0.3.0), wird
+ * `mod:unbekannt`. Der Balken zeigt damit Chat + Mods, wie die Kacheln zusammen.
  */
 function seriesOf(recs: { rec: Rec }[], now: number): { days: Bucket[]; weeks: Bucket[] } {
   const days = new Map(Array.from({ length: 14 }, (_, i) => [dayBefore(now, i), new Map<string, number>()] as const))
@@ -535,6 +548,22 @@ function seriesOf(recs: { rec: Rec }[], now: number): { days: Bucket[]; weeks: B
         add(weeks.get(weekStart(d)), k, v)
       }
     }
+  for (const { rec } of recs) {
+    const modDays = new Map<string, number>()
+    for (const m of Object.values(rec.mods)) for (const [d, v] of Object.entries(m.days)) modDays.set(d, (modDays.get(d) ?? 0) + v.usd)
+    for (const [k, m] of Object.entries(rec.modModels))
+      for (const [d, v] of Object.entries(m.days)) {
+        add(days.get(d), MOD_PART + k, v.usd)
+        add(weeks.get(weekStart(d)), MOD_PART + k, v.usd)
+        modDays.set(d, (modDays.get(d) ?? 0) - v.usd)
+      }
+    // Rest ohne Modell; Rundungsreste aus r8 nicht als eigenen Teil zeigen
+    for (const [d, rest] of modDays)
+      if (rest > 1e-6) {
+        add(days.get(d), MOD_PART + UNKNOWN_MODEL, rest)
+        add(weeks.get(weekStart(d)), MOD_PART + UNKNOWN_MODEL, rest)
+      }
+  }
   const toBuckets = (m: Map<string, Map<string, number>>): Bucket[] =>
     [...m.entries()].map(([key, parts]) => {
       const list = [...parts.entries()].map(([k, v]) => ({ key: k, usd: v })).sort((a, b) => b.usd - a.usd)

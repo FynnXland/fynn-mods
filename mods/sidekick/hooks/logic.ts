@@ -345,6 +345,60 @@ export function hintLine(zeile: string, skill: string): string {
   return out !== zeile ? out : `${zeile} (/${skill})`
 }
 
+type CmdName = { name: string; source?: string; plugin?: string }
+
+// Befehle, die ein Klick nie auslöst: sie beenden oder leeren den Chat oder melden ab (Nachtrag 0.8.1)
+const NO_BUTTON = new Set(['clear', 'exit', 'quit', 'logout', 'login', 'rewind'])
+// Eingebaute Befehle, die eine Zeile außerhalb des Skill-Hinweises nennen darf: nur die der Wartungs-Hinweise. Andere wie `/compact`,
+// `/fast`, `/model` oder `/remote-control` ändern den Chat oder die Session und bekommen keinen Button (Review 0.8.1 S1)
+const BUILTIN_OK = new Set(['skill-doctor', 'init'])
+// Ende eines Befehlsnamens: kein weiteres Namenszeichen, kein `/` und keine Dateiendung (`/init.ts`, `/hooks/x`, Review 0.8.1 S2)
+const END = String.raw`(?![\w:/-]|\.\w)`
+
+/**
+ * Befehl der Zeile für den Button (Nachtrag 0.8.1): beim Skill-Hinweis der Skill, sonst der erste erlaubte Befehl im Satz, den es in
+ * dieser Session gibt (`/name`, oder `plugin:name` auch ohne Schrägstrich). Erlaubt sind Befehle aus Plugins und eigene (`source`
+ * `plugin`/`user`, types:1832) und die eingebauten der Wartung, nie MCP-Prompts. Ein Kurzname wie `/uebergabe` (Sonnet, Fynns Store
+ * 2026-10-06) findet `limit-bars:uebergabe`, wenn nur ein Plugin ihn hat. Die Übergabe geht über `/handoff` von limit-bars, wenn es
+ * den gibt: der Skill und danach die Frage nach dem neuen Chat, und kein „ue“ in der Zeile. Im Satz steht danach genau der Befehl,
+ * den der Button ausführt; fehlt er dort, steht er in Klammern dahinter. Ohne Treffer: `null`, die Zeile bleibt ohne Button.
+ */
+export function lineCommand(zeile: string, skill: string, cmds: readonly CmdName[]): { line: string; cmd: string } | null {
+  const find = (n: string): string | null => {
+    if (cmds.some((c) => c.name === n)) return n
+    const hits = cmds.filter((c) => c.name.endsWith(`:${n}`))
+    return hits.length === 1 ? hits[0]!.name : null
+  }
+  const handoff = cmds.some((c) => c.name === 'handoff' && c.source === 'plugin' && /^limit-bars(@|$)/.test(c.plugin ?? ''))
+  const alias = (n: string) => (handoff && /(^|:)uebergabe$/.test(n) ? 'handoff' : n)
+  const allowed = (n: string, isSkill: boolean) => {
+    if (NO_BUTTON.has(n)) return false
+    if (isSkill) return true
+    const c = cmds.find((x) => x.name === n)
+    if (!c || c.source === 'mcp') return false
+    return c.source === 'builtin' ? BUILTIN_OK.has(n) : true
+  }
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const named = [...zeile.matchAll(new RegExp(String.raw`(?:^|[^\w/:.~-])(\/[a-z0-9][\w-]*(?::[a-z0-9][\w-]*)?|[a-z0-9][\w-]*:[a-z0-9][\w-]*)${END}`, 'gi'))].map(
+    (m) => m[1]!.replace(/^\//, ''),
+  )
+  // Ein Skill-Hinweis ist gegen die Skill-Liste geprüft (parseVerdict); fehlt die Befehlsliste noch, gilt sein Name
+  const cands = skill ? [skill, ...named] : named
+  for (const raw of cands) {
+    const isSkill = !!skill && raw === skill
+    const full = find(raw) ?? (isSkill ? skill : null)
+    if (!full) continue
+    const to = alias(full)
+    if (!allowed(to, isSkill)) continue
+    // Ohne Schrägstrich ersetzt nur ein Name mit `:` oder der Skill des Hinweises, sonst würden Wörter wie „context“ zu Befehlen (K1)
+    const names = [...new Set([raw, full, full.split(':').pop()!])].sort((a, b) => b.length - a.length)
+    const alt = names.map((n) => (n.includes(':') || isSkill ? String.raw`\/?` : String.raw`\/`) + esc(n)).join('|')
+    const line = zeile.replace(new RegExp(String.raw`(^|[^\w/:.~-])(?:${alt})${END}`, 'g'), (_m, pre: string) => `${pre}/${to}`)
+    return { line: line.includes(`/${to}`) ? line : `${line} (/${to})`, cmd: `/${to}` }
+  }
+  return null
+}
+
 export function handoffPrompt(summary: string, history: string): string {
   return `Laufende Kurzfassung: ${summary || '(keine)'}\n\nEnde des Verlaufs (älteste zuerst):\n\n${history || '(leer)'}`
 }

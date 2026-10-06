@@ -1,7 +1,7 @@
 {
   "name": "limit-bars",
-  "version": "0.3.1",
-  "description": "Bars for the 5-hour and weekly usage limits above the prompt, plus a ring showing how long the prompt cache stays warm. Cache guard: asks before an expensive cold send; /cache, /handoff, /keepwarm.",
+  "version": "0.6.0",
+  "description": "Bars for the 5-hour and weekly usage limits above the prompt, a ring showing how long the prompt cache stays warm, and an optional ring for drive usage by file type. Cache guard: asks before an expensive cold send; /cache, /handoff, /keepwarm, /disk, /bars. Every part of the display can be hidden.",
   "author": {
     "name": "Fynn Hansen"
   },
@@ -36,11 +36,40 @@
       "min": 50,
       "max": 100
     },
+    "showFiveHour": {
+      "type": "boolean",
+      "title": "Show 5-hour bar",
+      "description": "Bar for the 5-hour limit. /bars overrides this in all open chats.",
+      "default": true
+    },
+    "showWeekly": {
+      "type": "boolean",
+      "title": "Show weekly bar",
+      "description": "Bar for the weekly limit. /bars overrides this in all open chats.",
+      "default": true
+    },
+    "showCache": {
+      "type": "boolean",
+      "title": "Show cache ring",
+      "description": "Ring for the prompt cache. Hiding it keeps the cold-send question and notices (/cache warn off, /cache hints off).",
+      "default": true
+    },
+    "showStorage": {
+      "type": "boolean",
+      "title": "Show storage ring",
+      "description": "Ring for drive usage. Only shown when storagePath is set; off by default because storagePath is empty.",
+      "default": true
+    },
     "onlyFiveHour": {
       "type": "boolean",
-      "title": "5-hour limit only",
-      "description": "The weekly limit is not drawn.",
+      "title": "5-hour limit only (deprecated)",
+      "description": "Deprecated, use showWeekly. On: the weekly bar is hidden.",
       "default": false
+    },
+    "storagePath": {
+      "type": "directory",
+      "title": "Storage drive",
+      "description": "Drive shown as a ring next to the cache ring, for example E:. Windows only. Empty: off."
     }
   }
 }

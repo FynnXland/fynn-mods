@@ -389,7 +389,7 @@ function thinkC(n: number): PropSprite {
  * Denkblase mit Gedankenspur (Effekt) für "Grübelt": Alle Zustände liegen in einem festen Feld 18x10 (g-Ursprung (-19, -4)) und bilden eine Familie.
  * Die Spur aus zwei Punkten hängt an der Figur (kleiner Punkt am Kopf, größerer dahinter), die Blase wächst von unten rechts, wo die Spur sie berührt,
  * nach links oben. Die Blase ist dunkelgrau mit weißem Rand, damit Gelb und Weiß gut lesen. Zustände: 0 nur der kleine Punkt, 1 beide Punkte, 2 bis 4
- * kleine, mittlere, große Blase (5x3, 9x5, 11x7), 5 volle Blase 13x9 leer, 6 mit großem Fragezeichen, 7 Glühbirne aus (grau), 8 Birne an (gelb),
+ * kleine, mittlere, große Blase (5x3, 9x5, 11x7), 5 volle Blase 13x9 leer, 6 mit großem Fragezeichen (gespiegelt bleibt es lesbar: `mirrorRows`), 7 Glühbirne aus (grau), 8 Birne an (gelb),
  * 9 Birne an mit Strahlen.
  */
 const THX = -19
@@ -398,7 +398,7 @@ const THS: readonly (readonly [number, number])[] = [[0, 0], [0, 0], [5, 3], [9,
 const BULB_ON = ['..YYY..', '.YWYYY.', 'YWYYYYY', 'YYYYYYY', '.YYYYY.', '..WWW..', '...W...']
 const BULB_OFF = ['..GGG..', '.GGGGG.', 'GGGGGGG', 'GGGGGGG', '.GGGGG.', '..WWW..', '...W...']
 const QMARK = ['.WWW.', 'W...W', '....W', '...W.', '..W..', '.....', '..W..']
-function think(n: number): PropSprite {
+function think(n: number, mirrored = false): PropSprite {
   const g = grid(18, 10)
   if (n >= 2) {
     const [w, h] = THS[Math.min(n, 5)]
@@ -424,13 +424,15 @@ function think(n: number): PropSprite {
   if (n >= 1) rect(g, 13, 7, 3, 3, 'W')
   const stamp = (rows: readonly string[], x: number, y: number): void =>
     rows.forEach((r, j) => [...r].forEach((c, i) => c !== '.' && put(g, x + i, y + j, c)))
-  if (n === 6) stamp(QMARK, 4, 1)
+  // Für die gespiegelte Figur seitenverkehrt einsetzen: beim Spiegeln dreht es sich wieder richtig herum (Fynn, 2026-10-06: „?“ falsch herum)
+  if (n === 6) stamp(mirrored ? QMARK.map((r) => [...r].reverse().join('')) : QMARK, 4, 1)
   if (n === 7) stamp(BULB_OFF, 3, 1)
   if (n >= 8) {
     stamp(BULB_ON, 3, 1)
     if (n === 9) for (const [x, y] of [[1, 3], [11, 3], [2, 1], [10, 1], [2, 5], [10, 5]] as const) put(g, x, y, 'Y')
   }
-  return fxSpr(rowsOf(g))
+  const sp = fxSpr(rowsOf(g))
+  return n === 6 && !mirrored ? { ...sp, mirrorRows: think(6, true).rows } : sp
 }
 
 /** Z zum Einschlafen (Effekt, 5x5). */

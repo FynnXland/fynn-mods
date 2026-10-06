@@ -5,7 +5,7 @@
 import { clip } from '../clipdef.ts'
 import type { ClipDef, Frame } from '../clipdef.ts'
 import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, fetchOut } from '../macros.ts'
+import { armBlock, fetchIn, fetchOut, walk } from '../macros.ts'
 
 /** Sprite um 180° drehen (Zeichenraster); für die Mütze, die sich im Flug überschlägt. */
 const flip = (rows: readonly string[]): string[] => rows.map((r) => r.split('').reverse().join('')).reverse()
@@ -52,6 +52,16 @@ export const PROPS: Readonly<Record<string, PropSprite>> = {
   mood_z2: { rows: ['WWWWW', '....W', '...W.', '..W..', '.W...', 'W....', 'WWWWW'], effect: true },
   // Schweißtropfen, größer als der Basis-Tropfen
   mood_sweat: { rows: ['.L.', 'LLL', 'LLL', '.L.'], effect: true },
+  // Blumentopf 7×8 (roter Topf, grüner Stiel, rosa Blüte mit gelber Mitte): 0 = welk (Stiel hängt im Bogen, Blüte nach unten), 1 = richtet sich
+  // auf, 2 = steht und blüht. Jede Stufe hängt in sich zusammen, damit beim Aufrichten nichts einzeln auftaucht.
+  night_pot0: { rows: ['.......', '.......', '.EEE...', 'PP.E...', 'PP.E.E.', '..EEE..', '.MMMMM.', '..MMM..'] },
+  night_pot1: { rows: ['.......', '.PP....', '.PPE...', '...E...', '...E.E.', '..EEE..', '.MMMMM.', '..MMM..'] },
+  night_pot2: { rows: ['..PPP..', '..PYP..', '..PPP..', '...E...', '.E.E.E.', '..EEE..', '.MMMMM.', '..MMM..'] },
+  // Gießkanne 8×5 im Profil (blau, Tülle links mit weißer Brause, Bügelgriff oben rechts); 1/2 = nach vorn gekippt, aus der Brause rinnt ein
+  // Wasserstrahl (hängt an der Kanne, zwei Stellungen zum Flimmern)
+  night_can0: { rows: ['.....BB.', 'W...B..B', '.B.BBBBB', '..BBBBBB', '...BBBBB'] },
+  night_can1: { rows: ['.....BB.', '....B..B', '...BBBBB', 'WBBBBBBB', 'L..BBBBB', 'W.......', 'L.......'] },
+  night_can2: { rows: ['.....BB.', '....B..B', '...BBBBB', 'WBBBBBBB', 'W..BBBBB', 'L.......', 'W.......'] },
 }
 
 const out: ClipDef[] = []
@@ -296,6 +306,81 @@ C('morning_brush', 'Zähne putzen', 'morning', {
     ...[-7, -7, -7].map((x, i): Frame => ({ ...brHand(x, [7, 8, 9][i]), props: [br(x, [7, 8, 9][i])], t: 1 })),
     { armL: 'down', props: [br(-7, 9)], t: 2 }],
   outro: fetchOut(BRUSH),
+})
+
+// Morgengymnastik: sechs Hampelmänner (kleiner Sprung, landet gegrätscht mit hochgestreckten Blockarmen, springt zurück), zwei Kniebeugen mit
+// ausgestreckten Armen, dann ist ihm warm: ein Schweißtropfen entsteht an der Stirn, er wischt ihn mit der Hand weg und winkt dir fröhlich zu.
+// Ohne Gegenstand. Einmalig, ~6 s.
+const ARMS_UP = { out: 2, y: -2, h: 3 } as const // hochgestreckt: Blockarm über die Schulter hinaus
+const jack = (): Frame[] => [
+  { by: 1, legs: 'stand', armL: 'up1', armR: 'up1', t: 1 }, // ausholen
+  { by: 0, fy: -1, legs: 'tuck', armL: 'up2', armR: 'up2', t: 1 }, // Absprung
+  { fy: 0, legs: 'spread', armL: ARMS_UP, armR: ARMS_UP, t: 2 }, // Landung gegrätscht, Arme oben
+  { fy: -1, legs: 'tuck', armL: 'up2', armR: 'up2', t: 1 }, // zurück
+  { fy: 0, legs: 'stand', armL: 'down', armR: 'down', t: 1 },
+]
+const squat = (): Frame[] => [
+  { by: 1, armL: 'out', armR: 'out', t: 2 }, { by: 2, t: 3 }, { by: 1, t: 1 }, { by: 0, armL: 'down', armR: 'down', t: 2 },
+]
+const SWEAT = (y: number): PropRef => ['mood_sweat', 15, y, 'g']
+C('morning_jacks', 'Morgengymnastik (Hampelmann)', 'morning', { frames: [
+  { eyes: 'open', mouth: null, look: [0, 0], t: 3 },
+  ...jack(), ...jack(), ...jack(), ...jack(), ...jack(), ...jack(),
+  { eyes: 'closed', mouth: 'o', t: 2 }, { eyes: 'open', mouth: null, t: 1 },
+  ...squat(), ...squat(),
+  // warm geworden: Tropfen an der Stirn, rinnt etwas herab, die Hand wischt ihn weg
+  { eyes: 'half', props: [SWEAT(0)], t: 3 }, { props: [SWEAT(1)], t: 3 },
+  { ...armBlock('R', 2, 1), props: [SWEAT(1)], t: 2 },
+  { ...armBlock('R', 2, 0), eyes: 'closed', props: [], t: 2 },
+  { armR: 'down', eyes: 'happy', mouth: 'smile', blush: true, t: 4 },
+  // winkt dir zu: guten Morgen!
+  { armR: 'wave1', eyes: 'open', look: [0, 1], t: 3 }, { armR: 'wave2', t: 3 }, { armR: 'wave1', t: 3 }, { armR: 'wave2', t: 3 },
+  { armR: 'down', mouth: null, blush: false, look: [0, 0], t: 4 }] })
+
+// Blume gießen: Er holt einen Blumentopf mit welker Blume aus der Tasche und stellt ihn links neben sich, tritt drei Schritte zurück, holt eine
+// Gießkanne aus der Tasche und behält sie in der Hand: er hebt sie über die Blume, kippt sie, ein Wasserstrahl rinnt auf die Blume. Sie richtet sich
+// auf und blüht, er freut sich, packt die Kanne wieder in die Tasche, geht zurück und räumt den Topf ein. Einmalig, ~7 s.
+const POT = { name: 'night_pot0', size: [7, 8] as const, at: [-8, 2] as const, side: 'L' as const, grip: 5, rummage: 3 }
+const potAt = (v: number): PropRef => ['night_pot' + v, -8, 2, 'g']
+const CFX = 3 // dort steht er mit der Kanne
+const CAN = { name: 'night_can0', size: [8, 5] as const, at: [-6, -3] as const, side: 'L' as const, grip: 1, rummage: 3, fx: CFX }
+const canAt = (v: number, x = -6, y = -3): PropRef => ['night_can' + v, x, y, 'g']
+/** Blockhand am Kannengriff (Hand kommt von der Figur bei fx 3, Spitze an der rechten Kannenkante). */
+const canHand = (x: number, y: number): Frame => armBlock('L', Math.max(2, Math.min(6, CFX + 2 - (x + 7))), y + 1)
+C('morning_water', 'Gießt die Blume', 'morning', {
+  intro: [
+    ...fetchIn(POT),
+    // tritt zurück (die Blume braucht Platz für die Kanne)
+    { look: [-2, 1], eyes: 'half', mouth: 'flat', props: [potAt(0)], t: 4 },
+    ...walk(0, CFX, { props: [potAt(0)] }),
+    // Kanne aus der Tasche: Kramen, sie kommt klein hoch und wächst (wie fetchIn bis zum Hochhalten), dann hält er sie über die Blume
+    ...fetchIn({ ...CAN, keep: [potAt(0)] }).slice(0, 1 + 3 + 2),
+    { ...canHand(-4, -4), look: [-2, 0], props: [potAt(0), canAt(0, -4, -4)], t: 1 },
+    { ...canHand(-6, -3), look: [-2, 1], props: [potAt(0), canAt(0)], t: 2 },
+  ],
+  frames: [
+    // gießen: Kanne kippt, der Strahl flimmert
+    ...Array.from({ length: 10 }, (_, i): Frame => ({ eyes: i < 2 ? 'open' : 'half', mouth: 'smile', props: [potAt(0), canAt(1 + (i % 2))], t: 1 })),
+    { props: [potAt(0), canAt(0)], t: 2 },
+    // die Blume richtet sich auf und blüht
+    { eyes: 'wide', mouth: 'o', props: [potAt(1), canAt(0)], t: 3 },
+    { props: [potAt(2), canAt(0)], t: 3 },
+    { eyes: 'happy', mouth: 'smile', blush: true, t: 6 },
+    { eyes: 'open', mouth: null, blush: false, t: 2 },
+  ],
+  outro: [
+    // Kanne zurück an den Körper, wird kleiner und verschwindet in der Tasche (wie fetchOut)
+    { ...canHand(-4, -1), look: [-1, 1], props: [potAt(2), canAt(0, -4, -1)], t: 2 },
+    { ...armBlock('L', 2, 3), props: [potAt(2), ['night_can0@60', CFX - 4, 1, 'g']], t: 2 },
+    { by: 1, eyes: 'winkR', ...armBlock('L', 1, 5), props: [potAt(2), ['night_can0@37', CFX - 2, 5, 'g']], t: 1 },
+    { by: 1, ...armBlock('L', 1, 6), props: [potAt(2)], t: 1 },
+    { by: 1, ...armBlock('L', 1, 5), t: 1 },
+    { by: 0, eyes: 'open', look: [0, 0], armL: 'down', t: 2 },
+    // zurück zur Blume, Topf einpacken
+    ...walk(CFX, 0, { props: [potAt(2)] }),
+    ...fetchOut({ ...POT, name: 'night_pot2' }),
+    { eyes: 'happy', mouth: 'smile', t: 3 }, { eyes: 'open', mouth: null, t: 2 },
+  ],
 })
 
 export const CLIPS: readonly ClipDef[] = out

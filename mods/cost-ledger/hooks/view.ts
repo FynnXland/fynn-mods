@@ -8,7 +8,7 @@
 import type { RenderElement, RenderNode } from 'claude-code'
 import { T, dateTime, fullDate, rangeLabel, shortDate, tokens, usd, weekLabel } from './i18n.ts'
 import type { Lang } from './i18n.ts'
-import { UNKNOWN_MODEL, chatLabel, isoWeek, modelName, notesOf, projectLabel } from './logic.ts'
+import { MOD_PART, UNKNOWN_MODEL, chatLabel, isoWeek, modelName, notesOf, partLabel, projectLabel } from './logic.ts'
 import type { Bucket, Report, Settings, ViewName } from './logic.ts'
 
 export type View = { report: Report; view: ViewName; range: number }
@@ -76,13 +76,21 @@ export function stackedBar(surface: Surface, ratio: number, cells: number, parts
 
 const bar = (sf: Surface, ratio: number, cells: number, color: string) => stackedBar(sf, ratio, cells, [{ color, share: 1 }])
 
-/** Farbe je Modell: nach Gesamtbetrag in der Reihe, Beträge ohne Modell-Daten immer gedimmt. */
-function modelColors(buckets: Bucket[]): Map<string, string> {
+/**
+ * Farbe je Verlaufsteil: erst die Chat-Modelle nach Gesamtbetrag, danach die Mod-Teile (`mod:…`), damit sie in der
+ * Legende hinter dem Chat stehen. Beträge ohne Modell-Daten (Chat wie Mods) immer gedimmt.
+ */
+export function modelColors(buckets: Bucket[]): Map<string, string> {
   const tot = new Map<string, number>()
   for (const b of buckets) for (const p of b.parts) tot.set(p.key, (tot.get(p.key) ?? 0) + p.usd)
-  const keys = [...tot.entries()].filter(([k]) => k !== UNKNOWN_MODEL).sort((a, b) => b[1] - a[1]).map(([k]) => k)
+  const unknown = (k: string) => k === UNKNOWN_MODEL || k === MOD_PART + UNKNOWN_MODEL
+  const isMod = (k: string) => (k.startsWith(MOD_PART) ? 1 : 0)
+  const keys = [...tot.entries()]
+    .filter(([k]) => !unknown(k))
+    .sort((a, b) => isMod(a[0]) - isMod(b[0]) || b[1] - a[1])
+    .map(([k]) => k)
   const out = new Map(keys.map((k, i) => [k, MODEL_COLORS[i % MODEL_COLORS.length]!]))
-  if (tot.has(UNKNOWN_MODEL)) out.set(UNKNOWN_MODEL, UNKNOWN_COLOR)
+  for (const k of [UNKNOWN_MODEL, MOD_PART + UNKNOWN_MODEL]) if (tot.has(k)) out.set(k, UNKNOWN_COLOR)
   return out
 }
 
@@ -102,7 +110,8 @@ function figure(label: string, w: { usd: number; chats: number; mods: number }, 
 
 /**
  * Verlauf der letzten 14 Tage oder Wochen: je Zeile ein Balken, geteilt nach Modell, darunter die Legende. Der Betrag ist
- * der echte Chat-Betrag; die Aufteilung folgt den geschätzten Modell-Anteilen. Die Ampel färbt bei Tagen den Betrag.
+ * der echte Chat-Betrag plus die Mod-Aufrufe; die Aufteilung folgt den geschätzten Modell-Anteilen, Mod-Teile stehen in
+ * der Legende als „Modell · Mods“. Die Ampel färbt bei Tagen den Betrag.
  */
 function historyBlock(r: Report, s: Settings, sf: Surface, inner: number, weeks: boolean): RenderElement[] {
   const lang = s.lang
@@ -123,7 +132,7 @@ function historyBlock(r: Report, s: Settings, sf: Surface, inner: number, weeks:
     ]),
   )
   const legend: RenderNode[] = [...colors.entries()].map(([k, c]) =>
-    el('Box', { marginRight: 2 }, [el('Text', {}, [text('▄ ', { color: c }), dim(k === UNKNOWN_MODEL ? t.noData : modelName(k, lang))])]),
+    el('Box', { marginRight: 2 }, [el('Text', {}, [text('▄ ', { color: c }), dim(partLabel(k, lang))])]),
   )
   return [heading(weeks ? t.last14Weeks : t.last14Days), ...rows, ...(legend.length ? [row({ flexWrap: 'wrap', marginTop: 1 }, legend)] : [])]
 }

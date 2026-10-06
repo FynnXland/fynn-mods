@@ -1,16 +1,16 @@
 # cost-ledger
 
-A cost ledger across all your chats. After every answer, cost-ledger records what the chat has cost so far (the same value as `/cost`), plus the model calls made by other mods (sidekick, quick-replies …). `/ledger` shows today, 7 days, 30 days and all time, the history of the last 14 days, your projects and your most expensive chats in an overview styled like Claude Code (theme colors). The history shows 14 days or 14 weeks, each bar split by model. It is a pure observer: no budget, no intervention, no model calls of its own.
+A cost ledger across all your chats. After every answer, cost-ledger records what the chat has cost so far (the same value as `/cost`), plus the model calls made by other mods (sidekick, quick-replies …). `/ledger` shows today, 7 days, 30 days and all time, the history of the last 14 days, your projects and your most expensive chats in an overview styled like Claude Code (theme colors). The history shows 14 days or 14 weeks, each bar split by model; model calls by other mods appear as their own parts (e.g. “Sonnet 5.5 · mods”). It is a pure observer: no budget, no intervention, no model calls of its own.
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.290** · Plugin version **0.4.1** · Requires Claude Code v2.1.271 or later (setting options)
+Tested with Claude Code **v2.1.290** · Plugin version **0.4.2** · Requires Claude Code v2.1.271 or later (setting options)
 
 ## Usage
 
 | Input | Effect |
 |---|---|
-| `/ledger` | Overview: today, 7 days, 30 days, all time; history of the last 14 days, each bar split by model (with legend); projects, most expensive chats, mods |
+| `/ledger` | Overview: today, 7 days, 30 days, all time; history of the last 14 days, each bar split by model (with legend, chat and mod calls separate); projects, most expensive chats, mods |
 | `/ledger weeks` | The same overview with the last 14 calendar weeks instead of days |
 | `/ledger chats [7\|30\|all]` | The 20 most expensive chats in the period (default 30 days) |
 | `/ledger projects [7\|30\|all]` | All projects in the period |
@@ -42,7 +42,7 @@ All amounts are API values. On a subscription they count toward your usage limit
 |---|---|---|---|
 | `language` | Language / Sprache | Language of the overview, summary, help and confirmation: `en` or `de` | `en` |
 | `keepDays` | Retention (days) | Chats with no new bookings for this long are deleted by cost-ledger on the next `/ledger` | 365 |
-| `dayYellow` | Daily amount yellow from ($) | Daily amount from which the day's value in the history turns yellow | 3 |
+| `dayYellow` | Daily amount yellow from ($) | Daily amount (chat + mods) from which the day's value in the history turns yellow | 3 |
 | `dayRed` | Daily amount red from ($) | Daily amount from which it turns red | 8 |
 
 ## Language

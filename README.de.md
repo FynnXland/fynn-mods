@@ -118,11 +118,21 @@ zurückgesetzt werden. Ein Ring daneben zeigt, wie lange der Prompt-Cache dieses
 Kontextgröße. Die Cache-Wache fragt nach, bevor du in einen großen Chat mit kaltem Cache sendest und damit den ganzen
 Kontext neu schreiben würdest.
 
+Ein optionaler dritter Ring zeigt, wie voll ein Laufwerk ist, aufgeteilt nach Dateiart (Programme, Medien, KI-Modelle,
+Code …); `/disk` zeigt die Einzelheiten. Er ist **standardmäßig aus** und läuft bisher nur unter Windows: Zum
+Einschalten `storagePath` in `/config` setzen.
+
+**Nach deinem Geschmack:** Jeder Teil (5-Stunden-Balken, Wochen-Balken, Cache-Ring, Speicher-Ring) lässt sich einzeln
+ausblenden, mit `/bars show cache off` (wirkt sofort in allen offenen Chats) oder dauerhaft über `showFiveHour`,
+`showWeekly`, `showCache` und `showStorage` in `/config`. Ohne Cache-Ring bleibt die Rückfrage vor kaltem Senden an;
+die schaltest du mit `/cache warn off` ab.
+
 - **Befehle:** `/cache` (Überblick und Einstellungen), `/handoff [continue|show]` (Übergabe schreiben und in einem
-  frischen Chat weitermachen), `/keepwarm [stunden|off]`
+  frischen Chat weitermachen), `/keepwarm [stunden|off]`, `/disk [refresh]`, `/bars [show <teil> on|off | reset]`
 - **Rechte kurz:** liest Limits, Kontextgröße und Cache-Werte; kann eine Nachricht für eine Rückfrage anhalten; führt
   `/clear` und `/compact` aus und sendet eine Übergabe nur auf deine Wahl; `$.model.fork` nur, solange `/keepwarm`
-  läuft. Keine Dateien, Prozesse, kein Netzwerk, keine Umgebungsvariablen.
+  läuft; nur mit gesetztem `storagePath` startet er Windows PowerShell mit zwei festen, nur lesenden Skripten
+  (Laufwerksgröße, Größen nach Dateiendung). Keine Dateien, kein Netzwerk, keine Umgebungsvariablen.
 - **Details:** [mods/limit-bars](mods/limit-bars/README.md) (englisch)
 
 ### sidekick
@@ -143,8 +153,9 @@ Nachricht oder fragt nach.
 - **Falscher Chat:** Gehört eine Nachricht klar zu einem anderen Projekt als der Chat, hält sidekick sie an und fragt,
   ob du im falschen Chat bist, bevor sie im falschen Kontext landet (und dort Kosten verursacht).
 - **Fällige Wartung:** Einmal pro Chat nennt er höchstens einen fälligen Befehl (`/skill-doctor`, Prompt-Audit, Memory
-  aufräumen, `/init`), auf Grundlage einer kostenlosen lokalen Schätzung. Ein Knopf neben der Zeile setzt den Befehl
-  ins Eingabefeld oder reiht ihn, wenn worklist installiert ist, als To-do ein.
+  aufräumen, `/init`), auf Grundlage einer kostenlosen lokalen Schätzung. Ein Knopf neben der Zeile (auch für einen Befehl,
+  den ein Hinweis nennt, z. B. `/handoff`) führt ihn mit einem Klick aus oder reiht einen Skill, wenn worklist installiert
+  ist, als To-do ein.
 - **Nachprüfbare Ersparnis:** `/savings` zeigt, was sidekick gekostet und was er messbar gespart hat;
   `/savings detail` ergänzt Rechenweg, Modellvergleich und Verlauf je Tag.
 
@@ -154,8 +165,11 @@ Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unveränd
   `/savings [today|week|all]`, `/savings detail`
 - **Rechte kurz:** liest deine Nachricht vor dem Senden; hält sie nur an oder ersetzt sie nur nach deiner Wahl im
   Dialog; Sonnet über `$.model.complete` mit einer laufenden Kurzfassung und deinen letzten 3 Nachrichten, nie dem
-  ganzen Verlauf; auf Knopfdruck füllt er das Eingabefeld (sendet nie selbst) oder ruft `/todo` von worklist auf;
-  liest den Pfad der Projektwurzel. Keine Dateien, Umgebung, kein Netzwerk, keine Einstellungen.
+  ganzen Verlauf; auf Knopfdruck führt er den Befehl der Zeile aus (Befehle aus Plugins und eigene, `/skill-doctor`, `/init`;
+  nie MCP-Prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) oder ruft `/todo` von worklist auf, und
+  füllt das Eingabefeld, wenn der Befehl abgelehnt wird;
+  liest den Pfad der Projektwurzel; teilt clawd-buddy über `$.state` nur die Art des Ereignisses und die Uhrzeit mit,
+  nie deine Nachricht. Keine Dateien, Umgebung, kein Netzwerk, keine Einstellungen.
 - **Details:** [mods/sidekick](mods/sidekick/README.md) (englisch)
 
 ### quick-replies
@@ -212,6 +226,9 @@ deine Projekte und die teuersten Chats, gezeichnet im Stil von Claude Code.
   sie.
 - **sidekick gibt Aufgaben an worklist.** Sind beide installiert, reiht der Knopf neben einem Wartungshinweis den
   Befehl als To-do ein; worklist sendet ihn, sobald die laufende Aufgabe fertig ist.
+- **Clawd spielt sidekick mit.** Sind beide installiert, hält Clawd die Lupe ans Eingabefeld, während sidekick prüft,
+  zeigt bei einer Rückfrage ein Stoppschild und schreibt einen Brief, wenn sidekick einen neuen Chat mit Übergabe
+  startet.
 - **cost-ledger bucht die anderen.** Modellaufrufe von sidekick, worklist, quick-replies und limit-bars stehen nicht in
   `/cost`; cost-ledger bucht sie getrennt, so zeigt `/ledger`, was jeder Mod kostet.
 

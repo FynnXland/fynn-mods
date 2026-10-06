@@ -5,7 +5,7 @@
 // in Bühnenpixeln herein (Client: Zelle → Pixel).
 //
 // Ablauf eines Clips: intro (einmal) → frames (bei `loop` wiederholt) → outro (einmal beim Verlassen). Ein Stimmungswechsel
-// wartet auf den nächsten sicheren Frame im Hauptteil, dann läuft das Outro, dann (falls nötig) Übergangsclips zur Ausgangspose
+// lässt den Durchgang zu Ende spielen oder steigt an einer Ruhestelle aus (siehe cutHere), dann läuft das Outro, dann (falls nötig) Übergangsclips zur Ausgangspose
 // des nächsten Clips. Nur Maus und Aufwachen unterbrechen sofort, immer über einen Reaktionsclip; Gegenstände am Boden bleiben
 // dabei stehen ("Carry") und werden später ordentlich weggeräumt, nie ausgeblendet.
 import { FX, FY, H, LOOKABLE_EYES, POSES, STRUCT, TICK, W, compose } from './stage.ts'
@@ -32,6 +32,8 @@ type Phase = 'intro' | 'body' | 'outro' | 'end'
 
 type Play = {
   clip: ClipDef
+  /** Stimmung, für die der Clip gewählt wurde (Zeitvertreib läuft z. B. für `idle`). */
+  mood: string
   intro: Resolved[]
   body: Resolved[]
   outro: Resolved[]
@@ -64,6 +66,13 @@ export type EngineState = {
   play: Play | null
   queue: (string | ClipDef)[]
   pending: boolean
+  /** Der anstehende Wechsel ist dringend (URGENT): kürzere Gnadenfrist, siehe FINISH_URGENT. */
+  pendingUrgent: boolean
+  /**
+   * Eine Einmal-Stimmung (fertig, Fehler, Hinweis …) ist übernommen, ihr Clip hat aber noch nicht begonnen: so lange wird keine ruhige
+   * Stimmung übernommen, sonst ginge er verloren, wenn der laufende Clip lange zu Ende spielt (Review 0.6.0, S1).
+   */
+  oneShotWait: boolean
   ticks: number
   mood: string
   idleTicks: number
@@ -115,10 +124,22 @@ const FRONT_MATES = 6
 const BACK_Y = 4
 const MATE_HIDE = 5
 
-const ONE_SHOT = new Set(['done', 'oops', 'limit_back', 'agent_done', 'streak'])
-const URGENT = new Set(['waitUser', 'done', 'oops', 'limit_5h', 'limit_week', 'limit_back', 'agent_done', 'streak', 'waitUserLong'])
+const ONE_SHOT = new Set(['done', 'done_long', 'ctx_full', 'oops', 'limit_back', 'agent_done', 'streak', 'sk_fresh', 'skill'])
+// sidekick-Zustände, Komprimieren und Skill-Start sind kurz bzw. eindeutig: ohne Entprellung und Mindestdauer
+const URGENT = new Set(['waitUser', 'done', 'done_long', 'ctx_full', 'oops', 'limit_5h', 'limit_week', 'limit_back', 'agent_done', 'streak', 'waitUserLong',
+  'sk_check', 'sk_stop', 'sk_handoff', 'sk_fresh', 'compact', 'skill'])
 const MOOD_DEBOUNCE = 10 // ~0,75 s: so lange muss eine neue Stimmung anhalten
 const MIN_DWELL = 40 // ~3 s: so lange spielt ein Clip mindestens, bevor eine ruhige Stimmung ihn ablöst
+// Von einer Arbeit zur nächsten (Lesen → Schreiben, Shell → Grübeln …): länger entprellen und länger bleiben, damit Gegenstände nicht
+// kaum ausgepackt wieder verschwinden (Fynn, 2026-10-06: „wechselt so mittendrin“; vorher wechselte er alle 6–10 s, tools/flow.mjs).
+// Aus dem Grübeln (ohne Gegenstände) in eine Tool-Arbeit gilt die normale Mindestdauer.
+const WORK_DEBOUNCE = 20 // ~1,5 s
+const WORK_DWELL = 133 // ~10 s ab Clipbeginn (samt Auspacken)
+// Nichts mittendrin abbrechen (Fynn, 2026-10-06: „dass er keine Animation mittendrin abbricht“): Steht ein Wechsel an, spielt ein
+// unterbrechbarer Clip seinen Durchgang zu Ende, wenn davon höchstens so viel übrig ist. Sonst steigt er an der nächsten Ruhestelle aus
+// (Ausgangspose, Arme unten). Bei dringenden Stimmungen (wartet auf dich, fertig …) ist die Frist kürzer und jede sichere Stelle zählt.
+const FINISH = 80 // ~6 s
+const FINISH_URGENT = 27 // ~2 s
 const COOLDOWN = 280 // ~21 s: ein eben gespielter Clip wird so lange deutlich seltener gewählt
 const NIGHT_PLAY = 3 // nachts: so viele Leerlaufzeiten Zeitvertreib, bevor er einschläft
 const LOOP_STAY = 330 // ~25 s: so lange bleibt eine Schleife ohne Stimmungswechsel bei sich, dann darf eine Variante kommen
@@ -135,7 +156,7 @@ export function createEngine(opts: EngineOpts) {
   const props = opts.props
   const byName: Record<string, ClipDef> = Object.fromEntries(clips.map((c) => [c.name, c]))
   const S: EngineState = {
-    play: null, queue: [], pending: false, ticks: 0, mood: 'idle', idleTicks: 0, sleepStage: 0, annoy: 0, lastPick: {},
+    play: null, queue: [], pending: false, pendingUrgent: false, oneShotWait: false, ticks: 0, mood: 'idle', idleTicks: 0, sleepStage: 0, annoy: 0, lastPick: {},
     blinkAt: 40, blinkUntil: -1, hover: null, drag: null, gallery: null, galleryLoop: false, hour: opts.hour ?? 12,
     nightStart: opts.nightStart ?? 23, nightEnd: opts.nightEnd ?? 6, idleLimit: ((opts.idleSeconds ?? 45) * 1000) / TICK,
     reduced: opts.reduced ?? false, lastClipName: '', lastPose: null, landing: 'stand', carry: null, pendingClick: false,
@@ -257,6 +278,8 @@ export function createEngine(opts: EngineOpts) {
       if (!S.reduced && S.idleTicks > S.idleLimit && !lastWasFun && rng() < 0.6) return pick(fun, 'fun')
       return rng() < 0.22 && S.lastClipName !== 'idle_look' ? 'idle_look' : 'idle_breathe'
     }
+    // Du tippst: nicht jedes Mal eine Mitlese-Animation (Fynn, 2026-10-06: „muss nicht immer kommen“); oft schaut er nur kurz hin
+    if (m === 'watching' && !S.reduced && rng() < 0.35) return S.lastClipName !== 'idle_look' ? 'idle_look' : 'idle_breathe'
     const pool = poolOf(m)
     if (!pool.length) return 'idle_breathe'
     if (S.reduced && !ONE_SHOT.has(m)) return pool[0].name
@@ -353,8 +376,10 @@ export function createEngine(opts: EngineOpts) {
       body = smooth(r.body, before)
       outro = r.outro
     }
-    S.play = { clip: c, intro, body, outro, phase: intro.length ? 'intro' : 'body', fi: 0, tick: 0, interrupted: false }
+    S.play = { clip: c, mood: S.mood, intro, body, outro, phase: intro.length ? 'intro' : 'body', fi: 0, tick: 0, interrupted: false }
     S.pending = false
+    S.pendingUrgent = false
+    if (!isDyn(c) && c.cat !== 'transition' && c.cat !== 'mouse') S.oneShotWait = false
     S.lastClipName = c.name
     if (!isDyn(c)) {
       S.clipStart = S.ticks
@@ -498,7 +523,7 @@ export function createEngine(opts: EngineOpts) {
     // hier bleiben nur Effekte (sie lösen sich im Reaktionsclip auf) und der Carry.
     const keepFx = settled.props.filter((x) => props[x[0]]?.effect === true)
     const frames = [...settle, ...tidyFrames({ ...settled, props: keepFx })]
-    S.play = { clip: pl ? pl.clip : byName.idle_breathe, intro: [], body: [], outro: [], phase: 'end', fi: 0, tick: 0, interrupted: true }
+    S.play = { clip: pl ? pl.clip : byName.idle_breathe, mood: S.mood, intro: [], body: [], outro: [], phase: 'end', fi: 0, tick: 0, interrupted: true }
     S.landing = fromPose
     const rest = target ? [...planPath(clips, fromPose, byName[target].from), target] : S.queue
     S.queue = frames.length ? [dyn('ausklang', 'Ausklang (Pose zurück)', fromPose, fromPose, frames), ...rest] : rest
@@ -507,7 +532,43 @@ export function createEngine(opts: EngineOpts) {
 
   function requestChange() {
     S.pending = true
+    S.pendingUrgent = URGENT.has(S.mood)
     S.queue = []
+  }
+
+  /**
+   * Die Stimmung ist zum laufenden Clip zurückgekehrt (z. B. Lesen → Denken → Lesen, oder kurz getippt während eines Zeitvertreibs):
+   * kein Wechsel nötig, der anstehende entfällt und er spielt einfach weiter.
+   */
+  function stillFits(pl: Play): boolean {
+    if (!S.pending || S.gallery || S.queue.length || (pl.clip.cat !== S.mood && pl.mood !== S.mood)) return false
+    S.pending = false
+    return true
+  }
+
+  /** Ticks bis zum Ende des laufenden Durchgangs (Hauptteil ab dem aktuellen Bild). */
+  function bodyLeft(pl: Play): number {
+    let n = 0
+    for (let i = pl.fi; i < pl.body.length; i++) n += pl.body[i].t
+    return n
+  }
+
+  /**
+   * Darf der Clip an diesem Bild für einen anstehenden Wechsel verlassen werden? Nur an sicheren Bildern und (außer in der Grundpose) nur, wenn der Rest des
+   * Durchgangs länger als die Gnadenfrist ist (sonst spielt er zu Ende). Ohne Dringlichkeit zusätzlich nur in Ruhe: Arme wie in der
+   * Ausgangspose, damit keine Geste mitten in der Luft endet.
+   */
+  function cutHere(pl: Play): boolean {
+    const p = pl.body[pl.fi].p
+    if (!isSafe(pl.clip, p)) return false
+    // Grundpose (atmen, umschauen) hat keine Handlung, die man abbrechen könnte: sofort an jeder sicheren Stelle weiter
+    if (pl.clip.cat === 'idle') return true
+    // Ein Zeitvertreib läuft zu Ende, wenn du nur tippst: das Mitlesen darf warten
+    if (S.mood === 'watching' && pl.clip.cat === 'fun') return false
+    if (bodyLeft(pl) <= (S.pendingUrgent ? FINISH_URGENT : FINISH)) return false
+    if (S.pendingUrgent) return true
+    const base = POSES[pl.clip.from]
+    return p.armL === base.armL && p.armR === base.armR
   }
 
   function advance() {
@@ -520,7 +581,9 @@ export function createEngine(opts: EngineOpts) {
     pl.fi++
     pl.tick = 0
     if (pl.fi >= list.length) return phaseEnd(pl)
-    if (pl.phase === 'body' && S.pending && isSafe(pl.clip, list[pl.fi].p)) leaveClip(chooseForMood())
+    if (pl.phase !== 'body' || !S.pending) return
+    if (stillFits(pl)) return
+    if (cutHere(pl)) leaveClip(chooseForMood())
   }
 
   function phaseEnd(pl: Play) {
@@ -531,6 +594,7 @@ export function createEngine(opts: EngineOpts) {
       return
     }
     if (pl.phase === 'body') {
+      stillFits(pl)
       if (pl.clip.loop) {
         // Schleifengrenze = Ausgangspose: weiterlaufen oder weich aussteigen. Ohne Stimmungswechsel bleibt er bei seiner Schleife und
         // wählt erst nach LOOP_STAY eine Variante (Fynn: nicht ständig zwischen den Denk-Clips springen).
@@ -686,8 +750,10 @@ export function createEngine(opts: EngineOpts) {
   function moodDue(): boolean {
     const w = S.moodWant
     if (!w || S.welcome) return false
-    const steady = S.ticks - w.since >= MOOD_DEBOUNCE
-    const dwelt = S.mood === 'idle' || S.ticks - S.clipStart >= MIN_DWELL
+    if (S.oneShotWait && !URGENT.has(w.m)) return false
+    const work = S.mood.startsWith('work_') && w.m.startsWith('work_')
+    const steady = S.ticks - w.since >= (work ? WORK_DEBOUNCE : MOOD_DEBOUNCE)
+    const dwelt = S.mood === 'idle' || S.ticks - S.clipStart >= (work && S.mood !== 'work_think' ? WORK_DWELL : MIN_DWELL)
     return steady && dwelt
   }
 
@@ -698,6 +764,7 @@ export function createEngine(opts: EngineOpts) {
     const was = S.mood
     S.mood = m
     S.idleTicks = 0
+    if (!silent) S.oneShotWait = ONE_SHOT.has(m)
     if (!silent) {
       S.gallery = null
       const w = m !== 'idle' ? wake() : []
@@ -782,13 +849,13 @@ export function createEngine(opts: EngineOpts) {
     }
     if (d.mode === 'press') {
       // Losgelassen, bevor er hochgehoben war: kurz zurückfedern, sonst nichts
-      S.play = { clip: byName.idle_breathe, intro: [], body: [], outro: [], phase: 'end', fi: 0, tick: 0, interrupted: true }
+      S.play = { clip: byName.idle_breathe, mood: S.mood, intro: [], body: [], outro: [], phase: 'end', fi: 0, tick: 0, interrupted: true }
       S.landing = 'stand'
       S.queue = [dyn('zurueckfedern', 'federt zurück', 'stand', 'stand', [{ p: { ...POSES.stand, by: 1 }, t: 1 }, { p: { ...POSES.stand }, t: 2 }])]
       nextFromQueue()
       return true
     }
-    const none = { clip: byName.idle_breathe, intro: [], body: [], outro: [], phase: 'end' as Phase, fi: 0, tick: 0, interrupted: true }
+    const none = { clip: byName.idle_breathe, mood: S.mood, intro: [], body: [], outro: [], phase: 'end' as Phase, fi: 0, tick: 0, interrupted: true }
     if (d.mode === 'arm') {
       S.annoy = Math.min(8, S.annoy + 1)
       S.play = { ...none }

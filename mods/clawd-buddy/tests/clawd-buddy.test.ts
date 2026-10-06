@@ -1,6 +1,6 @@
 // clawd-buddy: Tests des Mods (Hooks-Modul + Client-Modul) nach SPEC.md → Tests. Animationsdaten und Engine testet anim.test.ts.
 import { expect, mock, test } from 'claude-code/testing'
-import { NO_FACTS, NO_STRAIN, SETBACK, addHit, deriveMood, deriveTemper, shellKind, specialDay, strainTurnEnd, strainTurnStart, toolKind } from '../hooks/mood.ts'
+import { LONG_TURN_MS, NO_FACTS, NO_STRAIN, SETBACK, addHit, ctxLevel, deriveMood, deriveTemper, shellKind, sidekickValue, specialDay, strainTurnEnd, strainTurnStart, toolKind } from '../hooks/mood.ts'
 import { ALL_CLIPS } from '../hooks/library.ts'
 import { CLIP_EN, T, clipLabel, langOf, num } from '../hooks/i18n.ts'
 import type { Facts, Strain } from '../hooks/mood.ts'
@@ -95,6 +95,10 @@ test('Band: Desktop zeigt die Figur als animiertes Svg (SMIL im Rahmen) und zeic
   expect(svgEl?.props.isInteractive).toBe(true)
   const first = svgEl?.props.source as string
   expect(first).toMatch(/^<svg [^>]*viewBox="0 0 100 14"/)
+  // Durchsichtiger Grund im Rahmen: ohne passendes Farbschema malt Chromium ihn im Dark Mode weiß
+  expect(first).toMatch(/^<svg [^>]*><style>:root\{color-scheme:light dark\}html,body\{margin:0;padding:0;overflow:hidden\}/)
+  // Clawds Box wird nie zusammengedrückt (sonst wäre die Hand rechts abgeschnitten)
+  expect((await ui.find({ type: 'Box', key: 'buddy' }))?.props.flexShrink).toBe(0)
   expect(first).toMatch(/#D77757/i)
   expect(first).toMatch(/<animate attributeName="visibility" calcMode="discrete"/)
   expect(first.length).toBeLessThanOrEqual(131072)
@@ -143,20 +147,29 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
     return { value: undefined }
   })
   on('prompt.edit', ($: unknown, e: any) => ({ text: e.text, cursor: e.cursor }))
+  on('turn.start', ($: unknown, e: any) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = async () => (await ui.find({ type: 'Svg' }))?.props.source as string
-  for (const ms of [5000, 1234, 7575]) {
+  for (const [i, ms] of [5025, 1275, 7575].entries()) { // ganze Takte: ein Rest unter 75 ms verschöbe die Erwartung um ein Bild
     const before = await svg()
     await clock.advance(ms)
+    // Neu zeichnen ohne neue Fakten (z. B. für einen anderen Mod): dasselbe Svg, der Rahmen lädt nicht neu (kein Flackern)
+    await ui.redraw()
+    expect(await svg()).toBe(before)
+    // Ein Ereignis, das etwas ändert: neues Svg, das mit dem Bild beginnt, das das vorige zu dieser Zeit zeigte
+    if (i % 2 === 0) await $.turn.start({ text: 'los', turnId: 't' + i })
+    else await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, reason: 'answer', turnId: 't' + (i - 1) } as any)
     await ui.redraw()
     const after = await svg()
+    expect(after).not.toBe(before)
     // Der Stand rückt in ganzen Takten (75 ms) vor
     expect(frameAt(after, 0)).toMatch(/#D77757/i)
-    expect(frameAt(after, 0)).toBe(frameAt(before, Math.floor(ms / 75) * 75))
+    expect(frameAt(after, 0), `Durchgang ${i}`).toBe(frameAt(before, Math.floor(ms / 75) * 75))
   }
   // /clawd status nennt die Messwerte der Desktop-Zeichnung und beginnt danach neu
   const st = await $.command.run({ command: 'clawd', args: 'status' })
-  expect(st.text).toMatch(/draws \(.*\/min\), animations avg .* s with .* frame changes/)
+  expect(st.text).toMatch(/draws \(.*\/min\), \d+ times kept unchanged \(no reload\), animations avg .* s with .* frame changes/)
   // Tippen: das erste Zeichen zeichnet neu, danach höchstens alle 3 s (vorher je Sekunde)
   const k = invalidates
   for (let i = 0; i < 20; i++) {
@@ -234,6 +247,12 @@ test('Fakten: turn.start → arbeitet, tool.call je Art, Subagent ändert nichts
   await ui.redraw()
   p = await clientProps(ui)
   expect(p.facts.tool).toBeNull()
+  // Nachlauf: das eben beendete Edit bleibt bis zu 8 s die Stimmung, danach grübelt er
+  expect(p.facts.lastTool?.kind).toBe('write')
+  // (ohne den Subagenten von oben, der sonst als „Subagenten arbeiten“ zählt)
+  const own = { ...p.facts, agents: [] }
+  expect(deriveMood(own, p.facts.lastTool.endedAt + 7000)).toBe('work_write')
+  expect(deriveMood(own, p.facts.lastTool.endedAt + 9000)).toBe('work_think')
   // Ende: fertig bzw. Fehler (aborted)
   await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: true, reason: 'aborted', turnId: 't1' })
   await ui.redraw()
@@ -241,6 +260,8 @@ test('Fakten: turn.start → arbeitet, tool.call je Art, Subagent ändert nichts
   expect(p.facts.turnActive).toBe(false)
   expect(p.facts.endedKind).toBe('oops')
   await $.turn.start({ text: 'nochmal', turnId: 't2' })
+  await ui.redraw()
+  expect((await clientProps(ui)).facts.lastTool).toBeUndefined()
   await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, reason: 'answer', turnId: 't2' })
   await ui.redraw()
   p = await clientProps(ui)
@@ -711,5 +732,166 @@ test('Sprache de: Befehle, Status und alt-Text deutsch wie bisher; Suche findet 
   const st = (await $.command.run({ command: 'clawd', args: 'status' })).text
   expect(st).toMatch(/^clawd-buddy: an, ausgeglichen \(0,00\), Müdigkeit 0 %, Ärger 0\. Desktop-Zeichnung/)
   expect((await $.command.run({ command: 'clawd', args: 'off' })).text).toBe('clawd-buddy: aus')
+  await ui.unmount()
+})
+
+test('sidekick, Komprimieren, Skill: Stimmungen mit Vorrang und Ablauf', () => {
+  const t = 1_000_000
+  const sk = (kind: 'check' | 'stop' | 'handoff' | 'fresh', at = t) => ({ ...NO_FACTS, sidekick: { kind, at } })
+  expect(deriveMood(sk('check'), t + 1000)).toBe('sk_check')
+  expect(deriveMood(sk('check'), t + 31_000)).toBe('idle') // Sicherheitsnetz: hängende Prüfung
+  expect(deriveMood(sk('stop'), t + 60_000)).toBe('sk_stop')
+  expect(deriveMood({ ...sk('stop'), ask: true }, t)).toBe('waitUser') // Claudes eigene Rückfrage geht vor
+  expect(deriveMood(sk('handoff'), t + 20_000)).toBe('sk_handoff')
+  // Neuer Chat: der Turn darin beginnt sofort, die Freude geht kurz vor, dann Arbeit
+  const fresh = { ...sk('fresh'), turnActive: true }
+  expect(deriveMood(fresh, t + 2000)).toBe('sk_fresh')
+  expect(deriveMood(fresh, t + 7000)).toBe('work_think')
+  expect(deriveMood({ ...NO_FACTS, sidekick: null }, t)).toBe('idle')
+  // Komprimieren hält die Arbeit an, ein Skill-Start zeigt sich kurz
+  expect(deriveMood({ ...NO_FACTS, turnActive: true, tool: { kind: 'read', since: t }, compactSince: t }, t + 20_000)).toBe('compact')
+  expect(deriveMood({ ...NO_FACTS, compactSince: t }, t + 6 * 60_000)).toBe('idle')
+  expect(deriveMood({ ...NO_FACTS, turnActive: true, skillAt: t }, t + 1000)).toBe('skill')
+  expect(deriveMood({ ...NO_FACTS, turnActive: true, skillAt: t }, t + 5000)).toBe('work_think')
+})
+
+const MSGS = [{ role: 'user', text: 'Zusammenfassung', toolUses: [] }]
+
+test('sidekick im Mod: Clawd liest sidekick.buddy beim Zeichnen; Komprimieren und Skill landen in den Fakten', async ($, on) => {
+  const clock = mock.clock(on)
+  const { logs } = stubs(on)
+  // Ein Stub ersetzt die Antwort des Hosts; Stubs antworten mit `{ value }` (wie store.get oben), hier mit dem ganzen StateRead
+  let side: unknown = { kind: 'stop', at: 0 }
+  on('state.get', ($: unknown, e: any) => ({ value: e.plugin === 'sidekick' && e.key === 'buddy' ? { value: side, version: 1 } : { value: undefined, version: 0 } }))
+  on('session.compact', async () => {
+    await clock.sleep(3000)
+    return { messages: MSGS }
+  })
+  on('skill.prompt', ($: unknown, e: any) => ({ text: e.text }))
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  let p = await clientProps(ui)
+  expect(p.facts.sidekick?.kind, logs.join(' | ')).toBe('stop')
+  side = null
+  await ui.redraw()
+  p = await clientProps(ui)
+  expect(p.facts.sidekick).toBeNull()
+  // Komprimieren (nicht das Vorausrechnen): solange es läuft
+  const pre = $.session.compact({ trigger: 'precompute', messages: MSGS } as any)
+  await clock.advance(3500)
+  await pre
+  await ui.redraw()
+  expect((await clientProps(ui)).facts.compactSince).toBeUndefined()
+  const run = $.session.compact({ trigger: 'manual', messages: MSGS } as any)
+  await clock.advance(1000)
+  await ui.redraw()
+  expect(typeof (await clientProps(ui)).facts.compactSince).toBe('number')
+  await clock.advance(3000)
+  await run
+  await ui.redraw()
+  expect((await clientProps(ui)).facts.compactSince).toBeUndefined()
+  await $.skill.prompt({ skill: 'commit', text: 'x' } as any)
+  await ui.redraw()
+  expect(typeof (await clientProps(ui)).facts.skillAt).toBe('number')
+  await ui.unmount()
+})
+
+test('sidekick: nur gültige Werte zählen (ein fremder Mod könnte den Wert umschreiben)', () => {
+  expect(sidekickValue({ kind: 'stop', at: 5 })).toEqual({ kind: 'stop', at: 5 })
+  expect(sidekickValue({ kind: 'boom', at: 5 })).toBeNull()
+  expect(sidekickValue({ kind: 'check', at: 'x' })).toBeNull()
+  expect(sidekickValue('stop')).toBeNull()
+  expect(sidekickValue(undefined)).toBeNull()
+})
+
+test('Beobachtend bei Fehlern: Komprimieren wirft bzw. wird übersprungen → Ergebnis kommt durch, compactSince wird geleert; sidekick-Wert nicht lesbar → Band bleibt', async ($, on) => {
+  const clock = mock.clock(on)
+  const { logs } = stubs(on)
+  on('state.get', () => {
+    throw new Error('nicht lesbar')
+  })
+  let mode: 'skip' | 'throw' = 'skip'
+  on('session.compact', () => {
+    if (mode === 'throw') throw new Error('kaputt')
+    return { skip: 'blockiert' }
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await clientProps(ui)).toBeDefined()
+  expect((await clientProps(ui)).facts.sidekick ?? null).toBeNull()
+  const r = await $.session.compact({ trigger: 'manual', messages: MSGS } as any)
+  expect(r).toEqual({ skip: 'blockiert' })
+  await ui.redraw()
+  expect((await clientProps(ui)).facts.compactSince).toBeUndefined()
+  mode = 'throw'
+  let failed = false
+  try {
+    await $.session.compact({ trigger: 'auto', messages: MSGS } as any)
+  } catch {
+    failed = true
+  }
+  await clock.advance(10)
+  await ui.redraw()
+  expect((await clientProps(ui)).facts.compactSince).toBeUndefined()
+  void failed
+  void logs
+  await ui.unmount()
+})
+
+
+test('Hinweise am Turn-Ende: Kontext fast voll (vor Pokal und Fertig), langer Turn → Puh geschafft', () => {
+  const t = 1_000_000
+  expect(ctxLevel(10)).toBe(0)
+  expect(ctxLevel(70)).toBe(70)
+  expect(ctxLevel(84.9)).toBe(70)
+  expect(ctxLevel(99)).toBe(85)
+  const ended = { ...NO_FACTS, endedKind: 'done' as const, endedAt: t }
+  expect(deriveMood({ ...ended, ctxAt: t, streakAt: t }, t + 1000)).toBe('ctx_full')
+  expect(deriveMood({ ...ended, ctxAt: t }, t + 5000)).toBe('idle')
+  // während der Arbeit nie (gezeigt wird erst am Turn-Ende)
+  expect(deriveMood({ ...NO_FACTS, turnActive: true, ctxAt: t }, t + 1000)).toBe('work_think')
+  expect(deriveMood({ ...ended, turnMs: LONG_TURN_MS }, t + 1000)).toBe('done_long')
+  expect(deriveMood({ ...ended, turnMs: LONG_TURN_MS - 1 }, t + 1000)).toBe('done')
+  expect(deriveMood({ ...ended, endedKind: 'oops', turnMs: LONG_TURN_MS }, t + 1000)).toBe('oops')
+})
+
+test('Kontext im Mod: neue Stufe zeigt er am Turn-Ende, jede Stufe einmal; nach dem Komprimieren wieder scharf', async ($, on) => {
+  const clock = mock.clock(on)
+  stubs(on)
+  on('session.measure', ($: unknown, e: any) => ({ changed: e.changed }))
+  on('turn.start', ($: unknown, e: any) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const measure = (percent: number) => ($ as any).session.measure({ context: { window: 200000, tokens: percent * 2000, percent }, rateLimits: [], changed: ['context'] })
+  const turn = async (n: number, pct: number, ms = 1000) => {
+    await $.turn.start({ text: 'los', turnId: 't' + n })
+    await measure(pct)
+    await clock.advance(ms)
+    await $.turn.complete({ answer: 'ok', durationMs: ms, isAborted: false, reason: 'answer', turnId: 't' + n })
+    await ui.redraw()
+    return clientProps(ui)
+  }
+  let p = await turn(1, 72)
+  expect(deriveMood(p.facts, p.now)).toBe('ctx_full')
+  await clock.advance(10_000)
+  p = await turn(2, 75)
+  expect(deriveMood(p.facts, p.now)).toBe('done') // dieselbe Stufe nicht noch einmal
+  await clock.advance(10_000)
+  p = await turn(3, 30) // komprimiert
+  expect(deriveMood(p.facts, p.now)).toBe('done')
+  await clock.advance(10_000)
+  p = await turn(4, 71, LONG_TURN_MS)
+  expect(deriveMood(p.facts, p.now)).toBe('ctx_full')
+  expect(p.facts.turnMs).toBeGreaterThanOrEqual(LONG_TURN_MS)
+  // nach dem Komprimieren fehlt percent bis zur nächsten Antwort: nichts passiert
+  await clock.advance(10_000)
+  await ($ as any).session.measure({ context: { window: 200000 }, rateLimits: [], changed: ['context'] })
+  await ui.redraw()
+  p = await clientProps(ui)
+  expect(deriveMood(p.facts, p.now)).toBe('idle')
+  // ohne Turn (Messung danach) sofort
+  await clock.advance(10_000)
+  await measure(90)
+  await ui.redraw()
+  p = await clientProps(ui)
+  expect(deriveMood(p.facts, p.now)).toBe('ctx_full')
   await ui.unmount()
 })

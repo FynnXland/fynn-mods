@@ -1,11 +1,12 @@
 {
   "name": "sidekick",
-  "version": "0.7.0",
+  "version": "0.8.1",
   "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Sonnet: a hint line under your message or a question (new chat with handoff, a skill, a clearer version, or \"wrong chat?\" when the message belongs to another project). Names due maintenance once per chat (/skill-doctor, prompt-audit, consolidate-memory, /init). /savings shows cost and measurable savings at a glance, /savings detail compares the models over time.",
   "author": {
     "name": "Fynn Hansen"
   },
   "license": "MIT",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "language": {
       "type": "string",

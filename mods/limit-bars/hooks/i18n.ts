@@ -22,6 +22,11 @@ export function dec(n: number, digits: number, lang: Lang): string {
   return lang === 'de' ? s.replace('.', ',') : s
 }
 
+/** Ganze Zahl mit Tausendertrennung: en `562,932`, de `562.932`. */
+export function int(n: number, lang: Lang): string {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, lang === 'de' ? '.' : ',')
+}
+
 /** API-Wert in Dollar: en `≈ $3.30`, `< $0.01`; de `≈ 3,30 $`, `< 0,01 $`. */
 export function usd(v: number, lang: Lang): string {
   const amount = (s: string) => (lang === 'de' ? `${s} $` : `$${s}`)
@@ -158,6 +163,51 @@ const en = {
     `Keep-warm on until ${until}${capped}. A ping reads the cache about ${lead} before it expires: ${perPing} API value per ping at ${ctx} context, ` +
     `so about ${pings} pings. If a ping rewrites instead of reading, keep-warm turns itself off. Off: /keepwarm off`,
   keepCapped: (max: string) => ` (at most ${max} h)`,
+
+  // Speicher-Ring und /disk
+  diskAlt: (drive: string, used: string, total: string) => `Drive ${drive} ${used} of ${total} used`,
+  groups: {
+    programs: 'Programs & libraries',
+    media: 'Media',
+    models: 'AI models & data',
+    code: 'Code & text',
+    archives: 'Archives & packages',
+    other: 'Other',
+  },
+  diskFree: 'Free',
+  cmdStorage: 'Drive usage by file type: ring with legend',
+  storageOff: 'The storage ring is off. Set `storagePath` in /config, for example `E:\\`.',
+  storageWindowsOnly: 'The storage ring works on Windows only for now: `storagePath` needs a drive letter, for example `E:\\`.',
+  storageFailed: (drive: string, err: string) => `Could not read drive ${drive}: ${err}`,
+  storageScanFailed: (err: string) => `Scan failed (${err}), showing the last result.`,
+  storageTitle: (drive: string, used: string, total: string, pct: string) => `### Drive ${drive} · ${used} of ${total} used (${pct})`,
+  storageScanned: (at: string, files: string) => `Scanned ${at} · ${files} files`,
+  storageNoScan: 'Not scanned by file type yet.',
+  storageHead: '| File type | Size | Share |',
+  storageOfDrive: (pct: string) => `${pct} of the drive`,
+  storageScanRunning: (at: string) => `Another session has been scanning the drive since ${at}. Run /disk again in a moment.`,
+  storageScanPaused: (at: string) => `The last scan failed at ${at}; automatic scans pause for 24 h. Retry: /disk refresh`,
+  errMissing: 'path not found',
+  errUnreadable: 'folder not readable',
+  errTruncated: 'output truncated',
+  errNoData: 'no usable output',
+
+  // /bars: Anzeige anpassen
+  cmdBars: 'Show or hide parts of the display: 5h, week, cache, storage',
+  barsTitle: '### limit-bars · display',
+  barsHead: '| Part | Shown | Set by |',
+  barsPart: { fiveHour: '5-hour bar', weekly: 'Weekly bar', cache: 'Cache ring', storage: 'Storage ring' },
+  barsOn: 'on',
+  barsOff: 'off',
+  barsByCommand: '/bars',
+  barsBySetting: 'settings',
+  barsNoPath: 'on, but no `storagePath`',
+  barsNotWindows: 'on, but `storagePath` has no drive letter',
+  barsUsage: 'Change: `/bars show 5h|week|cache|storage on|off` · back to the settings: `/bars reset`. Applies to all open chats within 10 s.',
+  barsSet: (part: string, state: string) => `${part}: ${state}. Applies to all open chats within 10 s; \`/bars reset\` goes back to the settings.`,
+  barsReset: 'Back to the settings (`/config` → limit-bars).',
+  barsCacheNote: 'The cold-send question and the notices stay on; turn them off with `/cache warn off` and `/cache hints off`.',
+  barsSaveFailed: (err: string) => `Could not save (${err}); applies to this chat only until it restarts.`,
 }
 
 export type Texts = typeof en
@@ -282,6 +332,49 @@ const de: Texts = {
     `Warmhalten an bis ${until}${capped}. Ein Ping liest den Cache etwa ${lead} vor Ablauf: ${perPing} API-Wert je Ping bei ${ctx} Kontext, ` +
     `also etwa ${pings} Pings. Schreibt ein Ping neu statt zu lesen, schaltet es sich ab. Aus: /keepwarm off`,
   keepCapped: (max) => ` (höchstens ${max} h)`,
+
+  diskAlt: (drive, used, total) => `Laufwerk ${drive} ${used} von ${total} belegt`,
+  groups: {
+    programs: 'Programme & Bibliotheken',
+    media: 'Medien',
+    models: 'KI-Modelle & Daten',
+    code: 'Code & Text',
+    archives: 'Archive & Pakete',
+    other: 'Sonstiges',
+  },
+  diskFree: 'Frei',
+  cmdStorage: 'Belegung des Laufwerks nach Dateiart: Ring mit Legende',
+  storageOff: 'Der Speicher-Ring ist aus. In /config `storagePath` setzen, zum Beispiel `E:\\`.',
+  storageWindowsOnly: 'Der Speicher-Ring geht vorerst nur unter Windows: `storagePath` braucht einen Laufwerksbuchstaben, zum Beispiel `E:\\`.',
+  storageFailed: (drive, err) => `Laufwerk ${drive} nicht lesbar: ${err}`,
+  storageScanFailed: (err) => `Scan fehlgeschlagen (${err}), angezeigt wird der letzte Stand.`,
+  storageTitle: (drive, used, total, pct) => `### Laufwerk ${drive} · ${used} von ${total} belegt (${pct})`,
+  storageScanned: (at, files) => `Gescannt ${at} · ${files} Dateien`,
+  storageNoScan: 'Noch nicht nach Dateiart gescannt.',
+  storageHead: '| Dateiart | Größe | Anteil |',
+  storageOfDrive: (pct) => `${pct} des Laufwerks`,
+  storageScanRunning: (at) => `Eine andere Sitzung scannt das Laufwerk seit ${at}. Gleich noch einmal /disk aufrufen.`,
+  storageScanPaused: (at) => `Der letzte Scan ist um ${at} gescheitert; automatische Scans pausieren 24 h. Neu versuchen: /disk refresh`,
+  errMissing: 'Pfad nicht gefunden',
+  errUnreadable: 'Ordner nicht lesbar',
+  errTruncated: 'Ausgabe abgeschnitten',
+  errNoData: 'keine verwertbare Ausgabe',
+
+  cmdBars: 'Teile der Anzeige ein- oder ausblenden: 5h, Woche, Cache, Speicher',
+  barsTitle: '### limit-bars · Anzeige',
+  barsHead: '| Teil | Sichtbar | Gesetzt durch |',
+  barsPart: { fiveHour: '5-Stunden-Balken', weekly: 'Wochen-Balken', cache: 'Cache-Ring', storage: 'Speicher-Ring' },
+  barsOn: 'an',
+  barsOff: 'aus',
+  barsByCommand: '/bars',
+  barsBySetting: 'Einstellung',
+  barsNoPath: 'an, aber ohne `storagePath`',
+  barsNotWindows: 'an, aber `storagePath` ohne Laufwerksbuchstaben',
+  barsUsage: 'Ändern: `/bars show 5h|week|cache|storage on|off` · zurück zu den Einstellungen: `/bars reset`. Wirkt in allen offenen Chats innerhalb von 10 s.',
+  barsSet: (part, state) => `${part}: ${state}. Wirkt in allen offenen Chats innerhalb von 10 s; \`/bars reset\` geht zurück zu den Einstellungen.`,
+  barsReset: 'Zurück zu den Einstellungen (`/config` → limit-bars).',
+  barsCacheNote: 'Die Rückfrage vor kaltem Senden und die Hinweise bleiben; aus mit `/cache warn off` und `/cache hints off`.',
+  barsSaveFailed: (err) => `Nicht gespeichert (${err}); gilt nur in diesem Chat bis zum Neustart.`,
 }
 
 export const T: Readonly<Record<Lang, Texts>> = { en, de }
@@ -290,3 +383,4 @@ export const T: Readonly<Record<Lang, Texts>> = { en, de }
 export const CACHE_ARGS = 'ttl 5|60|auto · warn on|off · big 150k · hints on|off'
 export const CACHE_HINT = '[ttl 5|60|auto] [warn on|off] [big 150k] [hints on|off]'
 export const HANDOFF_HINT = '[continue|show]'
+export const BARS_HINT = '[show 5h|week|cache|storage on|off] [reset]'

@@ -45,6 +45,13 @@ export type Desk = {
   plan: (facts: Facts, strain: Strain, scale: number) => Plan
   /** `/clawd nap`: eine Weile Nacht und kurzer Leerlauf, damit er einschläft. */
   nap: () => void
+  /**
+   * Ab wann (ms nach `now`) zeigten die Fakten `facts` etwas anderes als die gezeigte Animation (Stimmung oder Zahl der Helfer)?
+   * `Infinity`: bis zu ihrem Ende nichts; 0: sofort (noch nichts gezeigt, oder Fynn ist eben zurückgekommen).
+   */
+  divergence: (now: number, facts: Facts) => number
+  /** Wie lange (ms ab `now`) die gezeigte Animation noch läuft. */
+  remaining: (now: number) => number
 }
 
 const NAP_TICKS = 3000 // 5 Minuten
@@ -70,7 +77,7 @@ export function createDesk(o: DeskOpts): Desk {
   })
   // Zustand des Antriebs (neben der Engine); `at` = Uhrzeit des Stands, -1 = noch keiner
   let D = { n: 0, mood: '', napUntil: -1, seenBack: 0, at: -1 }
-  let drawn: { facts: Facts; strain: Strain } | null = null // Fakten der zuletzt gezeigten Animation
+  let drawn: { facts: Facts; strain: Strain; at: number; ticks: number } | null = null // zuletzt gezeigte Animation: Fakten, Beginn, Länge
   engine.start()
 
   function tick(now: number, facts: Facts, strain: Strain) {
@@ -184,11 +191,22 @@ export function createDesk(o: DeskOpts): Desk {
     draw(now, facts, strain, scale) {
       advance(now, drawn?.facts ?? facts, drawn?.strain ?? strain)
       const p = plan(facts, strain, scale)
-      drawn = { facts, strain }
+      drawn = { facts, strain, at: now, ticks: p.ticks }
       return p
     },
     catchUp(now) {
       if (drawn) advance(now, drawn.facts, drawn.strain)
+    },
+    divergence(now, facts) {
+      if (!drawn || (facts.backAt ?? 0) !== (drawn.facts.backAt ?? 0)) return 0
+      const end = drawn.at + drawn.ticks * TICK
+      for (let t = now; t <= end; t += TICK) {
+        if (deriveMood(facts, t) !== deriveMood(drawn.facts, t) || activeAgents(facts, t) !== activeAgents(drawn.facts, t)) return t - now
+      }
+      return Infinity
+    },
+    remaining(now) {
+      return drawn ? Math.max(0, drawn.at + drawn.ticks * TICK - now) : 0
     },
     nap() {
       D.napUntil = D.n + NAP_TICKS
@@ -222,7 +240,12 @@ function build(bodies: readonly string[][], shown: readonly Shown[][], ticks: nu
       groups += `<g visibility="${keys[0][1]}">${anim}${bodies[t][id]}</g>`
     }
   })
-  const source = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W * scale}" height="${H * scale}" shape-rendering="crispEdges">${groups}</svg>`
+  // Der Rahmen (isInteractive) bekäme sonst einen weißen Grund: Chromium hinterlegt einen Rahmen deckend, wenn dessen Farbschema
+  // (ohne Angabe hell) nicht zu dem der Seite passt, im Dark Mode also immer. `light dark` übernimmt das Schema der Seite.
+  // Bettet der Rahmen das SVG in ein HTML-Dokument ein, hätte `body` 8 px Rand: das Bild rutschte nach rechts unten aus dem Kasten und
+  // würde dort abgeschnitten. Ohne HTML-Hülle treffen die Regeln nichts.
+  const css = ':root{color-scheme:light dark}html,body{margin:0;padding:0;overflow:hidden}body>svg{display:block}'
+  const source = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W * scale}" height="${H * scale}" shape-rendering="crispEdges"><style>${css}</style>${groups}</svg>`
   return { source, ticks, frames, changes: changeAt.size }
 }
 

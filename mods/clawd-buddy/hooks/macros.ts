@@ -89,7 +89,7 @@ export function fetchIn(o: FetchOpts): Frame[] {
   const grip = o.grip ?? 0
   const out = reachOut(o)
   const yFinal = o.at[1]
-  const yPeak = Math.max(0, yFinal - (o.lift ?? 3))
+  const yPeak = Math.max(Math.min(0, yFinal), yFinal - (o.lift ?? 3)) // über dem Körper (y < 0) ohne Anheben
   const prop = (y: number): PropRef => [o.name, o.at[0], y, 'g']
   const hand = (objY: number) => blockArm(side, out, objY + grip)
   const away = side === 'L' ? 'armR' : 'armL'
@@ -129,7 +129,7 @@ export function fetchOut(o: FetchOpts): Frame[] {
   const grip = o.grip ?? 0
   const out = reachOut(o)
   const yFinal = o.at[1]
-  const yPeak = Math.max(0, yFinal - (o.lift ?? 3))
+  const yPeak = Math.max(Math.min(0, yFinal), yFinal - (o.lift ?? 3)) // über dem Körper (y < 0) ohne Anheben
   const prop = (y: number): PropRef => [o.name, o.at[0], y, 'g']
   const hand = (objY: number) => blockArm(side, out, objY + grip)
   const s2 = small(o, shrinkPct(o.size, 5, 3))

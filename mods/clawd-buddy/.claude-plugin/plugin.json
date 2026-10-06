@@ -1,11 +1,12 @@
 {
   "name": "clawd-buddy",
-  "version": "0.4.2",
+  "version": "0.6.0",
   "description": "Animated pixel mascot Clawd above the prompt: reacts to Claude's work, waiting times, idle time, time of day, the mouse and a mood that builds up over the session.",
   "author": {
     "name": "Fynn Hansen"
   },
   "license": "MIT",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "nightStart": {
       "type": "number",

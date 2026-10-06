@@ -1,8 +1,11 @@
 // limit-bars: Desktop-Grafik. Ein Svg-Bild (ohne isInteractive, types@2.1.288:11578-11605), 4-px-Raster, fest gestapelt:
 // je Fenster eine Textzeile (12 px) und darunter ein Segmentbalken (8 px); 5h oben, Woche unten, unten bündig.
-// Rechts daneben im selben Bild der Cache-Ring (ring.ts), damit er sicher zwischen Balken und Clawd sitzt.
+// Rechts daneben im selben Bild der Cache-Ring (ring.ts) und der Speicher-Ring (storage.ts), damit sie sicher zwischen
+// Balken und Clawd sitzen.
 import { FONT, RING_H, RING_SIZE, esc, ringSvg } from './ring.ts'
 import type { RingView } from './ring.ts'
+import { DISK_W, diskRingSvg } from './storage.ts'
+import type { DiskView } from './storage.ts'
 import { EMPTY, GREY, ORANGE } from './view.ts'
 import type { Shown } from './view.ts'
 
@@ -37,20 +40,30 @@ const PAD_LEFT = 10
 const RING_GAP = 8 // Abstand Balken – Ring
 
 /**
- * Das Bild für bis zu zwei Fenster und optional den Cache-Ring rechts daneben (zwischen Balken und Clawd).
- * Höhe ohne Ring 24 (ein Fenster) bzw. 56 (zwei); mit Ring immer 56, die Balken dann unten bündig.
+ * Das Bild für bis zu zwei Fenster, optional den Cache-Ring und den Speicher-Ring rechts daneben (zwischen Balken und
+ * Clawd). Höhe ohne Ring 24 (ein Fenster) bzw. 56 (zwei); mit einem Ring immer 56, die Balken dann unten bündig.
  */
-export function desktopSvg(shown: readonly Shown[], ring?: RingView): { source: string; width: number; height: number; alt: string } {
+export function desktopSvg(
+  shown: readonly Shown[],
+  ring?: RingView,
+  disk?: DiskView,
+): { source: string; width: number; height: number; alt: string } {
   const list = shown.slice(0, 2)
   const barsH = list.length > 0 ? list.length * GROUP + (list.length - 1) * GROUP_GAP : 0
-  const height = ring ? Math.max(RING_H, barsH) : barsH
+  const height = ring || disk ? Math.max(RING_H, barsH) : barsH
   // Etwas Luft zum linken Rand des Bands (Fynn): der Inhalt rückt im Bild um PAD_LEFT nach rechts
-  const barsW = list.length > 0 ? BAR_W : 0
-  const ringX = barsW > 0 ? barsW + RING_GAP : 0
-  const width = PAD_LEFT + (ring ? ringX + RING_SIZE : barsW) + SPACE_RIGHT
+  let x = list.length > 0 ? BAR_W : 0
+  const place = (w: number) => {
+    const at = x > 0 ? x + RING_GAP : 0
+    x = at + w
+    return at
+  }
   const dy = height - barsH
-  const body = list.map((s, i) => group(s, dy + i * (GROUP + GROUP_GAP))).join('') + (ring ? ringSvg(ring, ringX, height - RING_H) : '')
+  let body = list.map((s, i) => group(s, dy + i * (GROUP + GROUP_GAP))).join('')
+  if (ring) body += ringSvg(ring, place(RING_SIZE), height - RING_H)
+  if (disk) body += diskRingSvg(disk, place(DISK_W), height - RING_H)
+  const width = PAD_LEFT + x + SPACE_RIGHT
   const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><g transform="translate(${PAD_LEFT} 0)">${body}</g></svg>`
-  const alt = [...list.map((s) => `${s.name} ${s.pct.alt}${s.reset ? `, ${s.reset.alt}` : ''}`), ...(ring ? [ring.alt] : [])].join('; ')
+  const alt = [...list.map((s) => `${s.name} ${s.pct.alt}${s.reset ? `, ${s.reset.alt}` : ''}`), ...(ring ? [ring.alt] : []), ...(disk ? [disk.alt] : [])].join('; ')
   return { source, width, height, alt }
 }
