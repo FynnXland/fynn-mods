@@ -21,19 +21,21 @@ import {
   checkPrompt,
   checkSystem,
   cleanLedger,
+  daysInPeriod,
   cleanSettings,
   countHint,
   countWartung,
   cut,
   handoffEstimate,
   handoffPrompt,
+  hintLine,
   handoffSystem,
   historyTail,
   isSuppressed,
   parseVerdict,
   rankChoices,
-  periodOf,
   planCompaction,
+  savingsArgs,
   savingsReport,
   sumPeriod,
   triggerOf,
@@ -71,13 +73,16 @@ const HEADER = 'Sidekick'
 // Farbe der sidekick-Zeile und des Fassungs-Rahmens (andere Farbe als die Nachricht)
 const ACCENT = '#6CB6FF'
 
+/** Eine Zeile unter einer eigenen Nachricht; `cmd`: Befehl für den Button, `queued`: schon als To-do eingereiht (Nachtrag 0.7.0). */
+type HintRow = { id: string; line: string; sent?: string; cmd?: string; queued?: boolean }
+
 /** Was der Sidekick je Session weiß; `$.store` `sitzung:<sessionId>` (SPEC Zustand). */
 type Sitzung = {
   summary: string // laufende Kurzfassung, ≤ 600 Zeichen, schreibt die Prüfung fort
   recent: string[] // die letzten 3 eigenen Nachrichten, gekürzt
   own: number // eigene Nachrichten (ohne Befehle)
   ignored: Ignored
-  hints: { id: string; line: string; sent?: string }[] // Hinweis-Zeilen, an die Message-ID gebunden (höchstens 30)
+  hints: HintRow[] // Hinweis-Zeilen, an die Message-ID gebunden (höchstens 30)
   last: { line: string; art: Art; at: number } | null // letzter Hinweis
   open: { art: Art; skill: string; ctx: number } | null // gezeigte Zeile, noch nicht angenommen
   commits: number
@@ -96,7 +101,17 @@ function cleanSitzung(v: unknown): Sitzung {
   if (Array.isArray(o.recent)) s.recent = o.recent.filter((x: unknown) => typeof x === 'string').slice(-3)
   if (typeof o.own === 'number') s.own = o.own
   if (o.ignored && typeof o.ignored === 'object') s.ignored = o.ignored
-  if (Array.isArray(o.hints)) s.hints = o.hints.filter((h: any) => h && typeof h.id === 'string' && typeof h.line === 'string').slice(-30)
+  if (Array.isArray(o.hints))
+    s.hints = o.hints
+      .filter((h: any) => h && typeof h.id === 'string' && typeof h.line === 'string')
+      .map((h: any) => ({
+        id: h.id,
+        line: h.line,
+        ...(typeof h.sent === 'string' ? { sent: h.sent } : {}),
+        ...(typeof h.cmd === 'string' && h.cmd.startsWith('/') ? { cmd: h.cmd } : {}),
+        ...(h.queued === true ? { queued: true } : {}),
+      }))
+      .slice(-30)
   if (o.last && typeof o.last.line === 'string') s.last = o.last
   if (o.open && typeof o.open.art === 'string') s.open = o.open
   if (typeof o.commits === 'number') s.commits = o.commits
@@ -111,7 +126,7 @@ let ses: Sitzung = emptySitzung()
 let settings: Settings = { ...DEFAULT_SETTINGS }
 // Hinweis, der an die nächste eigene Zeile mit diesem Text gebunden wird (UserMessage kennt die Message-ID, prompt.submit nicht)
 // `alt`: die gesendete Fassung; der Desktop zeigt in der Sprechblase das Original, daher passen beide Texte
-let pending: { text: string; alt?: string; line: string; sent?: string } | null = null
+let pending: { text: string; alt?: string; line: string; sent?: string; cmd?: string } | null = null
 let askedCold = false // „Trotzdem senden“ im Kalt-Dialog: der folgende Kaltstart war gefragt, zählt nicht als „ohne Rückfrage“
 let skillCache: { at: number; list: Skill[] } | null = null
 type Breakdown = Awaited<ReturnType<EngineInterface['session']['usage']>>['context']['breakdown']
@@ -123,7 +138,7 @@ type WHint = Hint & { key: string }
 let wChain: Promise<unknown> = Promise.resolve() // Lesen, Ändern, Schreiben von `wartung:<schlüssel>` nacheinander
 let chain: Promise<unknown> = Promise.resolve() // Buchungen dieser Session nacheinander (Lesen, Ändern, Schreiben)
 // Die letzten /savings-Ausgaben: ui.render findet über die Kennung im Text die Daten der Zeichnung (wie cost-ledger)
-const reports = new Map<string, { d: Day; p: Period; now: number }>()
+const reports = new Map<string, { d: Day; p: Period; now: number; days?: Record<string, Day> }>()
 let reportNo = 0
 
 /** Ein Zeichen-Element als reine Daten (StyledElement, types:8851): Box oder Text mit einfachen Props. */
@@ -226,6 +241,64 @@ async function loadSkills($: EngineInterface, now: number): Promise<Skill[]> {
   for (const c of cmds) if (names.has(c.name)) list.push({ name: c.name, description: cut(c.description.split('\n')[0] ?? '', 90) })
   skillCache = { at: now, list: list.slice(0, 60) }
   return skillCache.list
+}
+
+// ---------- Button unter der Zeile (Nachtrag 0.7.0) ----------
+
+/**
+ * Wohin ein Befehl geht: als To-do, wenn worklist `/todo` anbietet und der Befehl ein Skill ist, den Claude selbst aufrufen kann
+ * (Name in der Skill-Liste der lokalen Schätzung); sonst ins Eingabefeld. Eingebaute Befehle wie `/skill-doctor` oder `/init`
+ * kann Claude nicht ausführen, ein To-do dafür liefe ins Leere (rel/skills.md:899).
+ */
+function routeOf(base: typeof baseCache, cmd: string): 'todo' | 'fill' {
+  if (!base) return 'fill'
+  const todo = base.cmds.some((c) => c.name === 'todo' && c.source === 'plugin' && /^worklist(@|$)/.test(c.plugin ?? ''))
+  const name = cmd.replace(/^\//, '').split(/\s+/)[0] ?? ''
+  const skill = (base.b?.skills?.skillFrontmatter ?? []).some((s) => s.name === name)
+  return todo && skill ? 'todo' : 'fill'
+}
+
+// Laufende Klicks (Review 0.7.0 S1): die Sperre steht vor dem ersten `await`, ein Doppelklick legt nichts doppelt an
+const pressing = new Set<string>()
+
+/**
+ * Klick auf den Button. `route` ist das Ziel, das beim Zeichnen auf dem Button stand (Review S2: Beschriftung und Aktion gleich):
+ * `/todo Führe … aus.` über worklist, oder der Befehl an der Cursor-Position ins Eingabefeld. „Eingereiht“ wird erst nach dem
+ * erfolgreichen `/todo` gespeichert (Review K1); bis dahin gilt es nur im Speicher.
+ */
+async function useHint($: EngineInterface, id: string, route: 'todo' | 'fill') {
+  const h = ses.hints.find((x) => x.id === id)
+  if (!h?.cmd || h.queued || pressing.has(id)) return
+  const cmd = h.cmd
+  pressing.add(id)
+  try {
+    if (route === 'todo') {
+      $.ui.invalidate('ui.render')
+      try {
+        await $.command.run({ command: 'todo', args: t().todoText(cmd) })
+      } catch (err) {
+        $.ui.toast(t().todoFailed(cmd, msg(err)), { timeoutMs: 15000 })
+        return
+      }
+      const now = ses.hints.find((x) => x.id === id)
+      if (now) {
+        now.queued = true
+        saveSes($, await $.clock.now().catch(() => 0))
+      }
+      return
+    }
+    // An der Cursor-Position: bei leerem Feld steht nur der Befehl da, getippter Text bleibt. Ohne eigenes $.prompt.read liefert fill
+    // den Feldinhalt nicht zurück (types:8324-8355), darum kein Umstellen in eine eigene Zeile
+    try {
+      const r = await $.prompt.fill({ text: cmd, mode: 'insert' })
+      if (!r.isFilled) $.ui.toast(t().fillFailed(cmd), { timeoutMs: 15000 })
+    } catch {
+      $.ui.toast(t().fillFailed(cmd), { timeoutMs: 15000 })
+    }
+  } finally {
+    pressing.delete(id)
+    $.ui.invalidate('ui.render')
+  }
 }
 
 // ---------- Wartungs-Hinweise (SPEC Nachtrag 0.2.0) ----------
@@ -350,7 +423,7 @@ async function sendWithWartung<R>($: EngineInterface, e: { text: string }, h: WH
   if (!h) return send()
   try {
     const now = await $.clock.now()
-    pending = { text: e.text, line: h.line }
+    pending = { text: e.text, line: h.line, ...(h.cmd ? { cmd: h.cmd } : {}) }
     ses.last = { line: h.line, art: 'sonstiges', at: now }
     saveSes($, now)
     bookDay($, now, (d) => countWartung(d, h.id, 'gezeigt'))
@@ -743,7 +816,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     // Befehle zuletzt, jeder für sich (CLAUDE.md, Registrieren in session.start); englisch
     for (const c of [
       { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[on|off|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …]' },
-      { name: 'savings', description: t().cmdSavings, argumentHint: '[today|week|all]' },
+      { name: 'savings', description: t().cmdSavings, argumentHint: '[detail] [today|week|all]' },
     ]) {
       try {
         await $.command.register(c)
@@ -823,8 +896,9 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (!d) {
       if (v && v.urteil !== 'durch' && v.zeile) {
         // Zeile unter dieser Nachricht (Verhalten 5); bei einem „anhalten“ ohne mögliche Aktion ebenso
-        const line = v.art === 'skill' && v.skill && !v.zeile.includes(v.skill) ? `${v.zeile} (/${v.skill})` : v.zeile
-        pending = { text: e.text, line }
+        const line = v.art === 'skill' || (v.skill && v.zeile.includes(v.skill)) ? hintLine(v.zeile, v.skill) : v.zeile
+        // Button nur beim Skill-Hinweis: nur dort prüft parseVerdict den Namen gegen die Skill-Liste (Review 0.7.0 S3)
+        pending = { text: e.text, line, ...(v.art === 'skill' && v.skill ? { cmd: `/${v.skill}` } : {}) }
         ses.open = { art: v.art, skill: v.skill, ctx: c.ctx }
         ses.last = { line, art: v.art, at: now }
         saveSes($, now)
@@ -924,7 +998,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       const own = ['composer', 'bridge', 'sdk'].includes(e.props.origin.kind)
       const shown = e.props.text.trim()
       if (!hit && own && pending && (shown === pending.text.trim() || shown === pending.alt?.trim())) {
-        hit = { id: e.requestId, line: pending.line, ...(pending.sent ? { sent: cut(pending.sent, 2000) } : {}) }
+        hit = { id: e.requestId, line: pending.line, ...(pending.sent ? { sent: cut(pending.sent, 2000) } : {}), ...(pending.cmd ? { cmd: pending.cmd } : {}) }
         pending = null
         ses.hints = [...ses.hints, hit].slice(-30)
         saveSes($, await $.clock.now())
@@ -939,8 +1013,20 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       // Eigene Zeichnung unter der unveränderten Nachricht: die Zeile farbig, eine gesendete Fassung im Rahmen.
       // Ein Hook darf die Zeichnung der Engine einbetten (types:3864-3871); ein ungültiger Baum zeichnet die der Engine.
       theirs = await next(e)
-      // Elemente als reine Daten {type, props, children} (types:9215-9218), ohne $.ui.resolve: kein zusätzliches Recht
-      const kids: RenderNode[] = [el('Box', { key: 'sidekick-line' }, [el('Text', { color: ACCENT }, [`· sidekick: ${hit.line}`])])]
+      // Elemente als reine Daten {type, props, children} (types:9215-9218); nur der Button kommt aus $.ui.resolve (Nachtrag 0.7.0)
+      const line: RenderNode[] = [el('Text', { color: ACCENT }, [`· sidekick: ${hit.line}`])]
+      // Button für den Befehl der Zeile (Nachtrag 0.7.0): mit worklist und einem Skill als To-do, sonst ins Eingabefeld
+      const id = hit.id
+      const cmd = hit.cmd
+      if (cmd && hit.queued) line.push(el('Text', { dimColor: true }, [`  ${t().btnQueued}`]))
+      else if (cmd) {
+        // Das Ziel steht beim Zeichnen fest und geht so in den Klick (Review S2); ohne geladene Befehlsliste: Eingabefeld
+        const route = routeOf(baseCache, cmd)
+        const label = route === 'todo' ? t().btnTodo : t().btnFill
+        // Ein Button trägt eine Funktion und ist darum keine reine Daten-Zeichnung: über $.ui.resolve (Test: „not plain data“)
+        line.push($.ui.resolve(e).Button({ key: 'sidekick-use', label, onPress: () => void useHint($, id, route) }) as RenderNode)
+      }
+      const kids: RenderNode[] = [el('Box', { key: 'sidekick-line', flexDirection: 'row', flexWrap: 'wrap', columnGap: 1 }, line)]
       if (hit.sent) {
         const frame = { key: 'sidekick-sent', flexDirection: 'column', borderStyle: 'round', borderColor: ACCENT, paddingX: 1 }
         kids.push(el('Box', frame, [el('Text', { dimColor: true }, [t().sentLabel]), el('Text', {}, [hit.sent])]))
@@ -992,17 +1078,20 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   })
 
   on('command.run', { command: 'savings' }, async ($, e) => {
-    const p = periodOf(e.args)
-    if (!p) return { text: t().savingsUsage }
+    const v = savingsArgs(e.args)
+    if (!v) return { text: t().savingsUsage }
+    const { p } = v
     const now = await $.clock.now()
     const keys = (await $.store.keys()).filter((k) => k.startsWith('bilanz:'))
     const ledgers: Ledger[] = []
     for (const k of keys) ledgers.push(cleanLedger(await $.store.get(k)))
     const d = sumPeriod(ledgers, p, now)
+    // Nur `/savings detail` braucht die Tage (Zeitraum je Modell, Verlauf je Tag)
+    const days = v.detail ? daysInPeriod(ledgers, p, now) : undefined
     const tag = `#${(++reportNo).toString(36)}${now.toString(36).slice(-5)}`
-    reports.set(tag, { d, p, now })
+    reports.set(tag, { d, p, now, days })
     while (reports.size > 10) reports.delete(reports.keys().next().value as string)
-    return { text: savingsReport(d, p, now, tag) }
+    return { text: savingsReport(d, p, now, tag, days) }
   })
 
   // /savings gezeichnet wie /ledger von cost-ledger: ein eigener Baum statt der Markdown-Zeile (types CommandOutput). `command`
@@ -1013,7 +1102,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     const v = tag ? reports.get(tag) : undefined
     if (!v) return next(e)
     try {
-      return savingsTree(v.d, v.p, v.now, e.viewport?.columns ?? 100, e.surface)
+      return savingsTree(v.d, v.p, v.now, e.viewport?.columns ?? 100, e.surface, v.days)
     } catch {
       return next(e)
     }

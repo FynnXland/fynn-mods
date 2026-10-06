@@ -2,12 +2,12 @@
 //
 // Aufgabe: aus Events *Fakten* sammeln (wann begann der Turn, welches Tool läuft seit wann, ob eine Frage offen ist, wann zuletzt
 // getippt wurde, wie der letzte Turn endete) und sie als `props` an das Client-Modul `./buddy.ts` reichen. Die Stimmung leitet der Client
-// daraus auf seiner eigenen Uhr ab (mood.ts); `$.ui.invalidate` läuft darum nur bei echten Ereignissen, nie im Bildtakt.
+// daraus auf seiner eigenen Uhr ab (mood.ts); `$.ui.invalidate` läuft darum nur bei echten Ereignissen, nie im Bildtakt (Desktop: desk.ts).
 // Zeichnet ins Band über dem Prompt (docs/raw/en/interface.md:207-213) und lässt fremden Inhalt stehen (`await next(e)` als Kind).
 import type { EngineInterface, On, Timer } from 'claude-code'
 import { joinBand, splitBand } from './band.ts'
 import { ALL_CLIPS } from './library.ts'
-import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, addHit, deriveTemper, shellKind, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
+import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, deriveTemper, shellKind, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
 import type { Strain } from './mood.ts'
 import { createDesk, DESK_TICK } from './desk.ts'
 import { T, clipLabel, langOf, num as fmt } from './i18n.ts'
@@ -39,35 +39,43 @@ let lastSeen = 0
 let seenSaved = 0
 let seenPerf = -1e9
 
-// Desktop-App: Dort lädt der Client-Rahmen nicht; die Engine läuft im Hooks-Modul (desk.ts) und zeichnet je Takt ein Svg.
-// Der Takt (`$.clock.every`, liefert einen Timer mit `cancel()`, types:11881) läuft nur, solange die Desktop-App das Band zeichnet und der
-// Buddy an ist: `/clawd off` bricht ihn ab, und zeichnet die App 2 s lang nicht mehr, bricht er sich selbst ab; das nächste Zeichnen startet ihn neu.
-// Invalidiert wird nur, wenn sich das Bild geändert hat (Fynn, 2026-10-05: 13 Neuzeichnungen/s ließen die Knöpfe anderer Mods im Band
-// unter der Maus flackern). Darum zählt der Abbruch nur Takte, in denen ein geändertes Bild auf seine Zeichnung wartet.
+// Desktop-App: Dort lädt der Client-Rahmen nicht; die Engine läuft im Hooks-Modul (desk.ts). Jede Zeichnung liefert die nächsten
+// Sekunden als ein Svg mit SMIL-Animation, das der Desktop selbst abspielt. Neu gezeichnet wird nur bei Ereignissen und kurz bevor die
+// Animation endet (Fynn, 2026-10-06: Jede Neuzeichnung des Bands lässt den Desktop auch die von sidekick gehookten eigenen Nachrichten
+// neu anfordern; bei ~5 Bildwechseln/s flackerten deren Hover-Leiste und Hinterlegung. Vorher, 2026-10-05: 13/s ließen Knöpfe im Band flackern.)
+// Der Wächter (`$.clock.every`, liefert einen Timer mit `cancel()`, types:12280) läuft nur, solange die Desktop-App das Band zeichnet und
+// der Buddy an ist: `/clawd off` bricht ihn ab, und zeichnet die App auf die Bitte hin 2 s lang nicht, bricht er sich selbst ab; das
+// nächste Zeichnen startet ihn neu. Gezählt wird in Wächter-Runden, nicht in Echtzeit (im Test-Kit läuft nur die Uhr der Mods-API).
 const DESK_SCALE = 4 // CSS-Pixel je Figurpixel: Figur 68 × 40 px, Bühne 400 × 56 px
-const DESK_IDLE_TICKS = 27 // ~2 s ohne Zeichnung (in Takten gezählt, nicht in Echtzeit)
+const DESK_CHECK = 250 // ms je Wächter-Runde
+const DESK_LEAD = 1000 // so lange vor dem Ende der Animation um die nächste bitten
+const DESK_IDLE_CHECKS = 8 // ~2 s ohne Antwort auf die Bitte: Wächter beenden
 let desk: Desk | null = null
 let deskTimer: Timer | null = null
-let deskNowBase = 0 // Hooks-Uhr bei der letzten Desktop-Zeichnung
-let deskTicksSinceDraw = 0 // Takte seit der letzten Desktop-Zeichnung
-let deskShown = '' // zuletzt gezeichnetes Svg
-let deskUnanswered = 0 // Takte, seit ein geändertes Bild invalidiert und noch nicht gezeichnet wurde (0 = nichts offen)
-const deskNow = (): number => deskNowBase + deskTicksSinceDraw * DESK_TICK
+let deskChecks = 0 // Wächter-Runden seit der letzten Zeichnung
+let deskPlanMs = 0 // Länge der zuletzt gezeichneten Animation
+let deskAsked = 0 // Wächter-Runden, seit um eine neue Zeichnung gebeten wurde (0 = keine Bitte offen)
 // Messung für `/clawd status` (Fynn, 2026-10-05: Clawd wirkt bei mehreren Agenten verzögert). Zählt seit dem letzten `/clawd status`,
-// mit performance.now() (synchron, kein `$`-Aufruf je Takt): Takte, größte Lücke zwischen Takten, Bildwechsel, Zeichnungen, Dauer.
-type DeskMeter = { since: number; ticks: number; lastTick: number; gapMax: number; calcSum: number; calcMax: number; changes: number; draws: number; drawSum: number; drawMax: number; othersSum: number }
-const newMeter = (): DeskMeter => ({ since: performance.now(), ticks: 0, lastTick: 0, gapMax: 0, calcSum: 0, calcMax: 0, changes: 0, draws: 0, drawSum: 0, drawMax: 0, othersSum: 0 })
+// mit performance.now() (synchron, kein `$`-Aufruf): Zeichnungen, Länge und Bildwechsel der Animationen, Rechen- und Zeichendauer.
+type DeskMeter = { since: number; draws: number; planSecs: number; changes: number; chars: number; calcSum: number; calcMax: number; drawSum: number; drawMax: number; othersSum: number }
+const newMeter = (): DeskMeter => ({ since: performance.now(), draws: 0, planSecs: 0, changes: 0, chars: 0, calcSum: 0, calcMax: 0, drawSum: 0, drawMax: 0, othersSum: 0 })
 let meter = newMeter()
 function meterText(lang: Lang, m: DeskMeter, at: number): string {
   const s = (at - m.since) / 1000
-  if (m.ticks === 0 && m.draws === 0) return T[lang].deskNone
-  const ps = (n: number) => fmt(lang, s > 0 ? n / s : 0)
-  const avg = (sum: number, n: number) => fmt(lang, n ? sum / n : 0)
+  if (m.draws === 0) return T[lang].deskNone
+  const avg = (sum: number) => fmt(lang, sum / m.draws)
   return T[lang].desk({
-    secs: s.toFixed(0), tps: ps(m.ticks), target: fmt(lang, 1000 / DESK_TICK), gap: Math.round(m.gapMax),
-    calcAvg: avg(m.calcSum, m.ticks), calcMax: fmt(lang, m.calcMax), changes: ps(m.changes), draws: ps(m.draws),
-    drawAvg: avg(m.drawSum, m.draws), drawMax: fmt(lang, m.drawMax), others: avg(m.othersSum, m.draws),
+    secs: s.toFixed(0), draws: m.draws, perMin: fmt(lang, s > 0 ? (m.draws * 60) / s : 0), planSecs: avg(m.planSecs), changes: avg(m.changes),
+    kb: fmt(lang, m.chars / m.draws / 1000), calcAvg: avg(m.calcSum), calcMax: fmt(lang, m.calcMax), drawAvg: avg(m.drawSum),
+    drawMax: fmt(lang, m.drawMax), others: avg(m.othersSum),
   })
+}
+
+/** Fakten für die Desktop-Engine zur Uhrzeit `now`: wie gespeichert, dazu der letzte Tastendruck auf diese Uhr umgerechnet. */
+function deskFacts(now: number): Facts {
+  const f: Facts = { ...facts }
+  if (typingPerf > 0) f.typingAt = now - (performance.now() - typingPerf)
+  return f
 }
 
 const num = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d)
@@ -265,7 +273,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // Zuerst weiterreichen: das Tippen darf nie verzögert werden. Keine `$`-Aufrufe pro Taste außer dem gedrosselten invalidate.
     const result = await next(e)
     typingPerf = performance.now()
-    if (typingPerf - typingInvalidatedPerf > 1000) {
+    // Desktop: die Animation sieht das Mitlesen TYPING_MS lang voraus, also reicht eine Neuzeichnung je halbem Fenster
+    if (typingPerf - typingInvalidatedPerf > (deskTimer ? TYPING_MS / 2 : 1000)) {
       typingInvalidatedPerf = typingPerf
       $.ui.invalidate('ui.render')
     }
@@ -301,6 +310,15 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const [first, ...rest] = e.args.trim().split(/\s+/)
     const sub = first || 'status'
     const arg = rest.join(' ').trim()
+    // Desktop: die Engine steht beim Anfang der gezeigten Animation; vor einem Eingriff erst auf jetzt nachziehen
+    const deskCatchUp = async () => {
+      if (!desk) return
+      try {
+        desk.catchUp(await $.clock.now())
+      } catch (err) {
+        $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+      }
+    }
     // demo und nap schalten ihn ein; das wird wie bei /clawd on gespeichert
     const ensureOn = async () => {
       if (enabled) return
@@ -341,6 +359,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       demo = hit.name
       demoN += 1
       await ensureOn()
+      await deskCatchUp()
       desk?.engine.play(hit.name)
       $.ui.invalidate('ui.render')
       const more = part.length > 1 && !exact ? tx.demoMore(part.slice(1, 5).map((c) => c.name).join(', ')) : ''
@@ -349,18 +368,20 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     if (sub === 'nap') {
       napN += 1
       await ensureOn()
+      await deskCatchUp()
       desk?.nap()
       $.ui.invalidate('ui.render')
       return { text: tx.nap }
     }
     if (sub === 'boop') {
       boopN += 1
+      await deskCatchUp()
       desk?.engine.click()
       $.ui.invalidate('ui.render')
       return { text: 'boop!' }
     }
     if (sub === 'status') {
-      let now = deskNowBase
+      let now = facts.endedAt
       try {
         now = await $.clock.now()
       } catch (err) {
@@ -415,50 +436,47 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         annoy,
       }
       if (e.surface === 'desktop') {
-        // Desktop: Engine im Hooks-Modul, Bild als Svg (deckende Figur auf durchsichtigem Grund), direkt über der Eingabe.
-        deskNowBase = now
+        // Desktop: Engine im Hooks-Modul, Bild als animiertes Svg (deckende Figur auf durchsichtigem Grund), direkt über der Eingabe.
         if (!desk) {
           desk = createDesk({ seed, nightStart, nightEnd, idleSeconds, reduced, flip, birthday })
         }
-        deskTicksSinceDraw = 0
-        deskUnanswered = 0
+        deskChecks = 0
+        deskAsked = 0
         if (!deskTimer) {
-          // Der Takt startet neu: die Sitzung wird (wieder) angezeigt, Fynn schaut also hin
+          // Der Wächter startet neu: die Sitzung wird (wieder) angezeigt, Fynn schaut also hin
           try {
             await noteSeen($, now)
           } catch (err) {
             $.ui.log(`clawd-buddy: presence not noted: ${String(err)}`, { to: 'debug' })
           }
-          deskTimer = $.clock.every(DESK_TICK, () => {
-            // Aus oder die App zeichnet das Band nicht mehr (z. B. Sitzung verdeckt): Takt beenden; das nächste Zeichnen startet ihn neu
-            if (!desk || !enabled || deskUnanswered > DESK_IDLE_TICKS) {
+          deskTimer = $.clock.every(DESK_CHECK, () => {
+            // Aus oder die App zeichnet das Band nicht mehr (z. B. Sitzung verdeckt): Wächter beenden; das nächste Zeichnen startet ihn neu
+            if (!desk || !enabled || deskAsked > DESK_IDLE_CHECKS) {
               deskTimer?.cancel()
               deskTimer = null
               return
             }
-            const tickStart = performance.now()
-            if (meter.lastTick) meter.gapMax = Math.max(meter.gapMax, tickStart - meter.lastTick)
-            meter.lastTick = tickStart
-            meter.ticks += 1
-            deskTicksSinceDraw += 1
-            const t = deskNow()
-            const df: Facts = { ...facts }
-            if (typingPerf > 0) df.typingAt = t - (performance.now() - typingPerf)
-            desk.tick(t, df, strain)
-            // Gleiches Bild: nichts neu zeichnen (das ganze Band würde sonst bei jedem Takt neu gerendert)
-            const changed = desk.svg(DESK_SCALE) !== deskShown
-            if (changed) $.ui.invalidate('ui.render')
-            if (changed || deskUnanswered > 0) deskUnanswered += 1
-            if (changed) meter.changes += 1
-            const calc = performance.now() - tickStart
-            meter.calcSum += calc
-            meter.calcMax = Math.max(meter.calcMax, calc)
+            deskChecks += 1
+            if (deskAsked > 0) deskAsked += 1
+            else if (deskChecks * DESK_CHECK >= deskPlanMs - DESK_LEAD) {
+              deskAsked = 1
+              $.ui.invalidate('ui.render')
+            }
           })
         }
+        // Stand so auf jetzt nachziehen, wie die gezeigte Animation lief, dann ab jetzt mit den neuen Fakten vorausrechnen
+        const calcStart = performance.now()
+        const plan = desk.draw(now, deskFacts(now), strain, DESK_SCALE)
+        deskPlanMs = plan.ticks * DESK_TICK
+        const calc = performance.now() - calcStart
         const { Svg } = $.ui.resolve(e)
-        deskShown = desk.svg(DESK_SCALE)
         const drawMs = performance.now() - drawStart
         meter.draws += 1
+        meter.planSecs += deskPlanMs / 1000
+        meter.changes += plan.changes
+        meter.chars += plan.source.length
+        meter.calcSum += calc
+        meter.calcMax = Math.max(meter.calcMax, calc)
         meter.drawSum += drawMs
         meter.drawMax = Math.max(meter.drawMax, drawMs)
         meter.othersSum += othersMs
@@ -473,7 +491,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
               key: 'buddy',
               flexDirection: 'column',
               justifyContent: 'flex-end',
-              children: [Svg({ source: deskShown, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE })],
+              // isInteractive: im Rahmen ohne Skripte, damit SMIL läuft (types:11957); als Bild stünde nur das erste Bild
+              children: [Svg({ source: plan.source, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, isInteractive: true })],
             }),
           ],
         }))

@@ -2,7 +2,7 @@
 // Ersparnis-Buchungen und /savings (SPEC Verhalten 8). Alles hier ist rein und wird direkt getestet.
 import { MIN, dayKey, parseTokens, priceFor, rewriteCost } from './cache.ts'
 import type { CompleteUsage } from './cache.ts'
-import { dec, lang, shortDate, spanText, t, tokensText, usdText } from './i18n.ts'
+import { dec, lang, shortDate, spanText, t, tokensText, usdFine, usdText } from './i18n.ts'
 import { HANDOFF, modelLabel } from './models.ts'
 import { RULE_IDS } from './wartung.ts'
 import type { RuleId } from './wartung.ts'
@@ -121,11 +121,11 @@ export function checkSystem(skills: Skill[] | null): string {
     'Regeln:',
     '- Höchstens ein Hinweis. Kein Lob, keine Rückfragen, keine Anrede.',
     '- "art": "neuer_chat" | "falscher_chat" | "skill" | "fassung" | "modell" | "sonstiges".',
-    '- "skill": nur ein Name aus der Skill-Liste unten, exakt geschrieben. Schlage nie vor, Plugins zu installieren.',
+    '- "skill": nur ein Name aus der Skill-Liste unten, exakt geschrieben. Schlage nie vor, Plugins zu installieren. In "zeile" beschreibst du den Skill in normalen Worten, ohne seinen Namen (der steht in "skill").',
     '- "modell" nur, wenn die Fakten "Auslöser: erste Nachricht des Chats" nennen: ein kleineres Modell für einfache Aufgaben oder ein größeres für schwere.',
     '- "neuer_chat" und "falscher_chat" nie bei der ersten Nachricht eines Chats: Der Chat ist dann schon neu. Der Kontext dort ist die Grundlast (Anweisungen, Werkzeuge), kein Verlauf.',
     '- "fassung": die komplette verbesserte Nachricht, vom Nutzer an den Assistenten, in seinem Ton und in der Sprache seiner Nachricht, ohne Erfundenes. Sonst leer. Nie bei kurzen Nachrichten (unter 4 Wörtern) wie Grüßen, Tests oder „OK“.',
-    `- "zeile": ein kurzer Satz, höchstens 120 Zeichen, auf ${t().outLang}, sachlich. Bei "durch" leer.`,
+    `- "zeile": ein kurzer Satz, höchstens 120 Zeichen, auf ${t().outLang}, sachlich. Umlaute als ä, ö, ü und ß, nie als ae, oe, ue oder ss (Übergabe, nicht Uebergabe). Bei "durch" leer.`,
     '- In "zeile", "fassung" und "kurzfassung" keine doppelten Anführungszeichen (sie zerbrechen das JSON); wenn nötig ‚einfache‘.',
     '- "verlauf": braucht die neue Nachricht den bisherigen Verlauf? "braucht" = baut direkt darauf auf; "kaum" = nur Stand und Eckdaten, eine kurze Übergabe reicht; "nicht" = in sich vollständig, ginge genauso in einem leeren Chat.',
     `- "kurzfassung": schreibe die laufende Kurzfassung des Chats fort, auf ${t().outLang}, höchstens 600 Zeichen: Thema, Stand, Entscheidungen, letzter Commit. Nur aus dem, was du siehst.`,
@@ -332,6 +332,17 @@ export function historyTail(msgs: readonly Msg[], max = 100000): string {
     used += block.length + 2
   }
   return parts.reverse().join('\n\n')
+}
+
+/**
+ * Die Zeile unter der Nachricht mit Skill: Steht der Skill-Name im Satz (Sonnet schrieb „limit-bars:uebergabe nutzen“), wird er
+ * als Befehl `/name` lesbar statt als Wort ohne Umlaute; fehlt er, steht er in Klammern dahinter (Fynn 2026-10-06).
+ */
+export function hintLine(zeile: string, skill: string): string {
+  if (!skill || zeile.includes(`/${skill}`)) return zeile
+  const esc = skill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const out = zeile.replace(new RegExp(`(^|[^/:\\w-])${esc}(?![\\w-])`, 'g'), (_m, pre: string) => `${pre}/${skill}`)
+  return out !== zeile ? out : `${zeile} (/${skill})`
 }
 
 export function handoffPrompt(summary: string, history: string): string {
@@ -575,12 +586,19 @@ export function planCompaction(
 
 export type Period = 'today' | 'week' | 'all'
 
-export function periodOf(arg: string): Period | null {
-  const a = arg.trim().toLowerCase()
-  if (!a || a === 'week') return 'week'
-  if (a === 'today') return 'today'
-  if (a === 'all') return 'all'
-  return null
+/** `/savings` knapp (Kennzahlen und Ersparnis) oder `/savings detail` mit Modellen, Vergleich, Tagesverlauf (Fynn 2026-10-06). */
+export type View = { p: Period; detail: boolean }
+
+/** Wörter in beliebiger Reihenfolge: `detail`/`details` und ein Zeitraum. Standard: knapp `week`, Details `all`. */
+export function savingsArgs(arg: string): View | null {
+  let p: Period | null = null
+  let detail = false
+  for (const w of arg.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+    if (w === 'detail' || w === 'details') detail = true
+    else if ((w === 'today' || w === 'week' || w === 'all') && !p) p = w
+    else return null
+  }
+  return { p: p ?? (detail ? 'all' : 'week'), detail }
 }
 
 /** Tage im Zeitraum (lokale Daten): heute, die letzten 7 Tage einschließlich heute, alle. */
@@ -591,10 +609,15 @@ function inPeriod(key: string, p: Period, now: number): boolean {
   return false
 }
 
+/** Je Datum die Summe aller Einträge, nur Tage im Zeitraum. */
+export function daysInPeriod(ledgers: Ledger[], p: Period, now: number): Record<string, Day> {
+  const out: Record<string, Day> = {}
+  for (const l of ledgers) for (const [k, d] of Object.entries(l.tage)) if (inPeriod(k, p, now)) out[k] = addDay(out[k] ?? emptyDay(), d)
+  return out
+}
+
 export function sumPeriod(ledgers: Ledger[], p: Period, now: number): Day {
-  let s = emptyDay()
-  for (const l of ledgers) for (const [k, d] of Object.entries(l.tage)) if (inPeriod(k, p, now)) s = addDay(s, d)
-  return s
+  return Object.values(daysInPeriod(ledgers, p, now)).reduce((s, d) => addDay(s, d), emptyDay())
 }
 
 export function periodTitle(p: Period, now: number): string {
@@ -602,34 +625,189 @@ export function periodTitle(p: Period, now: number): string {
   return p === 'today' ? x.titleToday(shortDate(now)) : p === 'week' ? x.titleWeek(shortDate(now - 6 * 24 * 60 * MIN), shortDate(now)) : x.titleAll
 }
 
+/** `2026-10-06` → kurzes Datum der eingestellten Sprache. */
+export function keyDate(key: string): string {
+  const [y = 1970, m = 1, d = 1] = key.split('-').map(Number)
+  return shortDate(new Date(y, m - 1, d, 12).getTime())
+}
+
 /** Sekunden mit einer Nachkommastelle, `–` ohne Messung. */
 export const secsText = (ms: number, n: number) => (n > 0 ? `${dec(ms / n / 1000, 1)} s` : '–')
+
+export const savedOf = (d: Day) => d.kaltVermieden.usd + d.neuWarm.usd
+/** `1 : 9,2` (Kosten : Ersparnis), `–` ohne beides. */
+export function ratioOf(d: Day): string {
+  const saved = savedOf(d)
+  return d.kosten > 0 && saved > 0 ? `1 : ${dec(saved / d.kosten, saved / d.kosten >= 10 ? 0 : 1)}` : '–'
+}
+
+/** Erster und letzter Tag sowie Anzahl der Tage, an denen `has` zutrifft. */
+export type Span = { from: string; to: string; days: number }
+export function spanOf(days: Record<string, Day>, has: (d: Day) => boolean): Span | null {
+  const ks = Object.keys(days).filter((k) => has(days[k]!)).sort()
+  return ks.length ? { from: ks[0]!, to: ks[ks.length - 1]!, days: ks.length } : null
+}
+export const spanLabel = (s: Span) => (s.from === s.to ? keyDate(s.from) : `${keyDate(s.from)}–${keyDate(s.to)}`)
+
+/**
+ * Vergleich der Prüfung je Modell (`/savings detail`): Anzahl, Ø Preis, Ø Dauer, Ø Tokens, Faktor zur günstigsten Zeile, Zeitraum.
+ * „früher“ (vor 0.5.0 ohne Modell): Prüfungen = alle − gebuchte, Dauer = Wartezeit − gebuchte Dauer (beide als `done − now`
+ * gebucht, register.ts). Der Betrag enthält dort auch die damaligen Übergaben, auch gescheiterte; sie sind nicht zählbar
+ * (`uebergaben` zählt nur erfolgreiche, Review 0.6.0 S1). Deshalb ist `usd / n` immer eine Obergrenze (`bound`). Ein Faktor
+ * gegen eine Obergrenze ist eine Untergrenze (`≥`), der Faktor der Obergrenze selbst eine Obergrenze (`≤`).
+ * Tokens stehen je Modell, nicht je Rolle: mit Übergaben ist der Schnitt „je Aufruf“ (`perCall`), sonst „je Prüfung“.
+ */
+export type CompareRow = {
+  key: string
+  label: string
+  n: number
+  ms: number
+  tin: number
+  tout: number
+  per: number
+  bound: boolean
+  perCall: boolean
+  factor: number | null
+  sign: '' | '≥' | '≤'
+  span: Span | null
+}
+
+export function modelCompare(d: Day, days: Record<string, Day>): CompareRow[] {
+  const { list, earlier } = modelRows(d)
+  const rows: CompareRow[] = list
+    .filter((m) => m.m.pruefung.n)
+    .map((m) => {
+      const pr = m.m.pruefung
+      const calls = pr.n + m.m.uebergabe.n
+      return {
+        key: m.key,
+        label: modelLabel(m.key),
+        n: pr.n,
+        ms: pr.ms,
+        tin: m.m.in / calls,
+        tout: m.m.out / calls,
+        per: pr.usd / pr.n,
+        bound: false,
+        perCall: m.m.uebergabe.n > 0,
+        factor: null,
+        sign: '',
+        span: spanOf(days, (x) => (x.modelle[m.key]?.pruefung.n ?? 0) > 0),
+      }
+    })
+  if (earlier.n > 0) {
+    rows.push({
+      key: '',
+      label: t().vEarlier,
+      n: earlier.n,
+      ms: Math.max(0, d.warteMs - list.reduce((a, m) => a + m.m.pruefung.ms, 0)),
+      tin: 0,
+      tout: 0,
+      per: earlier.usd / earlier.n,
+      bound: true,
+      perCall: false,
+      factor: null,
+      sign: '',
+      span: spanOf(days, (x) => modelRows(x).earlier.n > 0),
+    })
+  }
+  const priced = rows.filter((r) => r.per > 0)
+  if (priced.length < 2) return rows
+  const base = priced.reduce((a, r) => (r.per < a.per ? r : a))
+  for (const r of priced) {
+    r.factor = r.per / base.per
+    r.sign = r === base ? '' : base.bound ? '≥' : r.bound ? '≤' : ''
+  }
+  return rows
+}
+
+/** Preis je Prüfung, bei einer Obergrenze mit `≤` und aufgerundet (Review 0.6.0 K1). */
+export const perText = (r: CompareRow) => (r.bound ? usdFine(Math.ceil(r.per * 1e4 - 1e-9) / 1e4).replace('≈', '≤') : usdFine(r.per))
+/** `2,5×`, `≥ 2,4×` (abgerundet), `≤ 1,3×` (aufgerundet), `–` ohne Vergleich. */
+export function factorText(r: CompareRow): string {
+  if (!r.factor) return '–'
+  const f = r.sign === '≤' ? Math.ceil(r.factor * 10 - 1e-9) / 10 : r.sign === '≥' ? Math.floor(r.factor * 10 + 1e-9) / 10 : r.factor
+  return `${r.sign ? `${r.sign} ` : ''}${dec(f, 1)}×`
+}
+
+/** Fußnote je Vergleichszeile: Ø Tokens (nicht bei „früher“) und Zeitraum; leer, wenn nichts davon da ist. */
+export function compareNote(r: CompareRow): string {
+  const x = t()
+  const parts = [
+    ...(r.key && (r.tin || r.tout) ? [x.vCompareTokens(tokensText(r.tin), tokensText(r.tout), r.perCall)] : []),
+    ...(r.span ? [x.vUsed(spanLabel(r.span), r.span.days)] : []),
+  ]
+  return parts.length ? `${r.label}: ${parts.join(' · ')}` : ''
+}
+
+/** Tage mit Aktivität, neueste zuerst, höchstens `max`; dazu wie viele ältere es noch gibt. */
+/** Ein Tag mit Kosten, Prüfungen oder Ersparnis. */
+export const active = (d: Day) => d.kosten > 0 || d.pruefungen > 0 || savedOf(d) !== 0
+
+export function dayRows(days: Record<string, Day>, max = 14): { list: { key: string; d: Day }[]; more: number } {
+  const ks = Object.keys(days)
+    .filter((k) => active(days[k]!))
+    .sort()
+    .reverse()
+  return { list: ks.slice(0, max).map((key) => ({ key, d: days[key]! })), more: Math.max(0, ks.length - max) }
+}
+
+/** Modelle eines Tages mit ihren Aufrufen (Prüfung und Übergabe; „früher“: nur Prüfungen), z. B. `Sonnet 5.5 12× · früher 3×`. */
+export function dayModels(d: Day): string {
+  const { list, earlier } = modelRows(d)
+  const parts = list.map((m) => `${modelLabel(m.key)} ${m.m.pruefung.n + m.m.uebergabe.n}×`)
+  if (earlier.n || earlier.usd) parts.push(`${t().vEarlier}${earlier.n ? ` ${earlier.n}×` : ''}`)
+  return parts.join(' · ')
+}
 
 /**
  * Die Markdown-Karte von `/savings` (Befehlsausgaben zeichnet die Engine als Markdown; im Terminal und Desktop ersetzt sie
  * die Zeichnung aus view.ts). `tag` macht den Text eindeutig, damit `ui.render` die passende Zeichnung findet.
+ * Ohne `days`: knapp, nur Kennzahlen und Ersparnis. Mit `days` (`/savings detail`): dazu Rechenweise, Modelle, Vergleich, Tage,
+ * Hinweise und Zählungen.
  */
-export function savingsReport(d: Day, p: Period, now: number, tag = ''): string {
+export function savingsReport(d: Day, p: Period, now: number, tag = '', days?: Record<string, Day>): string {
   const x = t()
-  const title = periodTitle(p, now)
-  const saved = d.kaltVermieden.usd + d.neuWarm.usd
-  const ratio = d.kosten > 0 && saved > 0 ? `1 : ${dec(saved / d.kosten, saved / d.kosten >= 10 ? 0 : 1)}` : '–'
   // Die Engine setzt „sidekick: “ davor; deshalb keine Überschrift in der ersten Zeile
-  const out = [`**${title}**${tag ? ` · ${tag}` : ''}`, '']
-  out.push(x.costLine(usdText(d.kosten), usdText(saved), ratio), '')
+  const out = [`**${periodTitle(p, now)}**${days ? ` · ${x.detailWord}` : ''}${tag ? ` · ${tag}` : ''}`, '']
+  const span = days ? spanOf(days, active) : null
+  if (span) out.push(`*${x.vSpan(keyDate(span.from), keyDate(span.to), span.days)}*`, '')
+  out.push(x.costLine(usdText(d.kosten), usdText(savedOf(d)), ratioOf(d)), '')
+  if (!days) {
+    out.push(x.itemsHeadShort, '|---|---|---|')
+    out.push(`| ${x.vColdAvoided} | ${d.kaltVermieden.n} | ${usdText(d.kaltVermieden.usd)} |`)
+    out.push(`| ${x.vWarmNew} | ${d.neuWarm.n} | ${usdText(d.neuWarm.usd)} |`)
+    out.push('', x.moreHint)
+    return out.join('\n')
+  }
   out.push(x.itemsHead, '|---|---|---|---|')
   out.push(x.rowColdAvoided(d.kaltVermieden.n, usdText(d.kaltVermieden.usd)))
   out.push(x.rowWarmNew(d.neuWarm.n, usdText(d.neuWarm.usd)))
   for (const a of ['fassung', 'skill', 'modell'] as const) out.push(x.rowAccepted(x.art[a], d.hinweise[a]?.angenommen ?? 0))
   const mr = modelRows(d)
   if (mr.list.length || mr.earlier.usd) {
-    out.push('', x.modelsHead, '|---|---|---|---|---|---|')
+    out.push('', x.modelsHead, '|---|---|---|---|---|---|---|')
+    const used = (s: Span | null) => (s ? spanLabel(s) : '–')
     for (const { key, m } of mr.list)
       for (const r of ['pruefung', 'uebergabe'] as const) {
         const u = m[r]
-        if (u.n) out.push(`| ${modelLabel(key)} | ${x.role[r]} | ${u.n} | ${usdText(u.usd)} | ${usdText(u.usd / u.n)} | ${secsText(u.ms, u.n)} |`)
+        if (u.n) out.push(`| ${modelLabel(key)} | ${x.role[r]} | ${u.n} | ${usdText(u.usd)} | ${usdFine(u.usd / u.n)} | ${secsText(u.ms, u.n)} | ${used(spanOf(days, (y) => (y.modelle[key]?.[r].n ?? 0) > 0))} |`)
       }
-    if (mr.earlier.usd) out.push(x.rowEarlier(mr.earlier.n, usdText(mr.earlier.usd)))
+    if (mr.earlier.usd) out.push(x.rowEarlier(mr.earlier.n, usdText(mr.earlier.usd), used(spanOf(days, (y) => modelRows(y).earlier.usd > 0))))
+  }
+  const cmp = modelCompare(d, days)
+  if (cmp.length > 1) {
+    out.push('', x.compareHead, '|---|---|---|---|---|---|')
+    for (const r of cmp)
+      out.push(`| ${r.label} | ${r.n} | ${perText(r)} | ${secsText(r.ms, r.n)} | ${factorText(r)} | ${r.span ? spanLabel(r.span) : '–'} |`)
+    const notes = cmp.filter((r) => r.key).map(compareNote).filter(Boolean)
+    if (notes.length) out.push('', ...notes.map((n) => `- ${n}`))
+    if (cmp.some((r) => r.bound)) out.push('', `*${x.compareMixed}*`)
+  }
+  const dr = dayRows(days)
+  if (dr.list.length) {
+    out.push('', x.daysHead, '|---|---|---|---|---|')
+    for (const { key, d: dd } of dr.list) out.push(`| ${keyDate(key)} | ${dd.pruefungen} | ${usdText(dd.kosten)} | ${usdText(savedOf(dd))} | ${dayModels(dd) || '–'} |`)
+    if (dr.more) out.push('', x.daysMore(dr.more))
   }
   out.push('', x.counts, '')
   out.push(x.checks(d.pruefungen, secsText(d.warteMs, d.pruefungen)))

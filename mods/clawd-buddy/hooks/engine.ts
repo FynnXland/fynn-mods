@@ -832,9 +832,23 @@ export function createEngine(opts: EngineOpts) {
     chainNow([name])
   }
 
+  /**
+   * Zustand zum Zurückspulen (Desktop rechnet voraus, desk.ts). Kopiert wird alles, was `tick` an Ort und Stelle ändert; Clips,
+   * aufgelöste Frames und Posen werden nur ersetzt, nie verändert, und bleiben geteilt. Den Zufall sichert der Aufrufer selbst.
+   */
+  const copyState = (s: EngineState): EngineState => ({
+    ...s, play: s.play && { ...s.play }, queue: [...s.queue], lastPick: { ...s.lastPick }, playedAt: { ...s.playedAt },
+    hover: s.hover && { ...s.hover }, drag: s.drag && { ...s.drag }, moodWant: s.moodWant && { ...s.moodWant }, mates: [...s.mates],
+  })
+
   return {
     S,
     tick,
+    save: (): EngineSnap => ({ s: copyState(S), last }),
+    restore(snap: EngineSnap) {
+      Object.assign(S, copyState(snap.s))
+      last = snap.last
+    },
     render,
     pose: currentPose,
     setMood,
@@ -869,3 +883,4 @@ export function createEngine(opts: EngineOpts) {
 }
 
 export type Engine = ReturnType<typeof createEngine>
+export type EngineSnap = { s: EngineState; last: Composed | null }

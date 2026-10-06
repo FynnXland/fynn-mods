@@ -26,7 +26,7 @@ type Texts = {
   status: (o: { on: boolean; mood: string; temper: string; tired: number; annoy: number; desk: string }) => string
   mood: { veryGrumpy: string; grumpy: string; great: string; good: string; even: string }
   deskNone: string
-  desk: (o: { secs: string; tps: string; target: string; gap: number; calcAvg: string; calcMax: string; changes: string; draws: string; drawAvg: string; drawMax: string; others: string }) => string
+  desk: (o: { secs: string; draws: number; perMin: string; planSecs: string; changes: string; kb: string; calcAvg: string; calcMax: string; drawAvg: string; drawMax: string; others: string }) => string
   alt: string
 }
 
@@ -44,11 +44,10 @@ export const T: Readonly<Record<Lang, Texts>> = {
     unknown: (sub) => `unknown: ${sub}.`,
     status: (o) => `clawd-buddy: ${o.on ? 'on' : 'off'}, ${o.mood} (${o.temper}), tiredness ${o.tired}%, annoyance ${o.annoy}. ${o.desk}.`,
     mood: { veryGrumpy: 'very grumpy', grumpy: 'grumpy', great: 'in a great mood', good: 'in a good mood', even: 'calm' },
-    deskNone: 'Desktop frame rate: no data (only runs in the desktop app while the band is drawn)',
+    deskNone: 'Desktop drawing: no data (only runs in the desktop app while the band is drawn)',
     desk: (o) =>
-      `Desktop frame rate, last ${o.secs} s: ${o.tps} ticks/s (target ${o.target}, largest gap ${o.gap} ms), ` +
-      `compute per tick avg ${o.calcAvg} / max ${o.calcMax} ms, ${o.changes} frame changes/s, ${o.draws} draws/s, ` +
-      `draw avg ${o.drawAvg} / max ${o.drawMax} ms (other mods avg ${o.others} ms)`,
+      `Desktop drawing, last ${o.secs} s: ${o.draws} draws (${o.perMin}/min), animations avg ${o.planSecs} s with ${o.changes} frame changes, ` +
+      `${o.kb} kB; compute avg ${o.calcAvg} / max ${o.calcMax} ms, draw avg ${o.drawAvg} / max ${o.drawMax} ms (other mods avg ${o.others} ms)`,
     alt: 'Clawd, the mascot',
   },
   de: {
@@ -64,11 +63,10 @@ export const T: Readonly<Record<Lang, Texts>> = {
     unknown: (sub) => `unbekannt: ${sub}.`,
     status: (o) => `clawd-buddy: ${o.on ? 'an' : 'aus'}, ${o.mood} (${o.temper}), Müdigkeit ${o.tired} %, Ärger ${o.annoy}. ${o.desk}.`,
     mood: { veryGrumpy: 'sehr gereizt', grumpy: 'gereizt', great: 'bester Laune', good: 'gut gelaunt', even: 'ausgeglichen' },
-    deskNone: 'Desktop-Takt: keine Daten (läuft nur im Desktop, während das Band gezeichnet wird)',
+    deskNone: 'Desktop-Zeichnung: keine Daten (läuft nur im Desktop, während das Band gezeichnet wird)',
     desk: (o) =>
-      `Desktop-Takt, letzte ${o.secs} s: ${o.tps} Takte/s (Soll ${o.target}, größte Lücke ${o.gap} ms), ` +
-      `Rechnen je Takt Ø ${o.calcAvg} / max ${o.calcMax} ms, ${o.changes} Bildwechsel/s, ${o.draws} Zeichnungen/s, ` +
-      `Zeichnen Ø ${o.drawAvg} / max ${o.drawMax} ms (davon andere Mods Ø ${o.others} ms)`,
+      `Desktop-Zeichnung, letzte ${o.secs} s: ${o.draws} Zeichnungen (${o.perMin}/min), Animationen Ø ${o.planSecs} s mit ${o.changes} Bildwechseln, ` +
+      `${o.kb} kB; Rechnen Ø ${o.calcAvg} / max ${o.calcMax} ms, Zeichnen Ø ${o.drawAvg} / max ${o.drawMax} ms (davon andere Mods Ø ${o.others} ms)`,
     alt: 'Clawd, das Maskottchen',
   },
 }

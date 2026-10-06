@@ -4,7 +4,7 @@ An animated pixel mascot ("Clawd") sits to the right above the prompt. It reacts
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.290** · Plugin version **0.4.1**
+Tested with Claude Code **v2.1.290** · Plugin version **0.4.2**
 
 ## What it does
 
@@ -26,7 +26,7 @@ Clawd runs on his own. What he does depends on what is happening:
 
 | Input | Effect |
 |---|---|
-| `/clawd` or `/clawd status` | on/off, mood, tiredness, annoyance; in the desktop app also tick measurements since the last call (ticks/s, largest gap, frame changes/s, drawings/s, drawing time) |
+| `/clawd` or `/clawd status` | on/off, mood, tiredness, annoyance; in the desktop app also measurements since the last call (draws per minute, animation length and frame changes, size, compute and drawing time) |
 | `/clawd on` / `/clawd off` | show or hide him (persists) |
 | `/clawd list` | all animations by group |
 | `/clawd demo <name>` | play one animation, e.g. `/clawd demo type_laptop` |
@@ -36,7 +36,7 @@ Clawd runs on his own. What he does depends on what is happening:
 | Mouse (terminal): drag an arm | the arm follows briefly and snaps back |
 | Mouse (terminal): hold the body for ~0.7 s, then drag | he hangs from the pointer, falls when you let go, and walks back |
 
-Runs in: the terminal (half-block pixels, with mouse) and the desktop app's Code tab (as an image, without mouse). In `claude -p`, the Agent SDK, VS Code and mobile he draws nothing.
+Runs in: the terminal (half-block pixels, with mouse) and the desktop app's Code tab (as an animated image, without mouse). In `claude -p`, the Agent SDK, VS Code and mobile he draws nothing.
 
 ## Configuration
 
@@ -71,11 +71,11 @@ In plain language:
 
 - `$.command.register`: registers the `/clawd` command.
 - `$.store.get` / `$.store.set`: stores only on/off, the annoyance counter, and when you were last around (one timestamp, written at most every 5 min, for the welcome after a break). The plugin's own storage.
-- `$.ui.invalidate`: redraws the band when something changes (turn, tool, typing at most once per second; in the desktop app at the frame rate).
+- `$.ui.invalidate`: redraws the band when something changes (turn, tool, typing at most once per second; in the desktop app typing at most every 3 s, plus once before each animation runs out, usually every 15 to 30 s; 2 to 3 times a minute when idle).
 - `$.ui.resolve`: fetches the drawing components (Box, Client, Svg).
 - `$.clock.now`: time of day for day/night, waiting times, mood, and the break before the welcome.
 - Hook `session.measure`: reads only the percentage and reset time of the 5-hour and weekly limits (for the limit animations).
-- `$.clock.every`: frame tick (75 ms) **only in the desktop app**, while it draws the band and Clawd is on; in the terminal the client ticks on its own.
+- `$.clock.every`: a watcher (every 250 ms, no drawing of its own) **only in the desktop app**, while it draws the band and Clawd is on; it asks for the next animation shortly before the current one ends. In the terminal the client ticks on its own.
 - `$.ui.log`: error messages to the debug log.
 
 From tool results he reads only the "error" (`isError`) and "denied" (`deny`) flags, never contents or texts.
@@ -108,10 +108,9 @@ To just hide him without uninstalling, use `/clawd off`.
 
 ## Known limitations
 
-- **Desktop app:** The client frame does not load there; Clawd is an image that the hooks module redraws on a tick. No mouse (clicking, dragging) in the desktop app; `/clawd boop|demo|nap` work. The app draws the dark area behind the band itself and it cannot be hidden, so he does not sit quite flush on the input. In very narrow windows the 400 px wide image may be cut off.
-- **Desktop tick:** The tick runs at about 13 per second, but he only redraws when Clawd's image changes. Sitting still that is only a few redraws per second, more during animations. Whether the app allows more than 10 redraws per second in the band is not documented. If it stutters, please report it.
+- **Desktop app:** The client frame does not load there. The hooks module computes up to the next 30 seconds ahead and sends them as one SVG with SMIL animation, which the app plays in a script-less frame (`isInteractive`). Pastimes with many different frames get shorter animations, down to about 5 s. The band is redrawn only on events (turn, tool, question, typing) and shortly before the animation runs out. Every redraw of the band makes the app also re-request the rows other mods hook (for example your own messages with sidekick), which made their hover bar flicker in 0.4.1 at about 5 redraws per second. While Claude works, tool calls still redraw the band now and then. No mouse (clicking, dragging) in the desktop app; `/clawd boop|demo|nap` work. The app draws the dark area behind the band itself and it cannot be hidden, so he does not sit quite flush on the input. In very narrow windows the 400 px wide image may be cut off.
 - **Mouse in the terminal** only works where the terminal delivers mouse events (fullscreen). After a click on the figure it may keep the keyboard focus until you press Esc.
-- **After a hidden desktop session is shown again**, the figure may stand still until the next event (turn, tool, typing) if the app reuses the last drawing.
+- **After a hidden desktop session is shown again**, the figure may stand still (last frame of the animation) until the next event (turn, tool, typing) if the app reuses the last drawing.
 - **Mood** is per Claude Code process and is not saved. "Working on the same feature for a long time" is approximated by the time spent working in one stretch (the mod cannot see what the work is about).
 - **Voice input:** There is no mod event for "recording in progress", and `prompt.edit` only reports a person as the source. Dictated text counts like typing ("reads along"). Dedicated recording animations will follow once Claude Code offers a signal for it.
 - `tools/` and `showcase/` are developer tools (Node) and are not loaded by the mod. To see all animations, open `showcase/index.html` in a browser (a developer tool, German only). `node tools/gif.mjs <clip>...` renders clips as an animated GIF.

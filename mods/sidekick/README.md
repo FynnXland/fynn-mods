@@ -4,7 +4,7 @@ Checks your message just before it is sent: first with fixed rules, and only whe
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.290** · Plugin version **0.5.0**
+Tested with Claude Code **v2.1.290** · Plugin version **0.7.0**
 
 **Cost:** sidekick calls Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
 
@@ -75,9 +75,10 @@ Some commands only help if you remember to run them. **Once per chat**, on your 
 | `/sidekick hints <rule> on` · `off` | one rule on/off (`skills-cut`, `audit`, `memory`, `skills-heavy`, `init`) |
 | `/sidekick hints done <rule>` | mark as done by hand |
 | `/sidekick hints audit-min 2k` | threshold of the audit rule (default 3k) |
-| `/savings [today\|week\|all]` | balance, default `week`; drawn as a framed card in the terminal and the desktop app (like cost-ledger's `/ledger`), Markdown elsewhere |
+| `/savings [today\|week\|all]` | short balance, default `week`: cost, savings, ratio and the savings items; drawn as a framed card in the terminal and the desktop app (like cost-ledger's `/ledger`), Markdown elsewhere |
+| `/savings detail [today\|week\|all]` | everything, default `all`: also how it is computed, models, checks compared per model, by day, hints and counts (`details` works too, words in any order) |
 
-`/savings` shows the following. All amounts are API value; on a subscription the calls count toward your plan's usage.
+`/savings` shows cost, savings, ratio and the two savings items. `/savings detail` shows all of the following. All amounts are API value; on a subscription the calls count toward your plan's usage.
 
 - **Cost:** all of sidekick's own model calls (check and handoff), including cancelled ones, priced from `usage` at the rates of the model actually called, including output.
 - **Estimated savings**, calculated conservatively:
@@ -86,7 +87,10 @@ Some commands only help if you remember to run them. **Once per chat**, on your 
   - For both, from the second request on: (old context − context of the first request) × read price per request, never below 0. Both chats would grow by the same amount from there, so the gap stays. Runs until the new chat reaches the old size, at most 50 requests.
   - The handoff is not subtracted here; it is already in the cost.
   - *Rewritten version, skill, model:* only counted, not valued in $.
-- **Models** (since 0.5.0): sidekick's own calls per model ID, e.g. *Sonnet 5.5*, with a bar for its share of the cost; per role (check, handoff) the number of calls, average duration and cost per call, plus tokens in and out. Useful when the model per role changes: old and new model stand side by side. Costs booked before 0.5.0 have no model and appear as *earlier*.
+- **Models** (since 0.5.0): sidekick's own calls per model ID, e.g. *Sonnet 5.5*, with a bar for its share of the cost; per role (check, handoff) the number of calls, average duration and cost per call, plus tokens in and out. Useful when the model per role changes: old and new model stand side by side. Costs booked before 0.5.0 have no model and appear as *earlier*. Each model also shows the days it was used.
+- **Checks compared** (since 0.6.0, from two rows on): per model the number of checks, average price per check (4 decimals), average duration and a factor relative to the cheapest row; below, average tokens and the days used. Tokens are booked per model, not per role: with handoffs they are an average per call (check and handoff). *Earlier* (booked before 0.5.0: Haiku until 0.3, already Sonnet from 0.4) also contains the handoffs of that time, so its price per check is an upper bound (`≤`, rounded up); a factor against it is a lower bound (`≥`, rounded down).
+- **By day** (since 0.6.0): per day with activity, newest first (at most 14): cost with a bar, savings, checks and the models used with their calls.
+- The detailed view starts with the date range of the data.
 - **Counts:**
   - checks and average wait
   - hints by type (shown, accepted, ignored, cancelled)
@@ -94,6 +98,16 @@ Some commands only help if you remember to run them. **Once per chat**, on your 
   - cold starts without a question, with their cost
   - skills used, with a pointer to `/skill-doctor`
   - maintenance hints per rule (shown, accepted)
+
+## Button under the hint line (since 0.7.0)
+
+When a blue line under your message names a command (a maintenance hint such as `/claude-api prompt-audit`, `/skill-doctor`, `/init`, `/consolidate-memory`, or a skill sidekick suggests), a button sits next to it:
+
+- **Add as to-do**: when the **worklist** mod offers `/todo` and the command is a skill Claude can run itself. sidekick runs `/todo Run <command>.`; worklist queues it and sends it to Claude once the current task is done, in this chat. The line then reads "✓ queued as to-do". According to the types, commands run through `$.command.run` wait until the session is idle.
+- **Put in prompt**: otherwise. The command goes into the prompt box at the cursor; with an empty box you only press Enter. Text you already typed is never overwritten (the command is then inserted where the cursor is). Built-in commands like `/skill-doctor` and `/init` always go here, because Claude cannot run them itself (a to-do for them would do nothing).
+- What the button says is what it does: the target is decided when the line is drawn. Right after `/clear` or `/resume`, before sidekick has loaded the command list, it says **Put in prompt**.
+- Lines without a command (e.g. "new topic, a fresh chat would be cheaper") get no button. Other surfaces (VS Code) show the line as text, without a button.
+- If the prompt box is not available (a dialog is open) or `/todo` fails, a toast shows the command so you can type it.
 
 ## Working with other mods
 
@@ -138,7 +152,7 @@ Texts are English by default. For German, set `language` to `de`. Amounts then r
 
 ```text
 hooks: session.start, turn.step, tool.call{tool=Bash|PowerShell}, prompt.submit, skill.prompt, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}
-calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.complete, $.prompt.submit, $.session.id, $.session.messages, $.session.root, $.session.surfaces, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.toast
+calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.complete, $.prompt.fill, $.prompt.submit, $.session.id, $.session.messages, $.session.root, $.session.surfaces, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
 ```
 
 In plain language:
@@ -147,7 +161,10 @@ In plain language:
 - `turn.step`: reads the token counts of each main-loop request (cache warm/cold, context, savings measurement). Read only.
 - `tool.call{tool=Bash|PowerShell}`: after the run, reads `gitOperation.commit` (commit hash). Changes nothing.
 - `skill.prompt`: counts which skill ran and detects maintenance skills as done. Changes nothing.
-- `ui.render{component=UserMessage}`: appends the hint line to the display of your message.
+- `ui.render{component=UserMessage}`: appends the hint line to the display of your message, with a button when the line names a command.
+- `$.ui.resolve`: builds that button (a button carries its click handler, so it cannot be plain data).
+- `$.prompt.fill`: on a click, puts the command into the prompt box at the cursor. Never sends it, never overwrites what you typed.
+- `$.command.run`: also runs worklist's `/todo` on a click, when worklist is installed and the command is a skill.
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=AbovePrompt}`: only while a new chat is being started, a small blue box above the prompt shows progress and seconds. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
 - `$.model.complete`: Sonnet 5.5 for the check (effort `low`) and the handoff (effort `medium`), the only model calls. Your messages reach the model only through your session's own login.

@@ -5,6 +5,20 @@ import type { PropTable } from './stage.ts'
 import type { Shot } from './lint.ts'
 
 /** Kleiner deterministischer Zufallsgenerator (Seed → Folge in [0,1)). */
+/** mulberry32 mit lesbarem Zustand (`a`), damit sich eine Folge sichern und wiederholen lässt (desk.ts rechnet voraus). */
+export function seededRng(seed: number): { next: () => number; a: number } {
+  const r = {
+    a: seed | 0,
+    next: () => {
+      r.a = (r.a + 0x6d2b79f5) | 0
+      let t = Math.imul(r.a ^ (r.a >>> 15), 1 | r.a)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    },
+  }
+  return r
+}
+
 export function mulberry32(seed: number): () => number {
   let a = seed | 0
   return () => {

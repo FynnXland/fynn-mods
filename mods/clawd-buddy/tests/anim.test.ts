@@ -8,6 +8,8 @@ import type { Pose } from '../hooks/stage.ts'
 import { resolveClip } from '../hooks/clipdef.ts'
 import { captureClip, newEngine } from '../hooks/capture.ts'
 import { lintFrames } from '../hooks/lint.ts'
+import { PLAN_TICKS, SOURCE_MAX, createDesk } from '../hooks/desk.ts'
+import { NO_FACTS, NO_STRAIN } from '../hooks/mood.ts'
 
 const LIB = { clips: ALL_CLIPS, props: ALL_PROPS }
 const byName = (n: string) => ALL_CLIPS.find((c) => c.name === n)!
@@ -608,4 +610,56 @@ test('Gesicht: kein Mund; Blinzeln senkt nur das Lid (Auge springt nie zur Seite
     e.tick()
     expect(e.pose().eyes === 'closed' && e.S.play?.clip.name === 'idle_breathe').toBe(false)
   }
+})
+
+test('Desktop: plan rechnet voraus, ohne den Stand zu ändern, und bleibt unter der Svg-Grenze, auch bei Arbeit mit vielen Helfern', () => {
+  const opts = { seed: 7, nightStart: 23, nightEnd: 6, idleSeconds: 45, reduced: false, flip: false }
+  const a = createDesk(opts)
+  const b = createDesk(opts)
+  const t0 = Date.UTC(2026, 9, 6, 12)
+  const calm = { ...NO_FACTS, endedAt: t0 - 1000 }
+  const busy = { ...calm, turnActive: true, tool: { kind: 'write' as const, since: t0 }, agents: Array.from({ length: 12 }, () => t0) }
+  let now = t0
+  a.advance(now, calm, NO_STRAIN)
+  b.advance(now, calm, NO_STRAIN)
+  for (const facts of [calm, busy, calm, busy]) {
+    for (let r = 0; r < 4; r++) {
+      const p = a.plan(facts, NO_STRAIN, 4)
+      expect(p.source.length).toBeLessThanOrEqual(SOURCE_MAX)
+      expect(p.ticks).toBeGreaterThan(0)
+      expect(p.ticks).toBeLessThanOrEqual(PLAN_TICKS)
+      // b plant nie: beide müssen danach gleich weiterlaufen
+      now += Math.round(p.ticks * 0.6) * 75
+      a.advance(now, facts, NO_STRAIN)
+      b.advance(now, facts, NO_STRAIN)
+      expect(a.engine.render().buf).toEqual(b.engine.render().buf)
+    }
+  }
+})
+
+test('Desktop: ein Ereignis wirkt ab seiner Zeichnung, nicht rückwirkend (nach langer Ruhe kommen „fertig“ und die Begrüßung an)', () => {
+  const d = createDesk({ seed: 7, nightStart: 23, nightEnd: 6, idleSeconds: 45, reduced: false, flip: false })
+  const t0 = Date.UTC(2026, 9, 6, 12)
+  /** Was nach der Zeichnung zu `t` in den nächsten 4 s läuft (Clip-Gruppen), Takt für Takt wie gezeigt nachgezogen. */
+  const after = (t: number) => {
+    const cats = new Set<string>()
+    for (let ms = 0; ms <= 4000; ms += 75) {
+      d.catchUp(t + ms)
+      cats.add(d.engine.S.play?.clip.cat ?? '')
+      if (d.engine.S.welcome) cats.add('welcome')
+    }
+    return cats
+  }
+  const calm = { ...NO_FACTS, endedAt: t0 - 60_000 }
+  d.draw(t0, calm, NO_STRAIN, 4)
+  // 20 s Ruhe (die gezeigte Animation), dann endet ein Turn: ab dieser Zeichnung freut er sich (vorher lief „fertig“ unsichtbar im Nachziehen ab)
+  const t1 = t0 + 20_000
+  const done = { ...calm, endedAt: t1 - 50, endedKind: 'done' as const }
+  d.draw(t1, done, NO_STRAIN, 4)
+  expect([...after(t1)]).toContain('done')
+  // Rückkehr nach langer Pause (backAt) 60 s später: die Begrüßung läuft
+  const t2 = t1 + 60_000
+  d.catchUp(t2)
+  d.draw(t2, { ...done, backAt: t2 - 50 }, NO_STRAIN, 4)
+  expect([...after(t2)]).toContain('welcome')
 })

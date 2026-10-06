@@ -6,6 +6,12 @@ import {
   addDay,
   bookModel,
   modelRows,
+  modelCompare,
+  savingsArgs,
+  dayRows,
+  compareNote,
+  hintLine,
+  factorText,
   wrongChatChoices,
   applySetting,
   bookingStep,
@@ -193,11 +199,11 @@ deTest('Verdichtung: alte Sessions einmal, aktuelle und schon verdichtete nicht'
   expect(addDay(d, d).pruefungen).toBe(4)
 })
 
-deTest('/savings: Kosten, Schätzung mit Rechenweise, Zählungen', async () => {
+deTest('/savings detail: Kosten, Schätzung mit Rechenweise, Zählungen', async () => {
   const d = { ...emptyDay(), kosten: 0.5, pruefungen: 4, warteMs: 6000, kaltVermieden: { n: 2, usd: 4.6 } }
   d.hinweise.skill = { gezeigt: 3, angenommen: 1, ignoriert: 2, abgebrochen: 0 }
-  const t = savingsReport(d, 'week', NOW)
-  expect(t.split('\n')[0]).toBe('**Woche (29.09.–05.10.)**')
+  const t = savingsReport(d, 'week', NOW, '', { [dayKey(NOW)]: d })
+  expect(t.split('\n')[0]).toBe('**Woche (29.09.–05.10.)** · Details')
   expect(t).toContain('**Ersparnis (Schätzung)** ≈ 4,60 $')
   expect(t).toContain('**Verhältnis** 1 : 9,2')
   expect(t).toContain('| Kaltstart vermieden | 2 | ≈ 4,60 $ | 1. Anfrage: Kontext alt × Schreibpreis − (gelesen × Lesepreis')
@@ -223,7 +229,9 @@ type W = {
   memory?: { path: string; type: string; tokens: number }[]
   model?: string
   skills?: { totalSkills: number; includedSkills: number; tokens: number; skillFrontmatter: { name: string; source: string; tokens: number }[] }
-  cmds?: { name: string; description: string; source: string }[]
+  cmds?: { name: string; description: string; source: string; plugin?: string }[]
+  fillFails?: boolean // $.prompt.fill: Dialog hält die Tasten
+  todoFails?: boolean // /todo von worklist scheitert
   usageFails?: boolean
   noBreakdown?: boolean // breakdown fehlt in der Antwort
 }
@@ -235,6 +243,8 @@ function world(on: On, o: W = {}) {
   const asks: { question: string; options: string[] }[] = []
   const sent: string[] = []
   const commands: string[] = []
+  const commandArgs: string[] = []
+  const fills: { text: string; mode?: string }[] = []
   const checks: { system: string; prompt: string; req: unknown }[] = []
   const handoffs: string[] = []
   const handoffReqs: unknown[] = []
@@ -298,8 +308,15 @@ function world(on: On, o: W = {}) {
     return { value: undefined }
   })
   on('command.register', () => ({ value: undefined }))
+  on('prompt.fill', ($, e) => {
+    if (o.fillFails) return { isFilled: false, refusal: 'dialog' as const }
+    fills.push({ text: e.text, mode: e.mode })
+    return { isFilled: true }
+  })
   on('command.run', ($, e) => {
     commands.push(e.command)
+    commandArgs.push(`${e.command} ${e.args ?? ''}`.trim())
+    if (o.todoFails && e.command === 'todo') throw new Error('kein todo')
     // Ein werfender Stub wird übersprungen (docs/raw/en/test.md:182); ohne weitere Antwort scheitert der Aufruf
     if (o.clearFails && e.command === 'clear') throw new Error('nicht jetzt')
     if (e.command === 'clear') id = 'sess-2'
@@ -340,6 +357,8 @@ function world(on: On, o: W = {}) {
     clock,
     saved,
     toasts,
+    fills,
+    commandArgs,
     asks,
     sent,
     commands,
@@ -584,7 +603,7 @@ deTest('Neuer Chat: Übergabe → clear → submit mit ursprünglicher Nachricht
   // Kosten je Rolle mit deren Modell: Prüfung (CHECK) und Übergabe (HANDOFF)
   expect(near(today(w.ledger('sess-1')).kosten, completeCost(MODEL_USAGE, CHECK.model) + completeCost(MODEL_USAGE, HANDOFF_ROLE.model))).toBe(true)
   // /savings sieht beide Sessions (getrennte Schlüssel)
-  const s = await $.command.run({ command: 'savings', args: 'today' } as never)
+  const s = await $.command.run({ command: 'savings', args: 'detail today' } as never)
   expect(s.text).toContain('| Kaltstart vermieden | 1 |')
   expect(s.text).toContain('Übergaben: **1**')
 })
@@ -672,9 +691,9 @@ deTest('Persistenz: Bilanz und Einstellungen überleben einen Neustart (Store-St
   await flush(400)
   expect(saved.has('bilanz:alte-session')).toBe(false)
   expect(cleanLedger(saved.get('bilanz:tage')).aus).toEqual(['alte-session'])
-  const all = await $.command.run({ command: 'savings', args: 'all' } as never)
+  const all = await $.command.run({ command: 'savings', args: 'detail all' } as never)
   expect(all.text).toContain('Prüfungen: **5**')
-  const tdy = await $.command.run({ command: 'savings', args: 'today' } as never)
+  const tdy = await $.command.run({ command: 'savings', args: 'today detail' } as never)
   expect(tdy.text).toContain('Prüfungen: **2**')
   // Einstellung aus dem Store gilt: 6k Kontext löst (b) aus
   w.setCtx(6000)
@@ -1212,7 +1231,7 @@ deTest('/savings zeigt die Wartungs-Tabelle mit gezeigt und angenommen', async (
   const day = { ...emptyDay(), wartung: { audit: { gezeigt: 2, angenommen: 1 } } }
   const saved = new Map<string, unknown>([['bilanz:x', { tage: { [dayKey(NOW)]: day }, upd: NOW }]])
   world(on, { saved })
-  const text = String(((await $.command.run({ command: 'savings', args: 'today' })) as { text?: string }).text)
+  const text = String(((await $.command.run({ command: 'savings', args: 'detail today' })) as { text?: string }).text)
   expect(text).toContain('| Wartung | gezeigt | angenommen |')
   expect(text).toContain('| prompt-audit | 2 | 1 |')
 })
@@ -1355,7 +1374,7 @@ test('i18n: Englisch ist Standard; Rückfrage, Zeile und Befehle auf Englisch', 
   expect(status).toContain('**Maintenance hints:** on')
   const bad = String(((await $.command.run({ command: 'sidekick', args: 'quatsch' })) as { text?: string }).text)
   expect(bad).toContain('Unknown: "quatsch". Possible:')
-  const savings = String(((await $.command.run({ command: 'savings', args: 'today' })) as { text?: string }).text)
+  const savings = String(((await $.command.run({ command: 'savings', args: 'details today' })) as { text?: string }).text)
   expect(savings).toContain('**Cost**')
   expect(savings).toContain("| Sonnet's version accepted | 1 |")
   expect(savings).toContain('- Checks: **1**')
@@ -1579,8 +1598,8 @@ deTest('0.5.0: Modellaufrufe je Modell und Rolle; Name mit Version; altes ohne M
   // Speichern und Zusammenzählen halten die Modelle
   const back = cleanLedger(JSON.parse(JSON.stringify({ tage: { '2026-10-05': d }, upd: NOW }))).tage['2026-10-05']!
   expect(addDay(back, back).modelle['claude-sonnet-5-5']!.pruefung.n).toBe(4)
-  const md = savingsReport(d, 'today', NOW, '#abc12')
-  expect(md.split('\n')[0]).toBe('**Heute (05.10.)** · #abc12')
+  const md = savingsReport(d, 'today', NOW, '#abc12', { [dayKey(NOW)]: d })
+  expect(md.split('\n')[0]).toBe('**Heute (05.10.)** · Details · #abc12')
   expect(md).toContain('| Modell | Rolle | Aufrufe | ≈ $ | je Aufruf | Ø Dauer |')
   expect(md).toContain('| Sonnet 5.5 | Prüfung | 2 | ≈ 0,02 $ | ≈ 0,01 $ | 2,0 s |')
   expect(md).toContain('| Sonnet 5.5 | Übergabe | 1 | ≈ 0,03 $ | ≈ 0,03 $ | 8,0 s |')
@@ -1589,7 +1608,7 @@ deTest('0.5.0: Modellaufrufe je Modell und Rolle; Name mit Version; altes ohne M
   // Ohne Altlast keine Zeile „früher“; Rundungsreste zählen nicht
   const fresh = { ...emptyDay(), kosten: 0.01, pruefungen: 1 }
   bookModel(fresh, 'claude-sonnet-5-5', 'pruefung', 0.01, 1000, u)
-  expect(savingsReport(fresh, 'today', NOW)).not.toContain('früher')
+  expect(savingsReport(fresh, 'today', NOW, '', { [dayKey(NOW)]: fresh })).not.toContain('früher')
 })
 
 deTest('0.5.0: Prüfung und Übergabe buchen je Modell mit Dauer', async ($, on) => {
@@ -1617,9 +1636,9 @@ deTest('0.5.0: /savings gezeichnet im Terminal und Desktop; VS Code und unbekann
   w.setAnswer('Abbrechen (empfohlen)')
   await $.prompt.submit(userPrompt(WRONG_MSG))
   await flush()
-  const out = await $.command.run({ command: 'savings', args: 'today' } as never)
+  const out = await $.command.run({ command: 'savings', args: 'detail today' } as never)
   const text = String(out.text)
-  expect(/^\*\*Heute \(05\.10\.\)\*\* · #[0-9a-z]{5,}$/.test(text.split('\n')[0]!)).toBe(true)
+  expect(/^\*\*Heute \(05\.10\.\)\*\* · Details · #[0-9a-z]{5,}$/.test(text.split('\n')[0]!)).toBe(true)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', surface, props: { command: 'savings', args: 'today', text, isErrored: false } } as never)
     const tree = JSON.stringify(await ui.find({ key: 'sidekick-savings' }))
@@ -1708,9 +1727,333 @@ test('0.5.0 en: drawn /savings in English', async () => {
   setLang('en')
   const d = { ...emptyDay(), kosten: 0.02, pruefungen: 1, kaltVermieden: { n: 1, usd: 2.5 } }
   bookModel(d, 'claude-sonnet-5-5', 'pruefung', 0.02, 1800)
-  const tree = JSON.stringify(savingsTree(d, 'week', NOW, 100, 'desktop'))
+  const tree = JSON.stringify(savingsTree(d, 'week', NOW, 100, 'desktop', { [dayKey(NOW)]: d }))
   expect(tree).toContain('Models (own calls)')
   expect(tree).toContain('Check 1× · avg 1.8 s')
   expect(tree).toContain('Cold start avoided')
   expect(tree).toContain('1 : 125')
+})
+
+// ---------- 0.6.0: /savings knapp, /savings detail ausführlich ----------
+
+/** Zwei Tage: gestern Altlast (früher) und Haiku, heute Sonnet mit Prüfung und Übergabe. */
+function twoDays() {
+  const u = { input_tokens: 3000, output_tokens: 200, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  const old = { ...emptyDay(), kosten: 0.104, pruefungen: 21, warteMs: 21 * 1200 + 1500 - 1200, uebergaben: 1 }
+  bookModel(old, 'claude-haiku-4-5-20251001', 'pruefung', 0.004, 1500, u)
+  const now = { ...emptyDay(), kosten: 0.07, pruefungen: 2, warteMs: 4000, uebergaben: 1, kaltVermieden: { n: 1, usd: 1.5 } }
+  bookModel(now, 'claude-sonnet-5-5', 'pruefung', 0.01, 1800, u)
+  bookModel(now, 'claude-sonnet-5-5', 'pruefung', 0.01, 2200, u)
+  bookModel(now, 'claude-sonnet-5-5', 'uebergabe', 0.05, 8000, u)
+  const days = { [dayKey(NOW - DAY)]: old, [dayKey(NOW)]: now }
+  return { days, d: addDay(old, now) }
+}
+
+test('0.6.0: Argumente von /savings in beliebiger Reihenfolge, Standard knapp week, detail all', () => {
+  expect(savingsArgs('')).toEqual({ p: 'week', detail: false })
+  expect(savingsArgs('today')).toEqual({ p: 'today', detail: false })
+  expect(savingsArgs('detail')).toEqual({ p: 'all', detail: true })
+  expect(savingsArgs(' Week  DETAILS ')).toEqual({ p: 'week', detail: true })
+  expect(savingsArgs('all detail')).toEqual({ p: 'all', detail: true })
+  expect(savingsArgs('quatsch')).toBe(null)
+  expect(savingsArgs('today week')).toBe(null)
+})
+
+deTest('0.6.0: /savings knapp ohne Modelle, Rechenweise, Annahmen und Zählungen', async () => {
+  const { d } = twoDays()
+  const md = savingsReport(d, 'week', NOW, '#abc12')
+  expect(md.split('\n')[0]).toBe('**Woche (29.09.–05.10.)** · #abc12')
+  expect(md).toContain('**Verhältnis** 1 : 8,6')
+  expect(md).toContain('| Kaltstart vermieden | 1 | ≈ 1,50 $ |')
+  expect(md).toContain('`/savings detail`')
+  for (const no of ['1. Anfrage', 'nur gezählt', 'Sonnet', 'früher', 'Zählungen', 'Hinweis']) expect(md).not.toContain(no)
+  for (const sf of ['terminal', 'desktop'] as const) {
+    const tree = JSON.stringify(savingsTree(d, 'week', NOW, 100, sf))
+    expect(tree).toContain('Mehr: /savings detail')
+    expect(tree).toContain('Kaltstart vermieden')
+    for (const no of ['Modelle (', 'Angenommen', 'Rechenweise', 'Vergleich der', 'Zählungen', 'Sonnet']) expect(tree).not.toContain(no)
+  }
+})
+
+deTest('0.6.0: Vergleich der Prüfung je Modell mit Faktor, Zeitraum und „früher“ mit Übergaben', () => {
+  const { d, days } = twoDays()
+  const rows = modelCompare(d, days)
+  expect(rows.map((r) => r.label)).toEqual(['Sonnet 5.5', 'Haiku 4.5', 'früher'])
+  const [s, h, e] = rows as [(typeof rows)[number], (typeof rows)[number], (typeof rows)[number]]
+  expect(s.n).toBe(2)
+  expect(near(s.per, 0.01)).toBe(true)
+  expect(s.factor !== null && near(s.factor, 2.5)).toBe(true)
+  expect(h.factor).toBe(1)
+  // Tokens je Modell: Sonnet 3 Aufrufe (2 Prüfungen, 1 Übergabe) → Schnitt je Aufruf
+  expect(s.tin).toBe(3000)
+  expect(s.perCall).toBe(true)
+  expect(h.perCall).toBe(false)
+  expect(s.span).toEqual({ from: dayKey(NOW), to: dayKey(NOW), days: 1 })
+  expect(h.span).toEqual({ from: dayKey(NOW - DAY), to: dayKey(NOW - DAY), days: 1 })
+  expect(s.sign).toBe('')
+  // früher: 20 Prüfungen, Betrag mit alten Übergaben → Preis ist Obergrenze, Faktor gegen Haiku höchstens 1,25
+  expect(e.n).toBe(20)
+  expect(e.bound).toBe(true)
+  expect(near(e.per, 0.1 / 20)).toBe(true)
+  expect(e.factor !== null && near(e.factor, 1.25)).toBe(true)
+  expect(e.sign).toBe('≤')
+  // Dauer aus der Wartezeit ohne die gebuchten Prüfungen
+  expect(near(e.ms, 20 * 1200)).toBe(true)
+  // Ist „früher“ (Obergrenze) am günstigsten, sind die anderen Faktoren Untergrenzen
+  const cheapOld = { ...d, kosten: d.kosten - 0.09 }
+  const r2 = modelCompare(cheapOld, days)
+  expect(r2.map((r) => r.sign)).toEqual(['≥', '≥', ''])
+  expect(dayRows(days).list.map((r) => r.key)).toEqual([dayKey(NOW), dayKey(NOW - DAY)])
+  expect(dayRows(days, 1).more).toBe(1)
+})
+
+deTest('0.6.0: /savings detail zeigt Zeitraum, Modelle mit Nutzung, Vergleich und Verlauf je Tag', async () => {
+  const { d, days } = twoDays()
+  const md = savingsReport(d, 'all', NOW, '', days)
+  expect(md).toContain('| Prüfung mit | Anzahl | Ø je Prüfung | Ø Dauer | Faktor | genutzt |')
+  expect(md).toContain('| Sonnet 5.5 | 2 | ≈ 0,01 $ | 2,0 s | 2,5× | 05.10. |')
+  expect(md).toContain('| Haiku 4.5 | 1 | ≈ 0,004 $ | 1,5 s | 1,0× | 04.10. |')
+  expect(md).toContain('| früher | 20 | ≤ 0,005 $ | 1,2 s | ≤ 1,3× | 04.10. |')
+  expect(md).toContain('*früher: vor 0.5.0 ohne Modell gebucht (bis 0.3 Haiku, ab 0.4 schon Sonnet).')
+  expect(md).toContain('*Daten 04.10.–05.10. · an 2 Tagen*')
+  expect(md).toContain('| Sonnet 5.5 | Übergabe | 1 | ≈ 0,05 $ | ≈ 0,05 $ | 8,0 s | 05.10. |')
+  expect(md).toContain('| früher, ohne Modell | – | 20 | ≈ 0,10 $ | – | – | 04.10. |')
+  expect(md).toContain('- Sonnet 5.5: Ø 3,0k Tokens ein · 200 aus je Aufruf (Prüfung und Übergabe) · genutzt 05.10. · an 1 Tag')
+  expect(md).toContain('- Haiku 4.5: Ø 3,0k Tokens ein · 200 aus je Prüfung · genutzt 04.10. · an 1 Tag')
+  expect(md).toContain('| 05.10. | 2 | ≈ 0,07 $ | ≈ 1,50 $ | Sonnet 5.5 3× |')
+  expect(md).toContain('| 04.10. | 21 | ≈ 0,10 $ | ≈ 0 $ | Haiku 4.5 1× · früher 20× |')
+  expect(md).toContain('Rechenweise')
+  for (const sf of ['terminal', 'desktop'] as const) {
+    const tree = JSON.stringify(savingsTree(d, 'all', NOW, 120, sf, days))
+    for (const s of ['sidekick · Details', 'Daten 04.10.–05.10. · an 2 Tagen', 'Vergleich der Prüfung', 'Verlauf je Tag', 'genutzt 05.10. · an 1 Tag', '2,5×', '≤ 1,3×', '≤ 0,005 $', 'Haiku 4.5 1× · früher 20×', 'Rechenweise', 'Zählungen'])
+      expect(tree).toContain(s)
+    expect(tree).not.toContain('**')
+    if (sf === 'desktop') for (const m of tree.matchAll(/"width":"([^"]+)%"/g)) expect(/^\d+$/.test(m[1]!)).toBe(true)
+  }
+  // Schmal: Modelle des Tages unter der Zeile statt daneben
+  const narrow = JSON.stringify(savingsTree(d, 'all', NOW, 60, 'terminal', days))
+  expect(narrow).toContain('  Haiku 4.5 1× · früher 20×')
+  // Nur ein Modell: kein Vergleich
+  const one = { ...emptyDay(), kosten: 0.01, pruefungen: 1 }
+  bookModel(one, 'claude-sonnet-5-5', 'pruefung', 0.01, 1000)
+  expect(JSON.stringify(savingsTree(one, 'today', NOW, 100, 'desktop', { [dayKey(NOW)]: one }))).not.toContain('Vergleich der Prüfung')
+})
+
+deTest('0.6.0: /savings und /savings detail über den Befehl; falsches Argument zeigt den Aufruf', async ($, on) => {
+  const { days } = twoDays()
+  const saved = new Map<string, unknown>([['bilanz:x', { tage: days, upd: NOW }]])
+  world(on, { saved })
+  const short = String(((await $.command.run({ command: 'savings', args: '' })) as { text?: string }).text)
+  expect(short).not.toContain('Sonnet')
+  const det = String(((await $.command.run({ command: 'savings', args: 'detail' })) as { text?: string }).text)
+  expect(det.split('\n')[0]).toContain('**Gesamt** · Details · #')
+  const ui = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', surface: 'desktop', props: { command: 'savings', args: 'detail', text: det, isErrored: false } } as never)
+  const tree = JSON.stringify(await ui.find({ key: 'sidekick-savings' }))
+  expect(tree).toContain('Vergleich der Prüfung')
+  expect(tree).toContain('Verlauf je Tag')
+  await ui.unmount()
+  const bad = String(((await $.command.run({ command: 'savings', args: 'monat' })) as { text?: string }).text)
+  expect(bad).toContain('/savings detail [today|week|all]')
+})
+
+test('0.6.0 en: short and detailed /savings in English', () => {
+  setLang('en')
+  const { d, days } = twoDays()
+  const short = JSON.stringify(savingsTree(d, 'week', NOW, 100, 'desktop'))
+  expect(short).toContain('More: /savings detail')
+  const det = JSON.stringify(savingsTree(d, 'all', NOW, 120, 'desktop', days))
+  for (const s of ['sidekick · details', 'Checks compared', 'By day', 'used Oct 5 · on 1 day', '2.5×', 'earlier 20×']) expect(det).toContain(s)
+  expect(savingsReport(d, 'all', NOW, '', days)).toContain('| Check by | Count | avg per check | avg time | factor | used |')
+})
+
+deTest('0.6.0 Review: gescheiterte Übergabe ändert die Obergrenze von „früher“ nicht; Grenzen gerichtet gerundet', async () => {
+  const { d, days } = twoDays()
+  // Gescheiterte Übergabe ab 0.5.0: uebergabe.n steigt, uebergaben nicht (register.ts)
+  const fail = { ...emptyDay(), kosten: 0.02 }
+  bookModel(fail, 'claude-sonnet-5-5', 'uebergabe', 0.02, 45000)
+  const all = { ...days, [dayKey(NOW)]: addDay(days[dayKey(NOW)]!, fail) }
+  const rows = modelCompare(addDay(d, fail), all)
+  const e = rows.find((r) => !r.key)!
+  expect(e.bound).toBe(true)
+  expect(rows[0]!.sign).toBe('')
+  expect(e.sign).toBe('≤')
+  // ≤ aufrunden, ≥ abrunden
+  const md = savingsReport(addDay(d, fail), 'all', NOW, '', all)
+  expect(md).toContain('| früher | 20 | ≤ 0,005 $ | 1,2 s | ≤ 1,3× |')
+  const cheapOld = modelCompare({ ...d, kosten: d.kosten - 0.09 }, days)
+  expect(factorText(cheapOld[0]!)).toBe('≥ 20,0×')
+  expect(factorText({ ...cheapOld[0]!, factor: 2.49 })).toBe('≥ 2,4×')
+  expect(factorText({ ...cheapOld[0]!, factor: 2.41, sign: '≤' })).toBe('≤ 2,5×')
+})
+
+deTest('0.6.0 Review: ungleiche Tokens von Prüfung und Übergabe heißen „je Aufruf“; /savings detail ohne Daten', async () => {
+  const d = { ...emptyDay(), kosten: 0.06, pruefungen: 2, uebergaben: 1 }
+  bookModel(d, 'claude-sonnet-5-5', 'pruefung', 0.01, 1000, { input_tokens: 3000, output_tokens: 200, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+  bookModel(d, 'claude-sonnet-5-5', 'pruefung', 0.01, 1000, { input_tokens: 3000, output_tokens: 200, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+  bookModel(d, 'claude-sonnet-5-5', 'uebergabe', 0.04, 8000, { input_tokens: 20000, output_tokens: 800, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 })
+  const r = modelCompare(d, { [dayKey(NOW)]: d })[0]!
+  expect(compareNote(r)).toContain('je Aufruf (Prüfung und Übergabe)')
+  expect(compareNote(r)).not.toContain('je Prüfung')
+  // Leer: keine Fehler, kein Vergleich, kein Verlauf
+  const empty = savingsReport(emptyDay(), 'all', NOW, '', {})
+  expect(empty).not.toContain('Prüfung mit')
+  expect(empty).not.toContain('| Tag |')
+  for (const sf of ['terminal', 'desktop'] as const) {
+    const tree = JSON.stringify(savingsTree(emptyDay(), 'all', NOW, 30, sf, {}))
+    expect(tree).toContain('Noch keine Modellaufrufe.')
+    expect(tree).not.toContain('Verlauf je Tag')
+  }
+})
+
+deTest('0.6.0 Review S3: Kopfzeile des Vergleichs im Terminal so breit wie die Datenzeilen', async () => {
+  const { d, days } = twoDays()
+  const tree = savingsTree(d, 'all', NOW, 100, 'terminal', days) as unknown as { children: unknown[] }
+  const find = (n: any, pred: (x: any) => boolean): any => (pred(n) ? n : (n?.children ?? []).map((c: any) => find(c, pred)).find(Boolean))
+  const block = find(tree, (n) => n?.children?.[0]?.children?.[0]?.children?.[0] === 'Vergleich der Prüfung')
+  const widths = (row: any) => row.children.map((c: any) => c.props?.width)
+  expect(widths(block.children[1])).toEqual(widths(block.children[2]))
+})
+
+deTest('0.6.1: Skill-Name in der Zeile wird zum Befehl, sonst in Klammern; Prompt verlangt Umlaute', async () => {
+  expect(hintLine('limit-bars:uebergabe nutzen: Stand dokumentieren.', 'limit-bars:uebergabe')).toBe('/limit-bars:uebergabe nutzen: Stand dokumentieren.')
+  expect(hintLine('Erst mit limit-bars:uebergabe sichern.', 'limit-bars:uebergabe')).toBe('Erst mit /limit-bars:uebergabe sichern.')
+  expect(hintLine('Schon /mod-debug genannt.', 'mod-debug')).toBe('Schon /mod-debug genannt.')
+  expect(hintLine('Ein Skill prüft Hook und Regeln.', 'mod-debug')).toBe('Ein Skill prüft Hook und Regeln. (/mod-debug)')
+  expect(hintLine('mod-debugger ist was anderes', 'mod-debug')).toBe('mod-debugger ist was anderes (/mod-debug)')
+  expect(hintLine('Ohne Skill.', '')).toBe('Ohne Skill.')
+  const sys = checkSystem(null)
+  expect(sys).toContain('Übergabe, nicht Uebergabe')
+  expect(sys).toContain('ohne seinen Namen')
+})
+
+// ---------- 0.7.0: Button unter der Zeile ----------
+
+const WORKLIST = { name: 'todo', description: 'Queue a task', source: 'plugin', plugin: 'worklist' }
+const AUDIT_SKILL = { totalSkills: 2, includedSkills: 2, tokens: 20, skillFrontmatter: [{ name: 'mod-review', source: 'projectSettings', tokens: 10 }, { name: 'claude-api', source: 'bundled', tokens: 10 }] }
+
+async function mountLine($: Engine, text: string, requestId: string, surface = 'desktop') {
+  return $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId, surface, props: { text, origin: { kind: 'composer' }, isExpanded: true } } as never)
+}
+
+deTest('0.7.0: ohne worklist schreibt der Button den Befehl ins Eingabefeld, an der Cursor-Position', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  for (const surface of ['desktop', 'terminal']) {
+    const ui = await mountLine($, 'los gehts', 'b1', surface)
+    const line = JSON.stringify(await ui.find({ key: 'sidekick-line' }))
+    expect(line).toContain('Ins Eingabefeld')
+    await ui.press({ key: 'sidekick-use' })
+    await flush()
+    await ui.unmount()
+  }
+  expect(w.fills).toEqual([
+    { text: '/claude-api prompt-audit', mode: 'insert' },
+    { text: '/claude-api prompt-audit', mode: 'insert' },
+  ])
+  expect(w.commandArgs.filter((c) => c.startsWith('todo'))).toEqual([])
+})
+
+deTest('0.7.0: mit worklist wird ein Skill-Befehl zum To-do, einmal; danach steht „eingereiht“', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: [...ALL_CMDS, WORKLIST], skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'b2')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Als To-do')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.commandArgs).toContain('todo Führe /claude-api prompt-audit aus.')
+  expect(w.fills).toEqual([])
+  const again = await mountLine($, 'los gehts', 'b2')
+  const line = JSON.stringify(await again.find({ key: 'sidekick-line' }))
+  expect(line).toContain('✓ als To-do eingereiht')
+  expect(await again.find({ key: 'sidekick-use' })).toBeFalsy()
+  await again.unmount()
+  expect(w.commandArgs.filter((c) => c.startsWith('todo')).length).toBe(1)
+})
+
+deTest('0.7.0: eingebaute Befehle (/skill-doctor, /init) gehen auch mit worklist ins Eingabefeld', async ($, on) => {
+  const w = world(on, { memory: [projectFile(500)], cmds: [...ALL_CMDS, WORKLIST], skills: { totalSkills: 61, includedSkills: 52, tokens: 4800, skillFrontmatter: [{ name: 'claude-api', source: 'bundled', tokens: 10 }] } })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'b3')
+  const line = JSON.stringify(await ui.find({ key: 'sidekick-line' }))
+  expect(line).toContain('/skill-doctor')
+  expect(line).toContain('Ins Eingabefeld')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.fills).toEqual([{ text: '/skill-doctor', mode: 'insert' }])
+  expect(w.commandArgs.filter((c) => c.startsWith('todo'))).toEqual([])
+})
+
+deTest('0.7.0: Skill-Hinweis der Prüfung bekommt den Button; Zeile ohne Befehl keinen', async ($, on) => {
+  const w = world(on, { cmds: [WORKLIST] })
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'skill', zeile: 'Ein Skill prüft Mods gegen die Doku.', skill: 'mod-review' }), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt('prüf mal den mod bitte'))
+  const ui = await mountLine($, 'prüf mal den mod bitte', 'b4')
+  const line = JSON.stringify(await ui.find({ key: 'sidekick-line' }))
+  expect(line).toContain('Ein Skill prüft Mods gegen die Doku. (/mod-review)')
+  expect(line).toContain('Als To-do')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.commandArgs).toContain('todo Führe /mod-review aus.')
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'sonstiges', zeile: 'Nur ein Hinweis.' }), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt('und noch was anderes'))
+  const plain = await mountLine($, 'und noch was anderes', 'b5')
+  expect(JSON.stringify(await plain.find({ key: 'sidekick-line' }))).toContain('Nur ein Hinweis.')
+  expect(await plain.find({ key: 'sidekick-use' })).toBeFalsy()
+  await plain.unmount()
+})
+
+deTest('0.7.0 Fehlerpfade: Eingabefeld unter einem Dialog und gescheitertes /todo melden sich per Toast', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, fillFails: true })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'b6')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.toasts.some((x) => x.includes('Eingabefeld gerade nicht verfügbar. Befehl: /claude-api prompt-audit'))).toBe(true)
+})
+
+deTest('0.7.0 Fehlerpfad: /todo scheitert → Toast, Button bleibt für einen neuen Versuch', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: [...ALL_CMDS, WORKLIST], skills: AUDIT_SKILL, todoFails: true })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'b7')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.toasts.some((x) => x.startsWith('To-do nicht angelegt'))).toBe(true)
+  const again = await mountLine($, 'los gehts', 'b7')
+  expect(await again.find({ key: 'sidekick-use' })).toBeTruthy()
+  await again.unmount()
+})
+
+test('0.7.0 en: button labels and to-do text in English', async ($, on) => {
+  setLang('en')
+  const w = world(on, { memory: [projectFile(3400)], cmds: [...ALL_CMDS, WORKLIST], skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('lets go now'))
+  const ui = await mountLine($, 'lets go now', 'b8')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Add as to-do')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.commandArgs).toContain('todo Run /claude-api prompt-audit.')
+})
+
+deTest('0.7.0 Review: Doppelklick legt ein To-do an; Skill bei anderer Art gibt keinen Button; Doppelpunkt im Namen', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: [...ALL_CMDS, WORKLIST], skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'r1')
+  await Promise.all([ui.press({ key: 'sidekick-use' }), ui.press({ key: 'sidekick-use' })])
+  await flush()
+  await ui.unmount()
+  expect(w.commandArgs.filter((c) => c.startsWith('todo')).length).toBe(1)
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'sonstiges', zeile: 'Etwas anderes.', skill: 'mod-review' }), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt('ganz normale frage hier'))
+  const plain = await mountLine($, 'ganz normale frage hier', 'r2')
+  expect(await plain.find({ key: 'sidekick-use' })).toBeFalsy()
+  await plain.unmount()
+  expect(hintLine('Mit limit-bars:uebergabe sichern.', 'uebergabe')).toBe('Mit limit-bars:uebergabe sichern. (/uebergabe)')
 })

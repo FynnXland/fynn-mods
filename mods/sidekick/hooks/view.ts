@@ -3,9 +3,9 @@
 // Farbe tragen nur die Balken. Spalten sind Boxen mit fester Breite. Im Desktop sind Balken Boxen mit Hintergrundfarbe und
 // ganzzahliger Prozentbreite (Kommaprozente verwirft er, cost-ledger-Befund), im Terminal dünne `▄`.
 import type { RenderElement, RenderNode } from 'claude-code'
-import { dec, tokensText, t, usdText } from './i18n.ts'
-import { ARTS, modelRows, periodTitle, secsText } from './logic.ts'
-import type { Day, Period } from './logic.ts'
+import { tokensText, t, usdFine, usdText } from './i18n.ts'
+import { ARTS, active, compareNote, dayModels, dayRows, factorText, keyDate, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf } from './logic.ts'
+import type { Day, Period, Span } from './logic.ts'
 import { modelLabel } from './models.ts'
 import { RULE_IDS } from './wartung.ts'
 
@@ -16,6 +16,7 @@ const ORANGE = 'claude'
 const GREEN = 'success'
 const MODEL_COLORS = ['claude', 'suggestion', 'permission', 'warning', 'planMode', 'ide', 'remember']
 const EARLIER_COLOR = 'inactive'
+const DAY_COLOR = 'suggestion'
 
 type Props = Record<string, string | number | boolean>
 
@@ -54,9 +55,10 @@ function tableRow(first: string, rest: (string | number)[], w0: number, head = f
   return row({}, [cell(w0, t0), ...rest.map((v) => cell(12, head ? dim(String(v)) : text(String(v)), true))])
 }
 
-function savingsBlock(d: Day, sf: Surface, inner: number): RenderElement[] {
+/** Ersparnis je Posten als Balken; `full` (Details): dazu die nur gezählten Annahmen und die Rechenweise. */
+function savingsBlock(d: Day, sf: Surface, inner: number, full: boolean): RenderElement[] {
   const x = t()
-  const saved = d.kaltVermieden.usd + d.neuWarm.usd
+  const saved = savedOf(d)
   const items = [
     { label: x.vColdAvoided, n: d.kaltVermieden.n, usd: d.kaltVermieden.usd },
     { label: x.vWarmNew, n: d.neuWarm.n, usd: d.neuWarm.usd },
@@ -66,12 +68,21 @@ function savingsBlock(d: Day, sf: Surface, inner: number): RenderElement[] {
   const rows = items.map((i) =>
     row({}, [cell(nameW, text(i.label)), bar(sf, saved > 0 ? i.usd / saved : 0, cells, GREEN), cell(12, i.usd ? text(usdText(i.usd)) : dim('–'), true), cell(6, dim(`${i.n}×`), true)]),
   )
+  if (!full) return [heading(x.vSavingsHead), ...rows]
   const accepted = (['fassung', 'skill', 'modell'] as const).map((a) => `${x.art[a]} ${d.hinweise[a]?.angenommen ?? 0}`).join(' · ')
   return [heading(x.vSavingsHead), ...rows, el('Box', { marginTop: 1 }, [dim(x.vAccepted(accepted))]), dim(x.vFormula)]
 }
 
-/** Je Modell: Anteil an den eigenen Kosten als Balken, Betrag, Aufrufe; darunter je Rolle Anzahl, Dauer und Preis je Aufruf. */
-function modelsBlock(d: Day, sf: Surface, inner: number): RenderElement {
+/** Farbe eines Modells: nach seinem Platz in `modelRows`, in Modell- und Vergleichsblock gleich. */
+const colorOf = (d: Day, key: string) => {
+  const i = modelRows(d).list.findIndex((m) => m.key === key)
+  return i < 0 ? EARLIER_COLOR : MODEL_COLORS[i % MODEL_COLORS.length]!
+}
+
+const usedLine = (s: Span | null) => (s ? [dim(t().vUsed(spanLabel(s), s.days))] : [])
+
+/** Je Modell: Anteil an den eigenen Kosten als Balken, Betrag, Aufrufe; darunter je Rolle Anzahl, Dauer und Preis je Aufruf, Tokens und Zeitraum. */
+function modelsBlock(d: Day, days: Record<string, Day>, sf: Surface, inner: number): RenderElement {
   const x = t()
   const { list, earlier } = modelRows(d)
   const sum = list.reduce((a, m) => a + m.usd, 0) + earlier.usd
@@ -84,17 +95,19 @@ function modelsBlock(d: Day, sf: Surface, inner: number): RenderElement {
     const calls = m.m.pruefung.n + m.m.uebergabe.n
     const roles = (['pruefung', 'uebergabe'] as const)
       .filter((r) => m.m[r].n)
-      .map((r) => x.vRoleLine(x.role[r], m.m[r].n, secsText(m.m[r].ms, m.m[r].n), usdText(m.m[r].usd / m.m[r].n)))
+      .map((r) => x.vRoleLine(x.role[r], m.m[r].n, secsText(m.m[r].ms, m.m[r].n), usdFine(m.m[r].usd / m.m[r].n)))
     return [
       row({ marginTop: 1 }, [cell(nameW, text(names[i]!, { bold: true })), bar(sf, sum > 0 ? m.usd / sum : 0, cells, color), cell(6, dim(pct(m.usd)), true), cell(12, text(usdText(m.usd)), true), cell(6, dim(`${calls}×`), true)]),
       ...roles.map((r) => dim(r)),
       dim(x.vTokens(tokensText(m.m.in), tokensText(m.m.out))),
+      ...usedLine(spanOf(days, (x2) => !!x2.modelle[m.key])),
     ]
   })
   if (earlier.usd) {
     kids.push(
       row({ marginTop: 1 }, [cell(nameW, dim(x.vEarlier)), bar(sf, sum > 0 ? earlier.usd / sum : 0, cells, EARLIER_COLOR), cell(6, dim(pct(earlier.usd)), true), cell(12, text(usdText(earlier.usd)), true), cell(6, dim(earlier.n ? `${earlier.n}×` : ''), true)]),
       dim(x.vEarlierNote),
+      ...usedLine(spanOf(days, (x2) => modelRows(x2).earlier.usd > 0)),
     )
   }
   if (!kids.length) kids.push(dim(x.vNoModels))
@@ -139,27 +152,100 @@ function countsBlock(d: Day): RenderElement {
   return col({}, [heading(x.vCountsHead), ...lines.map((l) => text(plain(l)))])
 }
 
-/** Der ganze Baum für die `CommandOutput`-Zeile von `/savings`; `columns` dient nur als Richtwert (Terminal-Balken, Umbruch). */
-export function savingsTree(d: Day, p: Period, now: number, columns: number, surface: Surface = 'terminal'): RenderElement {
+/**
+ * Vergleich der Prüfung je Modell (`/savings detail`): Balken = Preis je Prüfung im Verhältnis zum teuersten, dazu Preis, Dauer,
+ * Anzahl, Faktor zum günstigsten; darunter je Zeile Ø Tokens und Zeitraum (`compareNote`). Nur ab zwei Zeilen (sonst gibt es nichts zu vergleichen).
+ */
+function compareBlock(d: Day, days: Record<string, Day>, sf: Surface, inner: number): RenderElement | null {
+  const x = t()
+  const rows = modelCompare(d, days)
+  if (rows.length < 2) return null
+  const c = x.vCompareCols
+  const nameW = Math.min(18, Math.max(10, ...rows.map((r) => r.label.length + 1)))
+  const cells = Math.max(6, Math.min(32, inner - nameW - 14 - 8 - 7 - 9 - 1))
+  const max = Math.max(...rows.map((r) => r.per))
+  const head = row({}, [cell(nameW, dim(c.model)), bar(sf, 0, cells, EARLIER_COLOR), cell(14, dim(c.per), true), cell(8, dim(c.time), true), cell(7, dim(c.n), true), cell(9, dim(c.factor), true)])
+  const kids: RenderNode[] = rows.map((r) =>
+    row({}, [
+      cell(nameW, r.key ? text(r.label, { bold: true }) : dim(r.label)),
+      bar(sf, max > 0 ? r.per / max : 0, cells, r.key ? colorOf(d, r.key) : EARLIER_COLOR),
+      cell(14, text(perText(r)), true),
+      cell(8, dim(secsText(r.ms, r.n)), true),
+      cell(7, dim(`${r.n}×`), true),
+      cell(9, r.factor ? text(factorText(r)) : dim('–'), true),
+    ]),
+  )
+  const notes = rows.map(compareNote).filter(Boolean).map((n) => dim(n))
+  const bound = rows.some((r) => r.bound)
+  return col({}, [
+    heading(x.vCompareHead),
+    head,
+    ...kids,
+    el('Box', { marginTop: 1, flexDirection: 'column' }, [...notes, ...(bound ? [dim(x.compareMixed)] : []), dim(x.vCompareNote)]),
+  ])
+}
+
+/** Verlauf je Tag, neueste zuerst: Kosten als Balken (im Verhältnis zum teuersten Tag), Kosten, Ersparnis, Prüfungen, Modelle. */
+function daysBlock(days: Record<string, Day>, sf: Surface, inner: number): RenderElement | null {
+  const x = t()
+  const { list, more } = dayRows(days)
+  if (!list.length) return null
+  const models = list.map((r) => dayModels(r.d))
+  // Modelle als eigene Spalte nur, wenn Platz ist; sonst gedimmt darunter
+  const mw = Math.min(34, Math.max(0, ...models.map((m) => m.length + 1)))
+  const side = inner >= 76 && mw > 0
+  const cells = Math.max(6, Math.min(24, inner - 9 - 12 - 12 - 6 - (side ? mw : 0) - 1))
+  const max = Math.max(...list.map((r) => r.d.kosten))
+  const kids: RenderNode[] = list.flatMap((r, i) => {
+    const line = row({}, [
+      cell(9, text(keyDate(r.key))),
+      bar(sf, max > 0 ? r.d.kosten / max : 0, cells, DAY_COLOR),
+      cell(12, text(usdText(r.d.kosten)), true),
+      cell(12, savedOf(r.d) ? text(usdText(savedOf(r.d))) : dim('–'), true),
+      cell(6, dim(`${r.d.pruefungen}×`), true),
+      ...(side ? [el('Box', { width: mw, flexShrink: 0, paddingLeft: 2 }, [dim(models[i]!)])] : []),
+    ])
+    return side || !models[i] ? [line] : [line, dim(`  ${models[i]}`)]
+  })
+  if (more) kids.push(dim(x.vDaysMore(more)))
+  return col({}, [heading(x.vDaysHead), ...kids])
+}
+
+/**
+ * Der ganze Baum für die `CommandOutput`-Zeile von `/savings`; `columns` dient nur als Richtwert (Terminal-Balken, Umbruch).
+ * Ohne `days`: knappe Karte (Kennzahlen, Ersparnis). Mit `days` (`/savings detail`): alles, dazu Vergleich und Verlauf je Tag.
+ */
+export function savingsTree(d: Day, p: Period, now: number, columns: number, surface: Surface = 'terminal', days?: Record<string, Day>): RenderElement {
   const x = t()
   const cols = Math.max(30, Math.min(columns || 100, 140))
   const inner = cols - 4 // Rahmen und paddingX
-  const head = row({ justifyContent: 'space-between', flexWrap: 'wrap' }, [text('sidekick', { color: ORANGE, bold: true }), dim(`${periodTitle(p, now)} · /savings today · week · all`)])
-  const saved = d.kaltVermieden.usd + d.neuWarm.usd
-  const ratio = d.kosten > 0 && saved > 0 ? `1 : ${dec(saved / d.kosten, saved / d.kosten >= 10 ? 0 : 1)}` : '–'
+  const cmd = days ? '/savings detail today · week · all' : '/savings today · week · all'
+  const head = row({ justifyContent: 'space-between', flexWrap: 'wrap' }, [
+    text(days ? `sidekick · ${x.detailWord}` : 'sidekick', { color: ORANGE, bold: true }),
+    dim(`${periodTitle(p, now)} · ${cmd}`),
+  ])
   const fw = inner >= 60 ? '33%' : '100%'
-  const w = wartungBlock(d)
-  return col({ key: 'sidekick-savings', borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%' }, [
-    head,
-    row({ flexWrap: 'wrap', marginTop: 1 }, [
-      figure(x.vCost, usdText(d.kosten), x.vCostSub(d.pruefungen, d.uebergaben), fw),
-      figure(x.vSaved, usdText(saved), x.vSavedSub(d.kaltVermieden.n + d.neuWarm.n), fw),
-      figure(x.vRatio, ratio, x.vRatioSub, fw),
-    ]),
-    ...savingsBlock(d, surface, inner),
-    modelsBlock(d, surface, inner),
+  const figures = row({ flexWrap: 'wrap', marginTop: 1 }, [
+    figure(x.vCost, usdText(d.kosten), x.vCostSub(d.pruefungen, d.uebergaben), fw),
+    figure(x.vSaved, usdText(savedOf(d)), x.vSavedSub(d.kaltVermieden.n + d.neuWarm.n), fw),
+    figure(x.vRatio, ratioOf(d), x.vRatioSub, fw),
+  ])
+  const box = (kids: RenderNode[]) => col({ key: 'sidekick-savings', borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%' }, kids)
+  if (!days) return box([head, figures, ...savingsBlock(d, surface, inner, false), el('Box', { marginTop: 1 }, [dim(x.vMore)])])
+  const span = spanOf(days, active)
+  const nodes = [
+    compareBlock(d, days, surface, inner),
+    daysBlock(days, surface, inner),
     hintsBlock(d),
-    ...(w ? [w] : []),
+    wartungBlock(d),
+  ].filter((n): n is RenderElement => n !== null)
+  return box([
+    head,
+    ...(span ? [dim(x.vSpan(keyDate(span.from), keyDate(span.to), span.days))] : []),
+    figures,
+    ...savingsBlock(d, surface, inner, true),
+    modelsBlock(d, days, surface, inner),
+    ...nodes,
     countsBlock(d),
     el('Box', { marginTop: 1 }, [dim(plain(x.savingsFoot))]),
   ])

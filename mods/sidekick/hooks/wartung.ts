@@ -42,7 +42,16 @@ export const HEAVY_UNUSED = 10
 export const UNUSED_DAYS = 30
 export const INIT_DAYS = 3
 
-export type Hint = { id: RuleId; line: string }
+/** `cmd`: der Befehl der Zeile (`/claude-api prompt-audit`), für den Button unter der Nachricht (Nachtrag 0.7.0). */
+export type Hint = { id: RuleId; line: string; cmd?: string }
+
+const CMD_OF: Record<RuleId, (a: Avail) => string | null> = {
+  'skills-cut': (a) => a.skillDoctor,
+  audit: (a) => a.audit,
+  memory: (a) => a.memory,
+  'skills-heavy': (a) => a.skillDoctor,
+  init: (a) => a.init,
+}
 
 type Rule = {
   id: RuleId
@@ -115,7 +124,8 @@ export function pickHint(m: Measure, w: Wartung, s: HintSettings, now: number): 
     if (st.hintAt && now - st.hintAt < rest) continue
     if (st.doneAt && now - st.doneAt < rest) continue
     const line = r.due(m, st, s)
-    if (line) return { id: r.id, line }
+    const cmd = CMD_OF[r.id](m.avail)
+    if (line) return { id: r.id, line, ...(cmd ? { cmd } : {}) }
   }
   return null
 }

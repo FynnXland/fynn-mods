@@ -57,7 +57,30 @@ test('Band: Terminal zeigt die Figur in Halbblock-Auflösung (Client), fremder I
   await ui.unmount()
 })
 
-test('Band: Desktop zeigt die Figur als Svg, der Takt des Hooks-Moduls bewegt sie, /clawd off hält ihn an', async ($, on) => {
+/** Das Bild, das ein Svg aus desk.ts zur Zeit `ms` nach Beginn zeigt: alle sichtbaren Kachelbilder (SMIL: visibility, diskrete keyTimes). */
+function frameAt(svg: string, ms: number): string {
+  const dur = Number(/dur="([\d.]+)s"/.exec(svg)?.[1] ?? 1) * 1000
+  const at = Math.min(1, ms / dur)
+  let out = ''
+  for (const g of svg.match(/<g visibility="\w+">.*?<\/g>/g) ?? []) {
+    const body = g.replace(/<g[^>]*>|<animate[^>]*\/>|<\/g>/g, '')
+    const m = /values="([^"]+)" keyTimes="([^"]+)"/.exec(g)
+    if (!m) {
+      out += body // Kachel mit nur einem Bild
+      continue
+    }
+    const vals = m[1].split(';')
+    const keys = m[2].split(';').map(Number)
+    let v = vals[0]
+    keys.forEach((k, i) => {
+      if (k <= at + 1e-9) v = vals[i]
+    })
+    if (v === 'visible') out += body
+  }
+  return out
+}
+
+test('Band: Desktop zeigt die Figur als animiertes Svg (SMIL im Rahmen) und zeichnet in Ruhe nur zum Ende der Animation neu; /clawd off hält den Wächter an', async ($, on) => {
   const clock = mock.clock(on)
   const { logs } = stubs(on)
   let invalidates = 0
@@ -68,33 +91,50 @@ test('Band: Desktop zeigt die Figur als Svg, der Takt des Hooks-Moduls bewegt si
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await ui.find({ type: 'Text', text: 'von anderen' })).toBeDefined()
   expect(await ui.find({ type: 'Client' })).toBeUndefined()
-  const first = (await ui.find({ type: 'Svg' }))?.props.source as string
+  const svgEl = await ui.find({ type: 'Svg' })
+  expect(svgEl?.props.isInteractive).toBe(true)
+  const first = svgEl?.props.source as string
   expect(first).toMatch(/^<svg [^>]*viewBox="0 0 100 14"/)
   expect(first).toMatch(/#D77757/i)
-  await $.command.run({ command: 'clawd', args: 'demo wave_question' })
-  await clock.advance(3000)
-  expect(invalidates).toBeGreaterThan(10)
+  expect(first).toMatch(/<animate attributeName="visibility" calcMode="discrete"/)
+  expect(first.length).toBeLessThanOrEqual(131072)
+  // Ruhiger Clawd (er atmet, blinzelt, schaut): die Animation läuft im Svg, das Band wird in der Zeit nicht neu gezeichnet
+  const dur = Number(/dur="([\d.]+)s"/.exec(first)?.[1]) * 1000
+  expect(dur).toBeGreaterThanOrEqual(10_000)
+  await clock.advance(dur - 1500)
+  expect(invalidates).toBe(0)
+  // Kurz vor dem Ende: genau eine Bitte um die nächste Animation
+  await clock.advance(1000)
+  expect(invalidates).toBe(1)
   await ui.redraw()
-  const later = (await ui.find({ type: 'Svg' }))?.props.source as string
-  expect(later).not.toBe(first)
-  // Aus: der Takt ist sofort beendet (kein invalidate mehr), und nichts wirft ins Debug-Log
+  const next = (await ui.find({ type: 'Svg' }))?.props.source as string
+  expect(next).not.toBe(first)
+  // Antwortet die App nicht mehr (Sitzung verdeckt), bittet er nicht erneut und endet nach ~2 s
+  const k = invalidates
+  await clock.advance(60_000)
+  expect(invalidates - k).toBe(1)
+  // Demo: sofort neu gezeichnet, das neue Svg zeigt sie
+  await ui.redraw()
+  await $.command.run({ command: 'clawd', args: 'demo wave_question' })
+  await ui.redraw()
+  expect((await ui.find({ type: 'Svg' }))?.props.source).not.toBe(next)
+  // Aus: der Wächter ist sofort beendet (kein invalidate mehr), und nichts wirft ins Debug-Log
   const offRes = await $.command.run({ command: 'clawd', args: 'off' })
   expect(offRes.text).toMatch(/: off$/)
   const n = invalidates
-  await clock.advance(2000)
+  await clock.advance(60_000)
   expect(invalidates).toBe(n)
-  // Wieder an: das nächste Zeichnen startet genau einen Takt (höchstens ein invalidate je 75 ms)
+  // Wieder an: das nächste Zeichnen startet den Wächter neu
   await $.command.run({ command: 'clawd', args: 'on' })
   await ui.redraw()
   const m = invalidates
-  await clock.advance(3000)
-  expect(invalidates - m).toBeGreaterThan(10)
-  expect(invalidates - m).toBeLessThanOrEqual(Math.ceil(3000 / 75) + 1)
+  await clock.advance(31_000)
+  expect(invalidates - m).toBe(1)
   expect(logs.filter((l) => /Error|not a function/i.test(l))).toEqual([])
   await ui.unmount()
 })
 
-test('Band: Desktop-Takt invalidiert nur, wenn sich das Bild ändert (gleiches Bild: keins; ruhiger Clawd: wenige; Animation: jedes neue Bild)', async ($, on) => {
+test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem Bild, das die vorige zu dieser Zeit zeigte); Tippen zeichnet selten neu', async ($, on) => {
   const clock = mock.clock(on)
   const { logs } = stubs(on)
   let invalidates = 0
@@ -102,41 +142,27 @@ test('Band: Desktop-Takt invalidiert nur, wenn sich das Bild ändert (gleiches B
     invalidates++
     return { value: undefined }
   })
+  on('prompt.edit', ($: unknown, e: any) => ({ text: e.text, cursor: e.cursor }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svg = async () => (await ui.find({ type: 'Svg' }))?.props.source as string
-  // Takt für Takt zeichnen wie die App: invalidiert genau dann, wenn das neue Bild anders ist als das gezeichnete
-  const step = async (ticks: number) => {
-    let changes = 0
-    let prev = await svg()
-    for (let i = 0; i < ticks; i++) {
-      const n = invalidates
-      await clock.advance(75)
-      await ui.redraw()
-      const cur = await svg()
-      expect(invalidates > n).toBe(cur !== prev)
-      if (cur !== prev) changes++
-      prev = cur
-    }
-    return changes
+  for (const ms of [5000, 1234, 7575]) {
+    const before = await svg()
+    await clock.advance(ms)
+    await ui.redraw()
+    const after = await svg()
+    // Der Stand rückt in ganzen Takten (75 ms) vor
+    expect(frameAt(after, 0)).toMatch(/#D77757/i)
+    expect(frameAt(after, 0)).toBe(frameAt(before, Math.floor(ms / 75) * 75))
   }
-  // Ruhiger Clawd (Grundpose, atmet, blinzelt und schaut nur ab und zu): weit weniger Neuzeichnungen als Takte (vorher je Takt eine)
-  const idle = await step(40)
-  expect(idle).toBeLessThan(20)
-  // Animation: jedes neue Bild wird gemeldet (ein Bild steht oft mehrere Takte, dazwischen kein invalidate)
-  await $.command.run({ command: 'clawd', args: 'demo wave_question' })
-  await ui.redraw()
-  const anim = await step(30)
-  expect(anim).toBeGreaterThan(5)
-  // /clawd status nennt die Messwerte des Desktop-Takts (Takte, Bildwechsel, Zeichnungen) und beginnt danach neu
+  // /clawd status nennt die Messwerte der Desktop-Zeichnung und beginnt danach neu
   const st = await $.command.run({ command: 'clawd', args: 'status' })
-  expect(st.text).toMatch(/ticks\/s.*frame changes\/s.*draws\/s/)
-  // Antwortet die App nicht mehr, endet der Takt nach ~2 s wie bisher
-  const m = invalidates
-  await clock.advance(5000)
-  expect(invalidates - m).toBeLessThanOrEqual(28)
+  expect(st.text).toMatch(/draws \(.*\/min\), animations avg .* s with .* frame changes/)
+  // Tippen: das erste Zeichen zeichnet neu, danach höchstens alle 3 s (vorher je Sekunde)
   const k = invalidates
-  await clock.advance(2000)
-  expect(invalidates).toBe(k)
+  for (let i = 0; i < 20; i++) {
+    await $.prompt.edit({ text: 'x'.repeat(i + 1), inputText: 'x', cursor: i + 1, start: i, end: i } as any)
+  }
+  expect(invalidates - k).toBe(1)
   expect(logs.filter((l) => /Error|not a function/i.test(l))).toEqual([])
   await ui.unmount()
 })
@@ -639,7 +665,7 @@ test('Sprache: beide Tabellen haben dieselben Schlüssel und keine leeren Texte;
     const r: Record<string, string> = {}
     for (const [k, v] of Object.entries(o)) {
       if (typeof v === 'string') r[p + k] = v
-      else if (typeof v === 'function') r[p + k] = String((v as (...a: unknown[]) => unknown)({ on: true, mood: 'x', temper: '0', tired: 1, annoy: 0, desk: 'd', secs: '1', tps: '1', target: '1', gap: 1, calcAvg: '1', calcMax: '1', changes: '1', draws: '1', drawAvg: '1', drawMax: '1', others: '1' }, 'y'))
+      else if (typeof v === 'function') r[p + k] = String((v as (...a: unknown[]) => unknown)({ on: true, mood: 'x', temper: '0', tired: 1, annoy: 0, desk: 'd', secs: '1', draws: 1, perMin: '1', planSecs: '1', changes: '1', kb: '1', calcAvg: '1', calcMax: '1', drawAvg: '1', drawMax: '1', others: '1' }, 'y'))
       else Object.assign(r, flat(v as Record<string, unknown>, `${p}${k}.`))
     }
     return r
@@ -668,7 +694,7 @@ test('Sprache en (Standard): Befehle, Status und alt-Text englisch; Suche findet
   expect((await $.command.run({ command: 'clawd', args: 'demo Jonglieren' })).text).toBe('playing: juggle (Juggling)')
   expect((await $.command.run({ command: 'clawd', args: 'nap' })).text).toMatch(/getting sleepy/)
   const st = (await $.command.run({ command: 'clawd', args: 'status' })).text
-  expect(st).toMatch(/^clawd-buddy: on, calm \(0\.00\), tiredness 0%, annoyance 0\. Desktop frame rate/)
+  expect(st).toMatch(/^clawd-buddy: on, calm \(0\.00\), tiredness 0%, annoyance 0\. Desktop drawing/)
   expect(st).toMatch(/Commands: on \| off/)
   expect((await $.command.run({ command: 'clawd', args: 'xyz' })).text).toMatch(/^unknown: xyz\. Commands:/)
   await ui.unmount()
@@ -683,7 +709,7 @@ test('Sprache de: Befehle, Status und alt-Text deutsch wie bisher; Suche findet 
   expect((await $.command.run({ command: 'clawd', args: 'demo Juggling' })).text).toBe('spielt: juggle (Jonglieren)')
   expect((await $.command.run({ command: 'clawd', args: 'demo' })).text).toMatch(/Mit \/clawd list/)
   const st = (await $.command.run({ command: 'clawd', args: 'status' })).text
-  expect(st).toMatch(/^clawd-buddy: an, ausgeglichen \(0,00\), Müdigkeit 0 %, Ärger 0\. Desktop-Takt/)
+  expect(st).toMatch(/^clawd-buddy: an, ausgeglichen \(0,00\), Müdigkeit 0 %, Ärger 0\. Desktop-Zeichnung/)
   expect((await $.command.run({ command: 'clawd', args: 'off' })).text).toBe('clawd-buddy: aus')
   await ui.unmount()
 })
