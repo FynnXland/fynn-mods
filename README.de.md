@@ -1,11 +1,19 @@
 # fynn-mods
 
+**Sechs Mods für Claude Code: ein animiertes Maskottchen, Balken für die Nutzungslimits, ein Sidekick, der vor dem
+Senden mitdenkt, Schnellantworten, eine To-do-Liste und ein Kostenbuch.**
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.290_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
+[![Mods](https://img.shields.io/badge/mods-6-555)](#die-mods)
+[![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#die-mods)
+
 [English](README.md) | **Deutsch**
 
-Mein Alltags-Set an [Claude-Code-Mods](https://code.claude.com/docs/de/plugins/mods/overview): ein animiertes
-Maskottchen, Balken für die Nutzungslimits, ein Sidekick, der vor dem Senden mitdenkt, Schnellantworten, eine
-To-do-Liste und ein Kostenbuch. Die Mods sind aufeinander abgestimmt, aber jeder ist ein eigenes Plugin und einzeln
-installierbar.
+Mein Alltags-Set an [Claude-Code-Mods](https://code.claude.com/docs/de/plugins/mods/overview), also Plugins, die in
+die Oberfläche von Claude Code selbst zeichnen, im Terminal und in der Desktop-App. Sie behalten Nutzungslimits,
+Prompt-Cache und Kosten im Blick, prüfen Nachrichten vor dem Senden und reihen die nächsten Aufgaben ein. Die Mods
+sind aufeinander abgestimmt, aber jeder ist ein eigenes Plugin und einzeln installierbar.
 
 Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mods`.
 
@@ -18,7 +26,7 @@ Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mod
 |---|---|
 | [clawd-buddy](#clawd-buddy) | Animiertes Pixel-Maskottchen über dem Prompt, das auf Claudes Arbeit reagiert |
 | [limit-bars](#limit-bars) | Balken für das 5-Stunden- und das Wochenlimit, dazu ein Ring, wie lange der Prompt-Cache noch warm ist |
-| [sidekick](#sidekick) | Prüft deine Nachricht vor dem Senden und schlägt einen besseren Weg vor, wenn es klar einen gibt |
+| [sidekick](#sidekick) | Prüft deine Nachricht vor dem Senden: Kosten bei kaltem Cache, falscher Chat, klarere Fassung, fällige Wartung |
 | [quick-replies](#quick-replies) | Der Vorschlag von Claude Code für die nächste Nachricht als Knopf |
 | [worklist](#worklist) | To-do-Seitenleiste, die Claude eine Aufgabe nach der anderen gibt, aber nur, wenn es sicher fertig ist |
 | [cost-ledger](#cost-ledger) | Kostenbuch über alle Chats, nach Tag, Projekt, Chat und Modell |
@@ -73,8 +81,10 @@ claude plugin update <mod>@fynn-mods
 
 Drei Mods lösen Modellaufrufe **über dein Konto** aus (im Abo zählen sie auf deine Nutzungslimits):
 
-- **sidekick** fragt Haiku, wenn sich eine Prüfung lohnen kann (erste Nachricht eines Chats, großer Kontext, kalter
-  Cache): etwa 0,005 $ je Prüfung (API-Wert). Abschalten mit `/sidekick off`.
+- **sidekick** fragt Sonnet 5.5 (Effort `low`) nur, wenn sich eine Prüfung lohnen kann (erste Nachricht eines Chats,
+  großer Kontext, kalter Cache): etwa 0,01 $ und 2 Sekunden je Prüfung (API-Wert). Eine Übergabe in einen neuen Chat
+  ist ein größerer Sonnet-Aufruf, nur wenn du ihn wählst. `/savings` stellt beides der gemessenen Ersparnis gegenüber.
+  Abschalten mit `/sidekick off`.
 - **worklist** fragt Haiku nur, wenn die Regeln nicht sicher erkennen, ob Claude fertig ist: etwa 0,0005 $ je Fall.
   Abschalten mit der Option `haiku` in `/config`; die Liste hält dann in diesen Fällen an.
 - **quick-replies** forkt die Session nach jeder Antwort **nur mit `/replies more on`** (standardmäßig aus): etwa so
@@ -119,14 +129,32 @@ Kontext neu schreiben würdest.
 
 ![sidekick](assets/sidekick.png)
 
-Schaut sich deine Nachricht kurz vor dem Senden an: zuerst mit festen Regeln und nur dort, wo es sich lohnen kann, kurz
-mit Haiku. Gibt es einen klar besseren Weg, etwa einen frischen Chat mit Übergabe statt teurem kaltem Cache, einen
-passenden Skill oder eine klarere Fassung, steht ein Hinweis unter deiner Nachricht oder sidekick fragt nach. Einmal
-pro Chat nennt er außerdem fällige Wartung (`/skill-doctor`, Prompt-Audit, Memory aufräumen, `/init`).
+Ein zweiter Blick auf jede Nachricht, kurz bevor sie rausgeht. Zuerst entscheiden feste Regeln, ohne Kosten. Nur wo
+sich eine Prüfung lohnen kann (erste Nachricht eines Chats, großer Kontext, kalter Cache), schaut zusätzlich kurz
+Sonnet 5.5 drauf. sidekick chattet nie von sich aus: Er bleibt still, setzt eine blaue Hinweiszeile unter deine
+Nachricht oder fragt nach.
 
-- **Befehle:** `/sidekick` (Status und Einstellungen), `/sidekick on|off`, `/savings [today|week|all]`
+- **Kalter Cache im großen Chat:** Bevor du einen großen, kalt gewordenen Kontext neu sendest, zeigt er beide Preise,
+  etwa „Senden schreibt alles neu (≈ 2,40 $)“ gegenüber „Neuer Chat mit Übergabe (≈ 0,26 $)“. Mit *Neuer Chat mit
+  Übergabe* schreibt Sonnet die Übergabe, der Chat wird geleert und deine Nachricht geht im frischen Chat weiter; der
+  alte bleibt über `/resume` erreichbar.
+- **Ein besserer Weg:** verweist auf einen passenden Skill, schlägt bei neuem Thema einen frischen Chat vor oder bietet
+  eine klarere Fassung deiner Nachricht an, die du mit einem Klick sendest.
+- **Falscher Chat:** Gehört eine Nachricht klar zu einem anderen Projekt als der Chat, hält sidekick sie an und fragt,
+  ob du im falschen Chat bist, bevor sie im falschen Kontext landet (und dort Kosten verursacht).
+- **Fällige Wartung:** Einmal pro Chat nennt er höchstens einen fälligen Befehl (`/skill-doctor`, Prompt-Audit, Memory
+  aufräumen, `/init`), auf Grundlage einer kostenlosen lokalen Schätzung. Ein Knopf neben der Zeile setzt den Befehl
+  ins Eingabefeld oder reiht ihn, wenn worklist installiert ist, als To-do ein.
+- **Nachprüfbare Ersparnis:** `/savings` zeigt, was sidekick gekostet und was er messbar gespart hat;
+  `/savings detail` ergänzt Rechenweg, Modellvergleich und Verlauf je Tag.
+
+Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unverändert raus.
+
+- **Befehle:** `/sidekick` (Status und Einstellungen), `/sidekick on|off`, `/sidekick hints …`,
+  `/savings [today|week|all]`, `/savings detail`
 - **Rechte kurz:** liest deine Nachricht vor dem Senden; hält sie nur an oder ersetzt sie nur nach deiner Wahl im
-  Dialog; Haiku über `$.model.complete` mit einer Kurzfassung und deinen letzten Nachrichten, nie dem ganzen Verlauf;
+  Dialog; Sonnet über `$.model.complete` mit einer laufenden Kurzfassung und deinen letzten 3 Nachrichten, nie dem
+  ganzen Verlauf; auf Knopfdruck füllt er das Eingabefeld (sendet nie selbst) oder ruft `/todo` von worklist auf;
   liest den Pfad der Projektwurzel. Keine Dateien, Umgebung, kein Netzwerk, keine Einstellungen.
 - **Details:** [mods/sidekick](mods/sidekick/README.md) (englisch)
 
@@ -182,6 +210,8 @@ deine Projekte und die teuersten Chats, gezeichnet im Stil von Claude Code.
 - **limit-bars und sidekick warnen beide vor kaltem Senden.** Nutzt du beide, schalte die Warnung von limit-bars
   einmal mit `/cache warn off` ab, damit nicht zwei Dialoge hintereinander kommen; die Rückfrage von sidekick ersetzt
   sie.
+- **sidekick gibt Aufgaben an worklist.** Sind beide installiert, reiht der Knopf neben einem Wartungshinweis den
+  Befehl als To-do ein; worklist sendet ihn, sobald die laufende Aufgabe fertig ist.
 - **cost-ledger bucht die anderen.** Modellaufrufe von sidekick, worklist, quick-replies und limit-bars stehen nicht in
   `/cost`; cost-ledger bucht sie getrennt, so zeigt `/ledger`, was jeder Mod kostet.
 
@@ -191,6 +221,11 @@ Ein Mod ist Code, der in Claude Code mit deinen Rechten läuft. Jeder Mod hier l
 hängt und welche API-Aufrufe er macht; `claude plugin validate mods/<mod>` zeigt die genaue Liste, und jede README
 erklärt jeden Eintrag in Klartext. Keiner dieser Mods liest oder speichert Anmeldedaten oder Tokens, und keiner fasst
 Dateien außerhalb seines eigenen Plugin-Speichers an.
+
+## Feedback
+
+Fehlerberichte und Ideen gern als [Issue](https://github.com/FynnXland/fynn-mods/issues), gern auch auf Deutsch.
+Bitte die Version des Mods (`/plugin`), `claude --version` und Terminal oder Desktop-App angeben.
 
 ## Hinweis
 

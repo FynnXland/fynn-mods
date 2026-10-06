@@ -111,7 +111,7 @@ When a blue line under your message names a command (a maintenance hint such as 
 
 ## Working with other mods
 
-- **limit-bars** stays a display. To avoid two dialogs in a row, turn off its cold-cache warning once: **`/cache guard off`** (the German `/cache warnung aus` works too). sidekick's question replaces it.
+- **limit-bars** stays a display. To avoid two dialogs in a row, turn off its cold-cache warning once: **`/cache warn off`** (the German `/cache warnung aus` works too). sidekick's question replaces it.
 - Claude Code's built-in plugin **`cc-plugin-you-should-know`** (off by default, availability depends on your organization) complements sidekick: it watches Claude's work, not your messages. `/savings` does **not** include its costs.
 
 ## Stored data
@@ -204,7 +204,7 @@ The mod loads in the next session, or after `/reload-plugins`.
 claude --plugin-dir <path-to-clone>/mods/sidekick
 ```
 
-**If you also use limit-bars:** run `/cache guard off` once (see above).
+**If you also use limit-bars:** run `/cache warn off` once (see above).
 
 **Status and pause:** `/sidekick status` shows the current state; `/sidekick off` turns sidekick off without uninstalling it.
 
