@@ -204,12 +204,15 @@ Mit `/replies more on` kommen aus einem Fork der Session bis zu drei weitere Vor
 ![worklist](assets/worklist.png)
 
 Eine To-do-Seitenleiste neben dem Chat. Aufgaben einreihen, auch während Claude arbeitet. Ist Claude **sicher** fertig,
-wird das laufende To-do abgehakt und das nächste gesendet. Wenn nicht (Rückfrage, Fehler, laufende Subagenten,
-Hintergrundarbeit, offener Plan), hält die Liste an, nennt den Grund und bietet Knöpfe zum Weitermachen, Abhaken oder
-erneut Senden. Der Verlauf gilt pro Projekt.
+wird das laufende To-do abgehakt und das nächste startet von selbst; solange Subagenten oder Hintergrundarbeit laufen,
+wartet sie. Die Liste pausiert nie von selbst: Ist Claude nicht sicher fertig (Rückfrage, Unterbrechung, Fehler,
+offener Plan), hält sie bei diesem To-do an, nennt den Grund und bietet **Fortsetzen**, **Abhaken** und
+**Überspringen**; auch deine Antwort auf Claudes Rückfrage im Chat setzt es fort. Einreihen bei freiem Claude startet
+die Liste auch nach einer Rückfrage. Der Verlauf gilt pro Projekt.
 
-- **Befehle:** `/todo <aufgabe>`, `/todos` (Seitenleiste), `/todos pause|resume|done|skip|clear|history|status|close`
-- **Rechte kurz:** sendet das nächste To-do nur nach bestandener Prüfung oder auf deinen Klick als deine Nachricht;
+- **Befehle:** `/todo <aufgabe>`, `/todos` (Seitenleiste), `/todos pause|resume|done|skip|retry|clear|history|status|close`
+- **Rechte kurz:** sendet das nächste To-do (oder die Fortsetzung eines angehaltenen) nur nach bestandener Prüfung
+  oder auf deinen Klick als deine Nachricht;
   Haiku für unklare Fälle (abschaltbar); liest, ob noch Subagenten laufen. Im Chat zeigt es gesendete To-dos als orange
   Zeile und blendet ein alleinstehendes „Fertig.“ / "Done." am Ende von Antworten aus (nur Anzeige). Keine Dateien,
   Prozesse, kein Netzwerk.

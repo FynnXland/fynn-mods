@@ -83,7 +83,7 @@ Three mods make model calls **on your account** (on a subscription they count to
   300 characters (about $0.01 each); level `cache` makes no model call at all. `/savings` sets both against the measured
   savings. Turn it off with `/sidekick off`.
 - **worklist** asks Haiku only when its rules can't tell whether Claude is done: about $0.0005 per case. Turn it off
-  with the `haiku` setting in `/config`; the list then pauses in those cases.
+  with the `haiku` setting in `/config`; the list then stops in those cases and waits for you.
 - **quick-replies** forks the session after each answer **only with `/replies more on`** (off by default): roughly
   the cost of one short answer, mostly from the prompt cache.
 
@@ -193,12 +193,15 @@ own pill above Clawd. Click it, or type `1` into the empty prompt, and it's sent
 ![worklist](assets/worklist.png)
 
 A to-do sidebar next to the chat. Queue tasks, even while Claude is working. When Claude is **clearly** done, the
-running to-do is checked off and the next one is sent. When it isn't (a question, an error, running subagents,
-background work, an open plan), the list pauses and tells you why, with buttons to continue, check off or resend.
+running to-do is checked off and the next one starts on its own; while subagents or background work still run, it
+waits. The list never pauses on its own: if Claude isn't clearly done (a question, an interruption, an error, an open
+plan), it stops at that to-do, tells you why and offers **Continue**, **Mark as done** and **Skip**; answering Claude's
+question in the chat continues it as well. Queueing while Claude is free starts the list even after a question.
 History is kept per project.
 
-- **Commands:** `/todo <task>`, `/todos` (sidebar), `/todos pause|resume|done|skip|clear|history|status|close`
-- **Rights in short:** sends the next to-do as your message only after its check passes or on your click; Haiku for
+- **Commands:** `/todo <task>`, `/todos` (sidebar), `/todos pause|resume|done|skip|retry|clear|history|status|close`
+- **Rights in short:** sends the next to-do (or the continuation of a stopped one) as your message only after its
+  check passes or on your click; Haiku for
   unclear cases (can be turned off); reads whether subagents are still running. In the chat it shows sent to-dos as an
   orange line and hides a standalone "Done." / „Fertig.“ at the end of answers (display only). No files, processes or network.
 - **Details:** [mods/worklist](mods/worklist/README.md)
