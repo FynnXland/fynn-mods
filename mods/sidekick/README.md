@@ -4,7 +4,7 @@ Checks your message just before it is sent: first with fixed rules, and only whe
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.10.3**
+Tested with Claude Code **v2.1.291** · Plugin version **0.10.4**
 
 **Cost:** sidekick calls Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
 
@@ -26,7 +26,7 @@ Tested with Claude Code **v2.1.291** · Plugin version **0.10.3**
   - A rewritten version (≤ 600 characters, not for messages under 4 words, never one that reads like Claude's reply) is sent **in your name without a dialog**. Below your message it says "· sidekick: Sonnet's version was sent" with the text actually sent, because the desktop bubble still shows your original. A version more than 40 % shorter than your message is asked about instead, so nothing gets lost.
   - Splitting into to-dos happens without the question; a notice says "Split into 3 to-dos".
   - Still asked, because hard to undo or expensive: new chat, wrong chat, the cold-cache question.
-  - The check gets an extra instruction to be more critical: unclear or incomplete messages get a clearer version more often, filled in from the summary and your last messages, never invented.
+  - The check gets an extra instruction to be more critical: unclear or incomplete messages get a clearer version more often, filled in from the summary, your last messages and the end of Claude's last reply, never invented. A short answer to Claude's own question gets no rewrite (since 0.10.4): Claude knows what it asked.
   - Measured with 10 of the author's real dictated messages: Auto wrote a version for 1 of 10 (Guide: 0), with every point kept; hint lines came about 5 times as often as in Guide.
 
 ## `/later <text>` (since 0.10.0)
@@ -59,6 +59,7 @@ Plans text as to-dos for later, also while Claude is working. sidekick answers t
 3. **Model check** with Sonnet 5.5 at effort `low`, about 1.8 s and about $0.01 per check (measured; at most 2.0 s in 20 calls). The model never sees the full history. It gets:
    - a running summary (≤ 600 characters) that it updates itself
    - your last 3 messages
+   - the end of Claude's last reply (up to 1,500 characters; since 0.10.4), so a short answer to Claude's question ("yes, the second one") isn't flagged as unclear
    - the new message
    - facts such as context size, cache state, model and last commit
    - your skill list (name and one line each)
@@ -233,7 +234,7 @@ In plain language:
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=AbovePrompt}`: only while a new chat is being started or to-dos are being written, a small blue box above the prompt shows progress and seconds. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
 - `$.model.complete`: Sonnet 5.5 for the check (effort `low`), the handoff (effort `medium`) and the to-do texts (effort `low`; it gets the summary, your message and the step titles, or for `/later` only the text): after you chose to split, after an automatic split in level Auto, or after `/later`. The only model calls. Your messages reach the model only through your session's own login.
-- `$.session.messages`: end of the history for the handoff and to detect the first message.
+- `$.session.messages`: end of the history for the handoff, the end of Claude's last reply for the check, and to detect the first message.
 - `$.session.usage`, `$.command.list`: context size, skill names and descriptions; for the maintenance hints, paths and token counts of instruction and memory files (no contents), size of the skill list, model, and whether a command exists.
 - `$.session.root`: project root as the key for maintenance hints. The path only.
 - `$.session.surfaces`: detects the desktop app, because there typed messages carry the origin `sdk` like `claude -p`.
@@ -299,7 +300,7 @@ claude --plugin-dir <path-to-clone>/mods/sidekick
   - `skills-heavy` only kicks in after 30 days of counting skill usage.
   - The audit rule detects a model change by the model name in the `/context` breakdown; if only its spelling changes, you get an unnecessary hint.
   - Two concurrent chats in the same project can show a hint twice (store not atomic).
-- **Wrong chat** is only detected when the model check runs (triggers above). In a small chat below `threshold` nothing is checked, so a message in the wrong small chat goes through. `/sidekick threshold 30k` widens the check, at about $0.01 and 2 s per checked message. sidekick only knows the chat from its running summary and your last 3 messages, so a chat that just started has little to compare against.
+- **Wrong chat** is only detected when the model check runs (triggers above). In a small chat below `threshold` nothing is checked, so a message in the wrong small chat goes through. `/sidekick threshold 30k` widens the check, at about $0.01 and 2 s per checked message. sidekick only knows the chat from its running summary, your last 3 messages and the end of Claude's last reply, so a chat that just started has little to compare against.
 - **`/savings` card:** the drawing is kept in memory for the last 10 outputs; after a restart or `/reload-plugins`, older `/savings` outputs show as Markdown.
 - **Splitting into to-dos:** only with worklist. sidekick can't tell a dictated message from a typed one; it only sees length and several tasks. Not offered with an attachment or `@file` (whether worklist resolves `@file` in a to-do is not documented). Messages over 7,600 characters are not offered for splitting (4 to-dos of 1,900 characters); a message close to that may still not fit, then writing fails and sidekick asks again. Only the first 4,000 characters reach the check that proposes the steps.
 - **Held-back text and Claude Code's limits:** Claude Code ignores a hold-back reason over 4,096 characters and sends the message anyway, and it shows only about 2,000 characters of a reason (found while building 0.9.0, not documented). sidekick keeps the text in the reason under 1,800 characters and stores longer messages in full for `/sidekick status`.

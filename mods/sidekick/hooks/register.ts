@@ -20,6 +20,8 @@ import {
   bookingStep,
   cacheText,
   checkPrompt,
+  isHostText,
+  lastReply,
   checkSystem,
   cleanLedger,
   daysInPeriod,
@@ -540,7 +542,7 @@ async function sendWithWartung<R>($: EngineInterface, e: { text: string }, h: WH
 /** Die letzten 3 eigenen Nachrichten aus dem Verlauf, ohne Befehle und Tool-Ergebnisse, gekürzt. */
 function lastOwn(msgs: readonly { role: string; text?: string }[]): string[] {
   return msgs
-    .filter((m) => m.role === 'user' && typeof m.text === 'string' && m.text.trim() && !m.text.trim().startsWith('<'))
+    .filter((m) => m.role === 'user' && typeof m.text === 'string' && m.text.trim() && !isHostText(m.text))
     .slice(-3)
     .map((m) => cut(String(m.text), 400))
 }
@@ -575,7 +577,7 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
   if (settings.level === 'off' || running || text.trim().startsWith('/')) return PASS
   // Vom Host eingefügte Nachrichten wie `<system-reminder>…` (Desktop, Worktree-Chat) sind nicht vom Nutzer: keine Prüfung, und sie
   // verbrauchen nicht die Wartungs-Prüfung des Chats (Desktop-Test 2026-10-06)
-  if (/^<[a-z][\w-]*>/i.test(text.trim())) return PASS
+  if (isHostText(text)) return PASS
   if (!(await isOwn($, kind))) return PASS
   await bindSession($)
   const now = await $.clock.now()
@@ -622,6 +624,8 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     return { c: { ...base, verdict: null }, w: null }
   }
   const skills = settings.skills ? await loadSkills($, now) : null
+  // Ende der letzten Antwort: Ohne sie hielt die Prüfung Antworten auf Rückfragen („ja, B“) für unklar (0.10.4). Fehler: ohne (fail-open)
+  const reply = await $.session.messages().then((m) => lastReply(m, text), () => '')
   const c = ses.commit
   const prompt = checkPrompt(ses.summary, recent, text, {
     trigger,
@@ -630,7 +634,7 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     model: mem.model,
     commit: c ? `${c.sha} vor ${spanText(now - c.at)}` : 'keiner',
     split,
-  })
+  }, reply)
   // Bricht der Nutzer ab, endet auch die Prüfung (types:2500-2501)
   buddy($, 'check')
   const r = await $.model.complete({ ...CHECK, system: checkSystem(skills, split, settings.level === 'auto'), prompt }, { signal })

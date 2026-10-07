@@ -166,7 +166,7 @@ If a check fails or times out, your message goes through unchanged.
 - **Commands:** `/sidekick` (status and settings), `/sidekick off|cache|guide|plan|auto|on`, `/sidekick long 800|off`,
   `/sidekick hints …`, `/later <text>`, `/savings [today|week|all]`, `/savings detail`
 - **Rights in short:** reads your message before it is sent; holds it back or replaces it only after your choice in
-  the dialog (in level `auto` also without asking: a rewritten version or a split); Sonnet via `$.model.complete` with a short running summary and your last 3 messages, never the whole
+  the dialog (in level `auto` also without asking: a rewritten version or a split); Sonnet via `$.model.complete` with a short running summary, your last 3 messages and the end of Claude's last reply, never the whole
   history; on a button click it runs the command shown in the line (plugin and your own commands, `/skill-doctor`,
   `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) or worklist's `/todo` (also for
   the to-dos of a split or `/later`); in level `auto` it sends a rewritten version in your name without asking, only
