@@ -4,7 +4,7 @@ An animated pixel mascot ("Clawd") sits to the right above the prompt. It reacts
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** (terminal and desktop app) · Plugin version **0.6.12**
+Tested with Claude Code **v2.1.291** (terminal and desktop app) · Plugin version **0.6.13**
 
 ## What it does
 

@@ -57,6 +57,12 @@ let deskTimer: Timer | null = null
 let deskChecks = 0 // Wächter-Runden seit der letzten Zeichnung
 let deskPlanMs = 0 // Länge der zuletzt gezeichneten Animation
 let deskAsked = 0 // Wächter-Runden, seit um eine neue Zeichnung gebeten wurde (0 = keine Bitte offen)
+// Eine abgelehnte Periode beendet `$.clock.every` still (types:3390-3391), `deskTimer` bliebe dann gesetzt und der Wächter käme nie
+// wieder. Darum zählt jede Runde `deskBeats`; sieht ein Zeichnen DESK_IDLE_CHECKS Runden lang (~2 s Uhrzeit) keine neue, startet es ihn neu
+// (wie limit-bars). Verglichen wird von Zeichnen zu Zeichnen, nicht gegen eine Sollzahl: Runden laufen nacheinander und hinken der Uhr nach.
+let deskBeats = 0
+let deskBeatsSeen = 0 // Stand von deskBeats beim letzten Zeichnen, das eine neue Runde sah
+let deskBeatsSeenAt = 0 // Uhrzeit dieses Zeichnens
 // Flackern (Fynn, 2026-10-06: „Es darf nicht flackern“): Ein neues `source` lud bis 0.6.5 den Rahmen neu, die Figur blinkte dabei kurz.
 // Das Band wird auch für andere Mods neu gezeichnet (limit-bars, sidekick, quick-replies); Ereignisse, die an der laufenden Animation
 // nichts ändern, bitten seit 0.6.9 gar nicht erst darum (factsChanged). Zeichnet die App trotzdem, geht dasselbe Svg noch einmal hinaus; neu gerechnet wird erst kurz bevor die neuen Fakten etwas anderes
@@ -584,15 +590,34 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         if (!desk) {
           desk = createDesk({ seed, nightStart, nightEnd, idleSeconds, reduced, flip, birthday })
         }
+        let stalled = false
+        if (deskTimer && deskBeats !== deskBeatsSeen) {
+          deskBeatsSeen = deskBeats
+          deskBeatsSeenAt = now
+        } else if (deskTimer && now - deskBeatsSeenAt >= DESK_IDLE_CHECKS * DESK_CHECK) {
+          // Keine Runde seit ~2 s: eine Periode wurde abgelehnt, der Wächter ist still beendet
+          deskTimer.cancel()
+          deskTimer = null
+          stalled = true
+          // Die tote Zeit nachziehen: deskPlanMs rechnet in Uhrzeit, sonst käme die nächste Bitte um diese Zeit zu spät
+          deskChecks = Math.max(deskChecks, Math.floor((now - deskDrawnAt) / DESK_CHECK))
+          $.ui.log('clawd-buddy: desk watcher stalled (period refused?), restarted', { to: 'debug' })
+        }
         if (!deskTimer) {
-          deskFresh = true // die Sitzung wird (wieder) angezeigt: neu zeichnen
-          // Der Wächter startet neu: die Sitzung wird (wieder) angezeigt, Fynn schaut also hin
-          try {
-            await noteSeen($, now)
-          } catch (err) {
-            $.ui.log(`clawd-buddy: presence not noted: ${String(err)}`, { to: 'debug' })
+          if (!stalled) {
+            deskFresh = true // die Sitzung wird (wieder) angezeigt: neu zeichnen
+            // Der Wächter startet neu: die Sitzung wird (wieder) angezeigt, Fynn schaut also hin
+            try {
+              await noteSeen($, now)
+            } catch (err) {
+              $.ui.log(`clawd-buddy: presence not noted: ${String(err)}`, { to: 'debug' })
+            }
           }
+          deskBeats = 0
+          deskBeatsSeen = 0
+          deskBeatsSeenAt = now
           deskTimer = $.clock.every(DESK_CHECK, () => {
+            deskBeats += 1
             // Aus oder die App zeichnet das Band nicht mehr (z. B. Sitzung verdeckt): Wächter beenden; das nächste Zeichnen startet ihn neu
             if (!desk || !enabled || deskAsked > DESK_IDLE_CHECKS) {
               deskTimer?.cancel()

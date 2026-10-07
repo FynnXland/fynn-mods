@@ -146,6 +146,8 @@ test('Band: Desktop zeigt die Figur als animiertes Svg (SMIL im Bild) und zeichn
   await clock.advance(31_000)
   expect(invalidates - m).toBe(1)
   expect(logs.filter((l) => /Error|not a function/i.test(l))).toEqual([])
+  // Im Normalbetrieb kein Fehlalarm der Stillstandserkennung (0.6.13)
+  expect(logs.some((l) => /watcher stalled/.test(l))).toBe(false)
   await ui.unmount()
 })
 
@@ -275,6 +277,34 @@ test('Band: Desktop: ein Ereignis, das erst später etwas ändert (Tool-Ende, Na
   await ui.redraw()
   expect(await svgOf(ui)).not.toBe(reading)
   expect(logs.filter((l) => /Error|not a function/i.test(l))).toEqual([])
+  expect(logs.some((l) => /watcher stalled/.test(l))).toBe(false)
+  await ui.unmount()
+})
+
+test('Band: Desktop: eine abgelehnte Periode beendet den Wächter still; ein Zeichnen ~2 s später ohne neue Runde startet ihn neu, ohne neues Bild', async ($, on) => {
+  // Ohne mock.clock: eigene Uhr, und jede Periode von clock.every wird abgelehnt (types:3390-3391; Review 0.6.9 K4)
+  let now = 1_000_000
+  let periods = 0
+  on('clock.now', () => ({ value: now }))
+  on('clock.every', () => {
+    periods += 1
+    return { deny: 'abgelehnt' }
+  })
+  const { logs } = stubs(on)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const first = periods
+  expect(first >= 1).toBe(true)
+  const svg = await svgOf(ui)
+  // Weniger als ~2 s ohne Runde: kein Neustart
+  now += 1000
+  await ui.redraw()
+  expect(periods).toBe(first)
+  // ~2 s ohne Runde: Wächter neu gestartet, dasselbe Bild (kein erzwungenes Neuzeichnen, das flackern könnte)
+  now += 1000
+  await ui.redraw()
+  expect(periods).toBe(first + 1)
+  expect(await svgOf(ui)).toBe(svg)
+  expect(logs.some((l) => /watcher stalled/.test(l))).toBe(true)
   await ui.unmount()
 })
 
