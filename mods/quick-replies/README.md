@@ -1,10 +1,10 @@
 # quick-replies
 
-After Claude answers, Claude Code often suggests your next message itself (the grey text in the prompt). quick-replies turns that suggestion into a button in its own pill above Clawd, in the band above the prompt. A click, typing its digit as the first character in an empty prompt, or sending just its digit as a message sends it immediately as your message. Nothing is ever sent automatically. On request (`/replies more on`) up to three more suggestions come from a fork of the session. Handy for development and debugging, where the answer is often just "yes, do that".
+After Claude answers, Claude Code often suggests your next message itself (the grey text in the prompt). quick-replies turns that suggestion into a button in its own pill above Clawd, in the band above the prompt. A click, typing its digit as the first character in an empty prompt, or sending just its digit as a message sends it immediately as your message. Nothing is ever sent automatically. On request (`/replies more on`) a fork of the session fills up to four places in total; Claude Code's own suggestion stays on `1`. Handy for development and debugging, where the answer is often just "yes, do that".
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.3.0**
+Tested with Claude Code **v2.1.291** · Plugin version **0.4.1**
 
 ## Display
 
@@ -31,18 +31,18 @@ Tested with Claude Code **v2.1.291** · Plugin version **0.3.0**
 
 ## Sources
 
-1. **Claude Code's own suggestion** (one per turn) is always on `1`. quick-replies only reads it; the grey suggestion in the prompt stays as it is. Without it there is no pill.
-2. **More suggestions from a fork** (only with `more` on): after each answer of the main session, quick-replies asks a fork of the session (full chat context, the session's model and prompt cache) for up to three likely next messages. The fork is asked to write them in the configured language (`language`), in your voice, short and concrete. Suggestions longer than 40 characters are dropped, not shortened, so nothing is sent that the button does not show. Duplicates are removed (ignoring case and punctuation), and model output is cleaned (control sequences and invisible characters removed; text with hidden Unicode tag characters is dropped). If the fork fails, gives no answer or returns nothing usable, only Claude Code's suggestion remains, without a toast.
+1. **Claude Code's own suggestion** (one per turn) is always on `1`. quick-replies only reads it; the grey suggestion in the prompt stays as it is. Without it (and with `more` off) there is no pill.
+2. **More suggestions from a fork** (only with `more` on): after each answer of the main session, quick-replies asks a fork of the session (full chat context, the session's model and prompt cache) for up to four likely next messages. Claude Code's own suggestion always takes place `1`; the fork's move down one place and the fourth is dropped (if it repeats one of them, the fourth stays). If the fork answers first, its four are shown and shift when Claude Code's suggestion arrives (not within 2 s of your last input). A message that starts with `/` runs as a slash command (observed, not documented), so the fork is told to start a suggestion with `/` only when it means to run that command; when a suggestion only talks about a command, the command is put in quotes (“/replies” in `en`, „/replies“ in `de`). The fork is asked to write them in the configured language (`language`), in your voice, short and concrete. Suggestions longer than 40 characters are dropped, not shortened, so nothing is sent that the button does not show. Duplicates are removed (ignoring case and punctuation), and model output is cleaned (control sequences and invisible characters removed; text with hidden Unicode tag characters is dropped). If the fork fails, gives no answer or returns nothing usable, only Claude Code's suggestion remains, without a toast.
 
 The fork only runs after a normal answer of at least 40 characters, not for subagents, aborted or failed turns, and only where the band is drawn. If a new turn starts first, the pending fork is skipped.
 
-**Cost:** `more` is **off by default**. When it is on, every answer triggers one `$.model.fork` of the session, roughly the cost of one short answer, mostly read from the prompt cache. It counts toward your own usage (on a subscription, toward your usage limits).
+**Cost:** `more` is **off by default**. When it is on, every answer triggers one `$.model.fork` of the session, roughly the cost of one short answer, mostly read from the prompt cache. It counts toward your own usage (on a subscription, toward your usage limits). `/replies status` shows what the fork used in the current chat: calls, tokens, the share read from the cache, and an estimate in dollars at API prices (price table copied from cost-ledger, unknown models priced like Opus 5.5). On a subscription that dollar figure is only a yardstick. The count starts over after `/clear`.
 
 ## Command
 
 | Command | Effect |
 |---|---|
-| `/replies` or `/replies status` | On/off, `more` on/off, the current suggestions with their source, fork state, how often Claude Code supplied a suggestion in this session, surface, band width, layout and position in the band |
+| `/replies` or `/replies status` | On/off, `more` on/off, the current suggestions with their source, fork state, the fork calls in this chat with their estimated cost, how often Claude Code supplied a suggestion in this session, surface, band width, layout and position in the band |
 | `/replies on` · `/replies off` | Turn the mod on or off |
 | `/replies more on` · `/replies more off` | Turn the extra fork suggestions on or off |
 
@@ -55,7 +55,7 @@ The fork only runs after a normal answer of at least 40 characters, not for suba
 | Key | Title in `/config` | Meaning | Default |
 |---|---|---|---|
 | `language` | Language / Sprache | Language of the mod's texts and of the fork's suggestions: `en` English, `de` German | `en` |
-| `more` | More suggestions via fork | Besides Claude Code's suggestion, ask a fork of the session for up to three more after every answer. Costs roughly one short answer per answer, mostly from the cache. `/replies more on\|off` overrides it for all sessions | off |
+| `more` | More suggestions via fork | Besides Claude Code's suggestion, ask a fork of the session for suggestions after every answer, up to four in total; Claude Code's own stays first. Costs roughly one short answer per answer, mostly from the cache. `/replies more on\|off` overrides it for all sessions | off |
 | `layout` | Layout | `auto`: 2 × 2 if the labels fit, otherwise one per row. `grid`: always 2 × 2. `list`: always one per row | `auto` |
 
 ### Language

@@ -8,7 +8,7 @@ import type { Pose } from '../hooks/stage.ts'
 import { resolveClip } from '../hooks/clipdef.ts'
 import { captureClip, newEngine } from '../hooks/capture.ts'
 import { lintFrames } from '../hooks/lint.ts'
-import { HANDOVER_TICKS, PLAN_TICKS, SOURCE_MAX, createDesk } from '../hooks/desk.ts'
+import { PLAN_TICKS, SOURCE_MAX, createDesk } from '../hooks/desk.ts'
 import { NO_FACTS, NO_STRAIN } from '../hooks/mood.ts'
 
 const LIB = { clips: ALL_CLIPS, props: ALL_PROPS }
@@ -859,27 +859,144 @@ test('Kein Gespamt: nach zwei kurzen Clips (< 4 s) läuft der dritte länger, au
   }
 })
 
-test('Desktop: ein Eingriff wirkt nach der Staffelübergabe (die neue Animation setzt erst die alte fort), ohne Übergabe sofort', () => {
+test('Kein Gespamt, aber eine Rückfrage wartet nicht: auch im gehaltenen dritten Clip kommt „wartet auf dich“ nach höchstens ~4 s', { timeoutMs: 30000 }, () => {
+  const moods = ['work_read', 'work_write', 'work_shell', 'work_think', 'watching', 'idle', 'work_git', 'work_test']
+  let checked = 0
+  for (let seed = 1; seed <= 6; seed++) {
+    const e = newEngine(LIB, 500 + seed)
+    e.start()
+    let r = seed
+    const rand = () => ((r = (r * 16807) % 2147483647) / 2147483647)
+    // Wie oben, bis ein dritter Clip gehalten wird und noch mindestens ~6 s bleiben müsste
+    for (let i = 0; i < 4000 && e.S.holdUntil - e.S.ticks < 80; i++) {
+      if (i % 12 === 0) e.setMood(moods[Math.floor(rand() * moods.length)])
+      e.tick()
+    }
+    if (e.S.holdUntil - e.S.ticks < 80) continue
+    checked++
+    e.setMood('waitUser')
+    let n = 0
+    while (n < 120 && e.S.play?.clip.cat !== 'waitUser') {
+      e.tick()
+      n++
+    }
+    expect(e.S.play?.clip.cat, `Seed ${seed}`).toBe('waitUser')
+    expect(n, `Seed ${seed}: Ticks bis zur Rückfrage`).toBeLessThanOrEqual(53) // ~4 s samt Übergang (ohne Ausnahme: noch mindestens 80 Ticks Sperre)
+    // Die Rückfrage hält selbst keine Sperre: Nach der Antwort (kurz darauf) geht es ebenso schnell weiter (Review 0.6.7, S1)
+    expect(e.S.holdUntil, `Seed ${seed}`).toBeLessThanOrEqual(e.S.ticks)
+    for (let i = 0; i < 10; i++) e.tick()
+    e.setMood('work_write')
+    let m = 0
+    while (m < 120 && e.S.play?.clip.cat === 'waitUser') {
+      e.tick()
+      m++
+    }
+    expect(m, `Seed ${seed}: Ticks bis nach der Antwort`).toBeLessThanOrEqual(53)
+  }
+  expect(checked, 'mindestens ein gehaltener Clip').toBeGreaterThan(0)
+})
+
+test('Kein Gespamt mit Rückfragen: Wechsel Rückfrage ↔ Arbeit im Sekundentakt ergibt nie mehr als vier kurze Clips nacheinander (zwei kurze, der von der Rückfrage verlassene gehaltene, die Rückfrage selbst)', { timeoutMs: 30000 }, () => {
+  const work = ['work_read', 'work_write', 'work_shell', 'work_think']
+  for (const period of [12, 16, 20, 24, 30, 40, 60, 80]) {
+    for (let seed = 1; seed <= 10; seed++) {
+      const e = newEngine(LIB, 900 + seed)
+      e.start()
+      const starts: number[] = []
+      let last = e.S.realStart
+      for (let i = 0; i < 4000; i++) {
+        if (i % period === 0) e.setMood((i / period) % 2 === 0 ? 'waitUser' : work[(i / period / 2 + seed) % work.length | 0])
+        e.tick()
+        if (e.S.realStart !== last) {
+          last = e.S.realStart
+          starts.push(last)
+        }
+      }
+      const lens = starts.slice(1).map((s, k) => s - starts[k])
+      for (let k = 4; k < lens.length; k++) {
+        expect([0, 1, 2, 3, 4].every((d) => lens[k - d] < 53), `Periode ${period}, Seed ${seed}: fünf kurze nacheinander ab Clip ${k - 4}`).toBe(false)
+      }
+    }
+  }
+})
+
+test('Dringend aus Clips mit eigener Haltung: aus dem Laptop kommt die Rückfrage nach höchstens ~4 s (vorher bis ~10 s), und kein Ausstieg lässt etwas auftauchen oder verschwinden', { timeoutMs: 120000 }, () => {
+  const urgentWait = (name: string, off: number, lint: boolean) => {
+    const e = newEngine(LIB, 7, { hour: 12 })
+    e.start()
+    for (let i = 0; i < 5; i++) e.tick()
+    e.setMood(byName(name).cat)
+    e.play(name)
+    let g = 0
+    while (e.S.play?.clip.name !== name && g++ < 300) e.tick()
+    for (let i = 0; i < off; i++) e.tick()
+    const frames = []
+    e.setMood('waitUser')
+    let n = 0
+    while (n < 400 && e.S.play?.clip.cat !== 'waitUser') {
+      e.tick()
+      n++
+      if (lint) {
+        const c = e.render()
+        frames.push({ buf: c.buf, hit: c.hit, pose: e.pose() })
+      }
+    }
+    // Das letzte Bild ist schon der Rückfrage-Clip: Bliebe vom verlassenen etwas zurück, fiele es dort als „verschwindet“ auf
+    const issues = lint ? lintFrames(frames, ALL_PROPS).filter((x) => x.kind !== 'liegt am Ende noch herum') : []
+    return { n, issues: issues.map((x) => `${name} ab Takt ${off}, Bild ${x.frame}: ${x.kind} ${x.name}`) }
+  }
+  // Laptop: an jeder Stelle von Intro und Hauptteil
+  for (const name of ['type_laptop', 'type_fast', 'type_sleepy', 'type_grumpy', 'type_tired']) {
+    for (let off = 0; off < 120; off += 3) {
+      const { n, issues } = urgentWait(name, off, true)
+      expect(issues.join('\n')).toBe('')
+      expect(n, `${name} ab Takt ${off}`).toBeLessThanOrEqual(53)
+    }
+  }
+  // Alle unterbrechbaren Clips mit Ausklang: ein dringender Ausstieg räumt sauber ab
+  const bad: string[] = []
+  for (const c of ALL_CLIPS.filter((x) => x.interruptible && x.outro.length && x.cat !== 'transition' && x.cat !== 'waitUser')) {
+    for (const off of [3, 11, 23, 41]) bad.push(...urgentWait(c.name, off, true).issues)
+  }
+  expect(bad.join('\n')).toBe('')
+})
+
+test('Helfer-Clips: ein Nicken (Körper 1 tiefer) kehrt zurück und bleibt nicht kleben (0.6.11)', () => {
+  const bad: string[] = []
+  // Am Ende des Hauptteils steht keiner mehr 1 tiefer (bewusstes Sitzen ist 2 tiefer); in den Clips mit Nicken ist es ein kurzer Ruck
+  // (helper_gift beugt sich beim Einstecken bewusst länger)
+  const nods = ['chat_helper', 'helper_report', 'helper_busy', 'chat_second', 'nod_to_team', 'team_glance']
+  for (const c of ALL_CLIPS.filter((x) => x.cat === 'work_agent' || x.cat === 'agent_done' || /helper|team/.test(x.name))) {
+    const r = resolveClip(c, ALL_PROPS)
+    if (r.body.length && r.body[r.body.length - 1].p.by === 1) bad.push(`${c.name}: endet 1 tiefer`)
+    if (!nods.includes(c.name)) continue
+    let run = 0
+    r.body.forEach((f, i) => {
+      run = f.p.by === 1 ? run + 1 : 0
+      if (run === 3) bad.push(`${c.name}: ab Bild ${i - 2} drei Bilder in Folge 1 tiefer`)
+    })
+  }
+  expect(nods.every((n) => ALL_CLIPS.some((c) => c.name === n))).toBe(true)
+  expect(bad.join('\n')).toBe('')
+})
+
+test('Desktop: ein Eingriff wirkt ab der Zeichnung sofort (keine Übergabe mehr, 0.6.6)', () => {
   const t0 = Date.UTC(2026, 9, 6, 12)
   const calm = { ...NO_FACTS, endedAt: t0 - 60_000 }
   const d = createDesk({ seed: 7, nightStart: 23, nightEnd: 6, idleSeconds: 45, reduced: false, flip: false })
   d.draw(t0, calm, NO_STRAIN, 4)
-  // Nichts Neues: keine Übergabe nötig
-  expect(d.draw(t0 + 3000, calm, NO_STRAIN, 4).lead).toBe(0)
-  // Anstupsen: die ersten HANDOVER_TICKS wie bisher, dann die Reaktion (Ärger steigt mit dem Klick)
+  d.draw(t0 + 3000, calm, NO_STRAIN, 4)
+  // Anstupsen: die Reaktion beginnt mit der Zeichnung (Ärger steigt mit dem Klick)
   const t1 = t0 + 6000
-  d.request('boop')
+  d.catchUp(t1)
   const annoy = d.engine.S.annoy
-  expect(d.draw(t1, calm, NO_STRAIN, 4).lead).toBe(HANDOVER_TICKS)
-  d.catchUp(t1 + (HANDOVER_TICKS - 1) * 75)
-  expect(d.engine.S.annoy).toBe(annoy)
-  d.catchUp(t1 + HANDOVER_TICKS * 75)
+  d.request('boop')
+  d.draw(t1, calm, NO_STRAIN, 4)
   expect(d.engine.S.annoy).toBe(annoy + 1)
-  // Baut die App die Rahmen ohnehin neu: sofort
+  // Ein zweiter, später: ebenso sofort
   d.catchUp(t1 + 5000)
   const before = d.engine.S.annoy // (Ärger klingt mit der Zeit ab)
   d.request('boop')
-  const p = d.drawFresh(t1 + 5000, calm, NO_STRAIN, 4)
-  expect(p.lead).toBe(0)
+  d.draw(t1 + 5000, calm, NO_STRAIN, 4)
   expect(d.engine.S.annoy).toBe(before + 1)
 })

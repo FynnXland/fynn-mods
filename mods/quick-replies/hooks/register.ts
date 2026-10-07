@@ -2,13 +2,15 @@
 // im Band über dem Prompt (AbovePrompt, docs/raw/en/interface.md:207-213). Klick oder Ziffer 1–4 als erstes Zeichen im leeren
 // Prompt (prompt.edit, types@2.1.289:8128-8203) schickt den Vorschlag als Nachricht des Nutzers ab ($.prompt.submit mit asUser,
 // types@2.1.289:8516-8529). Wird die Ziffer allein abgeschickt, ersetzt prompt.submit sie durch den Vorschlag.
-// Quellen: der eine Vorschlag von Claude Codes eigenem Dienst (prompt.suggest); auf Wunsch (/replies more on) bis zu drei weitere
-// aus einem Fork der Session ($.model.fork, voller Kontext, gleicher Cache), nach dem Vorbild von next-steps.
+// Quellen: der eine Vorschlag von Claude Codes eigenem Dienst (prompt.suggest); auf Wunsch (/replies more on) bis zu vier
+// aus einem Fork der Session (Claude Codes Vorschlag vorn, die aus dem Fork rücken nach) ($.model.fork, voller Kontext, gleicher Cache), nach dem Vorbild von next-steps.
 // Der Mod beobachtet nur: Jeder Event-Hook gibt das Ergebnis von next(e) weiter; nur eine Ziffer, die einen Vorschlag sendet,
 // landet nicht im Prompt bzw. wird beim Absenden durch den Vorschlag ersetzt. Er sendet nie von selbst, nur auf Klick oder Taste.
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
 import { joinBand, layer, LEVEL, nameOf, splitBand } from './band.ts'
-import { forkStateText, langOf, T } from './i18n.ts'
+import { addCall, NO_COST } from './cost.ts'
+import type { ForkCost } from './cost.ts'
+import { forkCostText, forkStateText, langOf, T } from './i18n.ts'
 import type { ForkState, Lang, Position } from './i18n.ts'
 import { forkPrompt, MIN_ANSWER, merge, parseFork } from './logic.ts'
 import type { Reply } from './logic.ts'
@@ -41,6 +43,9 @@ let fork: string[] = []
 let replies: Reply[] = []
 let forkGen = 0
 let forkState: ForkState = { kind: 'idle' }
+// Fork-Aufrufe dieses Chats (für /replies status); der Fork läuft auf dem Modell der Hauptschleife (types@2.1.291:2552-2556)
+let forkCost: ForkCost = NO_COST
+let mainModel = ''
 
 // Eingabe und Stabilität
 let promptText = ''
@@ -95,6 +100,13 @@ function resetTurn() {
   pending = false
 }
 
+/** Neuer Chat (/clear): Vorschläge und Fork-Kosten gehören zum alten. */
+function newChat(now: string) {
+  sid = now
+  resetTurn()
+  forkCost = NO_COST
+}
+
 function recompute() {
   replies = merge(engine, fork)
   sidCheck = SID_EVERY
@@ -133,9 +145,12 @@ function markInput($: EngineInterface) {
 /** Fork nach dem Turn, außerhalb von turn.complete (Lehre 12). Fehler, Unsinn oder nichts: es bleibt beim Vorschlag der Engine. */
 function askFork($: EngineInterface, gen: number) {
   forkState = { kind: 'running' }
+  const chat = sid
   $.model
     .fork({ prompt: forkPrompt(lang) })
     .then((r) => {
+      // Kosten zählen auch, wenn inzwischen ein neuer Turn läuft; nach /clear gehören sie zum alten Chat
+      if ('usage' in r && chat === sid) forkCost = addCall(forkCost, r.usage, mainModel)
       if (gen !== forkGen) return
       if (!r.isAnswered) {
         forkState = { kind: 'unanswered', reason: r.reason }
@@ -164,8 +179,7 @@ function send($: EngineInterface, text: string) {
     .id()
     .then((now) => {
       if (sid && now !== sid) {
-        sid = now
-        resetTurn()
+        newChat(now)
         return
       }
       return $.prompt.submit({ text, asUser: true }).then((r) => {
@@ -199,6 +213,7 @@ function status(): string {
     `${t.suggestions}${ready ? '' : t.hidden}:`,
     ...list,
     `${t.lastSources}: ${t.sourceEngine} ${engine ? t.yes : t.no} · ${t.sourceFork} ${settings.more ? forkStateText(t, forkState) : t.off}`,
+    forkCostText(t, forkCost),
     `${t.engineSeen}: ${engineSeen}×`,
     `${t.surface}: ${surface || t.notDrawn} · ${t.band(bodyColumns)} · ${t.layout} ${layout || '–'} · ${t.position} ${position ? t.positions[position] : '–'}`,
   ].join('\n')
@@ -218,6 +233,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       sid = ''
     }
     resetTurn()
+    forkCost = NO_COST
     // Commands zuletzt und in try/catch: ein belegter Name wirft (docs/raw/en/api.md:45)
     try {
       await $.command.register({ name: CMD, description: T[lang].description, argumentHint: '[status|on|off|more on|more off]' })
@@ -236,10 +252,13 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (!e.agentId && e.usage?.model) mainModel = e.usage.model
     if (!e.agentId && !e.isAborted && e.reason === 'answer') {
       try {
         // Nach /clear gibt es eine neue Session-ID ohne session.start (Lehre 13)
-        sid = await $.session.id()
+        const now = await $.session.id()
+        if (sid && now !== sid) newChat(now)
+        else sid = now
       } catch {
         // bleibt beim bisherigen Wert
       }
@@ -318,8 +337,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       return next(e)
     }
     if (sid && now !== sid) {
-      sid = now
-      resetTurn()
+      newChat(now)
       return next(e)
     }
     ready = false
@@ -357,7 +375,16 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       $.ui.invalidate('ui.render')
     }
     const t = T[lang]
-    if (args.length === 0 || args[0] === 'status') return { text: status() }
+    if (args.length === 0 || args[0] === 'status') {
+      // Direkt nach /clear: Vorschläge und Fork-Kosten gehören noch zum alten Chat
+      try {
+        const now = await $.session.id()
+        if (sid && now !== sid) newChat(now)
+      } catch {
+        // bleibt beim bisherigen Stand
+      }
+      return { text: status() }
+    }
     if (args.length === 1 && (args[0] === 'on' || args[0] === 'off')) {
       await change({ enabled: args[0] === 'on' })
       return { text: `quick-replies ${settings.enabled ? t.on : t.off}` }
@@ -399,8 +426,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         sidCheck = 0
         const now = await $.session.id()
         if (sid && now !== sid) {
-          sid = now
-          resetTurn()
+          newChat(now)
           // Auch der Prompt mit „/clear“ ist abgeschickt
           promptText = ''
           return theirs

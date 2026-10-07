@@ -9,8 +9,8 @@ export type Source = 'engine' | 'fork'
 export type Reply = { text: string; source: Source }
 
 const SLOTS = 4
-/** Weitere Vorschläge aus dem Fork (neben dem einen der Engine). */
-const FORK_MAX = 3
+/** Vorschläge aus dem Fork. Kommt einer von der Engine, steht er vorn und der letzte aus dem Fork fällt weg (merge). */
+const FORK_MAX = 4
 /** Längster Fork-Vorschlag. Längere werden verworfen, nicht gekürzt: Der Knopf zeigt höchstens so viel (view.ts MAX_LABEL), und
  *  gesendet werden darf nur, was auf dem Knopf steht. */
 const FORK_TEXT_MAX = 40
@@ -46,7 +46,8 @@ export function keyOf(text: string): string {
   return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
 }
 
-/** Höchstens 4 Plätze: zuerst der Vorschlag der Engine, dann die aus dem Fork; Doppelte fliegen raus. Ohne Quellen: leer. */
+/** Höchstens 4 Plätze: zuerst der Vorschlag der Engine, dann die aus dem Fork, die nachrücken; Doppelte fliegen raus.
+ *  Ohne Quellen: leer. */
 export function merge(engine: string, fork: readonly string[]): Reply[] {
   const out: Reply[] = []
   const seen = new Set<string>()
@@ -63,19 +64,24 @@ export function merge(engine: string, fork: readonly string[]): Reply[] {
 }
 
 /** Die Frage an den Fork der Session: Er kennt den ganzen Chat, soll aber nicht weitermachen. Die Frage ist englisch, die
- *  Vorschläge kommen in der eingestellten Sprache. */
+ *  Vorschläge kommen in der eingestellten Sprache. Eine Nachricht, die mit `/` beginnt, führt Claude Code als Befehl aus; nur
+ *  gewollte Aufrufe dürfen so beginnen, sonst steht der Befehl in typografischen Anführungszeichen (kein Escaping im JSON). */
 export function forkPrompt(lang: Lang): string {
+  const [open, close] = T[lang].forkQuotes
   return [
     'Do not continue the task. Instead, predict what the user is most likely to write to you next:',
     `up to ${FORK_MAX} concrete messages in the user's voice, written in ${T[lang].forkLanguage}, terse like a developer giving`,
     `instructions, each at most ${FORK_TEXT_MAX} characters and specific to this chat (name the file, test or next step).`,
     'Prefer the obvious next step (run the tests, commit, fix what was reported) over generic sentences.',
+    'A message that starts with "/" is executed as a slash command when sent. Start a message with "/" only if it is exactly',
+    'the command the user wants to run (/<command> <args>), and only name commands that appear in this chat. Whenever a',
+    `message only mentions or asks about a command, wrap the command in ${open}${close}, even at the start (${open}/<command>${close} fails).`,
     'If the chat is clearly finished or nothing useful comes to mind, return an empty list.',
     'Reply ONLY with a JSON array of strings, without any text around it and without a code block.',
   ].join(' ')
 }
 
-/** Fork-Antwort → bis zu 3 Vorschläge; nicht auswertbar → []. Nimmt Strings oder Objekte mit `prompt`; zu lange fliegen raus. */
+/** Fork-Antwort → bis zu 4 Vorschläge; nicht auswertbar → []. Nimmt Strings oder Objekte mit `prompt`; zu lange fliegen raus. */
 export function parseFork(reply: string): string[] {
   const start = reply.indexOf('[')
   const end = reply.lastIndexOf(']')

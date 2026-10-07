@@ -11,10 +11,10 @@ const band = (surface: Surface, bodyColumns = 120, over: Over = {}) =>
 
 type Node = { type: string; props: Record<string, unknown>; children: Node[] }
 const usage = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
-type Fork = 'ok' | 'junk' | 'unanswered' | 'nothing' | 'deny' | 'slow'
+type Fork = 'ok' | 'junk' | 'unanswered' | 'nothing' | 'deny' | 'slow' | 'cut'
 
 // Grundausstattung: ein Mod weiter innen (clawd), Kern-Stubs, Uhr, Store, Fork-Stub
-function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'deny' | 'drop'; stored?: unknown } = {}) {
+function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'deny' | 'drop'; stored?: unknown; forkUsage?: typeof usage } = {}) {
   const clock = mock.clock(on, { now: 0 })
   const w = {
     clock,
@@ -59,15 +59,16 @@ function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'deny' | 'drop'; sto
     if (kind === 'deny') return { deny: 'kein Fork' }
     if (kind === 'nothing') return { value: { isAnswered: false, reason: 'nothing-to-fork' } }
     if (kind === 'unanswered') return { value: { isAnswered: false, reason: 'aborted', usage } }
+    if (kind === 'cut') return { value: { isAnswered: false, reason: 'aborted', usage: opts.forkUsage ?? usage } }
     if (kind === 'junk') return { value: { isAnswered: true, text: 'Ich würde weitermachen.', usage } }
     if (kind === 'slow') await clock.sleep(9000)
-    return { value: { isAnswered: true, text: '["Lauf die Tests","Committe das","Zeig den Diff"]', usage } }
+    return { value: { isAnswered: true, text: '["Lauf die Tests","Committe das","Zeig den Diff","Push den Branch"]', usage: opts.forkUsage ?? usage } }
   })
   return w
 }
 
 const LONG = 'Ich habe die Funktion umgebaut und die Tests angepasst. Soll ich das noch committen?'
-const finish = ($: Engine, answer = LONG, more: { agentId?: string; isAborted?: boolean; reason?: 'answer' | 'error' } = {}) =>
+const finish = ($: Engine, answer = LONG, more: { agentId?: string; isAborted?: boolean; reason?: 'answer' | 'error'; model?: string } = {}) =>
   $.turn.complete({
     turnId: 't1',
     answer,
@@ -75,7 +76,7 @@ const finish = ($: Engine, answer = LONG, more: { agentId?: string; isAborted?: 
     isAborted: more.isAborted ?? false,
     reason: more.isAborted ? 'aborted' : (more.reason ?? 'answer'),
     agentId: more.agentId,
-    usage: null,
+    usage: more.model ? { ...usage, model: more.model } : null,
   })
 const suggest = ($: Engine, text: string) => $.prompt.suggest({ text, origin: { kind: 'suggestion' } })
 const type = ($: Engine, text: string, inputText: string) =>
@@ -170,12 +171,12 @@ test('more an: Fork über den Timer nach dem Turn, Claude Code vorn, bis zu 4 im
   await narrow.unmount()
 })
 
-test('more an: kommt der Fork vor Claude Code, rückt Claude Codes Vorschlag trotzdem auf 1', async ($, on) => {
+test('more an: kommt der Fork vor Claude Code, rückt Claude Codes Vorschlag auf 1, die anderen rücken nach, der vierte fällt weg', async ($, on) => {
   const w = world(on, { stored: { enabled: true, more: true } })
   const ui = await boot($, 'terminal')
   await finish($)
   await w.clock.advance(100)
-  expect(await labels(ui)).toEqual(['Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+  expect(await labels(ui)).toEqual(['Lauf die Tests', 'Committe das', 'Zeig den Diff', 'Push den Branch'])
   await suggest($, 'Committe die Änderungen')
   expect(await labels(ui)).toEqual(['Committe die Änderungen', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
   await ui.unmount()
@@ -682,4 +683,88 @@ test('band.ts: höchste Ebene oben, ohne Ebenen bleibt der Grund unverändert, e
   expect(levelOf(a)).toBe(20)
   expect(levelOf(ground)).toBe(-1)
   expect(joinBand([a], null)).toMatchObject({ props: { key: 'band' }, children: [a] })
+})
+
+test('Kostenzeile: Fork-Aufrufe dieses Chats mit geschätztem API-Wert, nach /clear wieder leer', async ($, on) => {
+  // 1000 Input, 38k aus dem Cache, 50 Output auf Opus 5.5: (1000 × 4 + 38000 × 0,2 + 50 × 20) / 1e6 = 0,0126 $
+  const forkUsage = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 38000, cache_creation_input_tokens: 0 }
+  const w = world(on, { stored: { enabled: true, more: true }, forkUsage })
+  const ui = await boot($, 'terminal')
+  const status = async () => String((await $.command.run({ command: 'replies', args: '' })).text)
+  expect(await status()).toContain('Fork in this chat: –')
+  await finish($, LONG, { model: 'claude-opus-5-5' })
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(1)
+  expect(await status()).toContain('Fork in this chat: 1× · ~$0.013 (API price, estimated; on a subscription it counts toward the usage limits) · 39k tokens, 97 % from cache')
+  await $.turn.start({ turnId: 't2', text: 'weiter' })
+  await finish($, LONG, { model: 'claude-opus-5-5' })
+  await w.clock.advance(100)
+  expect(await status()).toContain('Fork in this chat: 2× · ~$0.025')
+  // /clear: neue Session-ID, der nächste Turn zählt neu
+  w.sid = 's2'
+  await finish($, LONG, { model: 'claude-opus-5-5' })
+  expect(await status()).toContain('Fork in this chat: –')
+  await ui.unmount()
+})
+
+test('Kostenzeile de', { options: { language: 'de' } }, async ($, on) => {
+  const forkUsage = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 38000, cache_creation_input_tokens: 0 }
+  const w = world(on, { stored: { enabled: true, more: true }, forkUsage })
+  const ui = await boot($, 'terminal')
+  await finish($, LONG, { model: 'claude-opus-5-5' })
+  await w.clock.advance(100)
+  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain(
+    'Fork in diesem Chat: 1× · ~0,013 $ (API-Preis, geschätzt; im Abo zählt es gegen die Nutzungslimits) · 39k Tokens, 97 % aus dem Cache',
+  )
+  await ui.unmount()
+})
+
+test('Kostenzeile: „nothing-to-fork“ zählt nicht', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true }, fork: 'nothing' })
+  const ui = await boot($, 'terminal')
+  await finish($)
+  await w.clock.advance(100)
+  expect(w.forks.length).toBe(1)
+  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork in this chat: –')
+  await ui.unmount()
+})
+
+test('Kostenzeile: zählt einen abgelösten oder abgebrochenen Fork, nicht einen, der nach /clear zurückkommt', async ($, on) => {
+  const forkUsage = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 38000, cache_creation_input_tokens: 0 }
+  const status = async () => String((await $.command.run({ command: 'replies', args: '' })).text)
+  {
+    // Turn abgelöst, während der Fork läuft: die Tokens sind verbraucht und zählen
+    const w = world(on, { stored: { enabled: true, more: true }, forkUsage, fork: 'slow' })
+    const ui = await boot($, 'terminal')
+    await finish($, LONG, { model: 'claude-opus-5-5' })
+    await w.clock.advance(100)
+    await $.turn.start({ turnId: 't2', text: 'weiter' })
+    await w.clock.advance(9000)
+    expect(await status()).toContain('Fork in this chat: 1× · ~$0.013')
+    // Kommt der Fork erst nach /clear zurück, gehört er zum alten Chat
+    await finish($, LONG, { model: 'claude-opus-5-5' })
+    await w.clock.advance(100)
+    w.sid = 's2'
+    await finish($, LONG, { model: 'claude-opus-5-5' })
+    await w.clock.advance(100)
+    expect(await status()).toContain('Fork in this chat: –')
+    await w.clock.advance(9000)
+    // Nur der Fork des neuen Chats zählt
+    expect(await status()).toContain('Fork in this chat: 1×')
+    await ui.unmount()
+  }
+})
+
+test('Kostenzeile: abgebrochener Fork zählt, was vor dem Abbruch kam; direkt nach /clear zeigt der Status –; kleine Werte', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true }, fork: 'cut' })
+  const ui = await boot($, 'terminal')
+  await finish($, LONG, { model: 'claude-opus-5-5' })
+  await w.clock.advance(100)
+  // Stub-Usage: 1 Input, 1 Output → 24 µ$, 2 Tokens
+  const text = String((await $.command.run({ command: 'replies', args: '' })).text)
+  expect(text).toContain('Fork in this chat: 1× · <$0.001')
+  expect(text).toContain('· 2 tokens, 0 % from cache')
+  w.sid = 's2'
+  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork in this chat: –')
+  await ui.unmount()
 })

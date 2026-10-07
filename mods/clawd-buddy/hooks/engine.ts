@@ -109,6 +109,8 @@ export type EngineState = {
   realStart: number
   shortRun: number
   holdUntil: number
+  /** Wann eine Rückfrage zuletzt die Sperre umging: einen gehaltenen Clip verließ oder als dritte kurze selbst ungehalten begann (ASK). */
+  askCutAt: number
   /** Laufende Subagenten (vom Client/Desktop gesetzt) und die Begleiter auf ihren Plätzen: Versatz nach unten je Platz (0 = steht, MATE_HIDE = hinter der Linie). */
   agents: number
   mates: number[]
@@ -144,12 +146,21 @@ const WORK_DWELL = 133 // ~10 s ab Clipbeginn (samt Auspacken)
 // (Ausgangspose, Arme unten). Bei dringenden Stimmungen (wartet auf dich, fertig …) ist die Frist kürzer und jede sichere Stelle zählt.
 const FINISH = 80 // ~6 s
 const FINISH_URGENT = 27 // ~2 s
+// Dringend aus Clips mit eigener Haltung (Laptop: zugewandt, Gesicht seitlich; Fynn, 2026-10-07: bis ~10 s auf „wartet auf dich“): Deren
+// Hauptteil hat kein Bild in der Ausgangspose, ein Ausstieg ging nur am Ende eines Durchgangs, danach kam noch der Ausklang. Bei dringenden
+// Stimmungen darf ein unterbrechbarer Clip deshalb auch an Bildern aussteigen, die strukturell wie der Anfang seines Ausklangs stehen
+// (`intoOutro`): Der Ausklang räumt dann ab wie sonst (Laptop zuklappen, einpacken). Im Intro spielt er das bisher Gezeigte rückwärts
+// (`rewindIntro`), wenn das schneller ist als Intro, Hauptteil bis zum Ausstieg und Ausklang.
 // Kein Gespamt (Fynn, 2026-10-06: „eine Animation kurz spielt und dann die nächste … wirkt das wie Gespame“): Höchstens zwei Clips
 // nacheinander dürfen kürzer als SHORT_PLAY laufen. Der dritte bleibt mindestens HOLD_PLAY: kein Ausstieg für einen Stimmungswechsel,
 // auch keinen dringenden, und eine Schleife läuft weiter. Nur Maus, Aufwachen und Eingriffe (`/clawd`) unterbrechen sofort; reduzierte
-// Bewegung wählt wie bisher.
+// Bewegung wählt wie bisher. Ausnahme Rückfrage (ASK; Fynn, 2026-10-07: bis 8 s auf „wartet auf dich“ ist „schon hart“): Sie verlässt
+// den gehaltenen Clip wie jede dringende Stimmung (FINISH_URGENT), höchstens einmal je HOLD_PLAY (`askCutAt`), damit ein schneller Wechsel
+// Rückfrage ↔ Arbeit (Auto-Modus) kein Gespamt wird. Ein Rückfrage-Clip setzt selbst keine Sperre: Nach der Antwort geht es gleich weiter
+// (Review 0.6.7, S1/K2).
 const SHORT_PLAY = 53 // ~4 s
 const HOLD_PLAY = 107 // ~8 s
+const ASK = new Set(['waitUser', 'waitUserLong'])
 const COOLDOWN = 280 // ~21 s: ein eben gespielter Clip wird so lange deutlich seltener gewählt
 const NIGHT_PLAY = 3 // nachts: so viele Leerlaufzeiten Zeitvertreib, bevor er einschläft
 const LOOP_STAY = 330 // ~25 s: so lange bleibt eine Schleife ohne Stimmungswechsel bei sich, dann darf eine Variante kommen
@@ -170,7 +181,7 @@ export function createEngine(opts: EngineOpts) {
     blinkAt: 40, blinkUntil: -1, hover: null, drag: null, gallery: null, galleryLoop: false, hour: opts.hour ?? 12,
     nightStart: opts.nightStart ?? 23, nightEnd: opts.nightEnd ?? 6, idleLimit: ((opts.idleSeconds ?? 45) * 1000) / TICK,
     reduced: opts.reduced ?? false, lastClipName: '', lastPose: null, landing: 'stand', carry: null, pendingClick: false,
-    temper: 0, tired: 0, moodWant: null, clipStart: 0, playedAt: {}, realStart: -1, shortRun: 0, holdUntil: 0, agents: 0, mates: [], special: '', welcome: false,
+    temper: 0, tired: 0, moodWant: null, clipStart: 0, playedAt: {}, realStart: -1, shortRun: 0, holdUntil: 0, askCutAt: -1e9, agents: 0, mates: [], special: '', welcome: false,
   }
 
   // ---- Begleiter (Subagenten): je laufendem Subagenten (max. 12, ab 7 in zweiter Reihe) steht ein kleiner Helfer auf seinem Platz. Er steigt einmal von
@@ -408,7 +419,9 @@ export function createEngine(opts: EngineOpts) {
     if (!isDyn(c) && c.cat !== 'transition' && c.cat !== 'mouse') {
       if (S.realStart >= 0) S.shortRun = S.ticks - S.realStart < SHORT_PLAY ? S.shortRun + 1 : 0
       S.realStart = S.ticks
-      S.holdUntil = S.shortRun >= 2 && !S.gallery ? S.ticks + HOLD_PLAY : 0
+      // Eine Rückfrage, die einen gehaltenen Clip verlässt oder selbst gehalten würde (dritte kurze), nutzt das Fenster der Ausnahme
+      if (ASK.has(c.cat) && (S.ticks < S.holdUntil || S.shortRun >= 2)) S.askCutAt = S.ticks
+      S.holdUntil = S.shortRun >= 2 && !S.gallery && !ASK.has(c.cat) ? S.ticks + HOLD_PLAY : 0
     }
     S.landing = c.from
     log(`${isDyn(c) ? '  ↳ ' : ''}<b>${c.label}</b> <span>(${isDyn(c) ? 'weich' : c.cat})</span>`)
@@ -571,8 +584,34 @@ export function createEngine(opts: EngineOpts) {
     return true
   }
 
-  /** Der laufende Clip folgt auf zwei kurze und muss noch bleiben (HOLD_PLAY). */
-  const held = () => S.ticks < S.holdUntil
+  /** Steht die Figur strukturell wie zu Beginn des eigenen Ausklangs? Dann kann sie dorthin aussteigen (nur unterbrechbare Clips mit Ausklang). */
+  function intoOutro(pl: Play, p: Pose): boolean {
+    const o = pl.outro[0]?.p
+    return !!o && pl.clip.interruptible && STRUCT.every((k) => p[k] === o[k]) && p.legs === o.legs
+  }
+
+  /**
+   * Dringend im Intro: das bisher Gezeigte rückwärts als Ausklang (er packt wieder ein), wenn das schneller geht als Intro zu Ende, Hauptteil
+   * bis zum ersten Ausstieg und Ausklang. `pl.fi` ist das Bild, das jetzt käme; das zuletzt gezeigte (`fi - 1`) läuft nicht noch einmal,
+   * außer es ist das einzige (Review 0.6.10, K2).
+   */
+  function rewindIntro(pl: Play): boolean {
+    if (!pl.clip.interruptible || !pl.outro.length) return false
+    const ticks = (l: readonly Resolved[]) => l.reduce((n, f) => n + f.t, 0)
+    const back = pl.intro.slice(0, pl.fi > 1 ? pl.fi - 1 : 1)
+    let toExit = 0
+    for (const f of pl.body) {
+      if (isSafe(pl.clip, f.p) || intoOutro(pl, f.p)) break
+      toExit += f.t
+    }
+    if (ticks(back) >= ticks(pl.intro.slice(pl.fi)) + toExit + ticks(pl.outro)) return false
+    pl.outro = back.reverse()
+    leaveClip(chooseForMood())
+    return true
+  }
+
+  /** Der laufende Clip folgt auf zwei kurze und muss noch bleiben (HOLD_PLAY); eine anstehende Rückfrage (ASK) darf trotzdem wechseln, einmal je HOLD_PLAY. */
+  const held = () => S.ticks < S.holdUntil && !(S.pending && ASK.has(S.mood) && S.ticks - S.askCutAt >= HOLD_PLAY)
 
   /** Ticks bis zum Ende des laufenden Durchgangs (Hauptteil ab dem aktuellen Bild). */
   function bodyLeft(pl: Play): number {
@@ -589,7 +628,7 @@ export function createEngine(opts: EngineOpts) {
   function cutHere(pl: Play): boolean {
     if (held()) return false
     const p = pl.body[pl.fi].p
-    if (!isSafe(pl.clip, p)) return false
+    if (!isSafe(pl.clip, p) && !(S.pendingUrgent && intoOutro(pl, p))) return false
     // Grundpose (atmen, umschauen) hat keine Handlung, die man abbrechen könnte: sofort an jeder sicheren Stelle weiter
     if (pl.clip.cat === 'idle') return true
     // Ein Zeitvertreib läuft zu Ende, wenn du nur tippst: das Mitlesen darf warten
@@ -610,6 +649,7 @@ export function createEngine(opts: EngineOpts) {
     pl.fi++
     pl.tick = 0
     if (pl.fi >= list.length) return phaseEnd(pl)
+    if (pl.phase === 'intro' && S.pending && S.pendingUrgent && !held() && !stillFits(pl) && rewindIntro(pl)) return
     if (pl.phase !== 'body' || !S.pending) return
     if (stillFits(pl)) return
     if (cutHere(pl)) leaveClip(chooseForMood())

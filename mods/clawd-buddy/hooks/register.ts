@@ -9,7 +9,7 @@ import { joinBand, nameOf, splitBand } from './band.ts'
 import { ALL_CLIPS } from './library.ts'
 import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
 import type { Strain } from './mood.ts'
-import { blankSource, createDesk, DESK_TICK, markSource, stillSource } from './desk.ts'
+import { createDesk, DESK_TICK, stillSource } from './desk.ts'
 import { T, clipLabel, langOf, num as fmt } from './i18n.ts'
 import type { Lang } from './i18n.ts'
 import { H, W } from './stage.ts'
@@ -57,32 +57,28 @@ let deskTimer: Timer | null = null
 let deskChecks = 0 // Wächter-Runden seit der letzten Zeichnung
 let deskPlanMs = 0 // Länge der zuletzt gezeichneten Animation
 let deskAsked = 0 // Wächter-Runden, seit um eine neue Zeichnung gebeten wurde (0 = keine Bitte offen)
-// Flackern (Fynn, 2026-10-06: „Es darf nicht flackern“): Ein neues `source` lässt den Rahmen neu laden, die Figur blinkt dabei kurz.
-// Das Band wird aber auch für andere Mods neu gezeichnet (limit-bars, sidekick, quick-replies) und bei Ereignissen, die an der laufenden
-// Animation nichts ändern. Dann geht dasselbe Svg noch einmal hinaus; neu gerechnet wird erst kurz bevor die neuen Fakten etwas anderes
+// Flackern (Fynn, 2026-10-06: „Es darf nicht flackern“): Ein neues `source` lud bis 0.6.5 den Rahmen neu, die Figur blinkte dabei kurz.
+// Das Band wird auch für andere Mods neu gezeichnet (limit-bars, sidekick, quick-replies); Ereignisse, die an der laufenden Animation
+// nichts ändern, bitten seit 0.6.9 gar nicht erst darum (factsChanged). Zeichnet die App trotzdem, geht dasselbe Svg noch einmal hinaus; neu gerechnet wird erst kurz bevor die neuen Fakten etwas anderes
 // zeigen (desk.divergence) oder die Animation endet. Eingriffe (`/clawd demo|nap|boop|on`) erzwingen eine neue Zeichnung.
-// Staffelübergabe (Fynn, 2026-10-06: „nicht so ein Flackern, auch wenn es nur ganz kurz ist“; desk.ts): zwei Rahmen übereinander,
-// `deskSlots[deskFront]` zeigt die neueste Animation. Eine neue lädt im anderen Rahmen, während die alte weiterläuft; DESK_RETIRE_CHECKS
-// Wächter-Runden später (das neue Dokument steht, die Übergabe von HANDOVER_TICKS läuft noch) wird der alte geleert. Erst danach darf die
-// nächste neue Animation in ihn: Käme sie früher, wären beide Rahmen zugleich leer.
-// Baut die App die Rahmen ohnehin neu (Sitzung wieder angezeigt, Aufbau des Bands geändert, eingeschaltet), gibt es keine Übergabe
-// (`deskFresh`): neu zeichnen, den anderen gleich leeren.
-const DESK_RETIRE_CHECKS = 2 // 0,25–0,5 s nach der Zeichnung
-let deskSlots = ['', '']
-let deskFront = 0
-let deskRetire = false // der andere Rahmen zeigt noch die vorige Animation
+// Bild statt Rahmen (0.6.6): Bis 0.6.5 lief das Svg mit `isInteractive` in einem Rahmen, der bei jedem neuen `source` neu lud und dabei kurz
+// leer war. `/clawd flicker` zeigte (Fynn, 2026-10-07: blinkt in allen drei Abschnitten), dass die App beim Wechsel auch einen unveränderten
+// Rahmen neu lädt; die Staffelübergabe mit zwei Rahmen (0.6.3) war wirkungslos. Jetzt ein einziges Svg als Bild (ohne `isInteractive`,
+// types:11956-11957): Beim Tausch bleibt das alte Bild stehen, bis das neue fertig ist; SMIL läuft auch im Bild (Abnahme 2026-10-07, desk.ts).
+let deskSvg = '' // zuletzt gezeichnetes Svg
 let deskDrawnAt = 0 // Uhrzeit der letzten echten Zeichnung
-let deskForce = false
-let deskFresh = false
-// Flacker-Test (`/clawd flicker`, 0.6.5): Beginn (Uhrzeit), -2 = beginnt beim nächsten Zeichnen, -1 = aus. Drei Abschnitte je 10 s, alle 2 s ein
-// Wechsel; der Wächter bittet alle 0,5 s ums Zeichnen. Welche Abschnitte blinken, zeigt, ob die App beim Wechsel auch den unveränderten Rahmen
-// neu lädt (1), ob ein Neuladen überhaupt blinkt (2) und ob die Übergabe hält (3).
-const DIAG_MS = 30_000
+let deskForce = false // Eingriff: sofort neu
+let deskFresh = false // Sitzung wieder angezeigt oder eingeschaltet: sofort neu (eigene Zählung in `/clawd status`)
+// Flacker-Test (`/clawd flicker`): Beginn (Uhrzeit), -2 = beginnt beim nächsten Zeichnen, -1 = aus. Zwei Abschnitte je 10 s, alle 2 s ein
+// neues `source` mit gleichem Bild; der Wächter bittet alle 0,5 s ums Zeichnen. 1 = als Bild (wie im Betrieb seit 0.6.6), 2 = im Rahmen
+// (`isInteractive`, wie bis 0.6.5) zum Vergleich. Ein Punkt neben der Nummer blinkt per SMIL: In 1 muss er blinken (SMIL läuft im Bild),
+// Clawd selbst darf es nicht.
+const DIAG_MS = 20_000
 const DIAG_STEP = 2000
 let deskDiag = -1
 let deskDiagRounds = 0 // Wächter-Runden im Test; zeichnet die App nicht mehr (verdeckt), endet er danach von selbst
-// Springen (Fynn, 2026-10-06: „springt von jetzt auf gleich zu einer ganz anderen Sache“): Baut der Desktop den Rahmen trotz gleichem `source` neu
-// auf, beginnt die Animation wieder bei ihrem Anfang, also Sekunden zurück, und bei der nächsten echten Zeichnung springt sie nach vorn. Das passiert
+// Springen (Fynn, 2026-10-06: „springt von jetzt auf gleich zu einer ganz anderen Sache“): Baute der Desktop den Rahmen trotz gleichem `source` neu
+// auf (bis 0.6.5; ob ein neu eingehängtes Bild SMIL ebenso von vorn beginnt, ist [UNKLAR], im Browser tut es das), beginnt die Animation wieder bei ihrem Anfang, also Sekunden zurück, und bei der nächsten echten Zeichnung springt sie nach vorn. Das passiert
 // sicher, wenn sich der Aufbau des Bands ändert (eine Ebene von quick-replies oder sidekick kommt oder geht, andere Breite), und vermutlich auch nach
 // dem Wiederanzeigen der Sitzung [UNKLAR]. Deshalb: bei geändertem Aufbau immer neu zeichnen, und ein Svg höchstens DESK_REUSE_MS lang weitergeben;
 // ein unerkannter Neustart springt so höchstens um diese Zeit zurück.
@@ -90,14 +86,14 @@ const DESK_REUSE_MS = 5000
 let deskShape = ''
 // Messung für `/clawd status` (Fynn, 2026-10-05: Clawd wirkt bei mehreren Agenten verzögert). Zählt seit dem letzten `/clawd status`,
 // mit performance.now() (synchron, kein `$`-Aufruf): Zeichnungen, Länge und Bildwechsel der Animationen, Rechen- und Zeichendauer.
-// Dazu (0.6.5, Fynn: „flackert immer noch beim Wechsel“): wie oft mit bzw. ohne Übergabe gezeichnet wurde, und warum ohne.
+// Dazu (0.6.5): wie oft wegen eines geänderten Aufbaus des Bands bzw. nach Wiederanzeigen oder Einschalten neu gezeichnet wurde.
 type DeskMeter = {
   since: number; draws: number; reused: number; planSecs: number; changes: number; chars: number; calcSum: number; calcMax: number; drawSum: number; drawMax: number; othersSum: number
-  fresh: number; freshShape: number; freshShown: number; waited: number
+  freshShape: number; freshShown: number; skipped: number
 }
 const newMeter = (): DeskMeter => ({
   since: performance.now(), draws: 0, reused: 0, planSecs: 0, changes: 0, chars: 0, calcSum: 0, calcMax: 0, drawSum: 0, drawMax: 0, othersSum: 0,
-  fresh: 0, freshShape: 0, freshShown: 0, waited: 0,
+  freshShape: 0, freshShown: 0, skipped: 0,
 })
 let meter = newMeter()
 function meterText(lang: Lang, m: DeskMeter, at: number): string {
@@ -109,7 +105,7 @@ function meterText(lang: Lang, m: DeskMeter, at: number): string {
     secs: s.toFixed(0), draws: m.draws, reused: m.reused, perMin: fmt(lang, s > 0 ? (m.draws * 60) / s : 0), planSecs: avg(m.planSecs), changes: avg(m.changes),
     kb: fmt(lang, m.draws ? m.chars / m.draws / 1000 : 0), calcAvg: avg(m.calcSum), calcMax: fmt(lang, m.calcMax), drawAvg: avgAll(m.drawSum),
     drawMax: fmt(lang, m.drawMax), others: avgAll(m.othersSum),
-  }) + T[lang].deskFresh({ fresh: m.fresh, shape: m.freshShape, shown: m.freshShown, handover: m.draws - m.fresh, waited: m.waited })
+  }) + T[lang].deskFresh({ shape: m.freshShape, shown: m.freshShown, skipped: m.skipped })
 }
 
 /** Fakten für die Desktop-Engine zur Uhrzeit `now`: wie gespeichert, dazu der letzte Tastendruck auf diese Uhr umgerechnet. */
@@ -127,6 +123,27 @@ function latestTool(): Facts['tool'] {
   return best
 }
 
+/**
+ * Neue Fakten: um eine Neuzeichnung bitten. Im Desktop nur, wenn die gezeigte Animation sie vor ihrem Ende anders zeigen müsste
+ * (desk.divergence, wie beim Zeichnen); sonst rückt nur die Bitte des Wächters vor. Grund (Fynn, 2026-10-07): Jede Neuzeichnung des Bands
+ * lässt die Desktop-App auch die Zeilen neu anfordern, die sidekick an deinen Nachrichten hookt, und deren Hover-Leiste flackert (SPEC 0.4.2).
+ * Bis 0.6.8 zeichnete jedes Ereignis neu, auch wenn das Svg gleich blieb; bei viel Arbeit (mehrere Agenten) flackerte es so immer öfter.
+ * Ohne Uhrzeit (`now` fehlt, oder eine Ersatzzeit vor der letzten Zeichnung) oder im Terminal wie bisher: divergence liefe sonst von dieser
+ * Zeit an Takt für Takt bis zum Ende der Animation, bei 0 praktisch endlos (Review 0.6.9, S1).
+ */
+function factsChanged($: EngineInterface, now?: number) {
+  if (now !== undefined && now >= deskDrawnAt && desk && deskTimer && deskSvg !== '' && !deskForce && !deskFresh && deskAsked === 0 && deskDiag === -1) {
+    const div = desk.divergence(now, deskFacts(now), strain)
+    const left = desk.remaining(now)
+    if (div > DESK_LEAD && left > DESK_LEAD) {
+      deskPlanMs = Math.min(deskPlanMs, now - deskDrawnAt + Math.min(div, left))
+      meter.skipped += 1
+      return
+    }
+  }
+  $.ui.invalidate('ui.render')
+}
+
 // Top-Level-Funktion: `$` darf nur an solche weitergereicht werden (docs/raw/en/create.md:317)
 async function save($: EngineInterface) {
   const prev = ((await $.store.get('buddy')) ?? {}) as Stored
@@ -140,7 +157,7 @@ async function save($: EngineInterface) {
 async function noteSeen($: EngineInterface, now: number) {
   if (lastSeen > 0 && now - lastSeen >= AWAY_MS) {
     facts = { ...facts, backAt: now }
-    $.ui.invalidate('ui.render')
+    factsChanged($, now)
   }
   lastSeen = Math.max(lastSeen, now)
   if (now - seenSaved < 300_000) return
@@ -187,7 +204,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       const limits = { five: five?.percentUsed, fiveReset: ms(five?.resetsAt), week: week?.percentUsed, weekReset: ms(week?.resetsAt) }
       if (JSON.stringify(limits) !== JSON.stringify(facts.limits ?? {})) {
         facts = { ...facts, limits }
-        $.ui.invalidate('ui.render')
+        factsChanged($, await $.clock.now().catch(() => undefined))
       }
     } catch (err) {
       $.ui.log(`clawd-buddy: limits not read: ${String(err)}`, { to: 'debug' })
@@ -203,7 +220,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           const at = await $.clock.now()
           ctxPending = false // erst nach dem Lesen der Uhr: wirft sie, bleibt die Warnung für das Turn-Ende stehen
           facts = { ...facts, ctxAt: at }
-          $.ui.invalidate('ui.render')
+          factsChanged($, at)
         }
       }
     } catch (err) {
@@ -215,13 +232,15 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   // ---- Fakten aus den Events
   on('turn.start', async ($, e, next) => {
     facts = { ...facts, turnActive: true, endedKind: '', lastTool: undefined }
+    let now: number | undefined
     try {
-      if (!strain.turnSince) strain = strainTurnStart(strain, await $.clock.now())
+      now = await $.clock.now()
+      if (!strain.turnSince) strain = strainTurnStart(strain, now)
       turnHadError = false
     } catch {
       // Laune ist Beiwerk: ohne Uhr bleibt sie, wie sie ist
     }
-    $.ui.invalidate('ui.render')
+    factsChanged($, now)
     return next(e)
   })
 
@@ -230,13 +249,15 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     if (e.agentId) {
       if (agentSeen.delete(e.agentId)) {
         let doneAt = facts.agentDoneAt ?? 0
+        let clock = false
         try {
           doneAt = await $.clock.now()
+          clock = true
         } catch (err) {
           $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
         }
         facts = { ...facts, agents: [...agentSeen.values()], agentDoneAt: doneAt }
-        $.ui.invalidate('ui.render')
+        factsChanged($, clock ? doneAt : undefined)
       }
     } else {
       // Wirft die Uhr, bleibt der Turn trotzdem nicht "aktiv" hängen (letzte bekannte Zeit als Ersatz)
@@ -257,7 +278,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       strain = strainTurnEnd(strain, now, e.reason === 'answer', !turnHadError)
       // Erfolgsserie erreicht eine Marke (5, 10, 15 …): Pokal/Medaille statt des normalen Abschlusses
       if (strain.streak > 0 && strain.streak % STREAK_STEP === 0) facts = { ...facts, streakAt: now }
-      $.ui.invalidate('ui.render')
+      factsChanged($, now)
     }
     return next(e)
   })
@@ -269,9 +290,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       // Subagent (auch Hintergrund, Worktree, Workflow, Teammate) ist aktiv: zählt für die Stimmung "Subagenten" bzw. "Schwarm"
       try {
         const isNew = !agentSeen.has(e.agentId)
-        agentSeen.set(e.agentId, await $.clock.now())
+        const at = await $.clock.now()
+        agentSeen.set(e.agentId, at)
         facts = { ...facts, agents: [...agentSeen.values()] }
-        if (isNew) $.ui.invalidate('ui.render')
+        if (isNew) factsChanged($, at)
       } catch (err) {
         $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
       }
@@ -281,7 +303,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         if (askTool === id) {
           askTool = ''
           facts = { ...facts, ask: false }
-          $.ui.invalidate('ui.render')
+          factsChanged($)
         }
       }
     }
@@ -299,7 +321,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const kind = base === 'shell' ? shellKind((e as { command?: unknown }).command) : base
     running.set(id, { kind, since: now })
     facts = { ...facts, tool: latestTool(), ask: isQuestion || facts.ask, askSince: isQuestion && !facts.ask ? now : facts.askSince }
-    $.ui.invalidate('ui.render')
+    factsChanged($, now)
     let res: Awaited<ReturnType<typeof next>> | undefined
     try {
       res = await next(e)
@@ -326,7 +348,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         // ohne Uhr zählt der Beginn als Ende: der Nachlauf wird nur kürzer
       }
       facts = { ...facts, tool: latestTool(), lastTool: isQuestion ? facts.lastTool : { kind, endedAt } }
-      $.ui.invalidate('ui.render')
+      factsChanged($, endedAt)
     }
   })
 
@@ -336,13 +358,15 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // bewilligt (z. B. "Berechtigungen umgehen"), sieht dieses Modul nicht; die Frage gilt bis das Tool endet.
     if (decision.decision === 'ask' && e.tool_use_id) {
       askTool = e.tool_use_id
+      let now: number | undefined
       try {
-        if (!facts.ask) facts = { ...facts, askSince: await $.clock.now() }
+        now = await $.clock.now()
+        if (!facts.ask) facts = { ...facts, askSince: now }
       } catch {
         // ohne Uhr keine Steigerung, die Rückfrage gilt trotzdem
       }
       facts = { ...facts, ask: true }
-      $.ui.invalidate('ui.render')
+      factsChanged($, now)
     }
     return decision
   })
@@ -351,8 +375,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('session.compact', async ($, e, next) => {
     if (e.agentId || e.trigger === 'precompute') return next(e)
     try {
-      facts = { ...facts, compactSince: await $.clock.now() }
-      $.ui.invalidate('ui.render')
+      const at = await $.clock.now()
+      facts = { ...facts, compactSince: at }
+      factsChanged($, at)
     } catch (err) {
       $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
     }
@@ -360,15 +385,16 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       return await next(e)
     } finally {
       facts = { ...facts, compactSince: undefined }
-      $.ui.invalidate('ui.render')
+      factsChanged($)
     }
   })
 
   // Ein Skill startet: kurz zeigen (nur der Name zählt als Ereignis, der Text wird nicht gelesen)
   on('skill.prompt', async ($, e, next) => {
     try {
-      facts = { ...facts, skillAt: await $.clock.now() }
-      $.ui.invalidate('ui.render')
+      const at = await $.clock.now()
+      facts = { ...facts, skillAt: at }
+      factsChanged($, at)
     } catch (err) {
       $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
     }
@@ -439,7 +465,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         $.ui.log(`clawd-buddy: saving failed: ${String(err)}`, { to: 'debug' })
       }
       // Erst direkt vor dem Neuzeichnen: ein Zeichnen während der `await`s davor verbrauchte das Flag sonst mit dem alten Stand (Review 2, S1).
-      // Nur aus → an baut die App die Rahmen neu auf; war er schon an, gilt die Übergabe (Review 0.6.3, K4: sonst kurz beide leer)
       if (enabled && !was) deskFresh = true
       else deskForce = true
       $.ui.invalidate('ui.render')
@@ -461,7 +486,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       demo = hit.name
       demoN += 1
       await ensureOn()
-      // Desktop: wirkt ab der nächsten Zeichnung, nach der Übergabe (desk.ts)
+      // Desktop: wirkt ab der nächsten Zeichnung (desk.ts)
       desk?.request({ play: hit.name })
       deskForce = true
       $.ui.invalidate('ui.render')
@@ -560,7 +585,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           desk = createDesk({ seed, nightStart, nightEnd, idleSeconds, reduced, flip, birthday })
         }
         if (!deskTimer) {
-          deskFresh = true // die Sitzung wird (wieder) angezeigt: die Rahmen sind ohnehin neu
+          deskFresh = true // die Sitzung wird (wieder) angezeigt: neu zeichnen
           // Der Wächter startet neu: die Sitzung wird (wieder) angezeigt, Fynn schaut also hin
           try {
             await noteSeen($, now)
@@ -587,21 +612,15 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
               return
             }
             deskChecks += 1
-            // Alten Rahmen leeren, auch wenn schon um die nächste Animation gebeten wurde: die wartet bis dahin (`busy`), und ohne diese
-            // Bitte blieben beide Rahmen stehen, bis sich der Wächter beendet (Review 0.6.3, K1)
-            if (deskRetire && deskChecks === DESK_RETIRE_CHECKS) $.ui.invalidate('ui.render')
             if (deskAsked > 0) deskAsked += 1
             else if (deskChecks * DESK_CHECK >= deskPlanMs - DESK_LEAD) {
               deskAsked = 1
-              if (!(deskRetire && deskChecks === DESK_RETIRE_CHECKS)) $.ui.invalidate('ui.render')
+              $.ui.invalidate('ui.render')
             }
           })
         }
         const { Svg } = $.ui.resolve(e)
-        // Zwei Rahmen übereinander (Staffelübergabe): der zweite liegt absolut über dem ersten (BoxProps.position/bottom, types:892, 913-916).
-        // Beide bleiben immer im Baum, an derselben Stelle und mit gleichen Props außer `source` (sonst lüde auch der unveränderte neu);
-        // geleert wird ein Rahmen über ein leeres Svg, nie durch Entfernen.
-        const deskBand = (a: string, b: string) => joinBand(layers, Box({
+        const deskBand = (source: string, frame?: true) => joinBand(layers, Box({
           flexDirection: flip ? 'row-reverse' : 'row',
           alignItems: 'flex-end',
           // Jede Seite drückt ihren Inhalt selbst nach unten (Spalte, justifyContent flex-end): die Desktop-App setzt alignItems der
@@ -615,22 +634,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
               // Nie zusammendrücken: sonst schneidet ein schmales Band (Seitenbereich offen) das 400-px-Bild rechts ab, und mit ihm die Hand
               // (Fynn, 2026-10-06). Schmaler wird die linke Seite mit flexGrow.
               flexShrink: 0,
-              // isInteractive: im Rahmen ohne Skripte, damit SMIL läuft (types:11957); als Bild stünde nur das erste Bild.
-              children: [
-                Box({
-                  key: 'clawd-a',
-                  children: [Svg({ source: a, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, isInteractive: true })],
-                }),
-                Box({
-                  key: 'clawd-b',
-                  position: 'absolute',
-                  // Unten bündig wie der erste, den die Spalte nach unten drückt: ist die Box höher als das Bild, lägen sie sonst versetzt
-                  // (Review 0.6.3, K3)
-                  bottom: 0,
-                  left: 0,
-                  children: [Svg({ source: b, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, isInteractive: true })],
-                }),
-              ],
+              // Als Bild (ohne isInteractive): SMIL läuft, und beim Wechsel bleibt das alte stehen, bis das neue fertig ist. Den Rahmen
+              // (`frame`) gibt es nur noch im Flacker-Test zum Vergleich.
+              children: [Svg({ source, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, ...(frame ? { isInteractive: frame } : {}) })],
             }),
           ],
         }))
@@ -639,14 +645,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           const t = now - deskDiag
           if (t < DIAG_MS) {
             const step = Math.floor(t / DIAG_STEP)
-            const part = Math.floor(t / (DIAG_MS / 3)) + 1
-            const blank = blankSource(DESK_SCALE)
-            if (part === 1) return deskBand(stillSource(DESK_SCALE, flip, 1, 0), markSource(DESK_SCALE, flip ? 70 - (step % 5) * 4 : 26 + (step % 5) * 4))
-            if (part === 2) return deskBand(stillSource(DESK_SCALE, flip, 2, step), blank)
-            // Wie im Betrieb: neu im freien Rahmen, der alte bleibt 0,5 s stehen
-            const cur = stillSource(DESK_SCALE, flip, 3, step)
-            const old = t - step * DIAG_STEP < 500 ? stillSource(DESK_SCALE, flip, 3, step - 1) : blank
-            return step % 2 === 0 ? deskBand(cur, old) : deskBand(old, cur)
+            const part = Math.floor(t / (DIAG_MS / 2)) + 1
+            const still = stillSource(DESK_SCALE, flip, part, step)
+            return part === 1 ? deskBand(still) : deskBand(still, true)
           }
           deskDiag = -1
           deskFresh = true
@@ -655,35 +656,22 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         const fNow = deskFacts(now)
         // Ändern die neuen Fakten an der gezeigten Animation (vorerst) nichts, bleibt das Svg dasselbe: kein Neuladen, kein Flackern
         const shape = `${layers.map((l) => nameOf(l)).join(',')}|${e.props.bodyColumns}|${e.props.maxRows}`
-        const blank = blankSource(DESK_SCALE)
-        const fresh = deskFresh || deskSlots[deskFront] === '' || shape !== deskShape
+        const fresh = deskFresh || deskSvg === '' || shape !== deskShape
         const keep = !fresh && !deskForce && deskAsked === 0 && now - deskDrawnAt < DESK_REUSE_MS
         const div = keep ? desk.divergence(now, fNow, strain) : 0
         const left = keep ? desk.remaining(now) : 0
-        // Die vorige Übergabe läuft noch (der andere Rahmen ist nicht frei): eine neue Zeichnung wartet bis zum Leeren. Der Wächter bittet dann
-        // ohnehin, und dort wird wie sonst entschieden, ob die Fakten etwas ändern (Review 0.6.3, K2: nicht pauschal neu)
-        const busy = !fresh && deskRetire && deskChecks < DESK_RETIRE_CHECKS
-        if ((keep && div > DESK_LEAD && left > DESK_LEAD) || busy) {
+        if (keep && div > DESK_LEAD && left > DESK_LEAD) {
           // Der Wächter bittet kurz vor der Abweichung bzw. dem Ende um die nächste Zeichnung (Runden zählen ab der letzten echten)
-          if (!busy) deskPlanMs = now - deskDrawnAt + Math.min(div, left)
-          else meter.waited += 1
+          deskPlanMs = now - deskDrawnAt + Math.min(div, left)
           meter.reused += 1
-          if (deskRetire && deskChecks >= DESK_RETIRE_CHECKS) {
-            deskSlots[1 - deskFront] = blank
-            deskRetire = false
-          }
         } else {
-          // Stand so auf jetzt nachziehen, wie die gezeigte Animation lief, dann ab jetzt mit den neuen Fakten vorausrechnen; in den freien Rahmen
-          const plan = fresh ? desk.drawFresh(now, fNow, strain, DESK_SCALE) : desk.draw(now, fNow, strain, DESK_SCALE)
+          // Stand so auf jetzt nachziehen, wie die gezeigte Animation lief, dann ab jetzt mit den neuen Fakten vorausrechnen
+          const plan = desk.draw(now, fNow, strain, DESK_SCALE)
           if (fresh) {
-            meter.fresh += 1
-            if (!deskFresh && shape !== deskShape && deskSlots[deskFront] !== '') meter.freshShape += 1
+            if (!deskFresh && shape !== deskShape && deskSvg !== '') meter.freshShape += 1
             else meter.freshShown += 1
           }
-          deskFront = 1 - deskFront
-          deskSlots[deskFront] = plan.source
-          deskRetire = !fresh
-          if (fresh) deskSlots[1 - deskFront] = blank
+          deskSvg = plan.source
           deskDrawnAt = now
           deskShape = shape
           deskForce = false
@@ -703,7 +691,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         meter.drawSum += drawMs
         meter.drawMax = Math.max(meter.drawMax, drawMs)
         meter.othersSum += othersMs
-        return deskBand(deskSlots[0], deskSlots[1])
+        return deskBand(deskSvg)
       }
       // Eine Zeile: was andere Mods ins Band zeichnen (z. B. Limit-Balken), steht links und füllt den Platz; Clawd unten rechts daneben
       return joinBand(layers, Box({

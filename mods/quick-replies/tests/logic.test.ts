@@ -2,20 +2,26 @@ import { expect, test } from 'claude-code/testing'
 import { forkStateText, langOf, T } from '../hooks/i18n.ts'
 import { clean, forkPrompt, keyOf, merge, parseFork } from '../hooks/logic.ts'
 import { chooseLayout, label } from '../hooks/view.ts'
+import { addCall, callCost, NO_COST, priceFor } from '../hooks/cost.ts'
 
 test('Zusammenführen: Claude Code vorn, dann Fork, höchstens 4, ohne Doppelte; ohne Quellen leer', () => {
   const r = merge('Teste es!', ['teste es', 'Zeig den Log', 'Mach weiter', 'Vierter'])
-  expect(r.map((x) => x.text)).toEqual(['Teste es!', 'Zeig den Log', 'Mach weiter'])
-  expect(r.map((x) => x.source)).toEqual(['engine', 'fork', 'fork'])
+  expect(r.map((x) => x.text)).toEqual(['Teste es!', 'Zeig den Log', 'Mach weiter', 'Vierter'])
+  expect(r.map((x) => x.source)).toEqual(['engine', 'fork', 'fork', 'fork'])
   expect(merge('Nur einer', [])).toEqual([{ text: 'Nur einer', source: 'engine' }])
   expect(merge('', ['A', 'B', 'C']).length).toBe(3)
   expect(merge('', [])).toEqual([])
   expect(merge('X', ['A', 'B', 'C']).length).toBe(4)
   expect(new Set(merge('X', ['A', 'B', 'C']).map((x) => keyOf(x.text))).size).toBe(4)
+  // Fork allein: vier Plätze. Kommt Claude Code dazu, steht er vorn, die anderen rücken nach, der vierte fällt weg
+  expect(merge('', ['A', 'B', 'C', 'D']).map((x) => x.text)).toEqual(['A', 'B', 'C', 'D'])
+  expect(merge('X', ['A', 'B', 'C', 'D']).map((x) => x.text)).toEqual(['X', 'A', 'B', 'C'])
+  // Ist er einer der vier, bleibt der vierte
+  expect(merge('c', ['A', 'B', 'C', 'D']).map((x) => x.text)).toEqual(['c', 'A', 'B', 'D'])
 })
 
 test('Fork-Antwort: JSON-Array aus Strings oder Objekten mit prompt, Müll, Text drumherum', () => {
-  expect(parseFork('["Teste es","Zeig den Diff","Weiter","zu viel"]')).toEqual(['Teste es', 'Zeig den Diff', 'Weiter'])
+  expect(parseFork('["Teste es","Zeig den Diff","Weiter","Push","zu viel"]')).toEqual(['Teste es', 'Zeig den Diff', 'Weiter', 'Push'])
   expect(parseFork('Hier: [{"label":"x","prompt":"Lauf die Tests"}, 3, "B"] fertig')).toEqual(['Lauf die Tests', 'B'])
   // Länger als der Knopf zeigt: verworfen, nicht gekürzt
   expect(parseFork('["Kurz", "Das hier ist deutlich länger als vierzig Zeichen, mit verstecktem Rest"]')).toEqual(['Kurz'])
@@ -43,6 +49,15 @@ test('Fork-Frage: nur ein JSON-Array, nicht weitermachen, Ausgabesprache nach Ei
   }
   expect(forkPrompt('en')).toContain('written in English')
   expect(forkPrompt('de')).toContain('written in German')
+  expect(forkPrompt('en')).toContain('up to 4 ')
+})
+
+test('Fork-Frage: „/“ am Anfang nur für gewollte Befehle, sonst der Befehl in Anführungszeichen der Sprache', () => {
+  for (const lang of ['en', 'de'] as const) expect(forkPrompt(lang)).toContain('executed as a slash command')
+  expect(forkPrompt('en')).toContain('wrap the command in “”')
+  expect(forkPrompt('de')).toContain('wrap the command in „“')
+  // Typografische Anführungszeichen brauchen im JSON kein Escaping und bleiben erhalten
+  expect(parseFork('["„/replies“ zählt falsch","/mod-test quick-replies"]')).toEqual(['„/replies“ zählt falsch', '/mod-test quick-replies'])
 })
 
 test('Sprache: Standard en, de nur bei "de"; beide Tabellen mit denselben Schlüsseln und ohne leere Texte', () => {
@@ -78,4 +93,19 @@ test('Anzeige: kürzen auf 40 Zeichen; 2 × 2 nur ab zwei Vorschlägen und wenn 
   expect(chooseLayout(['Ja, mach das', long], 60)).toBe('list')
   expect(chooseLayout(['Nur einer'], 120)).toBe('list')
   expect(chooseLayout(['a', 'b'], 10, 'grid')).toBe('grid')
+})
+
+test('Kosten: Preis nach Modell-ID, Alias und unbekannt; Summe über Aufrufe', () => {
+  expect(priceFor('claude-opus-5-5-20260101')).toEqual({ input: 4, output: 20, read: 0.2 })
+  expect(priceFor('opus-5')).toEqual({ input: 5, output: 25, read: 0.5 })
+  expect(priceFor('claude-sonnet-5-5[1m]').input).toBe(2)
+  expect(priceFor('haiku').input).toBe(1)
+  expect(priceFor('irgendwas').input).toBe(4)
+  const u = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 38000, cache_creation_input_tokens: 2000 }
+  // 1000 × 4 + 38000 × 0,2 + 2000 × 4 × 1,25 + 50 × 20 = 22600 → 0,0226 $
+  expect(Math.round(callCost(u, 'claude-opus-5-5') * 1e6)).toBe(22600)
+  const two = addCall(addCall(NO_COST, u, 'claude-opus-5-5'), u, 'claude-opus-5-5')
+  expect(two.calls).toBe(2)
+  expect(two.tokens).toBe(82100)
+  expect(two.cached).toBe(76000)
 })

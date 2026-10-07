@@ -181,7 +181,7 @@ If a check fails or times out, your message goes through unchanged.
 
 Claude Code often suggests your next message as grey text in the prompt. quick-replies turns it into a button in its
 own pill above Clawd. Click it, or type `1` into the empty prompt, and it's sent as your message. With
-`/replies more on` a fork of the session adds up to three more suggestions on `2`–`4`.
+`/replies more on` a fork of the session fills up to four places in total; Claude Code's own stays on `1`.
 
 - **Commands:** `/replies` (status), `/replies on|off`, `/replies more on|off`
 - **Rights in short:** reads Claude Code's suggestion; sends a suggestion as your message only on click or key, never

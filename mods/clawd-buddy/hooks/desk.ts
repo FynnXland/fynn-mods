@@ -3,18 +3,18 @@
 // In der Desktop-App lädt der Client-Rahmen nicht (SPEC → Offene Punkte); ein `Svg` aus dem Hooks-Modul aber schon. Darum läuft die
 // Engine dort im Hooks-Modul. Sie zeichnet nicht mehr je Bild neu (0.4.2): Jede Neuzeichnung des Bands lässt die Desktop-App auch die
 // Zeilen neu anfordern, die andere Mods hooken (sidekick: UserMessage), und deren Hover-Leiste flackerte (Fynn, 2026-10-06). Stattdessen
-// rechnet `plan` die nächsten Sekunden voraus und liefert sie als ein SVG mit SMIL-Animation; mit `isInteractive` spielt der Desktop sie
-// in einem Rahmen ohne Skripte ab (SvgProps.isInteractive, types:11957). Der Stand der Engine bleibt dabei unverändert (Schnappschuss
-// samt Zufall). `draw` zieht ihn beim nächsten Zeichnen nach dem Zeitplan der gezeigten Animation auf die Uhrzeit nach, gibt also genau
-// das Gezeigte wieder, und rechnet erst ab da mit den neuen Fakten weiter: Ein Ereignis wirkt ab seiner Zeichnung, nie rückwirkend.
+// rechnet `plan` die nächsten Sekunden voraus und liefert sie als ein SVG mit SMIL-Animation, das der Desktop als Bild zeichnet
+// (SvgProps ohne `isInteractive`, types:11934-11935, 11956-11957). Der Stand der Engine bleibt dabei unverändert
+// (Schnappschuss samt Zufall). `draw` zieht ihn beim nächsten Zeichnen nach dem Zeitplan der gezeigten Animation auf die Uhrzeit nach,
+// gibt also genau das Gezeigte wieder, und rechnet erst ab da mit den neuen Fakten weiter: Ein Ereignis wirkt ab seiner Zeichnung, nie rückwirkend.
 //
-// Staffelübergabe (Fynn, 2026-10-06: „nicht so ein Flackern, auch wenn es nur ganz kurz ist“): Ein neues `source` lädt den Rahmen neu, und
-// bis das neue Dokument steht, ist er leer. An eine laufende Animation anhängen geht nicht (kein Skript im Rahmen, types:11957). Darum
-// zeichnet register.ts zwei Rahmen übereinander: Die neue Animation lädt im freien Rahmen, während die alte sichtbar weiterläuft, erst
-// danach wird der alte geleert. Kurz sind beide sichtbar; damit sich dabei nichts doppelt zeigt, setzt die neue Animation die ersten
-// HANDOVER_TICKS genau so fort wie die alte (deren Fakten, deren ausstehende Eingriffe) und zeigt Neues erst danach. Das nur, wenn das
-// Neue sonst sofort anders aussähe; sonst gelten die neuen Fakten gleich. Der Zeitplan (`segs`, `acts`) hält fest, welche Fakten und
-// Eingriffe ab welchem Takt gelten, damit das Nachziehen genau das Gezeigte wiederholt.
+// Bild statt Rahmen (0.6.6, Fynn: `/clawd flicker` blinkt in allen drei Abschnitten): Bis 0.6.5 lief das SVG mit `isInteractive` in einem
+// Rahmen ohne Skripte. Ein neues `source` lädt den Rahmen neu, er ist dabei ~50 ms leer (gemessen im Chromium der App), und die App lud
+// beim Wechsel auch den unveränderten zweiten Rahmen neu: Die Staffelübergabe aus 0.6.3 half nicht. Ein Bild zeigt beim Tausch das alte, bis
+// das neue fertig ist (gemessen: kein leerer Moment). Eine neue Animation gilt darum sofort. SMIL läuft auch im Bild der App, obwohl die
+// Typen es nur beim Rahmen nennen (types:11956-11957): Desktop-Abnahme durch Fynn am 2026-10-07 (SPEC, Nachtrag 0.6.6).
+// Der Zeitplan (`segs`, `acts`) bleibt in der Form aus 0.6.3: Seit 0.6.6 hat er nach jeder Zeichnung genau einen Abschnitt und keine
+// ausstehenden Eingriffe, das Nachziehen läuft also mit den Fakten der gezeigten Animation.
 //
 // Das Bild ist in senkrechte Kacheln geteilt, jede mit eigener Zeitliste: Begleiter, die nebeneinander blinzeln und werkeln, ergäben
 // als Ganzes sonst so viele verschiedene Bilder, dass die Animation nur wenige Sekunden fassen könnte.
@@ -36,8 +36,6 @@ export type Plan = {
   /** Kachelbilder darin und Takte, an denen sich etwas ändert. */
   frames: number
   changes: number
-  /** Takte, die die Animation die vorige unverändert fortsetzt (Staffelübergabe), bevor Neues gilt. */
-  lead: number
 }
 
 /** Eingriff per `/clawd`: Clip vorführen, Nickerchen, anstupsen. */
@@ -47,17 +45,12 @@ export type Desk = {
   engine: Engine
   /**
    * Zeichnen zur Uhrzeit `now` (ms): Stand nach dem Zeitplan der gezeigten Animation nachziehen, dann ab da mit den neuen Fakten
-   * vorausrechnen (Pixel = `scale` CSS-Pixel), mit Staffelübergabe. Die neuen Fakten gelten danach als gezeigt.
+   * vorausrechnen (Pixel = `scale` CSS-Pixel). Neues und vorgemerkte Eingriffe gelten sofort; die neuen Fakten gelten danach als gezeigt.
    */
   draw: (now: number, facts: Facts, strain: Strain, scale: number) => Plan
-  /**
-   * Wie `draw`, wenn die Desktop-App den Rahmen ohnehin neu aufbaut (Sitzung wieder angezeigt, Band neu aufgebaut, eingeschaltet):
-   * ohne Übergabe, Neues und ausstehende Eingriffe gelten sofort.
-   */
-  drawFresh: (now: number, facts: Facts, strain: Strain, scale: number) => Plan
   /** Stand auf `now` nachziehen, so wie die gezeigte Animation lief. */
   catchUp: (now: number) => void
-  /** Eingriff für die nächste Zeichnung vormerken; er wirkt ab ihr bzw. nach der Übergabe. */
+  /** Eingriff für die nächste Zeichnung vormerken; er wirkt ab ihr. */
   request: (a: Act) => void
   /** Stand bis `now` nachziehen, Takt für Takt, mit festen Fakten; liefert die Zahl der Takte. Der erste Aufruf setzt nur die Uhr. */
   advance: (now: number, facts: Facts, strain: Strain) => number
@@ -76,8 +69,6 @@ const NAP_TICKS = 3000 // 5 Minuten
 export const PLAN_TICKS = 400 // höchstens 30 s je Animation
 export const PLAN_CHARS = 85_000 // Bilder je Animation; Rest für Zeitlisten und Rahmen
 export const SOURCE_MAX = 131_072 // Svg.source höchstens (types:11939)
-/** So lange setzt eine neue Animation die alte fort, wenn sie sonst sofort anders aussähe (Rahmen laden, alten leeren: register.ts). */
-export const HANDOVER_TICKS = 10 // 0,75 s
 const CATCH_UP = 2400 // höchstens 3 min nachziehen; länger verdeckt: die Zeit davor wird übersprungen
 const TILE = 10 // Kachelbreite in Bühnenpixeln
 const TILES = Math.ceil(W / TILE)
@@ -177,26 +168,8 @@ export function createDesk(o: DeskOpts): Desk {
     rnd.a = snap.a
   }
 
-  /** Sähen die nächsten HANDOVER_TICKS mit den neuen Fakten anders aus als nach dem Zeitplan der gezeigten Animation? */
-  function differs(facts: Facts, strain: Strain): boolean {
-    const at = Math.max(D.at, 0)
-    const run = (one: (t: number) => void): string[] => {
-      const snap = save()
-      const out: string[] = []
-      for (let i = 1; i <= HANDOVER_TICKS; i++) {
-        one(at + i * TICK)
-        out.push(engine.render().buf.join(','))
-      }
-      load(snap)
-      return out
-    }
-    const shown = run(step)
-    const next = run((t) => tick(t, facts, strain))
-    return shown.some((f, i) => f !== next[i])
-  }
-
   /** Die nächsten Takte nach dem Zeitplan als animiertes SVG; der Stand selbst bleibt, wie er ist. */
-  function simulate(scale: number, lead: number): Plan {
+  function simulate(scale: number): Plan {
     const snap = save()
     const ids = Array.from({ length: TILES }, () => new Map<string, number>()) // Kachelbild → Nummer
     const bodies: string[][] = Array.from({ length: TILES }, () => [])
@@ -226,10 +199,10 @@ export function createDesk(o: DeskOpts): Desk {
     }
     load(snap)
     // Zu lang (viele Wechsel verlängern die Zeitlisten): die Animation halbieren, bis sie passt; ein einzelnes Bild passt immer
-    let p = build(bodies, shown, Math.max(ticks, 1), scale, lead)
+    let p = build(bodies, shown, Math.max(ticks, 1), scale)
     while (p.source.length > SOURCE_MAX && p.ticks > 1) {
       const half = Math.floor(p.ticks / 2)
-      p = build(bodies, shown.map((s) => s.filter((x) => x.from < half)), half, scale, lead)
+      p = build(bodies, shown.map((s) => s.filter((x) => x.from < half)), half, scale)
     }
     return p
   }
@@ -238,27 +211,22 @@ export function createDesk(o: DeskOpts): Desk {
     const keep = { segs, acts }
     segs = [{ until: Infinity, facts, strain }]
     acts = []
-    const p = simulate(scale, 0)
+    const p = simulate(scale)
     segs = keep.segs
     acts = keep.acts
     return p
   }
 
-  /** Neu zeichnen: nachziehen, Zeitplan fortschreiben (bei Übergabe die ersten `lead` Takte wie bisher), vorausrechnen, Fälliges anwenden. */
-  function redraw(now: number, facts: Facts, strain: Strain, scale: number, handover: boolean): Plan {
+  /** Neu zeichnen: nachziehen, Zeitplan fortschreiben, vorausrechnen, Fälliges anwenden. */
+  function redraw(now: number, facts: Facts, strain: Strain, scale: number): Plan {
     if (segs.length) follow(now)
     else advance(now, facts, strain)
     const n = D.n
-    const lead = handover && segs.length && (queued.length || differs(facts, strain)) ? HANDOVER_TICKS : 0
-    // Ohne Übergabe gilt alles ab jetzt, auch noch ausstehende Eingriffe der gezeigten Animation
-    if (!lead) acts = acts.map((x) => ({ ...x, at: n }))
-    segs = [
-      ...segs.filter((x) => x.until > n).map((x) => ({ ...x, until: Math.min(x.until, n + lead) })).filter((x) => x.until > n),
-      { until: Infinity, facts, strain },
-    ]
-    acts = [...acts, ...queued.map((act) => ({ at: n + lead, act }))]
+    // Neue Fakten und vorgemerkte Eingriffe gelten ab jetzt
+    segs = [{ until: Infinity, facts, strain }]
+    acts = queued.map((act) => ({ at: n, act }))
     queued = []
-    const p = simulate(scale, lead)
+    const p = simulate(scale)
     for (const x of acts) if (x.at === n) apply(x.act)
     acts = acts.filter((x) => x.at > n)
     drawn = { facts, strain, at: now, ticks: p.ticks }
@@ -269,8 +237,7 @@ export function createDesk(o: DeskOpts): Desk {
     engine,
     advance,
     plan,
-    draw: (now, facts, strain, scale) => redraw(now, facts, strain, scale, true),
-    drawFresh: (now, facts, strain, scale) => redraw(now, facts, strain, scale, false),
+    draw: redraw,
     catchUp(now) {
       if (segs.length) follow(now)
     },
@@ -293,16 +260,14 @@ export function createDesk(o: DeskOpts): Desk {
   }
 }
 
-// Der Rahmen (isInteractive) bekäme sonst einen weißen Grund: Chromium hinterlegt einen Rahmen deckend, wenn dessen Farbschema
+// Nur für den Rahmen (isInteractive, im Betrieb seit 0.6.6 nicht mehr, nur in Abschnitt 2 von `/clawd flicker`); im Bild wirkungslos.
+// Der Rahmen bekäme sonst einen weißen Grund: Chromium hinterlegt einen Rahmen deckend, wenn dessen Farbschema
 // (ohne Angabe hell) nicht zu dem der Seite passt, im Dark Mode also immer. `light dark` übernimmt das Schema der Seite.
 // Bettet der Rahmen das SVG in ein HTML-Dokument ein, hätte `body` 8 px Rand: das Bild rutschte nach rechts unten aus dem Kasten und
 // würde dort abgeschnitten. Ohne HTML-Hülle treffen die Regeln nichts.
 const CSS = ':root{color-scheme:light dark}html,body{margin:0;padding:0;overflow:hidden}body>svg{display:block}'
 const head = (scale: number): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W * scale}" height="${H * scale}" shape-rendering="crispEdges"><style>${CSS}</style>`
-
-/** Leerer, durchsichtiger Rahmen: der freie der beiden Rahmen der Staffelübergabe (register.ts). */
-export const blankSource = (scale: number): string => `${head(scale)}</svg>`
 
 /** Das Bild als Pfade je Kachel und Farbe; waagerechte Läufe gleicher Farbe werden Rechtecke (an Kachelgrenzen geteilt). */
 function tilesOf(buf: readonly (string | null)[], flip: boolean): string[] {
@@ -336,12 +301,13 @@ function tilesOf(buf: readonly (string | null)[], flip: boolean): string[] {
 }
 
 // Ziffern 3 × 5 für die Testbilder (Zeilen von oben, je 3 Bit)
-const DIGITS: Record<number, number[]> = { 1: [2, 6, 2, 2, 7], 2: [7, 1, 7, 4, 7], 3: [7, 1, 7, 1, 7] }
+const DIGITS: Record<number, number[]> = { 1: [2, 6, 2, 2, 7], 2: [7, 1, 7, 4, 7] }
 const GRAY = '#8a8a8a'
 
 /**
  * Testbild für `/clawd flicker`: Clawd steht still, oben links die Nummer des Abschnitts. `nonce` ändert nur ein unsichtbares Rechteck:
- * gleiches Bild, anderes `source` (der Rahmen lädt neu).
+ * gleiches Bild, anderes `source`. Rechts neben der Nummer blinkt ein Punkt per SMIL (an/aus je 0,5 s): Blinkt er, läuft SMIL in dieser
+ * Darstellung.
  */
 export function stillSource(scale: number, flip: boolean, digit: number, nonce: number): string {
   const body = tilesOf(compose({ ...POSES.stand }, ALL_PROPS).buf, flip).join('')
@@ -349,14 +315,12 @@ export function stillSource(scale: number, flip: boolean, digit: number, nonce: 
   ;(DIGITS[digit] ?? []).forEach((bits, y) => {
     for (let x = 0; x < 3; x++) if (bits & (4 >> x)) d += `M${1 + x} ${1 + y}h1v1h-1z`
   })
-  return `${head(scale)}<rect x="${nonce % 1000}" y="0" width="0" height="0"/><path fill="${GRAY}" d="${d}"/>${body}</svg>`
+  const pulse = `<path fill="${GRAY}" d="M6 3h2v2h-2z"><animate attributeName="visibility" calcMode="discrete" dur="1s" repeatCount="indefinite" values="visible;hidden" keyTimes="0;0.5"/></path>`
+  return `${head(scale)}<rect x="${nonce % 1000}" y="0" width="0" height="0"/><path fill="${GRAY}" d="${d}"/>${pulse}${body}</svg>`
 }
 
-/** Testbild für `/clawd flicker`: nur ein kleiner Punkt bei `x` (Bühnenpixel), sonst durchsichtig. */
-export const markSource = (scale: number, x: number): string => `${head(scale)}<path fill="${GRAY}" d="M${x} 8h2v2h-2z"/></svg>`
-
 /** SVG mit SMIL aus den Abfolgen je Kachel (Takt 0 bis `ticks`); nur die darin gezeigten, nicht leeren Kachelbilder kommen hinein. */
-function build(bodies: readonly string[][], shown: readonly Shown[][], ticks: number, scale: number, lead: number): Plan {
+function build(bodies: readonly string[][], shown: readonly Shown[][], ticks: number, scale: number): Plan {
   const dur = `${((ticks * TICK) / 1000).toFixed(3)}s`
   const kt = (i: number) => String(+(i / ticks).toFixed(5))
   let groups = ''
@@ -380,7 +344,7 @@ function build(bodies: readonly string[][], shown: readonly Shown[][], ticks: nu
       groups += `<g visibility="${keys[0][1]}">${anim}${bodies[t][id]}</g>`
     }
   })
-  return { source: `${head(scale)}${groups}</svg>`, ticks, frames, changes: changeAt.size, lead }
+  return { source: `${head(scale)}${groups}</svg>`, ticks, frames, changes: changeAt.size }
 }
 
 export const DESK_TICK = TICK

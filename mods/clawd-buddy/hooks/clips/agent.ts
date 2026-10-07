@@ -72,7 +72,7 @@ export const PROPS: Readonly<Record<string, PropSprite>> = {
 }
 
 // ---- Clawd. Arme: nur Blöcke, 2 dick, in ganzen Pixelschritten.
-const CALM: Frame = { armL: 'down', armR: 'down', eyes: 'open', mouth: null, look: [0, 0], fy: 0, legs: 'stand' }
+const CALM: Frame = { armL: 'down', armR: 'down', eyes: 'open', mouth: null, look: [0, 0], fy: 0, by: 0, legs: 'stand' }
 /** Vollständiger Frame: alles Nichtgenannte zurück auf ruhig (so passen Teile und Schleifenränder lückenlos zusammen). */
 const P = (patch: Frame = {}): Frame => ({ ...CALM, ...patch })
 const HAP: Frame = { eyes: 'happy', look: [-1, 0], mouth: 'smile' } // freut sich

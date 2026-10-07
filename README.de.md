@@ -192,7 +192,7 @@ Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unveränd
 
 Claude Code schlägt oft deine nächste Nachricht als grauen Text im Prompt vor. quick-replies macht daraus einen Knopf
 in einer eigenen Pille über Clawd. Ein Klick oder die Taste `1` im leeren Prompt schickt ihn als deine Nachricht ab.
-Mit `/replies more on` kommen aus einem Fork der Session bis zu drei weitere Vorschläge auf `2`–`4` dazu.
+Mit `/replies more on` füllt ein Fork der Session bis zu vier Plätze; Claude Codes eigener Vorschlag bleibt auf `1`.
 
 - **Befehle:** `/replies` (Status), `/replies on|off`, `/replies more on|off`
 - **Rechte kurz:** liest den Vorschlag von Claude Code; sendet einen Vorschlag nur auf Klick oder Taste als deine

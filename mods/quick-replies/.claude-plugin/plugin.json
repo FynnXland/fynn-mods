@@ -1,7 +1,7 @@
 {
   "name": "quick-replies",
-  "version": "0.3.0",
-  "description": "Claude Code's own next-message suggestion as a button above Clawd; click it, type 1 in the empty prompt, or send just 1 to send it. With /replies more on, up to three more suggestions from a fork of the session.",
+  "version": "0.4.1",
+  "description": "Claude Code's own next-message suggestion as a button above Clawd; click it, type 1 in the empty prompt, or send just 1 to send it. With /replies more on, a fork of the session fills up to four places in total.",
   "author": {
     "name": "Fynn Hansen"
   },
@@ -20,7 +20,7 @@
     "more": {
       "type": "boolean",
       "title": "More suggestions via fork",
-      "description": "Besides Claude Code's own suggestion, ask a fork of the session for up to three more after every answer. Costs roughly one short answer per answer, mostly from the cache. /replies more on|off overrides this for all sessions.",
+      "description": "Besides Claude Code's own suggestion, ask a fork of the session for suggestions after every answer, up to four in total; Claude Code's own stays first. Costs roughly one short answer per answer, mostly from the cache. /replies more on|off overrides this for all sessions.",
       "default": false
     },
     "layout": {

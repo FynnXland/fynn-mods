@@ -464,8 +464,11 @@ function miniWin(k: number): PropSprite {
   return spr(rowsOf(g))
 }
 
-/** Brieftaube (7x4, blickt nach links): 0 Flügel oben, 1 Flügel unten. */
-const dove = (v: number): PropSprite => spr(v ? ['.......', '...GG..', 'YKGGGG.', '.WWWWW.'] : ['..WW...', '.WWWW..', 'YKGGGG.', '.GGGGG.'])
+/**
+ * Brieftaube (7x4, blickt nach links): 0 Flügel oben, 1 Flügel unten. Ohne Auge (Fynn, 2026-10-07: „wirkt unrealistisch“): kleiner Kopf über
+ * dem Schnabel, rundlicher grauer Körper, dunkler Schwanz, helle Flügel. Schnabel unverändert links in Zeile 2 (dort hält sie den Brief).
+ */
+const dove = (v: number): PropSprite => spr(v ? ['.......', '.G.GG..', 'YGGGGGD', '...WW..'] : ['...WW..', '.G.WW..', 'YGGGGGD', '..GGG..'])
 /** Brief zu (Effekt, 4x3, roter Siegel) und aufgefaltet (Effekt, 5x5 mit Textzeilen). */
 const ENV = fxSpr(['WWWW', 'WMMW', 'WWWW'])
 const LETTER = fxSpr(['WWWWW', 'WDDDW', 'WWWWW', 'WDDDW', 'WWWWW'])

@@ -1,6 +1,20 @@
 // quick-replies: Texte in beiden Sprachen (ohne `$`). Die Sprache kommt aus userConfig `language` (Standard en).
 
+import type { ForkCost } from './cost.ts'
+
 export type Lang = 'en' | 'de'
+
+/** Kleine Beträge mit drei Nachkommastellen, sonst zwei. */
+function money(v: number): string {
+  const n = Number(v) || 0
+  return n.toFixed(n < 0.1 ? 3 : 2)
+}
+
+/** Tokens: unter 1000 genau, sonst in Tausend. */
+function count(v: number): string {
+  const n = Number(v) || 0
+  return n < 1000 ? String(n) : `${Math.round(n / 1000)}k`
+}
 
 export function langOf(v: unknown): Lang {
   return v === 'de' ? 'de' : 'en'
@@ -52,6 +66,12 @@ export const T = {
     sendFailed: (text: string) => `Sending failed. Please send it yourself: ${text}`,
     /** Sprache, in der der Fork die Vorschläge schreiben soll */
     forkLanguage: 'English',
+    forkQuotes: ['“', '”'],
+    forkInChat: 'Fork in this chat',
+    usd: (v: number) => (Number(v) < 0.001 ? '<$0.001' : `~$${money(v)}`),
+    costNote: 'API price, estimated; on a subscription it counts toward the usage limits',
+    tokens: (n: number) => `${count(n)} tokens`,
+    fromCache: (pct: number) => `${pct} % from cache`,
   },
   de: {
     description: 'Antwort-Vorschläge über Clawd: Status, an/aus, weitere Vorschläge per Fork',
@@ -85,10 +105,23 @@ export const T = {
     },
     sendFailed: (text: string) => `Senden ging nicht. Bitte selbst senden: ${text}`,
     forkLanguage: 'German',
+    forkQuotes: ['„', '“'],
+    forkInChat: 'Fork in diesem Chat',
+    usd: (v: number) => (Number(v) < 0.001 ? '<0,001 $' : `~${money(v).replace('.', ',')} $`),
+    costNote: 'API-Preis, geschätzt; im Abo zählt es gegen die Nutzungslimits',
+    tokens: (n: number) => `${count(n)} Tokens`,
+    fromCache: (pct: number) => `${pct} % aus dem Cache`,
   },
 } as const
 
 export type Texts = (typeof T)[Lang]
+
+/** Zeile für /replies status: Fork-Aufrufe dieses Chats mit geschätztem API-Wert. */
+export function forkCostText(t: Texts, c: ForkCost): string {
+  if (c.calls === 0) return `${t.forkInChat}: –`
+  const pct = c.tokens > 0 ? Math.round((c.cached / c.tokens) * 100) : 0
+  return `${t.forkInChat}: ${c.calls}× · ${t.usd(c.usd)} (${t.costNote}) · ${t.tokens(c.tokens)}, ${t.fromCache(pct)}`
+}
 
 export function forkStateText(t: Texts, s: ForkState): string {
   switch (s.kind) {
