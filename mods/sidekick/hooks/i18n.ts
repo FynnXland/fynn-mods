@@ -2,7 +2,7 @@
 // Die Sprache wird einmal in `register(on, options)` gesetzt; eine Änderung über /config lädt das Modul neu.
 // `de` war in 0.3.0 wortgleich zu 0.2.4. Seit 0.4.0 steht statt „Haiku“ der Name aus models.ts (CHECK_NAME, HANDOFF_NAME).
 
-import { CHECK_GEN_DE, CHECK_NAME, HANDOFF_NAME, SPLIT_NAME } from './models.ts'
+import { CHECK_AUTO_NAME, CHECK_NAME, HANDOFF_NAME, SPLIT_NAME, genitiveDe } from './models.ts'
 
 export type Lang = 'en' | 'de'
 
@@ -74,7 +74,8 @@ export function shortDate(ms: number): string {
 const de = {
   // Rückfrage (Dialog der Engine)
   send: 'Trotzdem senden',
-  fassung: `${CHECK_GEN_DE} Fassung senden`,
+  // `name`: das Modell, das die Fassung geschrieben hat (Haiku, in Autonom Sonnet; Nachtrag 0.11.0)
+  fassung: (name: string) => `${genitiveDe(name)} Fassung senden`,
   newChat: 'Neuer Chat mit Übergabe',
   newPlain: 'Neuer Chat ohne Übergabe',
   abort: 'Abbrechen',
@@ -86,7 +87,7 @@ const de = {
   howNext: 'Wie weiter?',
   fassungBlock: (f: string) => `Fassung:\n„${f}“`,
   newTopicDefault: 'Neues Thema: ein frischer Chat wäre hier günstiger.',
-  fassungDefault: `${CHECK_NAME} hat eine klarere Fassung.`,
+  fassungDefault: (name: string) => `${name} hat eine klarere Fassung.`,
   wrongChat: (zeile: string, cold: string) => `Das passt gar nicht zu diesem Chat.${zeile ? `\n\n${zeile}` : ''}${cold ? `\n\n${cold}` : ''}\n\nAbbrechen sendet nichts, dein Text bleibt zum Kopieren stehen. Bist du im falschen Chat?`,
   // Neuer Chat
   busyHandoff: 'schreibt die Übergabe',
@@ -125,10 +126,10 @@ const de = {
   level: { off: 'Aus', cache: 'Cache', guide: 'Begleiter', plan: 'Plan', auto: 'Autonom' },
   levelDesc: {
     off: 'prüft nichts',
-    cache: 'nur die Kalt-Rückfrage nach Regeln, ohne Sonnet',
+    cache: `nur die Kalt-Rückfrage nach Regeln, ohne ${CHECK_NAME}`,
     guide: `Prüfung mit ${CHECK_NAME}, Zeilen und Rückfragen`,
     plan: 'wie Begleiter, früher prüfen, lange Nachrichten in To-dos aufteilen',
-    auto: 'wie Plan, dazu jede Nachricht ab 300 Zeichen; Fassung und Aufteilung ohne Rückfrage',
+    auto: `wie Plan, dazu jede Nachricht ab 300 Zeichen; Fassung (von ${CHECK_AUTO_NAME}) und Aufteilung ohne Rückfrage`,
   },
   modeOff: '🔴 sidekick aus',
   modeOffWord: 'sidekick aus',
@@ -148,7 +149,7 @@ const de = {
   splitBusyDrop: (t: string) => `sidekick: Eine andere Aufteilung lief schon, deshalb nicht gesendet und nicht aufgeteilt. Dein Text zum Kopieren:\n\n${t}`,
   cmdLater: 'Sidekick: Text als To-dos für später einplanen (worklist); Claude liest ihn nicht',
   // Zeile unter der Nachricht
-  sentFassung: `gesendet wurde ${CHECK_GEN_DE} Fassung`,
+  sentFassung: (name: string) => `gesendet wurde ${genitiveDe(name)} Fassung`,
   sentLabel: 'gesendet:',
   sentPlain: (s: string) => `\n\ngesendet: „${s}“`,
   // /sidekick
@@ -157,7 +158,7 @@ const de = {
   statusTitle: (on: string) => `**${on}** · Status`,
   rowThreshold: (v: string) => `| **Schwelle** | ${v} Kontext (Prüfung ab hier) |`,
   rowBig: (v: string) => `| **Groß** | ${v} (Rückfrage, wenn der Cache kalt ist) |`,
-  rowSkills: (on: string) => `| **Skills an ${CHECK_NAME}** | ${on} |`,
+  rowSkills: (on: string) => `| **Skills an die Prüfung** | ${on} |`,
   rowTtl: (ttl: number, src: string) => `| **Cache-Dauer** | ${ttl} min (${src}) |`,
   rowLong: (n: number) => `| **Lang** | ${n > 0 ? `${n} Zeichen (ab hier Aufteilen in To-dos, nur mit worklist)` : 'aus'} |`,
   lastSplit: (time: string, k: number, n: number) => `**Letzte Aufteilung** (${time}): ${k} von ${n} To-dos eingereiht`,
@@ -289,7 +290,7 @@ type Texts = typeof de
 
 const en: Texts = {
   send: 'Send anyway',
-  fassung: `Send ${CHECK_NAME}'s version`,
+  fassung: (name) => `Send ${name}'s version`,
   newChat: 'New chat with handoff',
   newPlain: 'New chat without handoff',
   abort: 'Cancel',
@@ -301,7 +302,7 @@ const en: Texts = {
   howNext: 'How do you want to continue?',
   fassungBlock: (f) => `Version:\n"${f}"`,
   newTopicDefault: 'New topic: a fresh chat would be cheaper here.',
-  fassungDefault: `${CHECK_NAME} has a clearer version.`,
+  fassungDefault: (name) => `${name} has a clearer version.`,
   wrongChat: (zeile, cold) => `This doesn't fit this chat at all.${zeile ? `\n\n${zeile}` : ''}${cold ? `\n\n${cold}` : ''}\n\nCancel sends nothing; your text stays ready to copy. Are you in the wrong chat?`,
   busyHandoff: 'is writing the handoff',
   busyPlain: 'is starting a new chat',
@@ -337,10 +338,10 @@ const en: Texts = {
   level: { off: 'Off', cache: 'Cache', guide: 'Guide', plan: 'Plan', auto: 'Auto' },
   levelDesc: {
     off: 'checks nothing',
-    cache: 'only the cold-cache question by rules, no Sonnet',
+    cache: `only the cold-cache question by rules, no ${CHECK_NAME}`,
     guide: `check with ${CHECK_NAME}, hint lines and questions`,
     plan: 'like Guide, checks earlier, splits long messages into to-dos',
-    auto: 'like Plan, plus every message from 300 characters; version and split without asking',
+    auto: `like Plan, plus every message from 300 characters; version (by ${CHECK_AUTO_NAME}) and split without asking`,
   },
   modeOff: '🔴 sidekick off',
   modeOffWord: 'sidekick off',
@@ -359,7 +360,7 @@ const en: Texts = {
   laterBusy: (t) => `sidekick is splitting or starting a new chat; please try /later again in a moment. Your text: "${t}"`,
   splitBusyDrop: (t) => `sidekick: another split was already running, so this was not sent and not split. Your text to copy:\n\n${t}`,
   cmdLater: 'Sidekick: plan text as to-dos for later (worklist); Claude does not read it',
-  sentFassung: `${CHECK_NAME}'s version was sent`,
+  sentFassung: (name) => `${name}'s version was sent`,
   sentLabel: 'sent:',
   sentPlain: (s) => `\n\nsent: "${s}"`,
   on: 'on',
@@ -367,7 +368,7 @@ const en: Texts = {
   statusTitle: (on) => `**${on}** · status`,
   rowThreshold: (v) => `| **Threshold** | ${v} context (checks from here) |`,
   rowBig: (v) => `| **Big** | ${v} (asks when the cache is cold) |`,
-  rowSkills: (on) => `| **Skills to ${CHECK_NAME}** | ${on} |`,
+  rowSkills: (on) => `| **Skills to the check** | ${on} |`,
   rowTtl: (ttl, src) => `| **Cache lifetime** | ${ttl} min (${src}) |`,
   rowLong: (n) => `| **Long** | ${n > 0 ? `${n} characters (split into to-dos from here, only with worklist)` : 'off'} |`,
   lastSplit: (time, k, n) => `**Last split** (${time}): ${k} of ${n} to-dos queued`,
@@ -419,7 +420,7 @@ const en: Texts = {
   coldWithout: (n, usd) => `- Cold starts without asking: **${n}**${n ? ` · ${usd} rewrite` : ''}`,
   skillsUsed: (list) => `- Skills used: ${list || 'none'} · \`/skill-doctor\` shows what can be turned off`,
   savingsFoot: '*Amounts are API value; on a subscription it counts toward your plan. Savings are a cautious estimate. sidekick does not track the cost of the built-in `cc-plugin-you-should-know`.*',
-  art: { neuer_chat: 'New chat', falscher_chat: 'Wrong chat', skill: 'Skill', fassung: `${CHECK_NAME}'s version`, modell: 'Model', aufteilen: 'Split into to-dos', sonstiges: 'Other' },
+  art: { neuer_chat: 'New chat', falscher_chat: 'Wrong chat', skill: 'Skill', fassung: 'Clearer version', modell: 'Model', aufteilen: 'Split into to-dos', sonstiges: 'Other' },
   vCost: 'Cost',
   vCostSub: (n, h, s = 0) => `${n} ${n === 1 ? 'check' : 'checks'} · ${h} ${h === 1 ? 'handoff' : 'handoffs'}${s ? ` · ${s} ${s === 1 ? 'split' : 'splits'}` : ''}`,
   vSaved: 'Savings (estimate)',

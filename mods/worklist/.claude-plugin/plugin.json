@@ -1,6 +1,6 @@
 {
   "name": "worklist",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "To-do sidebar next to the chat: queue tasks, even while Claude is working. When Claude is clearly done, the to-do is checked off and the next one starts; otherwise the list stops with a reason and buttons (Continue keeps the order). Runs by default, never pauses on its own. History per project. /todo",
   "author": {
     "name": "Fynn Hansen"
@@ -20,8 +20,8 @@
     },
     "haiku": {
       "type": "boolean",
-      "title": "Haiku for unclear cases",
-      "description": "When the rules can't tell whether Claude is done, worklist briefly asks Haiku (measured at about 0.05 US cents per case). Off: the list stops in those cases instead.",
+      "title": "Haiku 5.5 for unclear cases",
+      "description": "When the rules can't tell whether Claude is done, worklist briefly asks Haiku 5.5 (claude-haiku-5-5, effort high; measured at about 0.01 US cents per case). Off: the list stops in those cases instead.",
       "default": true
     },
     "doneLine": {

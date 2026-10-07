@@ -170,7 +170,18 @@ const AUTO_RULES = [
   '',
 ]
 
-export function checkSystem(skills: Skill[] | null, split = false, auto = false): string {
+/**
+ * Haiku in der autonomen Stufe (Nachtrag 0.11.0): nur melden, dass eine Fassung lohnt; schreiben tut sie danach ein anderes
+ * Modell mit `AUTO_RULES`. Haiku selbst mit `AUTO_RULES` brauchte bis 18 s.
+ */
+const AUTO_FLAG_RULES = [
+  'Autonome Stufe (eine Fassung würde ohne Rückfrage gesendet; ein anderes Modell schreibt sie):',
+  '- Ist die Nachricht mehrdeutig, unvollständig oder deutlich klarer formulierbar und lässt sich das aus Kurzfassung oder letzten Nachrichten klären, antworte mit urteil "hinweis" und art "fassung", einer kurzen "zeile" dazu, und lasse "fassung" leer. Schreibe die Fassung nicht selbst.',
+  '- Antwortet die Nachricht auf eine Frage, Auswahl oder einen Vorschlag in der letzten Antwort des Assistenten, gilt das nicht.',
+  '',
+]
+
+export function checkSystem(skills: Skill[] | null, split = false, auto = false, flag = false): string {
   const out = [
     'Du bist der Sidekick in Claude Code. Der Nutzer tippt gleich eine Nachricht an seinen Coding-Assistenten; du prüfst sie VOR dem Senden.',
     'Du chattest nie mit dem Nutzer und beantwortest die Nachricht nicht. Du gibst nur ein Urteil als JSON.',
@@ -204,6 +215,7 @@ export function checkSystem(skills: Skill[] | null, split = false, auto = false)
     // Nur, wenn das Aufteilen erlaubt ist (lange Nachricht, worklist da): sonst bleibt der geprobte Prompt unverändert (Nachtrag 0.9.0)
     ...(split ? SPLIT_RULES : []),
     ...(auto ? AUTO_RULES : []),
+    ...(flag && !auto ? AUTO_FLAG_RULES : []),
     'Regeln:',
     '- Höchstens ein Hinweis. Kein Lob, keine Rückfragen, keine Anrede.',
     `- "art": "neuer_chat" | "falscher_chat" | "skill" | "fassung" | "modell" | ${split ? '"aufteilen" | ' : ''}"sonstiges".`,
@@ -818,12 +830,13 @@ const MAX_STEPS = 50
  */
 export function bookingStep(b: Booking, u: { total: number; read: number; written: number }): { usd: number; first: boolean; next: Booking | null } {
   const first = b.steps === 0
-  const read = priceFor(b.model).read / 1e6
+  // Preisstufe je Prompt (Haiku 5.5 über 100k, Nachtrag 0.11.0): der alte Chat hätte die alte Größe, der neue hat `u.total`
+  const read = priceFor(b.model, b.oldCtx).read / 1e6
   let usd: number
   let base = b.first
   if (first) {
     const old = b.kind === 'kalt' ? rewriteCost(b.oldCtx, b.model, b.ttl) : b.oldCtx * read
-    usd = old - (u.read * read + rewriteCost(u.written, b.model, b.ttl))
+    usd = old - (u.read * (priceFor(b.model, u.total).read / 1e6) + rewriteCost(u.written, b.model, b.ttl, u.total))
     base = u.total
   } else {
     if (!base) base = u.total

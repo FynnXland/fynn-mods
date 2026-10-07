@@ -160,16 +160,19 @@ async function measure($: EngineInterface, final = false, usage?: Usage & { mode
   await save($)
 }
 
-/** Modellaufruf eines anderen Mods buchen (SPEC Verhalten 5). `usage` steht auf jedem Zweig des Ergebnisses (types ModelCompleteResult). */
-async function bookCall($: EngineInterface, origin: string | undefined, model: string, usage: unknown, countOnly: boolean) {
+/**
+ * Modellaufruf eines anderen Mods buchen (SPEC Verhalten 5). `usage` steht auf jedem Zweig des Ergebnisses (types ModelCompleteResult).
+ * `single`: `usage` ist genau eine Anfrage (nur `model.complete`), dann gilt eine Preisstufe nach Prompt-Länge (Haiku 5.5).
+ */
+async function bookCall($: EngineInterface, origin: string | undefined, model: string, usage: unknown, countOnly: boolean, single = false) {
   const name = pluginName(origin ?? '')
   if (!name || name === 'engine' || name === SELF || !sessionId) return
   const now = await $.clock.now()
-  const amount = countOnly ? 0 : callCost(usage as Parameters<typeof callCost>[0], model)
+  const amount = countOnly ? 0 : callCost(usage as Parameters<typeof callCost>[0], model, single)
   await honorReset($)
   rec ??= newRec({ ...meta, title }, now, seen)
   bookMod(rec, name, dayKey(now), amount, now, countOnly ? undefined : (usage as Usage | undefined))
-  if (!countOnly) bookModel(rec, model, dayKey(now), usage as Usage | undefined, now, 'modModels')
+  if (!countOnly) bookModel(rec, model, dayKey(now), usage as Usage | undefined, now, 'modModels', single)
   await save($)
 }
 
@@ -324,7 +327,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('model.complete', async ($, e, next) => {
     const r = await next(e)
     try {
-      if ('value' in r) await serial(() => bookCall($, next.origin?.plugin, e.model, r.value.usage, false))
+      if ('value' in r) await serial(() => bookCall($, next.origin?.plugin, e.model, r.value.usage, false, true))
     } catch (err) {
       log($, `Mod-Aufruf: ${msg(err)}`)
     }

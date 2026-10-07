@@ -4,7 +4,7 @@ Two slim bars on the left of the band above the prompt show live how much of the
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.6.0**
+Tested with Claude Code **v2.1.291** · Plugin version **0.6.1**
 
 ## Display
 

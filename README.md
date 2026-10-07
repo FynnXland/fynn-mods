@@ -76,13 +76,13 @@ claude plugin update <mod>@fynn-mods
 
 Three mods make model calls **on your account** (on a subscription they count toward your usage limits):
 
-- **sidekick** asks Sonnet 5.5 (effort `low`) only when a check can pay off (first message of a chat, large context,
-  cold cache): about $0.01 and 2 seconds per check (API value). A handoff to a new chat is one larger Sonnet call,
+- **sidekick** asks Haiku 5.5 (effort `medium`) only when a check can pay off (first message of a chat, large context,
+  cold cache): about $0.001 and 3 seconds per check (API value). A handoff to a new chat is one larger Sonnet call,
   made only when you choose it. In level `plan` or `auto` with worklist installed, a long message (800+ characters) is
   checked too, and splitting it into to-dos or `/later` costs about $0.01 more. Level `auto` checks every message from
-  300 characters (about $0.01 each); level `cache` makes no model call at all. `/savings` sets both against the measured
+  300 characters with Sonnet 5.5 (about $0.012 each) and lets Sonnet write its rewritten versions; level `cache` makes no model call at all. `/savings` sets both against the measured
   savings. Turn it off with `/sidekick off`.
-- **worklist** asks Haiku only when its rules can't tell whether Claude is done: about $0.0005 per case. Turn it off
+- **worklist** asks Haiku 5.5 (effort `high`) only when its rules can't tell whether Claude is done: about $0.0001 per case. Turn it off
   with the `haiku` setting in `/config`; the list then stops in those cases and waits for you.
 - **quick-replies** forks the session after each answer **only with `/replies more on`** (off by default): roughly
   the cost of one short answer, mostly from the prompt cache.
@@ -135,7 +135,7 @@ An optional third ring shows how full a drive is, split by file type (programs, 
 ![sidekick](assets/sidekick.png)
 
 A second pair of eyes on every message, right before it is sent. Fixed rules decide first, at no cost. Only where a
-check can pay off (the first message of a chat, a large context, a cold cache) a quick Sonnet 5.5 call looks at it
+check can pay off (the first message of a chat, a large context, a cold cache) a quick Haiku 5.5 call looks at it
 too. sidekick never chats on its own: it stays quiet, adds a blue hint line under your message, or asks you.
 
 - **Cold cache in a large chat:** before you resend a big context that has gone cold, it shows both prices, e.g.
@@ -166,7 +166,7 @@ If a check fails or times out, your message goes through unchanged.
 - **Commands:** `/sidekick` (status and settings), `/sidekick off|cache|guide|plan|auto|on`, `/sidekick long 800|off`,
   `/sidekick hints …`, `/later <text>`, `/savings [today|week|all]`, `/savings detail`
 - **Rights in short:** reads your message before it is sent; holds it back or replaces it only after your choice in
-  the dialog (in level `auto` also without asking: a rewritten version or a split); Sonnet via `$.model.complete` with a short running summary, your last 3 messages and the end of Claude's last reply, never the whole
+  the dialog (in level `auto` also without asking: a rewritten version or a split); Haiku 5.5 and Sonnet 5.5 via `$.model.complete` with a short running summary, your last 3 messages and the end of Claude's last reply, never the whole
   history; on a button click it runs the command shown in the line (plugin and your own commands, `/skill-doctor`,
   `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) or worklist's `/todo` (also for
   the to-dos of a split or `/later`); in level `auto` it sends a rewritten version in your name without asking, only
@@ -201,7 +201,7 @@ History is kept per project.
 
 - **Commands:** `/todo <task>`, `/todos` (sidebar), `/todos pause|resume|done|skip|retry|clear|history|status|close`
 - **Rights in short:** sends the next to-do (or the continuation of a stopped one) as your message only after its
-  check passes or on your click; Haiku for
+  check passes or on your click; Haiku 5.5 for
   unclear cases (can be turned off); reads whether subagents are still running. In the chat it shows sent to-dos as an
   orange line and hides a standalone "Done." / „Fertig.“ at the end of answers (display only). No files, processes or network.
 - **Details:** [mods/worklist](mods/worklist/README.md)

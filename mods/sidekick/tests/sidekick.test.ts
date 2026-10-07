@@ -1,6 +1,6 @@
 import type { Engine, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { MIN, completeCost, dayKey, rewriteCost } from '../hooks/cache.ts'
+import { MIN, completeCost, dayKey, priceFor, rewriteCost } from '../hooks/cache.ts'
 import {
   DEFAULT_SETTINGS,
   addDay,
@@ -42,7 +42,7 @@ import type { Ledger, Level } from '../hooks/logic.ts'
 import { DEFAULT_HINTS, applyHints, availOf, cleanWartung, doneFromSkill, doneFromText, memoryMeasure, normModel, pickHint, projectKey, rebase, rootFromFiles, unusedSkills } from '../hooks/wartung.ts'
 import type { Measure, Wartung } from '../hooks/wartung.ts'
 import { T, dec, setLang, shortDate, spanText, tokensText, usdText } from '../hooks/i18n.ts'
-import { CHECK, HANDOFF as HANDOFF_ROLE, SPLIT, genitiveDe, modelLabel, modelName } from '../hooks/models.ts'
+import { CHECK, CHECK_AUTO, CHECK_NAME, HANDOFF as HANDOFF_ROLE, SPLIT, genitiveDe, modelLabel, modelName } from '../hooks/models.ts'
 import { savingsTree } from '../hooks/view.ts'
 
 // Die bisherigen Tests prüfen die deutschen Texte (language: de, Fynns Einstellung); eigene Tests unten prüfen Englisch.
@@ -198,13 +198,17 @@ deTest('Ersparnis: offene Buchung aus 0.3 ohne first nimmt den Kontext der laufe
 })
 
 deTest('Modelle: eine Konstante je Rolle, Name für Texte daraus', async () => {
-  expect(CHECK).toEqual({ model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 400, timeoutMs: 6000 })
+  // Nachtrag 0.11.0: Prüfung Haiku 5.5 medium; die Fassung in Autonom schreibt Sonnet wie bisher
+  expect(CHECK).toEqual({ model: 'claude-haiku-5-5', effort: 'medium', maxTokens: 2000, timeoutMs: 6000 })
+  expect(CHECK_AUTO).toEqual({ model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 400, timeoutMs: 6000 })
+  expect(CHECK_NAME).toBe('Haiku')
   expect(HANDOFF_ROLE).toEqual({ model: 'claude-sonnet-5-5', effort: 'medium', maxTokens: 3000, timeoutMs: 45000 })
   expect(modelName('claude-sonnet-5-5')).toBe('Sonnet')
   expect(modelName('haiku')).toBe('Haiku')
   expect(modelName('claude-opus-5-5[1m]')).toBe('Opus')
-  expect(T.de.fassung).toBe('Sonnets Fassung senden')
-  expect(T.en.fassung).toBe("Send Sonnet's version")
+  expect(T.de.fassung(CHECK_NAME)).toBe('Haikus Fassung senden')
+  expect(T.de.fassung('Sonnet')).toBe('Sonnets Fassung senden')
+  expect(T.en.fassung(CHECK_NAME)).toBe("Send Haiku's version")
   expect(genitiveDe('Opus')).toBe('Opus’')
   expect(genitiveDe('Haiku')).toBe('Haikus')
 })
@@ -300,6 +304,8 @@ function world(on: On, o: W = {}) {
   const handoffSystems: string[] = []
   let answer: string | null = 'Trotzdem senden'
   let reply: unknown = { isAnswered: true, text: verdict({}), usage: MODEL_USAGE }
+  // Antworten je Aufruf der Prüfung, danach wieder `reply` (zweistufige Prüfung in Autonom, Nachtrag 0.11.0)
+  let replies: unknown[] = []
   let handoffReply: unknown = { isAnswered: true, text: HANDOFF, usage: MODEL_USAGE }
   // SPLIT (Nachtrag 0.9.0): `null` = Aufruf wird abgelehnt
   const splits: { system: string; prompt: string; req: unknown }[] = []
@@ -356,7 +362,10 @@ function world(on: On, o: W = {}) {
       return { value: splitReply as never }
     }
     checks.push({ system: e.system ?? '', prompt: e.prompt, req: { model: e.model, effort: e.effort, maxTokens: e.maxTokens, timeoutMs: e.timeoutMs } })
-    return { value: reply as never }
+    const next = replies.length ? replies.shift() : reply
+    // `{ deny }` lehnt genau diesen Aufruf ab (docs/raw/en/test.md:182)
+    if (next && typeof next === 'object' && 'deny' in next) return next as never
+    return { value: next as never }
   })
   on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
@@ -464,6 +473,7 @@ function world(on: On, o: W = {}) {
     setSplit: (r: unknown) => (splitReply = r),
     setAnswer: (a: string | null) => (answer = a),
     setReply: (r: unknown) => (reply = r),
+    setReplies: (r: unknown[]) => (replies = [...r]),
     setHandoff: (r: unknown) => (handoffReply = r),
     setCtx: (n: number | undefined) => (ctx = n),
     setMessages: (m: unknown[]) => (messages = m),
@@ -527,7 +537,7 @@ deTest('Auslöser (b) ab Schwelle ruft die Prüfung genau einmal; durch → unve
   expect(d.pruefungen).toBe(1)
   expect(near(d.kosten, completeCost(MODEL_USAGE, CHECK.model))).toBe(true)
   // Modell, effort, Grenze und Zeitlimit kommen aus der Konstante der Rolle
-  expect(w.checks[0]!.req).toEqual({ model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 400, timeoutMs: 6000 })
+  expect(w.checks[0]!.req).toEqual(CHECK)
   // Die Kurzfassung wird gespeichert und bei der nächsten Prüfung mitgegeben
   await $.prompt.submit(userPrompt('und noch was'))
   expect(w.checks[1]!.prompt).toContain('Kurzfassung bisher: Kurz.')
@@ -647,14 +657,14 @@ deTest('anhalten fassung: richtige Antworten, „Fassung senden“ sendet den ne
   const w = world(on)
   w.setCtx(90000)
   w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Unklar, welche Datei', fassung: 'Bitte ändere hooks/register.ts: X' }), usage: MODEL_USAGE })
-  w.setAnswer('Sonnets Fassung senden')
+  w.setAnswer('Haikus Fassung senden')
   const r = await $.prompt.submit(userPrompt('mach das bitte mal schnell'))
-  expect(w.asks[0]!.options).toEqual(['Sonnets Fassung senden (empfohlen)', 'Trotzdem senden', 'Abbrechen'])
+  expect(w.asks[0]!.options).toEqual(['Haikus Fassung senden (empfohlen)', 'Trotzdem senden', 'Abbrechen'])
   expect(w.asks[0]!.question).toBe('Unklar, welche Datei\n\nFassung:\n„Bitte ändere hooks/register.ts: X“\n\nWie weiter?')
   expect(r).toMatchObject({ text: 'Bitte ändere hooks/register.ts: X' })
   // Der Desktop zeigt das Original in der Sprechblase: darunter steht, dass die Fassung gesendet wurde
   const ui = await $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId: 'mf', surface: 'desktop', props: { text: 'mach das bitte mal schnell', origin: { kind: 'sdk' }, isExpanded: true } } as never)
-  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('· sidekick: gesendet wurde Sonnets Fassung')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('· sidekick: gesendet wurde Haikus Fassung')
   // Darunter im Rahmen, was wirklich gesendet wurde
   const box = await ui.find({ key: 'sidekick-sent' })
   expect(JSON.stringify(box)).toContain('Bitte ändere hooks/register.ts: X')
@@ -679,7 +689,7 @@ deTest('Fehlerpfade: Timeout, ungültiges JSON, abgelehntes ask → durch; Timeo
   w.setReply({ isAnswered: false, reason: 'aborted', usage: { input_tokens: 500, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } })
   expect(await $.prompt.submit(userPrompt('a'))).toMatchObject({ text: 'a' })
   await flush()
-  expect(near(today(w.ledger()).kosten, (500 * 2) / 1e6)).toBe(true) // Sonnet 5.5: 2 $ je Million Eingabe
+  expect(near(today(w.ledger()).kosten, (500 * 0.1) / 1e6)).toBe(true) // Haiku 5.5: 0,10 $ je Million Eingabe
   w.setReply({ isAnswered: true, text: 'Das ist kein JSON', usage: MODEL_USAGE })
   expect(await $.prompt.submit(userPrompt('b'))).toMatchObject({ text: 'b' })
   w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neu' }), usage: MODEL_USAGE })
@@ -1505,14 +1515,14 @@ test('i18n: Englisch ist Standard; Rückfrage, Zeile und Befehle auf Englisch', 
   const w = world(on)
   w.setCtx(90000)
   w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Unclear which file', fassung: 'Please change hooks/register.ts: X' }), usage: MODEL_USAGE })
-  w.setAnswer("Send Sonnet's version (recommended)")
+  w.setAnswer("Send Haiku's version (recommended)")
   const r = await $.prompt.submit(userPrompt('please do that thing again'))
   expect(w.asks[0]!.question).toContain('Version:\n"Please change hooks/register.ts: X"')
   expect(w.asks[0]!.question).toContain('How do you want to continue?')
-  expect(w.asks[0]!.options).toEqual(["Send Sonnet's version (recommended)", 'Send anyway', 'Cancel'])
+  expect(w.asks[0]!.options).toEqual(["Send Haiku's version (recommended)", 'Send anyway', 'Cancel'])
   expect(r).toMatchObject({ text: 'Please change hooks/register.ts: X' })
   const ui = await $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId: 'm1', surface: 'desktop', props: { text: 'please do that thing again', origin: { kind: 'composer' }, isExpanded: true } } as never)
-  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain("· sidekick: Sonnet's version was sent")
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain("· sidekick: Haiku's version was sent")
   expect(JSON.stringify(await ui.find({ key: 'sidekick-sent' }))).toContain('sent:')
   await ui.unmount()
   // Die Anweisung der Prüfung verlangt Englisch
@@ -1525,9 +1535,9 @@ test('i18n: Englisch ist Standard; Rückfrage, Zeile und Befehle auf Englisch', 
   expect(bad).toContain('Unknown: "quatsch". Possible:')
   const savings = String(((await $.command.run({ command: 'savings', args: 'details today' })) as { text?: string }).text)
   expect(savings).toContain('**Cost**')
-  expect(savings).toContain("| Sonnet's version accepted | 1 |")
+  expect(savings).toContain('| Clearer version accepted | 1 |')
   expect(savings).toContain('- Checks: **1**')
-  expect(savings).toContain('| Sonnet 5.5 | Check | 1 |')
+  expect(savings).toContain('| Haiku 5.5 | Check | 1 |')
 })
 
 test('i18n: Kalt-Rückfrage und Übergabe auf Englisch, mit englischer Gliederung', async ($, on) => {
@@ -1770,12 +1780,14 @@ deTest('0.5.0: Prüfung und Übergabe buchen je Modell mit Dauer', async ($, on)
   await flush()
   await w.clock.advance(5000)
   await flush(200)
+  // Prüfung (Haiku) und Übergabe (Sonnet) buchen je auf ihr Modell
+  expect(today(w.ledger()).modelle[CHECK.model]!.pruefung.n).toBe(1)
+  expect(near(today(w.ledger()).modelle[CHECK.model]!.pruefung.usd, completeCost(MODEL_USAGE, CHECK.model))).toBe(true)
   const m = today(w.ledger()).modelle['claude-sonnet-5-5']!
-  expect(m.pruefung.n).toBe(1)
-  expect(near(m.pruefung.usd, completeCost(MODEL_USAGE, CHECK.model))).toBe(true)
   expect(m.uebergabe.n).toBe(1)
   expect(m.uebergabe.ms).toBe(5000)
-  expect(m.in).toBe(6000)
+  // Sonnet hat nur noch die Übergabe; die Prüfung bucht auf Haiku
+  expect(m.in).toBe(3000)
 })
 
 deTest('0.5.0: /savings gezeichnet im Terminal und Desktop; VS Code und unbekannte Zeilen bekommen Markdown', async ($, on) => {
@@ -1792,7 +1804,7 @@ deTest('0.5.0: /savings gezeichnet im Terminal und Desktop; VS Code und unbekann
     const ui = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', surface, props: { command: 'savings', args: 'today', text, isErrored: false } } as never)
     const tree = JSON.stringify(await ui.find({ key: 'sidekick-savings' }))
     expect(tree).toContain('Modelle (eigene Aufrufe)')
-    expect(tree).toContain('Sonnet 5.5')
+    expect(tree).toContain(modelLabel(CHECK.model))
     expect(tree).toContain('Prüfung 1×')
     expect(tree).toContain('Falscher Chat')
     expect(tree).toContain('"borderStyle":"round"')
@@ -2463,7 +2475,7 @@ deTest('0.9.0: mit worklist prüft eine lange Nachricht mit „Aufteilen erlaubt
   expect(w.checks[0]!.prompt).toContain('; Aufteilen erlaubt: ja')
   expect(w.checks[0]!.system).toContain('"aufteilen"')
   // Die Prüfung bleibt schnell: dieselbe Rolle CHECK
-  expect(w.checks[0]!.req).toEqual({ model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 400, timeoutMs: 6000 })
+  expect(w.checks[0]!.req).toEqual(CHECK)
   await $.prompt.submit(userPrompt('kurz'))
   await $.prompt.submit(userPrompt(`${LONG} schau in @src/app.ts`))
   await $.prompt.submit({ ...userPrompt(LONG), attachments: [{ kind: 'image' }] } as never)
@@ -3185,4 +3197,225 @@ deTest('0.10.2: Desktop: eigener Baum mit farbigem ● neben der Zeichnung der E
   d = await desk()
   expect(d.mine).toContain('#F85149')
   expect(d.mine).toContain('sidekick aus')
+})
+
+// ---------- Nachtrag 0.11.0: Haiku 5.5 für die Prüfung, neue Preise ----------
+
+deTest('0.11.0: Preise Haiku 5.5 und Sonnet 5.5; Alias haiku bleibt Haiku 4.5; Stufe über 100k', async () => {
+  expect(priceFor('claude-haiku-5-5')).toEqual({ id: 'haiku-5-5', input: 0.1, output: 0.5, read: 0.01 })
+  expect(priceFor('haiku').id).toBe('haiku-4-5')
+  expect(priceFor('claude-haiku-4-5-20251001')).toEqual({ id: 'haiku-4-5', input: 1, output: 5, read: 0.1 })
+  expect(priceFor('claude-sonnet-5-5').read).toBe(0.1)
+  expect(priceFor('claude-sonnet-5').read).toBe(0.2)
+  // Über 100 000 Prompt-Tokens das Fünffache, genau an der Grenze der normale Preis; andere Modelle haben keine Stufe
+  expect(priceFor('claude-haiku-5-5', 120000)).toEqual({ id: 'haiku-5-5', input: 0.5, output: 2.5, read: 0.05 })
+  expect(priceFor('claude-haiku-5-5', 100000)).toEqual({ id: 'haiku-5-5', input: 0.1, output: 0.5, read: 0.01 })
+  expect(priceFor('claude-opus-5-5', 900000).input).toBe(4)
+  // Prompt = input + Cache lesen + Cache schreiben
+  const big = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 110000, cache_creation_input_tokens: 0 }
+  expect(near(completeCost(big, 'claude-haiku-5-5'), (1000 * 0.5 + 110000 * 0.05 + 100 * 2.5) / 1e6)).toBe(true)
+  // Eine Prüfung mit Haiku 5.5: 4 000 ein, 800 aus ≈ 0,0008 $
+  const check = { input_tokens: 4000, output_tokens: 800, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  expect(near(completeCost(check, CHECK.model), 0.0008)).toBe(true)
+  // Neuschreiben: die Stufe nach der Kontextgröße
+  expect(near(rewriteCost(120000, 'claude-haiku-5-5', 60), (120000 * 0.5 * 2) / 1e6)).toBe(true)
+  expect(near(rewriteCost(50000, 'claude-haiku-5-5', 5), (50000 * 0.1 * 1.25) / 1e6)).toBe(true)
+})
+
+deTest('0.11.0: Texte folgen den Konstanten; Stufe Cache nennt CHECK_NAME, Autonom nennt den Schreiber der Fassung', async () => {
+  expect(T.de.levelDesc.cache).toContain(`ohne ${CHECK_NAME}`)
+  expect(T.en.levelDesc.cache).toContain(`no ${CHECK_NAME}`)
+  expect(T.de.levelDesc.cache).not.toContain('Sonnet')
+  expect(T.de.levelDesc.auto).toContain(`von ${modelName(CHECK_AUTO.model)}`)
+  expect(T.de.fassungDefault('Haiku')).toBe('Haiku hat eine klarere Fassung.')
+  expect(T.de.sentFassung('Sonnet')).toBe('gesendet wurde Sonnets Fassung')
+  expect(T.en.sentFassung('Haiku')).toBe("Haiku's version was sent")
+})
+
+const FLAG = verdict({ urteil: 'hinweis', art: 'fassung', zeile: 'Klarer formulierbar.', fassung: '' })
+/** Unter 300 Zeichen: In Autonom prüft Haiku zuerst (Nachtrag 0.11.0). */
+const SHORT = 'mach das mit der zeile nochmal so wie vorhin, aber ohne neue ideen'
+
+deTest('0.11.0 Autonom kurz: Haiku meldet, Sonnet schreibt die Fassung; beide gebucht', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(90000)
+  const good = 'Bitte prüfe die sidekick-Zeile unter der Nachricht noch einmal und setze sie genau so um, wie wir es vorhin besprochen haben, ohne neue Ideen.'
+  w.setReplies([
+    { isAnswered: true, text: FLAG, usage: MODEL_USAGE },
+    { isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Klarer.', fassung: good, kurzfassung: 'Von Sonnet.' }), usage: MODEL_USAGE },
+  ])
+  const r = await $.prompt.submit(userPrompt(SHORT))
+  expect(w.checks.length).toBe(2)
+  // 1. Haiku mit dem Melde-Zusatz, ohne den Schreib-Zusatz
+  expect(w.checks[0]!.req).toEqual(CHECK)
+  expect(w.checks[0]!.system).toContain('ein anderes Modell schreibt sie')
+  expect(w.checks[0]!.system).not.toContain('Sei kritischer als sonst')
+  // 2. Sonnet mit dem Autonom-Zusatz wie bis 0.10, derselbe Prompt
+  expect(w.checks[1]!.req).toEqual(CHECK_AUTO)
+  expect(w.checks[1]!.system).toContain('Sei kritischer als sonst')
+  expect(w.checks[1]!.system).not.toContain('ein anderes Modell schreibt sie')
+  expect(w.checks[1]!.prompt).toBe(w.checks[0]!.prompt)
+  expect(w.asks.length).toBe(0)
+  expect(r).toMatchObject({ text: good })
+  const ui = await mountLine($, SHORT, 'h1')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('· sidekick: gesendet wurde Sonnets Fassung')
+  await ui.unmount()
+  await flush()
+  const d = today(w.ledger())
+  expect(d.modelle[CHECK.model]!.pruefung.n).toBe(1)
+  expect(d.modelle[CHECK_AUTO.model]!.pruefung.n).toBe(1)
+  expect(d.pruefungen).toBe(2)
+  expect(near(d.kosten, completeCost(MODEL_USAGE, CHECK.model) + completeCost(MODEL_USAGE, CHECK_AUTO.model))).toBe(true)
+  // Die Kurzfassung kommt vom letzten Urteil
+  const status = String(((await $.command.run({ command: 'sidekick', args: 'status' })) as { text?: string }).text)
+  expect(status).toContain('Von Sonnet.')
+})
+
+deTest('0.11.0 Autonom ab 300 Zeichen: ein Aufruf, direkt Sonnet mit dem Autonom-Zusatz; 299 Zeichen prüft Haiku', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setReplies([{ isAnswered: true, text: FLAG, usage: MODEL_USAGE }])
+  await $.prompt.submit(userPrompt('y'.repeat(300)))
+  expect(w.checks.length).toBe(1)
+  expect(w.checks[0]!.req).toEqual(CHECK_AUTO)
+  expect(w.checks[0]!.system).toContain('Sei kritischer als sonst')
+  expect(w.checks[0]!.system).not.toContain('ein anderes Modell schreibt sie')
+  await flush()
+  expect(today(w.ledger()).modelle[CHECK.model]).toBeUndefined()
+  // 299 Zeichen: kein Auslöser (e); mit großem Kontext (b) prüft Haiku
+  w.setCtx(90000)
+  await $.prompt.submit(userPrompt('z'.repeat(299)))
+  expect(w.checks.length).toBe(2)
+  expect(w.checks[1]!.req).toEqual(CHECK)
+})
+
+deTest('0.11.0 Autonom kurz: ohne Meldung kein zweiter Aufruf; im Begleiter nie', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(90000)
+  // Haiku: durch
+  await $.prompt.submit(userPrompt(SHORT))
+  expect(w.checks.length).toBe(1)
+  // Haiku: anderer Hinweis (Skill) → kein Sonnet
+  w.setReplies([{ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'skill', skill: 'mod-review', zeile: 'Passt.' }), usage: MODEL_USAGE }])
+  await $.prompt.submit(userPrompt(`${SHORT} b`))
+  expect(w.checks.length).toBe(2)
+  // Begleiter: eine Fassung von Haiku bleibt bei Haiku, mit Rückfrage
+  await $.command.run({ command: 'sidekick', args: 'guide' } as never)
+  w.setReplies([{ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Klarer.', fassung: 'Bitte prüfe die Zeile unter der Nachricht und setze sie wie besprochen um, ohne neue Ideen.' }), usage: MODEL_USAGE }])
+  w.setAnswer('Abbrechen')
+  await $.prompt.submit(userPrompt(`${SHORT} c`))
+  expect(w.checks.length).toBe(3)
+  expect(w.checks[2]!.system).not.toContain('Autonome Stufe')
+  expect(w.asks.at(-1)!.options[0]).toBe('Haikus Fassung senden (empfohlen)')
+})
+
+deTest('0.11.0 Autonom: Kalt-Rückfrage (c) ruft Sonnet nicht nach; Haikus Zeile mit Haikus Namen', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(undefined)
+  w.setReplies([{ isAnswered: true, text: FLAG, usage: MODEL_USAGE }])
+  w.setAnswer('Trotzdem senden')
+  await w.step($, stepUsage(400000, 0))
+  await w.clock.advance(70 * MIN)
+  await $.prompt.submit(userPrompt(SHORT))
+  expect(w.checks.length).toBe(1)
+  expect(w.checks[0]!.prompt).toContain('Cache kalt und Kontext groß')
+  expect(w.asks[0]!.question).toContain('Haiku: Klarer formulierbar.')
+})
+
+deTest('0.11.0 Autonom Fehlerpfade: Sonnet antwortet nicht oder unlesbar → Haikus Zeile, Nachricht unverändert', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(90000)
+  w.setReplies([
+    { isAnswered: true, text: FLAG, usage: MODEL_USAGE },
+    { isAnswered: false, reason: 'aborted', usage: { input_tokens: 500, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } },
+  ])
+  const r = await $.prompt.submit(userPrompt(SHORT))
+  expect(w.checks.length).toBe(2)
+  expect(r).toMatchObject({ text: SHORT })
+  expect(w.asks.length).toBe(0)
+  const ui = await mountLine($, SHORT, 'h2')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Klarer formulierbar.')
+  await ui.unmount()
+  await flush()
+  // Der abgebrochene Sonnet-Aufruf ist trotzdem gebucht
+  expect(today(w.ledger()).modelle[CHECK_AUTO.model]!.pruefung.n).toBe(1)
+})
+
+deTest('0.11.0 Autonom Fehlerpfad: Sonnet liefert kein JSON → Haikus Zeile, Nachricht unverändert', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(90000)
+  w.setReplies([{ isAnswered: true, text: FLAG, usage: MODEL_USAGE }, { isAnswered: true, text: 'kein JSON', usage: MODEL_USAGE }])
+  expect(await $.prompt.submit(userPrompt(SHORT))).toMatchObject({ text: SHORT })
+  expect(w.checks.length).toBe(2)
+  expect(w.asks.length).toBe(0)
+  const ui = await mountLine($, SHORT, 'h3')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Klarer formulierbar.')
+  await ui.unmount()
+})
+
+deTest('0.11.0 Review S1: Haikus eigene Fassung geht in Autonom nie ohne Rückfrage raus, auch wenn Sonnet scheitert', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(90000)
+  const haiku = 'Bitte prüfe die sidekick-Zeile unter der Nachricht noch einmal und setze sie genau so um, wie wir es vorhin besprochen haben.'
+  w.setReplies([
+    { isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Klarer formulierbar.', fassung: haiku }), usage: MODEL_USAGE },
+    { isAnswered: false, reason: 'aborted', usage: MODEL_USAGE },
+  ])
+  const r = await $.prompt.submit(userPrompt(SHORT))
+  expect(w.checks.length).toBe(2)
+  expect(r).toMatchObject({ text: SHORT })
+  expect(w.asks.length).toBe(0)
+  const ui = await mountLine($, SHORT, 's1')
+  const line = JSON.stringify(await ui.find({ key: 'sidekick-line' }))
+  expect(line).toContain('Klarer formulierbar.')
+  expect(line).not.toContain('gesendet wurde')
+  await ui.unmount()
+})
+
+deTest('0.11.0 Review S2: ist die Fassung gerade unterdrückt, ruft Autonom Sonnet nicht', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(90000)
+  // 1. Haiku meldet, Sonnet scheitert: Haikus Zeile steht unter der Nachricht
+  w.setReplies([{ isAnswered: true, text: FLAG, usage: MODEL_USAGE }, { isAnswered: false, reason: 'aborted', usage: MODEL_USAGE }])
+  await $.prompt.submit(userPrompt(SHORT))
+  expect(w.checks.length).toBe(2)
+  // 2. Die nächste eigene Nachricht bucht die Zeile als ignoriert; Haiku meldet wieder, Sonnet bleibt aus
+  w.setReplies([{ isAnswered: true, text: FLAG, usage: MODEL_USAGE }])
+  await $.prompt.submit(userPrompt(`${SHORT} b`))
+  expect(w.checks.length).toBe(3)
+  expect(w.checks[2]!.req).toEqual(CHECK)
+})
+
+deTest('0.11.0 Review S3: bei (c) in Autonom bekommt Haiku keinen Melde-Zusatz und darf die Fassung für die Kalt-Rückfrage schreiben', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(undefined)
+  w.setReplies([{ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Klarer.', fassung: 'Bitte setze die Zeile wie besprochen um, ohne neue Ideen.' }), usage: MODEL_USAGE }])
+  w.setAnswer('Trotzdem senden')
+  await w.step($, stepUsage(400000, 0))
+  await w.clock.advance(70 * MIN)
+  await $.prompt.submit(userPrompt(SHORT))
+  expect(w.checks.length).toBe(1)
+  expect(w.checks[0]!.system).not.toContain('ein anderes Modell schreibt sie')
+  expect(w.asks[0]!.options).toContain('Haikus Fassung senden')
+})
+
+deTest('0.11.0 Review K5: Autonom fragt bei einer deutlich kürzeren Sonnet-Fassung; „Sonnets Fassung senden“ sendet sie', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(90000)
+  const msg = 'mach das mit der zeile nochmal so wie vorhin, genau so wie wir das besprochen hatten, aber wirklich ohne neue ideen bitte'
+  w.setReplies([
+    { isAnswered: true, text: FLAG, usage: MODEL_USAGE },
+    { isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Kürzer.', fassung: 'Setze die Zeile um.' }), usage: MODEL_USAGE },
+  ])
+  w.setAnswer('Sonnets Fassung senden (empfohlen)')
+  const r = await $.prompt.submit(userPrompt(msg))
+  expect(w.asks[0]!.options).toEqual(['Sonnets Fassung senden (empfohlen)', 'Trotzdem senden', 'Abbrechen'])
+  expect(r).toMatchObject({ text: 'Setze die Zeile um.' })
+})
+
+deTest('0.11.0 Review K5: Sonnet abgelehnt (deny) → Nachricht geht unverändert durch', async ($, on) => {
+  const w = world(on, { level: 'auto' })
+  w.setCtx(90000)
+  w.setReplies([{ isAnswered: true, text: FLAG, usage: MODEL_USAGE }, { deny: 'Modell gesperrt' }])
+  expect(await $.prompt.submit(userPrompt(SHORT))).toMatchObject({ text: SHORT })
+  expect(w.asks.length).toBe(0)
 })

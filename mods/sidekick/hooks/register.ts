@@ -6,7 +6,7 @@
 import type { EngineInterface, On, RenderElement, RenderNode, Timer } from 'claude-code'
 import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.ts'
 import { setLang, spanText, t, tokensText, usdText } from './i18n.ts'
-import { CHECK, CHECK_NAME, HANDOFF, SPLIT } from './models.ts'
+import { CHECK, CHECK_AUTO, HANDOFF, SPLIT, modelName } from './models.ts'
 import type { CacheMem, CompleteUsage, StepUsage } from './cache.ts'
 import { joinBand, layer, LEVEL, nameOf, splitBand } from './band.ts'
 import {
@@ -14,6 +14,7 @@ import {
   KEEP_DAYS,
   USAGE,
   applySetting,
+  AUTO_MIN,
   autoFassung,
   book,
   bookModel,
@@ -564,7 +565,7 @@ function closeOpen($: EngineInterface, now: number, ctx: number) {
 }
 
 // `before`: letzte Nachrichten und Kurzfassung vor dieser Nachricht; nach „Abbrechen“ beim falschen Chat zurück (Review S1)
-type Check = { trigger: Trigger; ctx: number; model: string; ttl: 5 | 60; cold: boolean; unknown: boolean; coldFor: number; verdict: Verdict | null; before: { recent: string[]; summary: string } }
+type Check = { trigger: Trigger; ctx: number; model: string; ttl: 5 | 60; cold: boolean; unknown: boolean; coldFor: number; verdict: Verdict | null; before: { recent: string[]; summary: string }; by?: string }
 
 /** Ergebnis des Torwächters: die Prüfung (null = ohne Prüfung durchlassen) und ein Wartungs-Hinweis für genau diese Nachricht. */
 type Gate = { c: Check | null; w: WHint | null }
@@ -637,21 +638,51 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
   }, reply)
   // Bricht der Nutzer ab, endet auch die Prüfung (types:2500-2501)
   buddy($, 'check')
-  const r = await $.model.complete({ ...CHECK, system: checkSystem(skills, split, settings.level === 'auto'), prompt }, { signal })
-  const done = await $.clock.now()
-  // `usage` kommt auf jedem Arm, auch bei Abbruch (types:6131): immer buchen
-  const usd = completeCost(r.usage as CompleteUsage, CHECK.model)
-  bookDay($, now, (d) => {
-    d.kosten += usd
-    d.pruefungen += 1
-    d.warteMs += done - now
-    bookModel(d, CHECK.model, 'pruefung', usd, done - now, r.usage as CompleteUsage)
-  })
-  let verdict = r.isAnswered ? parseVerdict(r.text, trigger, (skills ?? []).map((s) => s.name), text, split) : null
+  const names = (skills ?? []).map((s) => s.name)
+  const auto = settings.level === 'auto'
+  const ask = async (role: typeof CHECK | typeof CHECK_AUTO, system: string) => {
+    const t0 = await $.clock.now()
+    const r = await $.model.complete({ ...role, system, prompt }, { signal })
+    const done = await $.clock.now()
+    // `usage` kommt auf jedem Arm, auch bei Abbruch (types:6131): immer buchen
+    const usd = completeCost(r.usage as CompleteUsage, role.model)
+    bookDay($, now, (d) => {
+      d.kosten += usd
+      d.pruefungen += 1
+      d.warteMs += done - t0
+      bookModel(d, role.model, 'pruefung', usd, done - t0, r.usage as CompleteUsage)
+    })
+    return r.isAnswered ? parseVerdict(r.text, trigger, names, text, split) : null
+  }
+  // Nachtrag 0.11.0: Haiku prüft. Autonom ab 300 Zeichen prüft Sonnet in einem Aufruf wie bis 0.10: Haiku brauchte für ein
+  // Diktat auch nur zum Melden 5–10 s, zweistufig zusammen 10–14 s (Probe 2026-10-07). Kürzere Nachrichten in Autonom: Haiku
+  // meldet nur, dass eine Fassung lohnt
+  const direct = auto && text.trim().length >= AUTO_MIN
+  // Bei (c) kein Melden: Dort sendet Autonom nie ohne Rückfrage, Haiku liefert die Fassung für die Kalt-Rückfrage wie im
+  // Begleiter (Review 0.11.0 S3)
+  const flag = auto && !direct && trigger !== 'c'
+  const role = direct ? CHECK_AUTO : CHECK
+  let verdict = await ask(role, checkSystem(skills, split, direct, flag))
+  let by: string = role.model
+  if (flag && verdict?.art === 'fassung') {
+    // Eine Fassung, die Haiku trotz Melde-Zusatz schreibt, geht nie ohne Rückfrage raus: Fassungen in Autonom schreibt Sonnet
+    // (Review 0.11.0 S1)
+    if (verdict.urteil !== 'durch') verdict = { ...verdict, urteil: 'hinweis', fassung: '' }
+    // Autonom kurz: Sonnet schreibt die Fassung mit dem Autonom-Zusatz. Scheitert das, bleibt Haikus Zeile. Ist die Art gerade
+    // unterdrückt, wäre der Aufruf umsonst (Review 0.11.0 S2)
+    if (verdict.urteil !== 'durch' && !signal.aborted && !isSuppressed(ses.ignored, 'fassung', ctx, ses.commits)) {
+      const v2 = await ask(CHECK_AUTO, checkSystem(skills, split, true))
+      if (v2) {
+        // Ohne eigene Kurzfassung bleibt Haikus (Review 0.11.0 K2)
+        verdict = { ...v2, kurzfassung: v2.kurzfassung || verdict.kurzfassung }
+        by = CHECK_AUTO.model
+      }
+    }
+  }
   if (verdict?.kurzfassung) ses.summary = verdict.kurzfassung
   if (verdict && verdict.urteil !== 'durch' && isSuppressed(ses.ignored, verdict.art, ctx, ses.commits)) verdict = { ...verdict, urteil: 'durch' }
   saveSes($, now)
-  return { c: { ...base, verdict }, w: await wp }
+  return { c: { ...base, verdict, by }, w: await wp }
 }
 
 /** Die nicht gesendete Nachricht aus dem Prüfkontext nehmen: Sonst sähe die nächste Prüfung das fremde Gebiet als Teil des Chats. */
@@ -662,32 +693,35 @@ function forget($: EngineInterface, c: Check, now: number) {
 }
 
 /** Antworttexte der Rückfrage in der eingestellten Sprache. */
-/** `n`: Zahl der To-dos beim Aufteilen. */
-const label = (c: Choice, n = 0): string => {
+/** `n`: Zahl der To-dos beim Aufteilen. `who`: Name des Modells, das die Fassung schrieb (Nachtrag 0.11.0). */
+const label = (c: Choice, n = 0, who = whoOf()): string => {
   const x = t()
-  return { new: x.newChat, plain: x.newPlain, fassung: x.fassung, split: x.splitN(n), send: x.send, abort: x.abort }[c]
+  return { new: x.newChat, plain: x.newPlain, fassung: x.fassung(who), split: x.splitN(n), send: x.send, abort: x.abort }[c]
 }
 /** Antworttexte, die erste mit „(empfohlen)“. */
-const labels = (list: Choice[], n = 0) => list.map((c, i) => label(c, n) + (i === 0 ? t().recommended : ''))
+const labels = (list: Choice[], n = 0, who = whoOf()) => list.map((c, i) => label(c, n, who) + (i === 0 ? t().recommended : ''))
 /** Gewählte Antwort zurück zur Wahl; „(empfohlen)“ zählt nicht mit. Unbekannter Text (freie Eingabe) gilt als „senden“. */
-function choiceOf(answer: string, n = 0): Choice {
+function choiceOf(answer: string, n = 0, who = whoOf()): Choice {
   const a = answer.endsWith(t().recommended) ? answer.slice(0, -t().recommended.length) : answer
-  return (['new', 'plain', 'fassung', 'split', 'send', 'abort'] as const).find((c) => label(c, n) === a) ?? 'send'
+  return (['new', 'plain', 'fassung', 'split', 'send', 'abort'] as const).find((c) => label(c, n, who) === a) ?? 'send'
 }
+/** Name des Modells hinter einem Urteil, für Texte wie „Haikus Fassung“; ohne Angabe das der Prüfung. */
+const whoOf = (c?: Check | null) => modelName(c?.by || CHECK.model)
 
 const FASSUNG_MAX = 600
 const showable = (f: string) => !!f && f.length <= FASSUNG_MAX
 
 /** Die Rückfrage: Frage und Antworten (2–4, Frage endet mit „?“, types:2332-2346). `n`: Zahl der To-dos beim Aufteilen. */
-function dialog(c: Check, resendable: boolean, base: number): { question: string; options: string[]; art: Art; n?: number } | null {
+function dialog(c: Check, resendable: boolean, base: number): { question: string; options: string[]; art: Art; n?: number; who: string } | null {
   const v = c.verdict
+  const who = whoOf(c)
   // Falscher Chat vor allem anderen, auch vor der Kalt-Rückfrage: Abbrechen ist dann die bessere Aktion (Fynn 2026-10-06)
   if (v?.urteil === 'anhalten' && v.art === 'falscher_chat') {
     // Im Kalt-Fall dazu, was „Trotzdem senden“ kostet
     const ctx = tokensText(c.ctx)
     const send = usdText(rewriteCost(c.ctx, c.model, c.ttl))
     const cold = c.trigger !== 'c' ? '' : c.unknown ? t().coldUnknown(ctx, send) : t().coldSince(spanText(c.coldFor), ctx, send)
-    return { question: t().wrongChat(v.zeile, cold), options: labels(wrongChatChoices(resendable, v.verlauf)), art: 'falscher_chat' }
+    return { question: t().wrongChat(v.zeile, cold), options: labels(wrongChatChoices(resendable, v.verlauf), 0, who), art: 'falscher_chat', who }
   }
   if (c.trigger === 'c') {
     const send = rewriteCost(c.ctx, c.model, c.ttl)
@@ -697,7 +731,7 @@ function dialog(c: Check, resendable: boolean, base: number): { question: string
         ? t().coldUnknown(tokensText(c.ctx), usdText(send))
         : t().coldSince(spanText(c.coldFor), tokensText(c.ctx), usdText(send)),
     ]
-    if (v && v.urteil !== 'durch' && v.zeile) parts.push(`${CHECK_NAME}: ${v.zeile}`)
+    if (v && v.urteil !== 'durch' && v.zeile) parts.push(`${who}: ${v.zeile}`)
     if (resendable) {
       parts.push(t().optNew(t().newChat, usdText(est)))
       parts.push(t().optPlain(t().newPlain, usdText(rewriteCost(base, c.model, c.ttl))))
@@ -707,9 +741,9 @@ function dialog(c: Check, resendable: boolean, base: number): { question: string
     const fassung = v?.art === 'fassung' && showable(v.fassung)
     if (fassung) parts.splice(parts.length - 1, 0, t().fassungBlock(v!.fassung))
     // Die empfohlene Antwort steht auf 1; höchstens 4 Antworten
-    const options = labels(rankChoices({ cold: true, sendUsd: send, verlauf: v?.verlauf, resendable, fassung }))
+    const options = labels(rankChoices({ cold: true, sendUsd: send, verlauf: v?.verlauf, resendable, fassung }), 0, who)
     // Absätze statt eines Blocks
-    return { question: parts.join('\n\n'), options, art: 'neuer_chat' }
+    return { question: parts.join('\n\n'), options, art: 'neuer_chat', who }
   }
   if (!v || v.urteil !== 'anhalten') return null
   // Lange Nachricht mit mehreren Aufträgen (Nachtrag 0.9.0): Titel als Vorschau, Aufteilen empfohlen. parseVerdict lässt das nur mit
@@ -717,16 +751,16 @@ function dialog(c: Check, resendable: boolean, base: number): { question: string
   if (v.art === 'aufteilen') {
     const steps = v.schritte ?? []
     if (!resendable || steps.length < 3 || splitting) return null
-    return { question: t().splitAsk(steps), options: labels(['split', 'send', 'abort'], steps.length), art: 'aufteilen', n: steps.length }
+    return { question: t().splitAsk(steps), options: labels(['split', 'send', 'abort'], steps.length, who), art: 'aufteilen', n: steps.length, who }
   }
   if (v.art === 'neuer_chat') {
     if (!resendable) return null // mit Anhang oder @datei gibt es diese Antwort nicht (SPEC Verhalten 4)
-    return { question: `${v.zeile || t().newTopicDefault} ${t().howNext}`, options: labels(rankChoices({ cold: false, sendUsd: Infinity, verlauf: v.verlauf, resendable, fassung: false })), art: 'neuer_chat' }
+    return { question: `${v.zeile || t().newTopicDefault} ${t().howNext}`, options: labels(rankChoices({ cold: false, sendUsd: Infinity, verlauf: v.verlauf, resendable, fassung: false }), 0, who), art: 'neuer_chat', who }
   }
   // fassung (parseVerdict lässt „anhalten“ nur mit neuer_chat oder einer Fassung zu). Gesendet wird nur, was der Nutzer ganz gesehen
   // hat: eine längere Fassung wird zur Zeile
   if (!showable(v.fassung)) return null
-  return { question: `${v.zeile || t().fassungDefault}\n\n${t().fassungBlock(v.fassung)}\n\n${t().howNext}`, options: labels(['fassung', 'send', 'abort']), art: 'fassung' }
+  return { question: `${v.zeile || t().fassungDefault(who)}\n\n${t().fassungBlock(v.fassung)}\n\n${t().howNext}`, options: labels(['fassung', 'send', 'abort'], 0, who), art: 'fassung', who }
 }
 
 /**
@@ -1017,7 +1051,7 @@ async function afterStep($: EngineInterface, u: StepUsage, startedAt: number) {
   askedCold = false // gilt nur für die nächste Anfrage
   if (res.coldWritten) {
     if (!asked) {
-      const usd = rewriteCost(res.coldWritten, res.mem.model, ttl)
+      const usd = rewriteCost(res.coldWritten, res.mem.model, ttl, total) // Preisstufe nach dem ganzen Prompt (Review 0.11.0 K4)
       bookDay($, startedAt, (d) => {
         d.kaltOhne = { n: d.kaltOhne.n + 1, usd: d.kaltOhne.usd + usd }
       })
@@ -1239,8 +1273,8 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
           x.autonom += 1
         })
         // Wie „Fassung senden“: Die Sprechblase im Desktop zeigt das Original, die Zeile darunter und der Rahmen das Gesendete
-        pending = { text: e.text, alt: fassung, line: t().sentFassung, sent: fassung }
-        ses.last = { line: t().sentFassung, art: 'fassung', at: now }
+        pending = { text: e.text, alt: fassung, line: t().sentFassung(whoOf(c)), sent: fassung }
+        ses.last = { line: t().sentFassung(whoOf(c)), art: 'fassung', at: now }
         saveSes($, now)
         const r = await next({ ...e, text: fassung })
         $.ui.invalidate('ui.render')
@@ -1292,7 +1326,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     }
     let answer: Choice = 'send'
     try {
-      answer = choiceOf(await $.ui.ask(d.question, { options: d.options, header: HEADER }), d.n)
+      answer = choiceOf(await $.ui.ask(d.question, { options: d.options, header: HEADER }), d.n, d.who)
       buddy($, null)
     } catch {
       buddy($, null)
@@ -1306,7 +1340,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (answer === 'fassung' && v?.fassung && showable(v.fassung)) {
       bookDay($, now, (x) => countHint(x, 'fassung', 'angenommen'))
       // Sichtbar machen, was gesendet wurde: Der Desktop zeigt in der Sprechblase das Original
-      pending = { text: e.text, alt: v.fassung, line: t().sentFassung, sent: v.fassung }
+      pending = { text: e.text, alt: v.fassung, line: t().sentFassung(whoOf(c)), sent: v.fassung }
       const r = await next({ ...e, text: v.fassung })
       $.ui.invalidate('ui.render')
       return r

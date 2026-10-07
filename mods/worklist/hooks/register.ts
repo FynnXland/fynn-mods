@@ -9,7 +9,7 @@
 // Vorbild für Ideen und Abläufe: arbeitsliste (nikisge/niklas-mods, ohne Lizenz, kein Code übernommen).
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
-import { AGENT_TASKS, BUSY_STATUS, decideHaiku, decideRules, filterStop, haikuCost, haikuPrompt, haikuSystem, otherBackground, parseHaiku } from './check.ts'
+import { AGENT_TASKS, BUSY_STATUS, HAIKU, decideHaiku, decideRules, filterStop, haikuCost, haikuPrompt, haikuSystem, otherBackground, parseHaiku } from './check.ts'
 import type { Decision, StopFacts } from './check.ts'
 import { ANSWER_HINTS, CONTINUE_TEXTS, DONE_HINTS, T, cents, hhmm, shortDate } from './i18n.ts'
 import type { Strings } from './i18n.ts'
@@ -689,17 +689,18 @@ async function apply($: EngineInterface, d: Decision, todo: Todo | undefined) {
   raise($, reason, todo.id)
 }
 
-/** Stufe 9: Haiku liest nur das Ende der Antwort und das To-do. Fehler, Timeout, Unsinn → FRAGEN. */
+/**
+ * Stufe 9: Haiku liest nur das Ende der Antwort und das To-do. Fehler, Timeout, Unsinn → FRAGEN. Modell, effort und Grenzen
+ * aus `HAIKU` (check.ts, Nachtrag 0.5.0: Haiku 5.5, high, 1500 Tokens, 10 s).
+ */
 async function askHaiku($: EngineInterface, todoText: string, s: Snapshot): Promise<Decision> {
   const L = tx()
   const r = await $.model.complete({
-    model: 'haiku',
+    ...HAIKU,
     system: haikuSystem(L),
     prompt: haikuPrompt(todoText, s.answer, { filesChanged: s.filesChanged, toolError: s.lastToolError }),
-    maxTokens: 120,
-    timeoutMs: 8000,
   })
-  await addCost($, haikuCost(r.usage))
+  await addCost($, haikuCost(r.usage, HAIKU.model))
   if (!r.isAnswered) {
     lastHaiku = L.noAnswer(r.reason)
     return { ...decideHaiku(null, L), reason: L.haikuFailed(r.reason) }

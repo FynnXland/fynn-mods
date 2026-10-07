@@ -1,12 +1,12 @@
 # sidekick
 
-Checks your message just before it is sent: first with fixed rules, and only where it can pay off, also with a quick model call (Sonnet 5.5). If there is a clearly better move, a blue line appears under your message, or sidekick asks you. Examples of better moves: a new chat with a handoff, a matching skill, or a clearer wording. If a message clearly belongs to a different project than the chat ("wrong chat?"), sidekick holds it back and recommends cancelling. With the **worklist** mod installed, a long message with several separate tasks can be split into 3–4 to-dos, and `/later` plans text as to-dos without Claude reading it. Five levels, from off to autonomous, and a colored label in the prompt footer show how much sidekick does. sidekick never chats on its own. `/savings` shows what it costs and what it demonstrably saves.
+Checks your message just before it is sent: first with fixed rules, and only where it can pay off, also with a quick model call (Haiku 5.5; in level Auto, Sonnet 5.5 writes the rewritten version). If there is a clearly better move, a blue line appears under your message, or sidekick asks you. Examples of better moves: a new chat with a handoff, a matching skill, or a clearer wording. If a message clearly belongs to a different project than the chat ("wrong chat?"), sidekick holds it back and recommends cancelling. With the **worklist** mod installed, a long message with several separate tasks can be split into 3–4 to-dos, and `/later` plans text as to-dos without Claude reading it. Five levels, from off to autonomous, and a colored label in the prompt footer show how much sidekick does. sidekick never chats on its own. `/savings` shows what it costs and what it demonstrably saves.
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.10.6**
+Tested with Claude Code **v2.1.291** · Plugin version **0.11.0**
 
-**Cost:** sidekick calls Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
+**Cost:** sidekick calls Haiku 5.5 and Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
 
 ## Levels and the footer label (since 0.10.0)
 
@@ -14,9 +14,9 @@ Tested with Claude Code **v2.1.291** · Plugin version **0.10.6**
 |---|---|---|---|---|
 | Off | `/sidekick off` | nothing | nothing | 0 |
 | Cache | `/sidekick cache` | only trigger (c), by rules, no model call | the cold-cache question with handoff (below); no hint lines, no maintenance hints | 0, only the handoff you choose |
-| Guide | `/sidekick guide` | (a), (b) from `threshold` (80k), (c) | everything below: hint lines, questions, maintenance hints (as up to 0.9) | ≈ $0.01 per check |
+| Guide | `/sidekick guide` | (a), (b) from `threshold` (80k), (c) | everything below: hint lines, questions, maintenance hints (as up to 0.9) | ≈ $0.001 per check |
 | Plan | `/sidekick plan` | like Guide, but (b) from half the threshold (40k), plus (d) long messages with worklist | plus the split-into-to-dos question (below); just as strict as Guide | like Guide, plus splits |
-| Auto | `/sidekick auto` | like Plan, plus **every** own message from 300 characters | a rewritten version and splitting go out **without asking** (see below); the check may be more critical | ≈ $0.01 per message from 300 characters |
+| Auto | `/sidekick auto` | like Plan, plus **every** own message from 300 characters | a rewritten version and splitting go out **without asking** (see below); the check may be more critical | ≈ $0.012 per message from 300 characters (Sonnet), ≈ $0.001 for shorter ones |
 
 - `/sidekick on` brings back the last active level (default Guide). `/sidekick` and `/sidekick status` name the level.
 - Settings from before 0.10.0: `on` becomes Guide, `off` stays Off. `threshold`, `big`, `long`, `skills` and `ttl` apply in every level.
@@ -27,6 +27,7 @@ Tested with Claude Code **v2.1.291** · Plugin version **0.10.6**
   - Splitting into to-dos happens without the question; a notice says "Split into 3 to-dos".
   - Still asked, because hard to undo or expensive: new chat, wrong chat, the cold-cache question.
   - The check gets an extra instruction to be more critical: unclear or incomplete messages get a clearer version more often, filled in from the summary, your last messages and the end of Claude's last reply, never invented. A short answer to Claude's own question gets no rewrite (since 0.10.4): Claude knows what it asked.
+  - Models (since 0.11.0): a message from 300 characters is checked by Sonnet 5.5 in one call (≈ $0.012, 2–5 s), because Haiku took 6–10 s on long dictated messages. A shorter one is checked by Haiku 5.5; only if Haiku reports that a clearer version pays off, Sonnet 5.5 writes it in a second call (then ≈ 5–7 s).
   - Measured with 10 of the author's real dictated messages: Auto wrote a version for 1 of 10 (Guide: 0), with every point kept; hint lines came about 5 times as often as in Guide.
 
 ## `/later <text>` (since 0.10.0)
@@ -56,7 +57,7 @@ Plans text as to-dos for later, also while Claude is working. sidekick answers t
    - (b) context at or above `threshold` (default 80k)
    - (c) cold cache and context at or above `big` (default 150k). If sidekick sees a large chat for the first time (e.g. after `/reload-plugins` in an old chat), it doesn't know the cache state and asks once as a precaution.
    - (d) a long message (since 0.9.0): at least `long` characters (default 800) and at most 7,600 (more doesn't fit into 4 to-dos), without attachments or `@file`, **and only when worklist offers `/todo`**. Without worklist, length alone never triggers a check. This trigger only ever leads to the split question, never to a hint line. Order: (c) before (a) before (b) before (d).
-3. **Model check** with Sonnet 5.5 at effort `low`, about 1.8 s and about $0.01 per check (measured; at most 2.0 s in 20 calls). The model never sees the full history. It gets:
+3. **Model check** with Haiku 5.5 at effort `medium`, about 3 s and about $0.001 per check (measured 2026-10-07: median 3.1 s, all ordinary cases within 6 s; up to 0.10 Sonnet 5.5 at about $0.012). In level Auto, Sonnet 5.5 checks messages from 300 characters and writes the rewritten versions (see Auto above). The model never sees the full history. It gets:
    - a running summary (≤ 600 characters) that it updates itself
    - your last 3 messages
    - the end of Claude's last reply (up to 1,500 characters; since 0.10.4), so a short answer to Claude's question ("yes, the second one") isn't flagged as unclear
@@ -69,7 +70,7 @@ Plans text as to-dos for later, also while Claude is working. sidekick answers t
    - *question* (the engine's dialog). The recommended answer is option **1** and is marked "(recommended)": without handoff if your message doesn't need the old history; send if resending is cheap (under $0.30); otherwise with handoff. The answers:
      - **New chat with handoff**: Sonnet 5.5 (effort `medium`) writes a handoff from the summary and the end of the history (up to 100,000 characters, without tool results). Then `/clear` runs, and the handoff plus your message go into the new chat. The old chat stays reachable via `/resume`. Not offered when the message has an attachment or `@file`.
      - **New chat without handoff**: clears the chat and sends only your message, without a model call. Meant for messages that don't need the old history.
-     - **Send Sonnet's version**: the rewritten version is sent. The desktop app still shows your original in the bubble, so below it sidekick shows `· sidekick: Sonnet's version was sent` in blue, plus a box with the text that was actually sent. With worklist 0.4.0 this counts as your own answer: if a to-do stopped with a question, that to-do continues.
+     - **Send Haiku's version** (in level Auto: Sonnet's): the rewritten version is sent. The desktop app still shows your original in the bubble, so below it sidekick shows `· sidekick: Haiku's version was sent` (in level Auto: Sonnet's) in blue, plus a box with the text that was actually sent. With worklist 0.4.0 this counts as your own answer: if a to-do stopped with a question, that to-do continues.
      - **Send anyway**
      - **Cancel**: the message is not sent; your text is shown in the notice.
    - **Split into to-dos** (since 0.9.0, only with worklist): see below.
@@ -77,7 +78,7 @@ Plans text as to-dos for later, also while Claude is working. sidekick answers t
    - With trigger (c) the question always comes, with the cost of both paths, e.g. "Sending rewrites everything (≈ $2.40)" versus "New chat with handoff: ≈ $0.26" (Opus 5.5, 1-hour cache, about 20k base load in the new chat).
 5. A hint type you ignored only comes back once the context has grown by ≥ 50k or a commit happened in between.
 
-**Fail-open:** on error, timeout (6 s), an unusable model answer or a closed dialog, the message goes through unchanged. **Exception:** if the handoff fails after "New chat with handoff", sidekick does not silently send into the cold chat; it asks again.
+**Fail-open:** on error, timeout (6 s per model call; in level Auto a short message can take two calls, so up to about 12 s), an unusable model answer or a closed dialog, the message goes through unchanged. **Exception:** if the handoff fails after "New chat with handoff", sidekick does not silently send into the cold chat; it asks again.
 
 The handoff **never** comes from the main model. On a cold cache, the main model would have to re-read the whole history to write it, including via `/compact` or a handoff skill.
 
@@ -99,7 +100,7 @@ Sonnet turns them into 3 to-dos with every point of your message; worklist works
 - **Cancel**: not sent, your text is shown for copying. Closing the dialog sends the message as typed.
 - **Not split:** one coherent task with many details, a question or discussion, an answer to Claude's question. During a cold-cache question (c) sidekick never splits; that question comes first. To-dos that worklist sends are never checked again.
 - **Nothing is lost:** if writing the to-dos fails, sidekick asks again (*Send anyway* / *Cancel*). If `/todo` fails after k of n, a notice says so, and `/sidekick status` shows the remaining to-dos in full for copying. A message too long for the notice (over 1,800 characters) is shown shortened there and in full in `/sidekick status`. While one split is running, no second one is offered; if the chat changes (`/clear`, `/resume`) before the to-dos are queued, nothing goes into the new chat and the to-dos wait in `/sidekick status`.
-- **Cost (measured with 2.1.291):** checking a long message ≈ $0.01 and 2–3 s, like any check; writing the to-dos ≈ $0.01 and 4–5 s. About $0.02 per split. Without worklist: nothing, no check, no cost. `/sidekick long off` turns only the splitting off.
+- **Cost (measured with 2.1.291):** checking a long message ≈ $0.001 and 3–5 s with Haiku 5.5 (since 0.11.0; in level Auto Sonnet 5.5 checks it, ≈ $0.012 and 2–5 s); writing the to-dos ≈ $0.01 and 4–5 s. About $0.011 per split. Without worklist: nothing, no check, no cost. `/sidekick long off` turns only the splitting off.
 
 ## Maintenance hints
 
@@ -145,7 +146,7 @@ Some commands only help if you remember to run them. **Once per chat**, on your 
   - For both, from the second request on: (old context − context of the first request) × read price per request, never below 0. Both chats would grow by the same amount from there, so the gap stays. Runs until the new chat reaches the old size, at most 50 requests.
   - The handoff is not subtracted here; it is already in the cost.
   - *Rewritten version, skill, model, split into to-dos:* only counted, not valued in $.
-- **Models** (since 0.5.0): sidekick's own calls per model ID, e.g. *Sonnet 5.5*, with a bar for its share of the cost; per role (check, handoff, split) the number of calls, average duration and cost per call, plus tokens in and out. Useful when the model per role changes: old and new model stand side by side. Costs booked before 0.5.0 have no model and appear as *earlier*. Each model also shows the days it was used.
+- **Models** (since 0.5.0): sidekick's own calls per model ID (since 0.11.0 a short message in level Auto can count as two checks, one per model), e.g. *Sonnet 5.5*, with a bar for its share of the cost; per role (check, handoff, split) the number of calls, average duration and cost per call, plus tokens in and out. Useful when the model per role changes: old and new model stand side by side. Costs booked before 0.5.0 have no model and appear as *earlier*. Each model also shows the days it was used.
 - **Checks compared** (since 0.6.0, from two rows on): per model the number of checks, average price per check (4 decimals), average duration and a factor relative to the cheapest row; below, average tokens and the days used. Tokens are booked per model, not per role: with handoffs they are an average per call (check and handoff). *Earlier* (booked before 0.5.0: Haiku until 0.3, already Sonnet from 0.4) also contains the handoffs of that time, so its price per check is an upper bound (`≤`, rounded up); a factor against it is a lower bound (`≥`, rounded down).
 - **By day** (since 0.6.0): per day with activity, newest first (at most 14): cost with a bar, savings, checks and the models used with their calls.
 - The detailed view starts with the date range of the data.
@@ -233,7 +234,7 @@ In plain language:
 - `$.prompt.fill`: only as a fallback, when Claude Code refuses the command: puts it into the prompt box at the cursor. Never sends it, never overwrites what you typed.
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=AbovePrompt}`: only while a new chat is being started or to-dos are being written, a small blue box above the prompt shows progress and seconds. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
-- `$.model.complete`: Sonnet 5.5 for the check (effort `low`), the handoff (effort `medium`) and the to-do texts (effort `low`; it gets the summary, your message and the step titles, or for `/later` only the text): after you chose to split, after an automatic split in level Auto, or after `/later`. The only model calls. Your messages reach the model only through your session's own login.
+- `$.model.complete`: Haiku 5.5 for the check (effort `medium`, full ID `claude-haiku-5-5`); Sonnet 5.5 for the check in level Auto from 300 characters and for the rewritten version there (effort `low`), the handoff (effort `medium`) and the to-do texts (effort `low`; it gets the summary, your message and the step titles, or for `/later` only the text): after you chose to split, after an automatic split in level Auto, or after `/later`. The only model calls. Your messages reach the model only through your session's own login.
 - `$.session.messages`: end of the history for the handoff, the end of Claude's last reply for the check, and to detect the first message.
 - `$.session.usage`, `$.command.list`: context size, skill names and descriptions; for the maintenance hints, paths and token counts of instruction and memory files (no contents), size of the skill list, model, and whether a command exists.
 - `$.session.root`: project root as the key for maintenance hints. The path only.
@@ -300,7 +301,7 @@ claude --plugin-dir <path-to-clone>/mods/sidekick
   - `skills-heavy` only kicks in after 30 days of counting skill usage.
   - The audit rule detects a model change by the model name in the `/context` breakdown; if only its spelling changes, you get an unnecessary hint.
   - Two concurrent chats in the same project can show a hint twice (store not atomic).
-- **Wrong chat** is only detected when the model check runs (triggers above). In a small chat below `threshold` nothing is checked, so a message in the wrong small chat goes through. `/sidekick threshold 30k` widens the check, at about $0.01 and 2 s per checked message. sidekick only knows the chat from its running summary, your last 3 messages and the end of Claude's last reply, so a chat that just started has little to compare against.
+- **Wrong chat** is only detected when the model check runs (triggers above). In a small chat below `threshold` nothing is checked, so a message in the wrong small chat goes through. `/sidekick threshold 30k` widens the check, at about $0.001 and 3 s per checked message. sidekick only knows the chat from its running summary, your last 3 messages and the end of Claude's last reply, so a chat that just started has little to compare against.
 - **`/savings` card:** the drawing is kept in memory for the last 10 outputs; after a restart or `/reload-plugins`, older `/savings` outputs show as Markdown.
 - **Splitting into to-dos:** only with worklist. sidekick can't tell a dictated message from a typed one; it only sees length and several tasks. Not offered with an attachment or `@file` (whether worklist resolves `@file` in a to-do is not documented). Messages over 7,600 characters are not offered for splitting (4 to-dos of 1,900 characters); a message close to that may still not fit, then writing fails and sidekick asks again. Only the first 4,000 characters reach the check that proposes the steps.
 - **Held-back text and Claude Code's limits:** Claude Code ignores a hold-back reason over 4,096 characters and sends the message anyway, and it shows only about 2,000 characters of a reason (found while building 0.9.0, not documented). sidekick keeps the text in the reason under 1,800 characters and stores longer messages in full for `/sidekick status`.

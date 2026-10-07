@@ -1,6 +1,6 @@
 import type { Engine, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { MIN, cacheState, emptyMem, observeStep, textBar, parseTokens, pingMissed, priceFor, readCost, rewriteCost, ringFor, terminalBlock } from '../hooks/cache.ts'
+import { MIN, cacheState, emptyMem, inputCost, observeStep, textBar, parseTokens, pingMissed, priceFor, readCost, rewriteCost, ringFor, terminalBlock } from '../hooks/cache.ts'
 import { RING_H, RING_SEGMENTS, ringFilled } from '../hooks/ring.ts'
 import { desktopSvg } from '../hooks/svg.ts'
 import { layoutTerminal, shownWindows } from '../hooks/view.ts'
@@ -372,6 +372,62 @@ test('/cache Bericht: Zustand, Kosten in $, letzte Anfrage, Warmhalten, Einstell
   expect(r.text).toContain('395k aus dem Cache gelesen, 5,0k neu geschrieben')
   expect(r.text).toContain('| **Warmhalten** | aus |')
   expect(r.text).toContain('/cache ttl 5|60|auto')
+})
+
+// ---------- 0.6.1: Preise Haiku 5.5 und Sonnet 5.5 (SPEC, Nachtrag 0.6.1) ----------
+
+test('0.6.1 Preise: Haiku 5.5 neu, Alias haiku bleibt 4.5, Sonnet 5.5 liest für 0,10 $', async () => {
+  expect(priceFor('claude-haiku-5-5')).toEqual({ id: 'haiku-5-5', input: 0.1, read: 0.01 })
+  expect(priceFor('haiku').id).toBe('haiku-4-5')
+  expect(priceFor('claude-haiku-4-5-20251001')).toEqual({ id: 'haiku-4-5', input: 1, read: 0.1 })
+  expect(priceFor('claude-sonnet-5-5').read).toBe(0.1)
+  expect(priceFor('claude-sonnet-5-5').input).toBe(2)
+  expect(priceFor('claude-sonnet-5').read).toBe(0.2)
+  // Die Stufe gilt nur für Haiku 5.5
+  expect(priceFor('claude-opus-5-5', 500_000)).toEqual({ id: 'opus-5-5', input: 4, read: 0.2 })
+})
+
+test('0.6.1 Stufe über 100k: Haiku 5.5 mit 120 000 Tokens fünffach, genau 100 000 normal', async () => {
+  expect(near(rewriteCost(120_000, 'claude-haiku-5-5', 5), (120_000 * 0.5 * 1.25) / 1e6)).toBe(true)
+  expect(near(rewriteCost(100_000, 'claude-haiku-5-5', 5), (100_000 * 0.1 * 1.25) / 1e6)).toBe(true)
+  expect(near(readCost(120_000, 'claude-haiku-5-5'), (120_000 * 0.05) / 1e6)).toBe(true)
+  expect(near(readCost(100_000, 'claude-haiku-5-5'), (100_000 * 0.01) / 1e6)).toBe(true)
+  // Kalter Neustart: geschrieben werden 30k, der Prompt (Kontext) hat aber 150k → hohe Stufe
+  expect(near(rewriteCost(30_000, 'claude-haiku-5-5', 60, 150_000), (30_000 * 0.5 * 2) / 1e6)).toBe(true)
+  expect(near(rewriteCost(30_000, 'claude-haiku-5-5', 60), (30_000 * 0.1 * 2) / 1e6)).toBe(true)
+})
+
+test('0.6.1 Warmhalte-Ping: Stufe nach dem ganzen Prompt (Eingabe + Cache lesen + Cache schreiben)', async () => {
+  // 95k gelesen + 4k geschrieben + 2k neu = 101k > 100k → alles zum fünffachen Preis
+  const over = { input_tokens: 2_000, output_tokens: 1, cache_read_input_tokens: 95_000, cache_creation_input_tokens: 4_000, model: 'claude-haiku-5-5' }
+  expect(near(inputCost(over, '', 5), (2_000 * 0.5 + 95_000 * 0.05 + 4_000 * 0.5 * 1.25) / 1e6)).toBe(true)
+  const under = { ...over, cache_read_input_tokens: 90_000 }
+  expect(near(inputCost(under, '', 5), (2_000 * 0.1 + 90_000 * 0.01 + 4_000 * 0.1 * 1.25) / 1e6)).toBe(true)
+})
+
+test('0.6.1 /cache für eine Haiku-5.5-Session: über 100k die hohe Stufe, darunter die normale', DE, async ($, on) => {
+  const w = world(on)
+  await w.step($, usage(395000, 5000, 'claude-haiku-5-5'))
+  const big = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
+  expect(big).toContain('| **Modell** | haiku-5-5 |')
+  // 400k Kontext, 1-h-Cache: neu 400k × 0,50 × 2 = 0,40 $, warm 400k × 0,05 = 0,02 $
+  expect(big).toContain('kalt (Neuschreiben) ≈ 0,40 $')
+  expect(big).toContain('warm ≈ 0,02 $')
+  await w.step($, usage(75000, 5000, 'claude-haiku-5-5'))
+  const small = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
+  // 80k Kontext: neu 80k × 0,10 × 2 = 0,016 $ → 0,02 $, warm 80k × 0,01 = 0,0008 $
+  expect(small).toContain('kalt (Neuschreiben) ≈ 0,02 $')
+  expect(small).toContain('warm < 0,01 $')
+})
+
+test('0.6.1 Kalter Neustart (Hook): Stufe nach dem Kontext (150k), nicht nach dem neu geschriebenen Teil (90k)', DE, async ($, on) => {
+  const w = world(on)
+  await w.step($, usage(0, 150000, 'claude-haiku-5-5'))
+  await w.clock.advance(70 * MIN)
+  // 60k gelesen, 90k neu geschrieben: > 50 % neu → kalter Neustart. Prompt 150k > 100k → 90k × 0,50 × 2 (1-h-Cache) = 0,09 $
+  await w.step($, usage(60000, 90000, 'claude-haiku-5-5'))
+  const text = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
+  expect(text).toContain('| **Kalte Neustarts** | 1 · ≈ 0,09 $ in dieser Sitzung |')
 })
 
 test('/keepwarm: Standard aus; Ping kurz vor Ablauf hält warm; Selbstabschaltung, wenn der Ping neu schreibt', DE, async ($, on) => {

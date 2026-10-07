@@ -1,6 +1,6 @@
 import type { Engine, On, RenderNode } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { decideHaiku, decideRules, haikuSystem, isDone, isProblem, isQuestion, parseHaiku } from '../hooks/check.ts'
+import { HAIKU, decideHaiku, decideRules, haikuCost, haikuSystem, isDone, isProblem, isQuestion, parseHaiku } from '../hooks/check.ts'
 import type { Facts } from '../hooks/check.ts'
 import { ANSWER_HINTS, CONTINUE_TEXTS, DONE_HINTS, DONE_LINES, T, cents, cleanLang, dayDate, hhmm, shortDate } from '../hooks/i18n.ts'
 import { commandOfTurn, findSent, firstSentence, hideDoneMarker, move, parseCommand, parseSent, pushSent, textHash } from '../hooks/model.ts'
@@ -216,6 +216,7 @@ function world(
   const hints: (readonly string[] | undefined)[] = []
   const userHints: (readonly string[] | undefined)[] = []
   const haikuCalls: string[] = []
+  const haikuReqs: Record<string, unknown>[] = []
   const haikuSystems: string[] = []
   let sid = 's1'
   let agents: Agent[] = []
@@ -261,6 +262,7 @@ function world(
   })
   on('model.complete', ($, e) => {
     haikuCalls.push(e.prompt)
+    haikuReqs.push({ model: e.model, effort: e.effort, maxTokens: e.maxTokens, timeoutMs: e.timeoutMs })
     haikuSystems.push(e.system ?? '')
     if (o.haikuFails) throw new Error('Netz weg')
     return { value: reply as never }
@@ -309,6 +311,7 @@ function world(
     hints,
     userHints,
     haikuCalls,
+    haikuReqs,
     haikuSystems,
     setSid: (s: string) => (sid = s),
     agentCalls: () => agentCalls,
@@ -2176,4 +2179,30 @@ test('Review 0.4.0, K4: Warten bei leerer Liste prüft nicht dauernd nach; Einre
   await tick(w.clock, 130_000)
   expect(w.agentCalls()).toBeGreaterThan(calls)
   expect(w.toasts.at(-1)).toBe('Im Hintergrund läuft noch: npm run dev. Nicht mehr warten?')
+})
+
+// ---------- 0.5.0: Haiku 5.5 für Stufe 9 (SPEC Nachtrag 0.5.0) ----------
+
+test('0.5.0: Stufe 9 ruft Haiku 5.5 mit fester ID, effort high, 1500 Tokens, 10 s', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.end($, 'Ich habe die Datei angepasst und die Tests ausgeführt.')
+  expect(w.haikuReqs).toEqual([{ model: 'claude-haiku-5-5', effort: 'high', maxTokens: 1500, timeoutMs: 10_000 }])
+  expect(HAIKU).toEqual({ model: 'claude-haiku-5-5', effort: 'high', maxTokens: 1500, timeoutMs: 10_000 })
+  // Kosten mit Haiku-5.5-Preisen: 800 ein, 40 aus (USAGE) → 0,0001 $
+  expect((await cmd($, 'status')).text).toContain('bisher 1× im Projekt, 0,01 ct')
+})
+
+test('0.5.0: haikuCost rechnet mit den Preisen des Modells', async () => {
+  const u = { input_tokens: 1500, output_tokens: 600, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  expect(Math.round(haikuCost(u) * 1e9)).toBe(450000)
+  expect(Math.round(haikuCost(u, 'claude-haiku-5-5') * 1e9)).toBe(450000)
+  expect(Math.round(haikuCost(u, 'claude-haiku-4-5') * 1e9)).toBe(4500000)
+  const c = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000 }
+  expect(Math.round(haikuCost(c) * 1e9)).toBe(135000000)
+  // Unbekanntes Modell: lieber zu teuer als zu billig (Preise Haiku 4.5)
+  expect(Math.round(haikuCost(u, 'irgendwas') * 1e9)).toBe(4500000)
 })

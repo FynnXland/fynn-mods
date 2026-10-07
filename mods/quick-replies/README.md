@@ -4,7 +4,7 @@ After Claude answers, Claude Code often suggests your next message itself (the g
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.4.2**
+Tested with Claude Code **v2.1.291** · Plugin version **0.4.3**
 
 ## Display
 
@@ -36,7 +36,7 @@ Tested with Claude Code **v2.1.291** · Plugin version **0.4.2**
 
 The fork only runs after a normal answer of at least 40 characters, not for subagents, aborted or failed turns, and only where the band is drawn. If a new turn starts first, the pending fork is skipped.
 
-**Cost:** `more` is **off by default**. When it is on, every answer triggers one `$.model.fork` of the session, roughly the cost of one short answer, mostly read from the prompt cache. It counts toward your own usage (on a subscription, toward your usage limits). `/replies status` shows what the fork used in the current chat: calls, tokens, the share read from the cache, and an estimate in dollars at API prices (price table copied from cost-ledger, unknown models priced like Opus 5.5). On a subscription that dollar figure is only a yardstick. The count starts over after `/clear`.
+**Cost:** `more` is **off by default**. When it is on, every answer triggers one `$.model.fork` of the session, roughly the cost of one short answer, mostly read from the prompt cache. It counts toward your own usage (on a subscription, toward your usage limits). `/replies status` shows what the fork used in the current chat: calls, tokens, the share read from the cache, and an estimate in dollars at API prices (price table copied from cost-ledger, Haiku 5.5 and Sonnet 5.5 as of 2026-10-07, unknown models priced like Opus 5.5). On a subscription that dollar figure is only a yardstick. The count starts over after `/clear`.
 
 ## Command
 
@@ -119,6 +119,7 @@ claude --plugin-dir <path-to-clone>/mods/quick-replies
 - **Messages starting with a digit:** while the pill shows, a message cannot start with a digit from `1` to the number of suggestions; typing it sends the suggestion instead. This also applies to the same digit repeated, whether a held key repeats it or `11` is pasted. A digit after other text, a higher digit, or a digit pasted together with other characters (`12`) stays normal text. Likewise, a message that is only such a digit (or repeated digit) is sent as the suggestion, not as the digit; this also applies when Claude offered numbered options in its answer. Write `1.` or `option 1` to send the number itself.
 - **Same digit right after sending:** after a digit has sent a suggestion, the same digit is ignored as the first character of the prompt until about 1.2 s after its last repeat, so a held key does not fill the prompt. The delay is chosen for the longest key-repeat delay Windows offers (1 s); with a longer delay on another system, a repeat may still land in the prompt.
 - **Order in the band is not documented.** Claude Code does not define in which order mods that draw into the band run, and with marketplace installs the order is not guaranteed. The pill sits above Clawd when quick-replies runs as the outer band mod. The other band mods from fynn-mods (clawd-buddy, limit-bars, sidekick) share a small layout protocol that keeps the pill on top in either order. With other band mods that do not know it, quick-replies may end up inside them, and the buttons then appear squeezed next to their content (e.g. next to Clawd). quick-replies cannot prevent that from inside. `/replies status` shows the position.
+- **Haiku 5.5 above 100k tokens:** Haiku 5.5 costs five times as much when a request has more than 100,000 prompt tokens. The fork reports only the sum over its requests, so the cost line always uses the lower price. Each fork request carries the whole chat, so in a Haiku 5.5 chat whose context is over 100,000 tokens the estimate is about five times too low.
 - **Hover flicker in the desktop app:** next to animated mods in the band (e.g. clawd-buddy's Clawd), the buttons can flicker under the mouse. Clicks still work.
 
 ## Credits

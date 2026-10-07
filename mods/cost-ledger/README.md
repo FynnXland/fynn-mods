@@ -4,7 +4,7 @@ A cost ledger across all your chats. After every answer, cost-ledger records wha
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.4.2** · Requires Claude Code v2.1.271 or later (setting options)
+Tested with Claude Code **v2.1.291** · Plugin version **0.4.3** · Requires Claude Code v2.1.271 or later (setting options)
 
 ## Usage
 
@@ -23,7 +23,7 @@ Older German arguments still work as aliases: `hilfe` for `help`, `alle` for `al
 **What gets counted:**
 
 - **Chats:** after every turn, the difference in `usage().cost.usd`, booked to today. Subagents are included (verified). Remaining costs are booked at session end and before `/ledger`.
-- **Mods:** every `$.model.complete` / `fork` / `classify` call by another mod, with count and amount, priced with the price table from sidekick (prices as of 2026-09-25). `classify` only counts the number of calls. These costs are **not** part of `/cost` and are added on top (verified).
+- **Mods:** every `$.model.complete` / `fork` / `classify` call by another mod, with count and amount, priced with cost-ledger's own price table (Haiku 5.5 and Sonnet 5.5 as of 2026-10-07, the other models as of 2026-09-25). `classify` only counts the number of calls. These costs are **not** part of `/cost` and are added on top (verified).
 - **Project:** the repo name, otherwise the folder; worktrees under `.claude/worktrees/` count toward the main folder. Runs with `claude -p` are listed as **Script runs**.
 - **Chat name:** the session title if Claude Code reports one (the desktop app does not), otherwise the start of your first message (at most 50 characters, without commands; not for `-p` script runs). These 50 characters are kept in the local plugin store. Chats without a message are called **Chat from Oct 6 14:05** (date and time of the first booking).
 - **Collected in advance** (not all shown yet, so later reports have data from today on): per chat and day the number of answers and subagent turns, working time, aborts and errors, most expensive answer, highest context fill, cost per hour, peak of the 5-hour and weekly limits; tokens per mod; the project's Git remote (only `host/owner/repo`).
@@ -105,7 +105,8 @@ claude --plugin-dir <path-to-clone>/mods/cost-ledger
 - **If the desktop app closes a chat hard** (without `session.end`), the remainder since the last answer is missing. If the chat is resumed later, cost-ledger books that remainder then.
 - **`/resume` in the middle of a session** is only covered by a test, not verified in a real session (it cannot be triggered in `-p`). Assumption: `usage().cost` afterwards reflects the resumed chat (as when starting with `--resume`, which is verified). If the counter instead kept running per process, the previous chat's cost would be booked twice onto the resumed one.
 - **After the mod reloads** (a module file saved, settings changed), cost-ledger only recognizes the session again with the next prompt. Costs in between are booked then; mod calls from that window are missing.
-- **Mod amounts are estimates:** tokens × price table; cache writes are priced as 5-minute TTL. Calls that are denied (`deny`) do not count.
+- **Mod amounts are estimates:** tokens × price table; cache writes are priced as 5-minute TTL. Calls that are denied (`deny`) do not count. Haiku 5.5 is priced by prompt length: above 100,000 prompt tokens (input + cache reads + cache writes) the whole call costs five times as much. cost-ledger applies this only to single mod calls (`model.complete`). A chat turn and a `fork` report their responses summed, so their per-model estimate always uses the lower Haiku 5.5 rate and can be too low when a single request in them was over 100,000 tokens.
+- **Haiku 5.5 as the chat model:** the chat amount is Claude Code's own `/cost` value. Claude Code v2.1.291 does not know Haiku 5.5 yet and prices it like Haiku 4.5, so such a chat shows about ten times too much until Claude Code is updated. Mod calls on Haiku 5.5 and the per-model view use cost-ledger's own prices instead (see the previous point).
 - **Retention needs use:** Claude Code deletes a plugin's store if no session reads or writes it within `cleanupPeriodDays`. A 365-day retention assumes chats with the mod loaded keep running.
 - **Storage:** `$.store` has 4 MiB in total. With the data collected, a chat needs about 0.5–0.8 KB per day on which it runs. That is enough for roughly 5,000–8,000 chat-days; with very many `-p` runs, lower `keepDays`. `/ledger` warns from 75 % and reports a write error.
 - **Old `/ledger` lines** only show the Markdown summary after the session restarts (the rendering's data lives only in the process memory).

@@ -74,9 +74,12 @@ export function dayBefore(ms: number, n: number): string {
   return dayKey(new Date(d.getFullYear(), d.getMonth(), d.getDate() - n, 12).getTime())
 }
 
-// Dollar je Million Tokens, übernommen aus mods/sidekick/hooks/cache.ts (Claude-API-Preistabelle, Stand 2026-09-25).
-// Längere IDs zuerst: 'opus-5' darf 'opus-5-5' nicht schlucken.
-const TABLE: readonly [string, { input: number; output: number; read: number }][] = [
+// Dollar je Million Tokens. haiku-5-5 und sonnet-5-5: Stand 2026-10-07 (platform.claude.com/docs/en/about-claude/pricing,
+// SPEC Nachtrag 0.4.3); übrige Zeilen aus mods/sidekick/hooks/cache.ts, Stand 2026-09-25.
+// Längere IDs zuerst: 'opus-5' darf 'opus-5-5' nicht schlucken. `long`: ab `above` Prompt-Tokens gilt das `factor`-Fache für
+// den ganzen Aufruf (Haiku 5.5: zweite Preiszeile „for prompts over 100,000 tokens“, alle Spalten ×5).
+type Price = { input: number; output: number; read: number; long?: { above: number; factor: number } }
+const TABLE: readonly [string, Price][] = [
   ['fable-5-1', { input: 10, output: 50, read: 0.25 }],
   ['mythos-5-1', { input: 10, output: 50, read: 0.25 }],
   ['fable-5', { input: 10, output: 50, read: 1 }],
@@ -85,9 +88,10 @@ const TABLE: readonly [string, { input: number; output: number; read: number }][
   ['opus-4-8', { input: 5, output: 25, read: 0.5 }],
   ['opus-4-7', { input: 5, output: 25, read: 0.5 }],
   ['opus-4-6', { input: 5, output: 25, read: 0.5 }],
-  ['sonnet-5-5', { input: 2, output: 10, read: 0.2 }],
+  ['sonnet-5-5', { input: 2, output: 10, read: 0.1 }],
   ['sonnet-5', { input: 2, output: 10, read: 0.2 }],
   ['sonnet-4-6', { input: 3, output: 15, read: 0.3 }],
+  ['haiku-5-5', { input: 0.1, output: 0.5, read: 0.01, long: { above: 100_000, factor: 5 } }],
   ['haiku-4-5', { input: 1, output: 5, read: 0.1 }],
 ]
 const FAMILY: readonly [string, string][] = [
@@ -109,7 +113,7 @@ function bareId(model: string): string {
 }
 
 /** Preis je Million Tokens für eine Modell-ID oder einen Alias (`haiku`, `claude-opus-5-5`, `opus[1m]` …). */
-export function priceFor(model: string): { id: string; input: number; output: number; read: number } {
+export function priceFor(model: string): { id: string } & Price {
   const id = bareId(model)
   for (const [key, p] of TABLE) if (id === key || id.startsWith(key)) return { id: key, ...p }
   for (const [fam, key] of FAMILY) {
@@ -126,15 +130,25 @@ export type Usage = {
   cache_creation_input_tokens?: number
 }
 
-/** API-Wert eines Aufrufs in $; Cache-Schreiben wie 5-min-TTL (1,25 × Input), wie sidekick completeCost. */
-export function callCost(u: Usage | undefined, model: string): number {
+/**
+ * API-Wert in $; Cache-Schreiben wie 5-min-TTL (1,25 × Input), wie sidekick completeCost.
+ * Preisstufe (`long`) nur bei `single`, also wenn `u` genau eine Anfrage ist (`model.complete`, types:2525-2528). Turn- und
+ * Fork-Usage sind Summen über mehrere Antworten (types:13262, :6079); dort wäre die Summe kein Prompt, also Faktor 1.
+ * Prompt = `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. Dass Cache-Tokens mitzählen, ist ein Schluss
+ * aus zwei Seiten, wörtlich steht es nirgends: die Preisseite (…/about-claude/pricing) nennt nur „prompt“, die Seite
+ * …/build-with-claude/context-windows sagt „all three count toward the window“.
+ */
+export function callCost(u: Usage | undefined, model: string, single = false): number {
   if (!u) return 0
   const p = priceFor(model)
+  const prompt = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+  const factor = single && p.long && prompt > p.long.above ? p.long.factor : 1
   return (
-    ((u.input_tokens || 0) * p.input +
-      (u.cache_read_input_tokens || 0) * p.read +
-      (u.cache_creation_input_tokens || 0) * p.input * 1.25 +
-      (u.output_tokens || 0) * p.output) /
+    (factor *
+      ((u.input_tokens || 0) * p.input +
+        (u.cache_read_input_tokens || 0) * p.read +
+        (u.cache_creation_input_tokens || 0) * p.input * 1.25 +
+        (u.output_tokens || 0) * p.output)) /
     1e6
   )
 }
@@ -340,7 +354,7 @@ export function bookMod(rec: Rec, name: string, day: string, amount: number, now
 }
 
 /** Eine Antwort (`models`) oder einen Mod-Aufruf (`modModels`) je Modell buchen; Betrag geschätzt nach Preistabelle. */
-export function bookModel(rec: Rec, model: string, day: string, u: Usage | undefined, now: number, into: 'models' | 'modModels' = 'models'): void {
+export function bookModel(rec: Rec, model: string, day: string, u: Usage | undefined, now: number, into: 'models' | 'modModels' = 'models', single = false): void {
   if (!u) return
   const m = (rec[into][modelKey(model)] ??= { days: {} })
   const d = (m.days[day] ??= { in: 0, out: 0, cr: 0, cw: 0, usd: 0, n: 0 })
@@ -348,7 +362,7 @@ export function bookModel(rec: Rec, model: string, day: string, u: Usage | undef
   d.out += u.output_tokens || 0
   d.cr += u.cache_read_input_tokens || 0
   d.cw += u.cache_creation_input_tokens || 0
-  d.usd = r8(d.usd + callCost(u, model))
+  d.usd = r8(d.usd + callCost(u, model, single))
   d.n += 1
   rec.lastAt = now
 }

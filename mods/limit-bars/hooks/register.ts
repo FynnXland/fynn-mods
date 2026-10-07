@@ -588,7 +588,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         justCompacted = false
         if (res.coldWritten) {
           cold.count += 1
-          cold.usd += rewriteCost(res.coldWritten, res.mem.model, ttlOf(res.mem, settings))
+          // Preisstufe nach dem ganzen Prompt der Anfrage (Kontext), nicht nur nach dem neu geschriebenen Teil
+          cold.usd += rewriteCost(res.coldWritten, res.mem.model, ttlOf(res.mem, settings), res.mem.ctx)
         }
         mem = res.mem
         last = { read: u.cache_read_input_tokens, written: u.cache_creation_input_tokens, at: startedAt }

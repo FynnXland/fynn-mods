@@ -6,9 +6,9 @@ The list runs by default: worklist never pauses on its own (only you do), nothin
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** (desktop app: 2.1.288) · Plugin version **0.4.0**
+Tested with Claude Code **v2.1.291** (desktop app: 2.1.288) · Plugin version **0.5.0**
 
-**Cost:** when the rules can't decide whether Claude is done, worklist asks Haiku (measured at about 0.05 US cents per case). These calls run through your session and count toward your usage. You can switch this off with the `haiku` option (see [Configuration](#configuration)); the list then stops in those cases instead.
+**Cost:** when the rules can't decide whether Claude is done, worklist asks Haiku 5.5 (`claude-haiku-5-5`, effort `high`; measured at about 0.01 US cents per case). These calls run through your session and count toward your usage. You can switch this off with the `haiku` option (see [Configuration](#configuration)); the list then stops in those cases instead.
 
 ## Usage
 
@@ -67,7 +67,7 @@ After every turn end (including after your own chat messages) these stages run; 
 6. A question in the last paragraph (`?` at the end, "Shall I", "Do you want", "Soll ich" …, options with a question; code doesn't count; a standalone "Done." below doesn't hide it) → **ask**
 7. A problem ("failed", "couldn't", "konnte nicht" …), the last tool ended with an error, or an empty answer → **ask**
 8. The last sentence is itself "Done.", "Done, …", "All done." (or German "Fertig.", "Erledigt.") → **continue**. "Done" in the middle of a sentence or with a restriction ("Done, except …") doesn't count.
-9. Otherwise Haiku (only the end of the answer and the to-do): only "done" with confidence ≥ 0.85 → **continue**, anything else → **ask**
+9. Otherwise Haiku 5.5 (only the end of the answer and the to-do; model `claude-haiku-5-5`, effort `high`, at most 1500 tokens and 10 s): only "done" with confidence ≥ 0.85 → **continue**, anything else (including no answer or a timeout) → **ask**
 10. Before sending, a 3 s settle time, then check again: no new turn, no new helper, same chat, not paused
 
 When in doubt, nothing is sent. After your own chat message, the list stops quietly on "ask" (no toast); queueing a to-do or **Start now** continues it. **Loop guard:** if the same to-do stops twice in a row without you replying in the chat, **Continue** disappears; your answer in the chat, **Mark as done** or **Skip** continue it. **Continue** counts toward the loop guard. After `maxAutoRun` to-dos in a row without your intervention, the list also stops.
@@ -110,7 +110,7 @@ Neither is part of your message or shown in the chat; `/todos status` shows whet
 | Key | Default | Meaning |
 |---|---|---|
 | `language` | `en` | Language of the texts: `en` or `de`. |
-| `haiku` | on | Ask Haiku in unclear cases (measured at about 0.05 US cents per case). Off: the list stops in those cases. |
+| `haiku` | on | Ask Haiku 5.5 in unclear cases (measured at about 0.01 US cents per case). Off: the list stops in those cases. |
 | `doneLine` | on | Hidden hints with every sent to-do and with your answer to a to-do's question (not shown in the chat); makes detection more reliable. |
 | `settleSeconds` | 3 | Settle time before sending the next to-do (1–30 s), after which worklist checks again that Claude is free. |
 | `maxAutoRun` | 15 | Maximum to-dos in a row without your intervention (1–100); then the list stops. |
@@ -132,7 +132,7 @@ In plain language:
 - `$.command.list`, `$.command.run`: a to-do starting with `/name` runs as that command, after checking it exists.
 - `prompt.submit`: only observes where a message comes from (you, another mod on your behalf, or something else); it never changes, drops or extends a message.
 - `classic.UserPromptSubmit`: attaches the hidden hints, only to the to-do worklist just sent (or its continuation) and to your answer to a stopped to-do's question (switch off with `doneLine`); every other message passes unchanged.
-- `$.model.complete`: Haiku, only in stage 9, and it can be switched off.
+- `$.model.complete`: Haiku 5.5 (fixed model id `claude-haiku-5-5`, effort `high`), only in stage 9, and it can be switched off.
 - `$.agent.list`: reads whether helpers are still running (stage 4, and every 10 s while waiting).
 - `$.session.id`, `$.session.root`: list per chat, history per project.
 - `$.store`, `$.state`: list, history, cost, run state, and a redraw counter for the sidebar. `$.store.delete` only deletes this chat's list once it has become empty.
@@ -173,6 +173,8 @@ claude --plugin-dir <path-to-clone>/mods/worklist
 - **After `/reload-plugins` while waiting** for background work, worklist no longer knows the facts of the last turn end; the list then waits for you (**Start now**) instead of checking on its own.
 - **Waiting:** a scheduled wake-up (`/loop`, CronCreate) or a background shell keeps the list waiting until you answer "Don't wait" (asked after 2 minutes) or a new turn starts.
 - **Commands as to-dos:** if a command starts no turn within a few seconds, worklist counts it as done once it has run. The command list Claude Code offers to mods is incomplete (`/cost` is missing but runs), so whether a command exists is decided by running it.
+- **Haiku 5.5 with Claude Code 2.1.291:** that version doesn't know the model id yet and logs `[claude-code:unrecognized_model]` (visible in `claude -p` output); the call works and `effort` is applied. worklist uses the fixed id on purpose: Haiku 5.5 thinks before answering, which counts against the token limit, so a future switch of the `haiku` alias won't silently break stage 9.
+- **Model allowlist or third-party provider:** stage 9 calls the fixed id `claude-haiku-5-5`, not the `haiku` alias, so `ANTHROPIC_DEFAULT_HAIKU_MODEL` doesn't apply. If your organization's model allowlist (`availableModels`) excludes that id, or a provider (Bedrock, Vertex, Foundry) doesn't resolve it, the call is refused and every unclear case stops the list (never an unchecked continue). Allow the id, or switch `haiku` off.
 - The rules of stages 6–8 are text patterns; unusual wording ends up with Haiku or leads to "ask", never to an unchecked continue.
 - The elapsed-time clock only ticks while the sidebar is visible and Claude is working.
 - **Storage:** all of worklist's data shares 4 MiB. The history is limited to 300 entries per project (text cut to 200 characters); each project folder and worktree has its own. Empty lists are deleted; unfinished lists of old chats remain, and so do the sent-to-do checksums of every chat that sent a to-do (at most 50 small entries per chat). If saving fails, a toast appears and the list keeps running in memory only.

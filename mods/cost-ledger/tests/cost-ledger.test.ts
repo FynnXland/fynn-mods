@@ -271,7 +271,7 @@ const sidekick = {
       }
       if (e.args === 'classify') return { text: `classify:${await $.model.classify('x', ['a', 'b'])}` }
       try {
-        const r = await $.model.complete({ model: 'haiku', prompt: 'x' })
+        const r = await $.model.complete({ model: e.args.startsWith('model:') ? e.args.slice(6) : 'haiku', prompt: 'x' })
         return { text: `complete:${r.isAnswered ? r.text : r.reason}` }
       } catch (err) {
         return { text: `denied:${String((err as Error).message ?? err)}` }
@@ -328,13 +328,49 @@ test('model.fork „nothing-to-fork“ zählt nicht; model.complete ohne Antwort
   near(w.rec()!.mods.sidekick!.days[TODAY]!.usd, 1) // „usage rides every arm“ (types ModelCompleteResult)
 })
 
-test('Preistabelle wie sidekick: Alias, volle ID, unbekannt → Opus 5.5', () => {
+test('Preistabelle: Alias, volle ID, unbekannt → Opus 5.5', () => {
   expect(priceFor('haiku').id).toBe('haiku-4-5')
   expect(priceFor('claude-haiku-4-5-20251001').id).toBe('haiku-4-5')
   expect(priceFor('opus[1m]').id).toBe('opus-5-5')
   expect(priceFor('claude-opus-5').id).toBe('opus-5')
   expect(priceFor('???').id).toBe('opus-5-5')
   near(callCost({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1e6, cache_creation_input_tokens: 1e6 }, 'haiku'), 0.1 + 1.25)
+})
+
+test('0.4.3: Preise Haiku 5.5 und Sonnet 5.5, Stufe über 100k Prompt-Tokens', () => {
+  const h = priceFor('claude-haiku-5-5')
+  expect([h.id, h.input, h.output, h.read]).toEqual(['haiku-5-5', 0.1, 0.5, 0.01])
+  expect(priceFor('haiku').id).toBe('haiku-4-5') // CC 2.1.291 löst den Alias noch zu Haiku 4.5 auf
+  expect(priceFor('claude-sonnet-5-5').read).toBe(0.1)
+  const h4 = priceFor('claude-haiku-4-5-20251001')
+  expect([h4.id, h4.input, h4.output, h4.read, h4.long]).toEqual(['haiku-4-5', 1, 5, 0.1, undefined])
+  // 120 000 Prompt-Tokens (davon Cache) → fünffach, auch die Ausgabe; genau 100 000 → normale Stufe
+  const over = { input_tokens: 20_000, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 10_000, output_tokens: 1_000 }
+  const base = (20_000 * 0.1 + 90_000 * 0.01 + 10_000 * 0.125 + 1_000 * 0.5) / 1e6
+  near(callCost(over, 'claude-haiku-5-5', true), 5 * base)
+  near(callCost(over, 'claude-haiku-5-5'), base) // Summe über mehrere Antworten (Turn, Fork): keine Stufe (Review B1)
+  const at = { input_tokens: 100_000, output_tokens: 1_000 }
+  near(callCost(at, 'claude-haiku-5-5', true), (100_000 * 0.1 + 1_000 * 0.5) / 1e6)
+  near(callCost({ input_tokens: 100_001 }, 'claude-haiku-5-5', true), (5 * 100_001 * 0.1) / 1e6)
+  // andere Modelle ohne Stufe
+  near(callCost({ input_tokens: 500_000 }, 'claude-haiku-4-5'), 0.5)
+  near(callCost({ cache_read_input_tokens: 1_000_000 }, 'claude-sonnet-5-5'), 0.1)
+  expect(modelKey('claude-haiku-5-5')).toBe('haiku-5-5')
+  expect(modelName(modelKey('claude-haiku-5-5'), 'de')).toBe('Haiku 5.5')
+  expect(modelName(modelKey('haiku'), 'de')).toBe('Haiku 4.5')
+})
+
+test('0.4.3: Stufe nur bei Einzelaufrufen; Turn-Summe über 100k bleibt normal (Review B1)', { plugins: [sidekick], ...DE }, async ($, on) => {
+  const w = world(on)
+  const big = { input_tokens: 20_000, output_tokens: 0, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 0 }
+  const usd = (20_000 * 0.1 + 100_000 * 0.01) / 1e6 // 0,003 $ normale Stufe
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: big } as never }))
+  await w.start($)
+  await w.turn($, 1, { usage: U('claude-haiku-5-5', 20_000, 0, 100_000) }) // Summe mehrerer Antworten
+  near(w.rec()!.models['haiku-5-5']!.days[TODAY]!.usd, usd)
+  await $.command.run({ command: 'probe', args: 'model:claude-haiku-5-5' }) // eine Anfrage mit 120k Prompt
+  near(w.rec()!.modModels['haiku-5-5']!.days[TODAY]!.usd, 5 * usd)
+  near(w.rec()!.mods.sidekick!.days[TODAY]!.usd, 5 * usd)
 })
 
 // ---------- Modelle ----------

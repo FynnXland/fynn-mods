@@ -274,7 +274,29 @@ export function decideHaiku(v: HaikuVerdict | null, tx: Strings): Decision {
   return { outcome: 'FRAGEN', stage: 9, reason: `${label}${v.why ? ` Haiku: ${v.why}` : ''}` }
 }
 
-/** Preis von Haiku 4.5 je Million Tokens (wie mods/sidekick/hooks/cache.ts; Schreiben in den Cache 1,25 × Eingabe). */
-export function haikuCost(u: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }): number {
-  return ((u.input_tokens || 0) * 1 + (u.output_tokens || 0) * 5 + (u.cache_read_input_tokens || 0) * 0.1 + (u.cache_creation_input_tokens || 0) * 1.25) / 1e6
+/**
+ * Stufe 9 auf Haiku 5.5 (SPEC Nachtrag 0.5.0). Feste ID statt Alias: Haiku 5.5 denkt, das zählt gegen `maxTokens`; stellte ein
+ * Update den Alias `haiku` um, reichten die alten 120 Tokens nicht mehr (kein Urteil → stilles FRAGEN). CC 2.1.291 kennt die ID
+ * noch nicht (Warnung `unrecognized_model`), ruft sie aber auf, und `effort` kommt an.
+ * Probe 2026-10-07 (CLI 2.1.291, 12 Fälle × 2, Texte de):
+ * - high: 24/24 richtig (halb erledigte nie WEITER), JSON 24/24; Ausgabe 57–439 Tokens (Ø 114); Dauer Ø 1,2 s, max 2,5 s;
+ *   Ø 0,009 ct je Prüfung
+ * - medium: 24/24, Ø 74 Tokens, max 1,8 s · Haiku 4.5 (Alias, 120 Tokens): 24/24, Ø 51 Tokens, Ø 0,05 ct
+ * timeoutMs: höchste Dauer × 2 = 4,9 s, Untergrenze 10 s.
+ */
+export const HAIKU = { model: 'claude-haiku-5-5', effort: 'high', maxTokens: 1500, timeoutMs: 10_000 } as const
+
+/** US-Dollar je Million Tokens, Stand 2026-10-07 (wie mods/sidekick/hooks/cache.ts nach dessen Nachtrag 0.11.0). */
+const PRICES: Record<string, { input: number; output: number; cacheRead: number; cacheWrite: number }> = {
+  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
+  'claude-haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+}
+
+/** Kosten eines Aufrufs mit den Preisen des Modells (Standard: das Modell von Stufe 9). */
+export function haikuCost(
+  u: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number },
+  model: string = HAIKU.model,
+): number {
+  const p = PRICES[model] ?? PRICES['claude-haiku-4-5'] ?? { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }
+  return ((u.input_tokens || 0) * p.input + (u.output_tokens || 0) * p.output + (u.cache_read_input_tokens || 0) * p.cacheRead + (u.cache_creation_input_tokens || 0) * p.cacheWrite) / 1e6
 }

@@ -1,6 +1,6 @@
 {
   "name": "cost-ledger",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Cost ledger across all chats: after every answer it records the chat cost (as /cost), tokens per model and model calls made by other mods. /ledger shows today, 7 and 30 days, total, history by model (days or weeks), projects and the most expensive chats. Observer only, no model calls.",
   "author": { "name": "Fynn Hansen" },
   "license": "MIT",

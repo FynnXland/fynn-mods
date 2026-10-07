@@ -81,13 +81,13 @@ claude plugin update <mod>@fynn-mods
 
 Drei Mods lösen Modellaufrufe **über dein Konto** aus (im Abo zählen sie auf deine Nutzungslimits):
 
-- **sidekick** fragt Sonnet 5.5 (Effort `low`) nur, wenn sich eine Prüfung lohnen kann (erste Nachricht eines Chats,
-  großer Kontext, kalter Cache): etwa 0,01 $ und 2 Sekunden je Prüfung (API-Wert). Eine Übergabe in einen neuen Chat
+- **sidekick** fragt Haiku 5.5 (Effort `medium`) nur, wenn sich eine Prüfung lohnen kann (erste Nachricht eines Chats,
+  großer Kontext, kalter Cache): etwa 0,001 $ und 3 Sekunden je Prüfung (API-Wert). Eine Übergabe in einen neuen Chat
   ist ein größerer Sonnet-Aufruf, nur wenn du ihn wählst. In der Stufe `plan` oder `auto` mit worklist prüft er auch
   eine lange Nachricht (ab 800 Zeichen), und das Aufteilen in To-dos oder `/later` kostet etwa 0,01 $ mehr. Die Stufe
-  `auto` prüft jede Nachricht ab 300 Zeichen (je etwa 0,01 $); die Stufe `cache` ruft gar kein Modell auf. `/savings`
+  `auto` prüft jede Nachricht ab 300 Zeichen mit Sonnet 5.5 (je etwa 0,012 $) und lässt Sonnet ihre Fassungen schreiben; die Stufe `cache` ruft gar kein Modell auf. `/savings`
   stellt beides der gemessenen Ersparnis gegenüber. Abschalten mit `/sidekick off`.
-- **worklist** fragt Haiku nur, wenn die Regeln nicht sicher erkennen, ob Claude fertig ist: etwa 0,0005 $ je Fall.
+- **worklist** fragt Haiku 5.5 (Effort `high`) nur, wenn die Regeln nicht sicher erkennen, ob Claude fertig ist: etwa 0,0001 $ je Fall.
   Abschalten mit der Option `haiku` in `/config`; die Liste hält dann in diesen Fällen an.
 - **quick-replies** forkt die Session nach jeder Antwort **nur mit `/replies more on`** (standardmäßig aus): etwa so
   viel wie eine kurze Antwort, großteils aus dem Prompt-Cache.
@@ -143,7 +143,7 @@ die schaltest du mit `/cache warn off` ab.
 
 Ein zweiter Blick auf jede Nachricht, kurz bevor sie rausgeht. Zuerst entscheiden feste Regeln, ohne Kosten. Nur wo
 sich eine Prüfung lohnen kann (erste Nachricht eines Chats, großer Kontext, kalter Cache), schaut zusätzlich kurz
-Sonnet 5.5 drauf. sidekick chattet nie von sich aus: Er bleibt still, setzt eine blaue Hinweiszeile unter deine
+Haiku 5.5 drauf. sidekick chattet nie von sich aus: Er bleibt still, setzt eine blaue Hinweiszeile unter deine
 Nachricht oder fragt nach.
 
 - **Kalter Cache im großen Chat:** Bevor du einen großen, kalt gewordenen Kontext neu sendest, zeigt er beide Preise,
@@ -176,7 +176,7 @@ Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unveränd
   `/sidekick hints …`, `/later <Text>`,
   `/savings [today|week|all]`, `/savings detail`
 - **Rechte kurz:** liest deine Nachricht vor dem Senden; hält sie nur an oder ersetzt sie nur nach deiner Wahl im
-  Dialog (in der Stufe `auto` auch ohne Rückfrage: eine Fassung oder eine Aufteilung); Sonnet über `$.model.complete` mit einer laufenden Kurzfassung, deinen letzten 3 Nachrichten und dem Ende von Claudes letzter Antwort, nie dem
+  Dialog (in der Stufe `auto` auch ohne Rückfrage: eine Fassung oder eine Aufteilung); Haiku 5.5 und Sonnet 5.5 über `$.model.complete` mit einer laufenden Kurzfassung, deinen letzten 3 Nachrichten und dem Ende von Claudes letzter Antwort, nie dem
   ganzen Verlauf; auf Knopfdruck führt er den Befehl der Zeile aus (Befehle aus Plugins und eigene, `/skill-doctor`, `/init`;
   nie MCP-Prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) oder ruft `/todo` von worklist auf (auch
   für die To-dos einer Aufteilung oder von `/later`); in der Stufe `auto` sendet er eine umformulierte Nachricht ohne
@@ -213,7 +213,7 @@ die Liste auch nach einer Rückfrage. Der Verlauf gilt pro Projekt.
 - **Befehle:** `/todo <aufgabe>`, `/todos` (Seitenleiste), `/todos pause|resume|done|skip|retry|clear|history|status|close`
 - **Rechte kurz:** sendet das nächste To-do (oder die Fortsetzung eines angehaltenen) nur nach bestandener Prüfung
   oder auf deinen Klick als deine Nachricht;
-  Haiku für unklare Fälle (abschaltbar); liest, ob noch Subagenten laufen. Im Chat zeigt es gesendete To-dos als orange
+  Haiku 5.5 für unklare Fälle (abschaltbar); liest, ob noch Subagenten laufen. Im Chat zeigt es gesendete To-dos als orange
   Zeile und blendet ein alleinstehendes „Fertig.“ / "Done." am Ende von Antworten aus (nur Anzeige). Keine Dateien,
   Prozesse, kein Netzwerk.
 - **Details:** [mods/worklist](mods/worklist/README.md) (englisch)

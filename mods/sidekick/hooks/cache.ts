@@ -70,9 +70,15 @@ export function observeStep(mem: CacheMem, u: StepUsage, startedAt: number, afte
   return { mem: next, coldWritten }
 }
 
-// Dollar je Million Tokens (Claude-API-Preistabelle, Stand 2026-09-25). Schreiben kostet 1,25 × Input (5-min-TTL) bzw. 2 × (1 h).
-// Längere IDs zuerst: 'opus-5' darf 'opus-5-5' nicht schlucken. `output` ergänzt aus pricing.mjs:6-19.
-const TABLE: readonly [string, { input: number; output: number; read: number }][] = [
+// Dollar je Million Tokens (Claude-API-Preistabelle, Stand 2026-10-07, docs „Pricing“). Schreiben kostet 1,25 × Input
+// (5-min-TTL) bzw. 2 × (1 h). Längere IDs zuerst: 'opus-5' darf 'opus-5-5' nicht schlucken. `output` ergänzt aus pricing.mjs:6-19.
+// Sonnet 5.5 liest für 0,10 (0,05 × Input; die Tabelle der Preisseite nennt 0,20, ihr Text 0,10, SPEC Nachtrag 0.11.0).
+// `long`: Haiku 5.5 kostet bei einem Prompt über 100 000 Tokens das Fünffache (0,50/2,50/0,05 statt 0,10/0,50/0,01). Annahme
+// wie limit-bars 0.6.1 (Schluss, die Preisseite zählt den Prompt nicht wörtlich aus): Prompt sind alle Eingabe-Tokens einer
+// Anfrage, gecachte eingeschlossen, denn input_tokens, cache_read_input_tokens und cache_creation_input_tokens zählen alle zum
+// Kontext (docs „Context windows“).
+type Price = { input: number; output: number; read: number; long?: { above: number; factor: number } }
+const TABLE: readonly [string, Price][] = [
   ['fable-5-1', { input: 10, output: 50, read: 0.25 }],
   ['mythos-5-1', { input: 10, output: 50, read: 0.25 }],
   ['fable-5', { input: 10, output: 50, read: 1 }],
@@ -81,11 +87,13 @@ const TABLE: readonly [string, { input: number; output: number; read: number }][
   ['opus-4-8', { input: 5, output: 25, read: 0.5 }],
   ['opus-4-7', { input: 5, output: 25, read: 0.5 }],
   ['opus-4-6', { input: 5, output: 25, read: 0.5 }],
-  ['sonnet-5-5', { input: 2, output: 10, read: 0.2 }],
+  ['sonnet-5-5', { input: 2, output: 10, read: 0.1 }],
   ['sonnet-5', { input: 2, output: 10, read: 0.2 }],
   ['sonnet-4-6', { input: 3, output: 15, read: 0.3 }],
+  ['haiku-5-5', { input: 0.1, output: 0.5, read: 0.01, long: { above: 100_000, factor: 5 } }],
   ['haiku-4-5', { input: 1, output: 5, read: 0.1 }],
 ]
+// Der Alias `haiku` bleibt Haiku 4.5: Claude Code 2.1.291 löst ihn noch zu claude-haiku-4-5 auf (SPEC Nachtrag 0.11.0)
 const FAMILY: readonly [string, string][] = [
   ['fable', 'fable-5-1'],
   ['mythos', 'mythos-5-1'],
@@ -94,33 +102,40 @@ const FAMILY: readonly [string, string][] = [
   ['haiku', 'haiku-4-5'],
 ]
 
-/** Preis je Million Tokens für eine Modell-ID (`claude-opus-5-5`, `claude-haiku-4-5-20251001`, `opus[1m]` …). */
-export function priceFor(model: string): { id: string; input: number; output: number; read: number } {
+/**
+ * Preis je Million Tokens für eine Modell-ID (`claude-opus-5-5`, `claude-haiku-4-5-20251001`, `opus[1m]` …). Mit
+ * `promptTokens` gilt bei Modellen mit Stufe (Haiku 5.5) über der Grenze der höhere Preis; genau an der Grenze der normale.
+ */
+export function priceFor(model: string, promptTokens?: number): { id: string; input: number; output: number; read: number } {
   const id = String(model || '')
     .toLowerCase()
     .replace(/^claude-/, '')
     .replace(/\[.*?\]/g, '')
     .replace(/-\d{8}$/, '')
     .trim()
-  for (const [key, p] of TABLE) if (id === key || id.startsWith(key)) return { id: key, ...p }
+  const out = (key: string, p: Price) => {
+    const f = p.long && (promptTokens ?? 0) > p.long.above ? p.long.factor : 1
+    return { id: key, input: p.input * f, output: p.output * f, read: p.read * f }
+  }
+  for (const [key, p] of TABLE) if (id === key || id.startsWith(key)) return out(key, p)
   for (const [fam, key] of FAMILY) {
     const hit = TABLE.find(([k]) => k === key)
-    if (id.includes(fam) && hit) return { id: key, ...hit[1] }
+    if (id.includes(fam) && hit) return out(key, hit[1])
   }
   return { id: 'opus-5-5', input: 4, output: 20, read: 0.2 }
 }
 
-/** Neuschreiben von `tokens` (API-Wert in $). */
-export function rewriteCost(tokens: number, model: string, ttlMin: number): number {
-  return ((tokens || 0) * priceFor(model).input * (ttlMin >= 60 ? 2 : 1.25)) / 1e6
+/** Neuschreiben von `tokens` (API-Wert in $); `promptTokens` für die Preisstufe, ohne Angabe `tokens` (die Kontextgröße). */
+export function rewriteCost(tokens: number, model: string, ttlMin: number, promptTokens = tokens): number {
+  return ((tokens || 0) * priceFor(model, promptTokens).input * (ttlMin >= 60 ? 2 : 1.25)) / 1e6
 }
 
 export type CompleteUsage = StepUsage & { output_tokens: number }
 
-/** Kosten eines eigenen `$.model.complete` (API-Wert in $); Schreiben wie 5-min-TTL, das ist der Standard der API. */
+/** Kosten eines eigenen `$.model.complete` (API-Wert in $); Schreiben wie 5-min-TTL, das ist der Standard der API. Die Preisstufe nach dem ganzen Prompt. */
 export function completeCost(u: CompleteUsage | undefined, model: string): number {
   if (!u) return 0
-  const p = priceFor(model)
+  const p = priceFor(model, (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0))
   return (
     ((u.input_tokens || 0) * p.input +
       (u.cache_read_input_tokens || 0) * p.read +

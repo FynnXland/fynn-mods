@@ -1,7 +1,7 @@
 {
   "name": "sidekick",
-  "version": "0.10.6",
-  "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Sonnet: a hint line under your message or a question (new chat with handoff, a skill, a clearer version, or \"wrong chat?\" when the message belongs to another project). Names due maintenance once per chat (/skill-doctor, prompt-audit, consolidate-memory, /init). With worklist installed, a long message with several tasks can be split into 3-4 to-dos, and /later plans text as to-dos. Five levels (off, cache, guide, plan, auto) with a colored label in the prompt footer. /savings shows cost and measurable savings at a glance, /savings detail compares the models over time.",
+  "version": "0.11.0",
+  "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Haiku 5.5 (Sonnet 5.5 writes rewritten versions in level auto): a hint line under your message or a question (new chat with handoff, a skill, a clearer version, or \"wrong chat?\" when the message belongs to another project). Names due maintenance once per chat (/skill-doctor, prompt-audit, consolidate-memory, /init). With worklist installed, a long message with several tasks can be split into 3-4 to-dos, and /later plans text as to-dos. Five levels (off, cache, guide, plan, auto) with a colored label in the prompt footer. /savings shows cost and measurable savings at a glance, /savings detail compares the models over time.",
   "author": {
     "name": "Fynn Hansen"
   },

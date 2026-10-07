@@ -96,8 +96,8 @@ test('Anzeige: kürzen auf 40 Zeichen; 2 × 2 nur ab zwei Vorschlägen und wenn 
 })
 
 test('Kosten: Preis nach Modell-ID, Alias und unbekannt; Summe über Aufrufe', () => {
-  expect(priceFor('claude-opus-5-5-20260101')).toEqual({ input: 4, output: 20, read: 0.2 })
-  expect(priceFor('opus-5')).toEqual({ input: 5, output: 25, read: 0.5 })
+  expect(priceFor('claude-opus-5-5-20260101')).toEqual({ id: 'opus-5-5', input: 4, output: 20, read: 0.2 })
+  expect(priceFor('opus-5')).toEqual({ id: 'opus-5', input: 5, output: 25, read: 0.5 })
   expect(priceFor('claude-sonnet-5-5[1m]').input).toBe(2)
   expect(priceFor('haiku').input).toBe(1)
   expect(priceFor('irgendwas').input).toBe(4)
@@ -108,6 +108,27 @@ test('Kosten: Preis nach Modell-ID, Alias und unbekannt; Summe über Aufrufe', (
   expect(two.calls).toBe(2)
   expect(two.tokens).toBe(82100)
   expect(two.cached).toBe(76000)
+})
+
+test('0.4.3: Preise Haiku 5.5 und Sonnet 5.5; ein Fork über 100k Prompt-Tokens bleibt auf der günstigen Stufe', () => {
+  expect(priceFor('claude-haiku-5-5')).toMatchObject({ id: 'haiku-5-5', input: 0.1, output: 0.5, read: 0.01 })
+  // Alias haiku löst Claude Code 2.1.291 noch zu Haiku 4.5 auf
+  expect(priceFor('haiku')).toMatchObject({ id: 'haiku-4-5', input: 1 })
+  expect(priceFor('claude-haiku-4-5-20251001')).toMatchObject({ id: 'haiku-4-5', input: 1, output: 5, read: 0.1 })
+  expect(priceFor('claude-sonnet-5-5').read).toBe(0.1)
+  expect(priceFor('claude-sonnet-5').read).toBe(0.2)
+  // 120 000 Prompt-Tokens mit Cache-Anteil: 10000 × 0,1 + 100000 × 0,01 + 10000 × 0,1 × 1,25 + 1000 × 0,5 = 3750
+  const big = { input_tokens: 10_000, output_tokens: 1000, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 10_000 }
+  // Fork-Usage ist eine Summe über mehrere Antworten: immer die günstige Stufe, auch in der Kostenzeile
+  expect(Math.round(callCost(big, 'claude-haiku-5-5') * 1e6)).toBe(3750)
+  expect(Math.round(addCall(NO_COST, big, 'claude-haiku-5-5').usd * 1e6)).toBe(3750)
+  // Die Stufe der Kopie (nur für echte Einzelaufrufe): über 100k fünffach, auch die Ausgabe; genau 100 000 noch günstig
+  expect(Math.round(callCost(big, 'claude-haiku-5-5', true) * 1e6)).toBe(18750)
+  const edge = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 0 }
+  expect(Math.round(callCost(edge, 'claude-haiku-5-5', true) * 1e6)).toBe(1000)
+  expect(Math.round(callCost({ ...edge, input_tokens: 10 }, 'claude-haiku-5-5', true) * 1e6)).toBe(5005)
+  // andere Modelle ohne Stufe
+  expect(callCost(big, 'claude-sonnet-5-5', true)).toBe(callCost(big, 'claude-sonnet-5-5'))
 })
 
 test('gehaltene Ziffer: eine oder mehrfach dieselbe von 1–4, sonst 0', () => {

@@ -781,6 +781,17 @@ test('Kostenzeile: Fork-Aufrufe dieses Chats mit geschätztem API-Wert, nach /cl
   await ui.unmount()
 })
 
+test('Kostenzeile 0.4.3: Haiku-5.5-Session, Fork mit 120k Prompt-Tokens bleibt auf der günstigen Stufe (Summe, kein Einzelaufruf)', async ($, on) => {
+  // (10000 × 0,1 + 100000 × 0,01 + 10000 × 0,1 × 1,25 + 1000 × 0,5) / 1e6 = 0,00375 $; fünffach wären es 0,019 $
+  const forkUsage = { input_tokens: 10_000, output_tokens: 1000, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 10_000 }
+  const w = world(on, { stored: { enabled: true, more: true }, forkUsage })
+  const ui = await boot($, 'terminal')
+  await finish($, LONG, { model: 'claude-haiku-5-5' })
+  await w.clock.advance(100)
+  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork in this chat: 1× · ~$0.004 ')
+  await ui.unmount()
+})
+
 test('Kostenzeile de', { options: { language: 'de' } }, async ($, on) => {
   const forkUsage = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 38000, cache_creation_input_tokens: 0 }
   const w = world(on, { stored: { enabled: true, more: true }, forkUsage })
