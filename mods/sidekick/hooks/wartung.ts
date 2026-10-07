@@ -45,6 +45,7 @@ export const INIT_DAYS = 3
 /** `cmd`: der Befehl der Zeile (`/claude-api prompt-audit`), für den Button unter der Nachricht (Nachtrag 0.7.0). */
 export type Hint = { id: RuleId; line: string; cmd?: string }
 
+/** Befehl je Regel, null wenn er in dieser Session fehlt: für den Button und für „fehlt“ in der Statustabelle. */
 const CMD_OF: Record<RuleId, (a: Avail) => string | null> = {
   'skills-cut': (a) => a.skillDoctor,
   audit: (a) => a.audit,
@@ -360,18 +361,11 @@ export function hintsStatus(m: Measure | null, w: Wartung, s: HintSettings, key:
     const rest = m ? r.rest(m) * DAY : 0
     const from = Math.max(st.hintAt ? st.hintAt + rest : 0, st.doneAt ? st.doneAt + rest : 0)
     const off = s.off.includes(r.id) ? x.ruleOff : ''
-    const avail = m && !availFor(r.id, m.avail) ? x.cmdMissing : ''
+    const avail = m && !CMD_OF[r.id](m.avail) ? x.cmdMissing : ''
     out.push(`| ${x.rule[r.id]}${off}${avail} | ${val} | ${st.doneAt ? shortDate(st.doneAt) : '–'} | ${st.hintAt ? shortDate(st.hintAt) : '–'} | ${from > now ? shortDate(from) : x.now} |`)
   }
   out.push('', x.change(hintsUsage()))
   return out.join('\n')
-}
-
-function availFor(id: RuleId, a: Avail): string | null {
-  if (id === 'skills-cut' || id === 'skills-heavy') return a.skillDoctor
-  if (id === 'audit') return a.audit
-  if (id === 'memory') return a.memory
-  return a.init
 }
 
 /** Ruhezeit einer Regel in Tagen, für `accepted` außerhalb der Tabelle. */

@@ -92,7 +92,7 @@ export const splits = (s: Settings) => s.level === 'plan' || s.level === 'auto'
 
 /**
  * Lange Nachricht, die sich in To-dos aufteilen ließe (Auslöser (d), Nachtrag 0.9.0): ≥ `long` Zeichen, ohne Anhänge und ohne
- * `@datei` (neu gesendet fehlten sie; ob worklist `@datei` auflöst, ist [UNKLAR]). Ob worklist `/todo` anbietet, prüft register.ts.
+ * `@datei` (neu gesendet fehlten sie; worklist löst `@datei` nicht auf, types:8708-8709). Ob worklist `/todo` anbietet, prüft register.ts.
  */
 export function isLong(text: string, resendable: boolean, s: Settings): boolean {
   const n = text.trim().length
@@ -175,7 +175,7 @@ export function checkSystem(skills: Skill[] | null, split = false, auto = false)
     'Du bist der Sidekick in Claude Code. Der Nutzer tippt gleich eine Nachricht an seinen Coding-Assistenten; du prüfst sie VOR dem Senden.',
     'Du chattest nie mit dem Nutzer und beantwortest die Nachricht nicht. Du gibst nur ein Urteil als JSON.',
     '',
-    'Rollen (Fassungen klangen wie Antworten des Assistenten):',
+    'Rollen:',
     '- Drei Beteiligte: der Nutzer (schreibt), sein Coding-Assistent (bekommt die Nachricht und arbeitet) und du (stiller Prüfer davor). Du bist nicht der Assistent.',
     '- "fassung" ist die eigene Nachricht des Nutzers an den Assistenten, nur klarer. Absender bleibt der Nutzer: „ich“ ist der Nutzer, „du“ ist der Assistent. Sie gibt dem Assistenten einen Auftrag oder stellt ihm eine Frage.',
     '- Eine Fassung ist nie eine Antwort an den Nutzer, nie eine Rückfrage an den Nutzer und nie eine Begrüßung. Sätze wie „Was möchtest du machen?“, „Welches soll ich nehmen?“ oder „Ich bin bereit“ gehören dem Assistenten, nicht dem Nutzer.',

@@ -1284,6 +1284,18 @@ deTest('Wartung, Fehlerpfad: root wirft → Schlüssel aus der Anweisungsdatei, 
   expect(wStore(w).regeln.audit?.hintAt).toBe(NOW)
 })
 
+deTest('/sidekick hints status: fehlt ein Befehl in der Session, steht „(Befehl fehlt)“ nur bei seinen Regeln (CMD_OF, 0.10.6)', async ($, on) => {
+  // Ohne /claude-api und ohne consolidate-memory: audit und memory fehlen, skill-doctor und init sind da
+  world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS.filter((c) => c.name === 'skill-doctor' || c.name === 'init') })
+  const status = String((await $.command.run({ command: 'sidekick', args: 'hints status' }) as { text?: string }).text)
+  const row = (label: string) => status.split('\n').find((l) => l.startsWith(`| ${label}`)) ?? ''
+  expect(row('prompt-audit')).toContain('(Befehl fehlt)')
+  expect(row('Memory aufräumen')).toContain('(Befehl fehlt)')
+  expect(row('Skill-Liste gekürzt')).not.toContain('(Befehl fehlt)')
+  expect(row('ungenutzte Skills')).not.toContain('(Befehl fehlt)')
+  expect(row('CLAUDE.md anlegen')).not.toContain('(Befehl fehlt)')
+})
+
 deTest('/sidekick hints: status, Regel aus, done, audit-min, unbekannt', async ($, on) => {
   const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS })
   const status = String((await $.command.run({ command: 'sidekick', args: 'hints status' }) as { text?: string }).text)

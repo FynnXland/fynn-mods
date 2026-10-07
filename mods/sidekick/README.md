@@ -4,7 +4,7 @@ Checks your message just before it is sent: first with fixed rules, and only whe
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.10.4**
+Tested with Claude Code **v2.1.291** · Plugin version **0.10.6**
 
 **Cost:** sidekick calls Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
 
