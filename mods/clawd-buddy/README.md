@@ -123,7 +123,6 @@ To just hide him without uninstalling, use `/clawd off`.
 - **After a hidden desktop session is shown again**, the figure may stand still (last frame of the animation) until the next event (turn, tool, typing) if the app reuses the last drawing.
 - **Mood** is per Claude Code process and is not saved. "Working on the same feature for a long time" is approximated by the time spent working in one stretch (the mod cannot see what the work is about).
 - **Voice input:** There is no mod event for "recording in progress", and `prompt.edit` only reports a person as the source. Dictated text counts like typing ("reads along"). Dedicated recording animations will follow once Claude Code offers a signal for it.
-- `tools/` and `showcase/` are developer tools (Node) and are not loaded by the mod. To see all animations, open `showcase/index.html` in a browser (a developer tool, German only). `node tools/gif.mjs <clip>...` renders clips as an animated GIF.
 
 ## Credits
 
