@@ -4,7 +4,7 @@
 Senden mitdenkt, Schnellantworten, eine To-do-Liste und ein Kostenbuch.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.290_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.291_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
 [![Mods](https://img.shields.io/badge/mods-6-555)](#die-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#die-mods)
 
@@ -33,7 +33,7 @@ Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mod
 
 ## Voraussetzungen
 
-- Claude Code mit Mods. Mods brauchen **v2.1.287 oder neuer**; dieses Set ist mit **v2.1.290** getestet. Prüfen mit
+- Claude Code mit Mods. Mods brauchen **v2.1.287 oder neuer**; dieses Set ist mit **v2.1.291** getestet. Prüfen mit
   `claude --version`.
 - Läuft im Terminal und im Code-Tab der Claude-Desktop-App. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen
   die meisten Mods nichts; Details in der README des jeweiligen Mods.
