@@ -367,6 +367,72 @@ test('Ziffer als erstes Zeichen im leeren Prompt sendet den Vorschlag sofort, di
   }
 })
 
+test('Ziffer lang gedrückt: die zusammengefasste Wiederholung sendet wie die einzelne Ziffer, weitere Wiederholungen landen nicht im Prompt', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    w.sent.length = 0
+    const ui = await boot($, surface)
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    await w.clock.advance(2100)
+    expect((await labels(ui))[0]).toBe('Committe die Änderungen')
+    // Taste gehalten: der Editor liefert „1111“ als eine Eingabe
+    expect(await type($, '', '1111')).toMatchObject({ text: '', cursor: 0 })
+    await ui.find({ type: 'Text', text: 'clawd' })
+    expect(w.sent).toEqual([{ text: 'Committe die Änderungen', asUser: true }])
+    // Wiederholungen danach, einzeln oder zusammengefasst, solange die Taste gehalten wird
+    expect(await type($, '', '1')).toMatchObject({ text: '' })
+    await w.clock.advance(1000)
+    expect(await type($, '', '111')).toMatchObject({ text: '' })
+    expect(w.sent.length).toBe(1)
+    // losgelassen: nach der Pause ist die Ziffer wieder Text
+    await w.clock.advance(1300)
+    expect(await type($, '', '1')).toMatchObject({ text: '1' })
+    await clear($, '1')
+    await $.turn.start({ turnId: 't2', text: 'Committe die Änderungen' })
+    await finish($)
+    await suggest($, 'Weiter')
+    await w.clock.advance(2100)
+    expect((await labels(ui))[1]).toBe('Lauf die Tests')
+    // Erste Wiederholung erst nach dem Senden: auch sie landet nicht im Prompt; eine andere Ziffer schon
+    expect(await type($, '', '2')).toMatchObject({ text: '' })
+    await ui.find({ type: 'Text', text: 'clawd' })
+    expect(w.sent.length).toBe(2)
+    expect(await type($, '', '2')).toMatchObject({ text: '' })
+    expect(await type($, '', '1')).toMatchObject({ text: '1' })
+    await clear($, '1')
+    // danach zählt auch die 2 wieder als Text
+    expect(await type($, '', '2')).toMatchObject({ text: '2' })
+    expect(w.sent.length).toBe(2)
+    await clear($, '2')
+    await $.turn.start({ turnId: 't3', text: '2' })
+    await ui.unmount()
+  }
+})
+
+test('Ziffer lang gedrückt, Senden gescheitert: die Pille kommt zurück, aber Wiederholungen der Taste senden nicht erneut', async ($, on) => {
+  const w = world(on, { submit: 'drop' })
+  const ui = await boot($, 'desktop')
+  await finish($)
+  await suggest($, 'Run the tests')
+  expect(await labels(ui)).toEqual(['Run the tests'])
+  expect(await type($, '', '1')).toMatchObject({ text: '' })
+  await ui.find({ type: 'Text', text: 'clawd' })
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  expect(await type($, '', '11')).toMatchObject({ text: '' })
+  await w.clock.advance(1000)
+  expect(await type($, '', '1')).toMatchObject({ text: '' })
+  await ui.find({ type: 'Text', text: 'clawd' })
+  expect(w.sent.length).toBe(1)
+  expect(w.toasts.length).toBe(1)
+  // losgelassen und neu gedrückt: ein neuer Versuch
+  await w.clock.advance(1300)
+  expect(await type($, '', '1')).toMatchObject({ text: '' })
+  await ui.find({ type: 'Text', text: 'clawd' })
+  expect(w.sent.length).toBe(2)
+  await ui.unmount()
+})
+
 test('Ziffer bleibt normaler Text: nach anderem Text, über der Zahl der Vorschläge, eingefügt, ohne sichtbare Pille', async ($, on) => {
   const w = world(on)
   // Vorschlag da, aber das Band wurde noch nie mit Pille gezeichnet
@@ -492,6 +558,13 @@ test('Ziffer allein abgeschickt: der Vorschlag mit dieser Nummer geht stattdesse
     // höchstens einmal pro Turn: die nächste 1 ist wieder Text
     expect(await submit($, '1', { origin: { kind } })).toMatchObject({ text: '1' })
     await $.turn.start({ turnId: 't2', text: 'Lauf die Tests' })
+    // Taste gehalten, dann abgeschickt: „1111“ zählt wie „1“
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    await w.clock.advance(2100)
+    expect((await labels(ui))[0]).toBe('Committe die Änderungen')
+    expect(await submit($, '1111', { origin: { kind } })).toMatchObject({ text: 'Committe die Änderungen' })
+    await $.turn.start({ turnId: 't3', text: 'Committe die Änderungen' })
     await ui.unmount()
   }
 })
@@ -507,6 +580,7 @@ test('Ziffer allein abgeschickt bleibt Text: ohne Vorschlag, über der Zahl, meh
   expect(await submit($, '2')).toMatchObject({ text: '2' })
   expect(await submit($, '1 bitte')).toMatchObject({ text: '1 bitte' })
   expect(await submit($, '12')).toMatchObject({ text: '12' })
+  expect(await submit($, '22')).toMatchObject({ text: '22' })
   expect(await submit($, '1', { turnId: 't1' })).toMatchObject({ text: '1' })
   expect(await submit($, '1', { image: true })).toMatchObject({ text: '1' })
   expect(await submit($, '1', { origin: { kind: 'peer' } })).toMatchObject({ text: '1' })
@@ -522,7 +596,7 @@ test('Ziffer allein abgeschickt bleibt Text: ohne Vorschlag, über der Zahl, meh
   expect(await submit($, '1')).toMatchObject({ text: '1' })
   w.sid = 's2'
   expect(await submit($, '1')).toMatchObject({ text: '1' })
-  expect(w.sent.map((s) => s.text)).toEqual(['1', '2', '1 bitte', '12', '1', '1', '1', '1', '1', '1', '1', '1'])
+  expect(w.sent.map((s) => s.text)).toEqual(['1', '2', '1 bitte', '12', '22', '1', '1', '1', '1', '1', '1', '1', '1'])
   await ui.unmount()
 })
 

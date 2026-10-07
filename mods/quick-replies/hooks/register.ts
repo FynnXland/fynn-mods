@@ -12,7 +12,7 @@ import { addCall, NO_COST } from './cost.ts'
 import type { ForkCost } from './cost.ts'
 import { forkCostText, forkStateText, langOf, T } from './i18n.ts'
 import type { ForkState, Lang, Position } from './i18n.ts'
-import { forkPrompt, MIN_ANSWER, merge, parseFork } from './logic.ts'
+import { forkPrompt, heldDigit, MIN_ANSWER, merge, parseFork } from './logic.ts'
 import type { Reply } from './logic.ts'
 import { chooseLayout, GAP, label } from './view.ts'
 import type { Layout, LayoutPref } from './view.ts'
@@ -22,6 +22,9 @@ const CMD = 'replies'
 const FRAME = 4
 // Keine Neubelegung so lange nach einer Eingabe (SPEC → Stabilität)
 const QUIET_MS = 2000
+// So lange nach der letzten Ziffer zählt dieselbe Ziffer als Wiederholung der gehaltenen Taste. Über der längsten
+// Verzögerung bis zur ersten Wiederholung, die Windows einstellen lässt (1 s), und dem längsten Abstand danach.
+const HOLD_MS = 1200
 // Abgeschickte Ziffer zählt nur, wenn der Nutzer sie selbst geschickt hat: Prompt im Terminal oder SDK-Host (Desktop). Nicht
 // Remote Control: Telefon und Web zeigen die Pille nicht (types@2.1.290:8554-8575)
 const USER_ORIGINS: ReadonlySet<string> = new Set(['composer', 'sdk'])
@@ -55,6 +58,9 @@ let shown = false
 let seen: string[] = []
 let quiet: Timer | null = null
 let pending = false
+// Ziffer, deren Taste gerade einen Vorschlag gesendet hat: ihre Wiederholungen (Taste noch gehalten) landen nicht im Prompt
+let held = 0
+let holdTimer: Timer | null = null
 
 // Zeichnen: die Pille bleibt dasselbe Objekt, solange sich nichts ändert. Clawd zeichnet das Band im Desktop etwa 13-mal pro
 // Sekunde neu; neu gebaute Knöpfe nahmen dort keinen Klick an.
@@ -140,6 +146,24 @@ function markInput($: EngineInterface) {
     }
   })
   quiet = t
+}
+
+/** Taste der Ziffer `n` gehalten: Wiederholungen bis HOLD_MS nach der letzten schlucken (einmaliger Timer wie bei markInput). */
+function hold($: EngineInterface, n: number) {
+  unhold()
+  const t = $.clock.every(HOLD_MS, () => {
+    t.cancel()
+    if (holdTimer === t) unhold()
+  })
+  // Erst mit laufendem Timer: ohne ihn bliebe die Ziffer bis zur nächsten anderen Eingabe gesperrt
+  holdTimer = t
+  held = n
+}
+
+function unhold() {
+  holdTimer?.cancel()
+  holdTimer = null
+  held = 0
 }
 
 /** Fork nach dem Turn, außerhalb von turn.complete (Lehre 12). Fehler, Unsinn oder nichts: es bleibt beim Vorschlag der Engine. */
@@ -296,11 +320,21 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('prompt.edit', async ($, e, next) => {
     const r = await next(e)
     // Ziffer als erstes Zeichen in den leeren Prompt, während die Pille steht: Vorschlag sofort senden, die Ziffer landet nicht im
-    // Prompt (Antwort mit leerem Text, types@2.1.289:8191-8203). Die Pause des Band-Hotkeys (docs/raw/en/reference.md:244) greift im
-    // Desktop nicht, solange der Prompt den Fokus hat.
-    const pick = e.text === '' && /^[1-4]$/.test(e.inputText) ? replies[Number(e.inputText) - 1] : undefined
-    if (pick && shown && ready && r.text === e.inputText) {
+    // Prompt (Antwort mit leerem Text, types@2.1.291:8276-8283). Die Pause des Band-Hotkeys (docs/raw/en/reference.md:244) greift im
+    // Desktop nicht, solange der Prompt den Fokus hat. Eine gehaltene Taste kommt als „111…“ in einer Eingabe an und zählt wie
+    // die einzelne Ziffer; spätere Wiederholungen derselben Ziffer landen nicht im Prompt und senden nie erneut (auch nicht, wenn
+    // das Senden scheiterte und die Pille zurück ist, oder schon der nächste Turn fertig ist).
+    const n = e.text === '' && r.text === e.inputText ? heldDigit(e.inputText) : 0
+    if (n > 0 && n === held) {
+      hold($, n)
+      return { ...r, text: '', cursor: 0 }
+    }
+    unhold()
+    const pick = n > 0 ? replies[n - 1] : undefined
+    if (pick && shown && ready) {
+      if (e.inputText.length > 1) $.ui.log(`quick-replies: held digit ${n} (${e.inputText.length}×)`, { to: 'debug' })
       promptText = ''
+      hold($, n)
       send($, pick.text)
       return { ...r, text: '', cursor: 0 }
     }
@@ -315,9 +349,11 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   // der Vorschlag mit dieser Nummer raus, im Transkript steht sein Text (types@2.1.290:4024-4033, 8740-8791). Alles andere,
   // auch die eigenen Sendungen des Mods (origin plugin), läuft unverändert durch.
   on('prompt.submit', async ($, e, next) => {
+    // Auch mehrfach dieselbe Ziffer (Taste gehalten, dann abgeschickt)
     const digit = e.text.trim()
-    if (!/^[1-4]$/.test(digit)) return next(e)
-    const pick = seen[Number(digit) - 1]
+    const n = heldDigit(digit)
+    if (!n) return next(e)
+    const pick = seen[n - 1]
     const why = !USER_ORIGINS.has(e.origin.kind)
       ? `origin ${e.origin.kind}`
       : e.turnId !== undefined || e.attachments?.length

@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import { forkStateText, langOf, T } from '../hooks/i18n.ts'
-import { clean, forkPrompt, keyOf, merge, parseFork } from '../hooks/logic.ts'
+import { clean, forkPrompt, heldDigit, keyOf, merge, parseFork } from '../hooks/logic.ts'
 import { chooseLayout, label } from '../hooks/view.ts'
 import { addCall, callCost, NO_COST, priceFor } from '../hooks/cost.ts'
 
@@ -108,4 +108,10 @@ test('Kosten: Preis nach Modell-ID, Alias und unbekannt; Summe über Aufrufe', (
   expect(two.calls).toBe(2)
   expect(two.tokens).toBe(82100)
   expect(two.cached).toBe(76000)
+})
+
+test('gehaltene Ziffer: eine oder mehrfach dieselbe von 1–4, sonst 0', () => {
+  expect(heldDigit('1')).toBe(1)
+  expect(heldDigit('4444')).toBe(4)
+  expect(['', '0', '5', '12', '11 ', '1a', '١'].map(heldDigit)).toEqual([0, 0, 0, 0, 0, 0, 0])
 })

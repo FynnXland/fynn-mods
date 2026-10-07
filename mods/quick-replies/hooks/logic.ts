@@ -46,6 +46,13 @@ export function keyOf(text: string): string {
   return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
 }
 
+/** Die Nummer eines Platzes, wenn der Text nur aus einer Ziffer `1`–`4` besteht, auch mehrfach dieselbe: eine gehaltene Taste
+ *  wiederholt sie, und der Editor fasst solche Tasten zu einer Eingabe zusammen (types@2.1.291:8228-8233). Sonst 0. */
+export function heldDigit(text: string): number {
+  const m = /^([1-4])\1*$/.exec(text)
+  return m ? Number(m[1]) : 0
+}
+
 /** Höchstens 4 Plätze: zuerst der Vorschlag der Engine, dann die aus dem Fork, die nachrücken; Doppelte fliegen raus.
  *  Ohne Quellen: leer. */
 export function merge(engine: string, fork: readonly string[]): Reply[] {
