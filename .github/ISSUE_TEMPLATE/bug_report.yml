@@ -1,0 +1,74 @@
+name: Bug report
+description: A mod doesn't work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Issues are public and stay public.** Don't paste chat content, API keys or your user name.
+        Security problems belong in a [private report](https://github.com/FynnXland/fynn-mods/security/advisories/new).
+        English or German, both are fine.
+  - type: dropdown
+    id: mod
+    validations: {required: true}
+    attributes:
+      label: Mod
+      options: ["clawd-buddy", "limit-bars", "sidekick", "quick-replies", "worklist", "cost-ledger", "Several / not sure"]
+  - type: input
+    id: mod-version
+    validations: {required: true}
+    attributes:
+      label: Mod version
+      description: "Shown in `/plugin` under Installed, e.g. 0.6.0"
+  - type: input
+    id: cc-version
+    validations: {required: true}
+    attributes:
+      label: Claude Code version
+      description: "Output of `claude --version`"
+  - type: dropdown
+    id: surface
+    validations: {required: true}
+    attributes:
+      label: Where did it happen?
+      multiple: true
+      options: ["Terminal", "Desktop app (Code tab)", "VS Code", "claude -p / Agent SDK", "Other"]
+  - type: dropdown
+    id: os
+    validations: {required: true}
+    attributes:
+      label: Operating system
+      options: ["Windows 11", "Windows 10", "macOS", "Linux", "Other"]
+  - type: textarea
+    id: steps
+    validations: {required: true}
+    attributes:
+      label: Steps to reproduce
+      description: Commands you ran and what you did, one step per line.
+  - type: textarea
+    id: behaviour
+    validations: {required: true}
+    attributes:
+      label: Expected and actual behavior
+  - type: textarea
+    id: others
+    attributes:
+      label: Other mods and plugins
+      description: Other mods you have installed (from `/plugin`). Mods share the band above the prompt and some events.
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log excerpt
+      render: text
+      description: |
+        Start Claude Code with `claude --debug-file mod-debug.log`, reproduce the problem, then copy the lines that
+        contain the mod's name.
+        **The log can contain your content:** prompts, file paths, tool input and output, project names.
+        Replace such content with `[redacted]` and check paths for your user name.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: "I removed or redacted chat content, my user name in paths and any keys from this report."
+          required: true

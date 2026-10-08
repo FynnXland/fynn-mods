@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest an idea or an improvement for a mod.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: "Please describe the problem first. A clear problem is often more useful than a finished solution. English or German, both are fine."
+  - type: dropdown
+    id: mod
+    validations: {required: true}
+    attributes:
+      label: Mod
+      options: ["clawd-buddy", "limit-bars", "sidekick", "quick-replies", "worklist", "cost-ledger", "A new mod", "Several / not sure"]
+  - type: textarea
+    id: problem
+    validations: {required: true}
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what makes it hard today?
+  - type: textarea
+    id: proposal
+    validations: {required: true}
+    attributes:
+      label: Proposed solution
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where would you use it?
+      multiple: true
+      options: ["Terminal", "Desktop app (Code tab)"]
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: "My examples contain no chat content, real names or other personal data. Issues are public."
+          required: true

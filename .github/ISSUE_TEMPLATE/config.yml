@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: "https://github.com/FynnXland/fynn-mods/security/advisories/new"
+    about: "Please report security problems privately, never in a public issue."
+  - name: Troubleshooting
+    url: "https://github.com/FynnXland/fynn-mods#troubleshooting"
+    about: Common problems and their fixes.
+  - name: Mods documentation
+    url: "https://code.claude.com/docs/en/plugins/mods/overview"
+    about: How mods work in Claude Code (official documentation).

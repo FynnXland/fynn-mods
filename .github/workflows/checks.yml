@@ -1,0 +1,31 @@
+name: Checks
+on:
+  push: {branches: [main]}
+  pull_request:
+  workflow_dispatch:
+permissions: {contents: read}
+concurrency: {group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: true}
+jobs:
+  mods:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The Claude Code version the README names as tested. Validate and test need no login.
+      CLAUDE_CODE_VERSION: 2.1.291
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash -s "$CLAUDE_CODE_VERSION"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: claude --version
+      - name: Validate and test every mod
+        run: |
+          status=0
+          for mod in mods/*/; do
+            echo "::group::${mod%/}"
+            claude plugin validate "$mod" --strict || status=1
+            claude plugin test "$mod" || status=1
+            echo "::endgroup::"
+          done
+          exit $status

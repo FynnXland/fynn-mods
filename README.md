@@ -8,7 +8,13 @@ worklist and a cost ledger.**
 [![Mods](https://img.shields.io/badge/mods-6-555)](#the-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#the-mods)
 
-**English** | [Deutsch](README.de.md)
+[Install](#installation) · [The mods](#the-mods) · [Troubleshooting](#troubleshooting) · **English** · [Deutsch](README.de.md)
+
+<p align="center">
+  <img src="assets/hero.gif" width="790" alt="The Claude Code prompt in the desktop app with four mods: four reply suggestions numbered 1 to 4 above the prompt, below them the 5-hour and weekly limit bars, the cache ring and the storage ring, Clawd the pixel crab typing on a laptop and jumping for joy, and the sidekick level Guide in the prompt footer.">
+  <br><i>quick-replies, limit-bars and clawd-buddy share the band above the prompt; sidekick shows its level in the
+  footer. Four suggestions need <code>/replies more on</code>; the storage ring is optional.</i>
+</p>
 
 My daily-driver set of [Claude Code mods](https://code.claude.com/docs/en/plugins/mods/overview), the plugins that
 draw into Claude Code's own interface in the terminal and in the desktop app. They keep an eye on usage limits, the
@@ -94,7 +100,7 @@ model calls. cost-ledger records the calls of the other mods, so you can see wha
 
 ### clawd-buddy
 
-![clawd-buddy](assets/clawd-buddy.gif)
+![Clawd, a pixel crab, types on a laptop, high-fives a small subagent helper, gets a gift from it, jumps for joy and juggles colored blocks.](assets/clawd-buddy.gif)
 
 Clawd, a little pixel crab, sits on top of the prompt box and reacts to what's going on: he reads along, types on a
 laptop while Claude edits, waits with an hourglass during long tool runs, celebrates finished turns and gets visibly
@@ -108,7 +114,7 @@ Subagents show up as small helpers next to him.
 
 ### limit-bars
 
-![limit-bars](assets/limit-bars.svg)
+![limit-bars: the 5-hour limit bar at 42 % with reset in 2 h 14 min, the weekly bar at 18 % with reset Monday 09:00, a green cache ring with 42 minutes left at 212k tokens of context, and the storage ring for drive E: with 419 of 931 GB used.](assets/limit-bars.svg)
 
 Two slim bars left of Clawd show how much of the 5-hour and the weekly limit you've used and when each resets. A ring
 next to them shows how long this chat's prompt cache stays warm, and the context size. The cache guard asks before
@@ -132,7 +138,7 @@ An optional third ring shows how full a drive is, split by file type (programs, 
 
 ### sidekick
 
-![sidekick](assets/sidekick.png)
+![sidekick in the desktop app (German setting): a blue hint line under a message that suggests a prompt audit, with a button to run it, then a long dictated message with three tasks and sidekick's question whether to split it into three to-dos, with the options split, send anyway and cancel.](assets/sidekick.png)
 
 A second pair of eyes on every message, right before it is sent. Fixed rules decide first, at no cost. Only where a
 check can pay off (the first message of a chat, a large context, a cold cache) a quick Haiku 5.5 call looks at it
@@ -177,7 +183,7 @@ If a check fails or times out, your message goes through unchanged.
 
 ### quick-replies
 
-![quick-replies](assets/quick-replies.png)
+![quick-replies in the desktop app (German setting): after Claude's answer, a pill above Clawd and the limit bars offers three numbered reply suggestions.](assets/quick-replies.png)
 
 Claude Code often suggests your next message as grey text in the prompt. quick-replies turns it into a button in its
 own pill above Clawd. Click it, or type `1` into the empty prompt, and it's sent as your message. With
@@ -190,14 +196,14 @@ own pill above Clawd. Click it, or type `1` into the empty prompt, and it's sent
 
 ### worklist
 
-![worklist](assets/worklist.png)
+![worklist in the desktop app (German setting): the chat shows to-do 2 of 4 as sent, and the to-do sidebar on the right lists two open to-dos with buttons to move or remove them, a field for new ones and the history of two finished to-dos.](assets/worklist.png)
 
 A to-do sidebar next to the chat. Queue tasks, even while Claude is working. When Claude is **clearly** done, the
 running to-do is checked off and the next one starts on its own; while subagents or background work still run, it
 waits. The list never pauses on its own: if Claude isn't clearly done (a question, an interruption, an error, an open
 plan), it stops at that to-do, tells you why and offers **Continue**, **Mark as done** and **Skip**; answering Claude's
 question in the chat continues it as well. Queueing while Claude is free starts the list even after a question.
-History is kept per project.
+The list survives `/clear`; history is kept per project.
 
 - **Commands:** `/todo <task>`, `/todos` (sidebar), `/todos pause|resume|done|skip|retry|clear|history|status|close`
 - **Rights in short:** sends the next to-do (or the continuation of a stopped one) as your message only after its
@@ -208,16 +214,19 @@ History is kept per project.
 
 ### cost-ledger
 
-![cost-ledger](assets/cost-ledger.png)
+![cost-ledger's /ledger overview (German setting): totals for today, 7 days, 30 days and all time, a 14-day history with bars split by model, costs per project, the most expensive chats and the model calls made by other mods.](assets/cost-ledger.png)
 
 After every answer cost-ledger books what the chat has cost so far (the same figure as `/cost`), the tokens per model
 and the model calls made by other mods. `/ledger` shows today, 7 and 30 days and the total, a history split by model,
-your projects and the most expensive chats, drawn in Claude Code's own style.
+your projects and the most expensive chats, drawn in Claude Code's own style. On a subscription, `/ledger limits` shows
+how much API value went into the current 5-hour and weekly window and into your subscription month; set your plan once
+with `/ledger plan`.
 
-- **Commands:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger reset`, `/ledger help`
-- **Rights in short:** reads the session's cost and usage; observes other mods' model calls and passes them on
-  unchanged; stores the project name, the git remote as `host/owner/repo` and the first 50 characters of a chat's first
-  message in its local plugin store. Makes no model calls; no files, processes or network.
+- **Commands:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,
+  `/ledger plan <plan> <day|today> [price]`, `/ledger reset`, `/ledger help`
+- **Rights in short:** reads the session's cost, usage and limit windows; observes other mods' model calls and passes
+  them on unchanged; stores the project name, the git remote as `host/owner/repo`, the first 50 characters of a chat's
+  first message and your plan setting in its local plugin store. Makes no model calls; no files, processes or network.
 - **Details:** [mods/cost-ledger](mods/cost-ledger/README.md)
 
 ## How they work together
@@ -239,14 +248,30 @@ your projects and the most expensive chats, drawn in Claude Code's own style.
 ## Rights and trust
 
 A mod is code that runs inside Claude Code with your permissions. Every mod here declares what it hooks into and which
-API calls it makes; `claude plugin validate mods/<mod>` prints the exact list, and each README explains every entry
-in plain language. None of these mods reads or stores login data or tokens, and none touches files outside its own
-plugin store.
+API calls it makes; `claude plugin validate mods/<mod>` prints the exact list, and each README explains in plain
+language what they are for. None of these mods reads or stores login data or tokens, none has network access of its own, and
+none writes anywhere but its own plugin store. The only mod that looks at your drive is limit-bars, and only with its
+optional storage ring: it reads sizes, never file contents. Found a security problem? See [SECURITY.md](SECURITY.md).
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| A mod draws nothing | Check `claude --version` (mods need v2.1.287 or later) and that `/plugin` lists the mod as `mod active`. A newly installed mod loads in the next session or after `/reload-plugins`. In `claude -p`, the Agent SDK, VS Code and on mobile most mods draw nothing. |
+| A mod broke after a Claude Code update | Update the mods (`claude plugin marketplace update fynn-mods`, then `claude plugin update <mod>@fynn-mods`). If that doesn't help, please open an issue. |
+| Two questions in a row before a cold send | limit-bars and sidekick both guard against cold sends. Turn off limit-bars' question with `/cache warn off`. |
+| Everything is in English | Set the `language` option to `de` with `/plugin configure <mod>@fynn-mods`. |
+| The storage ring is missing or empty | It is Windows only and off by default: set `storagePath` (for example `D:\`) in `/config`, and check that `/bars show storage on` is set. If it stays empty, `/disk` shows the error. |
+| cost-ledger shows a Haiku 5.5 chat at about ten times its cost | Claude Code v2.1.291 prices Haiku 5.5 like Haiku 4.5 in `/cost`, and cost-ledger books that value for the chat. Model calls of the mods use cost-ledger's own prices. |
+
+To see why a mod does nothing, start Claude Code with `claude --debug-file mod-debug.log` and search the file for the
+mod's name ([Claude Code docs](https://code.claude.com/docs/en/plugins/mods/troubleshoot)).
 
 ## Feedback
 
-Bug reports and ideas are welcome as [issues](https://github.com/FynnXland/fynn-mods/issues). Please include the mod's
-version (`/plugin`), `claude --version`, and whether it happened in the terminal or the desktop app.
+Bug reports and ideas are welcome as [issues](https://github.com/FynnXland/fynn-mods/issues); the form asks for the
+mod's version (`/plugin`), `claude --version`, and whether it happened in the terminal or the desktop app. Before you
+start on a pull request, please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer
 
@@ -255,7 +280,8 @@ to Clawd, the Claude Code mascot; the pixels are drawn by hand. If Anthropic obj
 
 ## License
 
-[MIT License](LICENSE), Copyright (c) 2026 Fynn Hansen.
+[MIT License](LICENSE), Copyright (c) 2026 Fynn Hansen. Unless you explicitly state otherwise, any contribution you
+submit for inclusion in this project is licensed under the MIT License, without additional terms or conditions.
 
 limit-bars is modeled on Cache Keeper by Nate Herk (MIT); sidekick reuses limit-bars' cache logic. See the
 `THIRD-PARTY-NOTICES.md` in both mods.

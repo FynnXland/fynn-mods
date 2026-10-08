@@ -8,7 +8,13 @@ Senden mitdenkt, Schnellantworten, eine To-do-Liste und ein Kostenbuch.**
 [![Mods](https://img.shields.io/badge/mods-6-555)](#die-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#die-mods)
 
-[English](README.md) | **Deutsch**
+[Installation](#installation) · [Die Mods](#die-mods) · [Fehlerbehebung](#fehlerbehebung) · [English](README.md) · **Deutsch**
+
+<p align="center">
+  <img src="assets/hero.gif" width="790" alt="Der Prompt von Claude Code in der Desktop-App mit vier Mods: vier Antwortvorschläge mit den Nummern 1 bis 4 über dem Prompt, darunter die Balken für das 5-Stunden- und das Wochenlimit, der Cache-Ring und der Speicher-Ring, Clawd, die Pixel-Krabbe, die auf dem Laptop tippt und vor Freude springt, und in der Fußzeile die sidekick-Stufe Guide.">
+  <br><i>quick-replies, limit-bars und clawd-buddy teilen sich das Band über dem Prompt; sidekick zeigt seine Stufe in
+  der Fußzeile. Vier Vorschläge gibt es mit <code>/replies more on</code>; der Speicher-Ring ist optional.</i>
+</p>
 
 Mein Alltags-Set an [Claude-Code-Mods](https://code.claude.com/docs/de/plugins/mods/overview), also Plugins, die in
 die Oberfläche von Claude Code selbst zeichnen, im Terminal und in der Desktop-App. Sie behalten Nutzungslimits,
@@ -99,7 +105,7 @@ keine Modellaufrufe. cost-ledger bucht die Aufrufe der anderen Mods, so siehst d
 
 ### clawd-buddy
 
-![clawd-buddy](assets/clawd-buddy.gif)
+![Clawd, eine Pixel-Krabbe, tippt auf dem Laptop, klatscht einen kleinen Subagenten-Helfer ab, bekommt von ihm ein Geschenk, springt vor Freude und jongliert bunte Klötze.](assets/clawd-buddy.gif)
 
 Clawd, eine kleine Pixel-Krabbe, sitzt auf der Eingabebox und reagiert auf das, was passiert: Er liest mit, tippt auf
 dem Laptop, während Claude Dateien bearbeitet, wartet mit der Sanduhr bei langen Tool-Läufen, jubelt über fertige
@@ -113,7 +119,7 @@ nachts schläft er ein. Subagenten erscheinen als kleine Helfer neben ihm.
 
 ### limit-bars
 
-![limit-bars](assets/limit-bars.svg)
+![limit-bars: der Balken für das 5-Stunden-Limit bei 42 %, zurückgesetzt in 2 h 14 min, der Wochenbalken bei 18 %, zurückgesetzt Montag 09:00, ein grüner Cache-Ring mit 42 Minuten Rest bei 212k Tokens Kontext und der Speicher-Ring für Laufwerk E: mit 419 von 931 GB belegt.](assets/limit-bars.svg)
 
 Zwei schmale Balken links neben Clawd zeigen, wie viel vom 5-Stunden- und vom Wochenlimit verbraucht ist und wann sie
 zurückgesetzt werden. Ein Ring daneben zeigt, wie lange der Prompt-Cache dieses Chats noch warm ist, dazu die
@@ -139,7 +145,7 @@ die schaltest du mit `/cache warn off` ab.
 
 ### sidekick
 
-![sidekick](assets/sidekick.png)
+![sidekick in der Desktop-App: eine blaue Hinweiszeile unter einer Nachricht schlägt ein Prompt-Audit vor, mit einem Knopf zum Ausführen; darunter eine lange diktierte Nachricht mit drei Aufträgen und sidekicks Rückfrage, ob sie in drei To-dos aufgeteilt werden soll, mit den Optionen Aufteilen, Trotzdem senden und Abbrechen.](assets/sidekick.png)
 
 Ein zweiter Blick auf jede Nachricht, kurz bevor sie rausgeht. Zuerst entscheiden feste Regeln, ohne Kosten. Nur wo
 sich eine Prüfung lohnen kann (erste Nachricht eines Chats, großer Kontext, kalter Cache), schaut zusätzlich kurz
@@ -188,7 +194,7 @@ Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unveränd
 
 ### quick-replies
 
-![quick-replies](assets/quick-replies.png)
+![quick-replies in der Desktop-App: Nach Claudes Antwort bietet eine Pille über Clawd und den Limit-Balken drei nummerierte Antwortvorschläge an.](assets/quick-replies.png)
 
 Claude Code schlägt oft deine nächste Nachricht als grauen Text im Prompt vor. quick-replies macht daraus einen Knopf
 in einer eigenen Pille über Clawd. Ein Klick oder die Taste `1` im leeren Prompt schickt ihn als deine Nachricht ab.
@@ -201,14 +207,14 @@ Mit `/replies more on` füllt ein Fork der Session bis zu vier Plätze; Claude C
 
 ### worklist
 
-![worklist](assets/worklist.png)
+![worklist in der Desktop-App: Im Chat steht To-do 2 von 4 als gesendet, rechts listet die To-do-Seitenleiste zwei offene To-dos mit Knöpfen zum Verschieben und Entfernen, ein Feld für neue und den Verlauf mit zwei erledigten To-dos.](assets/worklist.png)
 
 Eine To-do-Seitenleiste neben dem Chat. Aufgaben einreihen, auch während Claude arbeitet. Ist Claude **sicher** fertig,
 wird das laufende To-do abgehakt und das nächste startet von selbst; solange Subagenten oder Hintergrundarbeit laufen,
 wartet sie. Die Liste pausiert nie von selbst: Ist Claude nicht sicher fertig (Rückfrage, Unterbrechung, Fehler,
 offener Plan), hält sie bei diesem To-do an, nennt den Grund und bietet **Fortsetzen**, **Abhaken** und
 **Überspringen**; auch deine Antwort auf Claudes Rückfrage im Chat setzt es fort. Einreihen bei freiem Claude startet
-die Liste auch nach einer Rückfrage. Der Verlauf gilt pro Projekt.
+die Liste auch nach einer Rückfrage. Die Liste übersteht `/clear`; der Verlauf gilt pro Projekt.
 
 - **Befehle:** `/todo <aufgabe>`, `/todos` (Seitenleiste), `/todos pause|resume|done|skip|retry|clear|history|status|close`
 - **Rechte kurz:** sendet das nächste To-do (oder die Fortsetzung eines angehaltenen) nur nach bestandener Prüfung
@@ -220,16 +226,20 @@ die Liste auch nach einer Rückfrage. Der Verlauf gilt pro Projekt.
 
 ### cost-ledger
 
-![cost-ledger](assets/cost-ledger.png)
+![Die Übersicht /ledger von cost-ledger: Summen für heute, 7 Tage, 30 Tage und gesamt, ein Verlauf über 14 Tage mit Balken nach Modell, Kosten je Projekt, die teuersten Chats und die Modellaufrufe anderer Mods.](assets/cost-ledger.png)
 
 Nach jeder Antwort bucht cost-ledger, was der Chat bisher gekostet hat (derselbe Wert wie `/cost`), die Tokens je
 Modell und die Modellaufrufe anderer Mods. `/ledger` zeigt heute, 7 und 30 Tage und gesamt, einen Verlauf nach Modell,
-deine Projekte und die teuersten Chats, gezeichnet im Stil von Claude Code.
+deine Projekte und die teuersten Chats, gezeichnet im Stil von Claude Code. Im Abo zeigt `/ledger limits`, wie viel
+API-Wert ins aktuelle 5-Stunden- und Wochenfenster und in deinen Abo-Monat geflossen ist; dein Abo trägst du einmal mit
+`/ledger plan` ein.
 
-- **Befehle:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger reset`, `/ledger help`
-- **Rechte kurz:** liest Kosten und Verbrauch der Session; beobachtet die Modellaufrufe anderer Mods und gibt sie
-  unverändert weiter; speichert Projektname, Git-Remote als `host/owner/repo` und die ersten 50 Zeichen der ersten
-  Nachricht eines Chats im lokalen Plugin-Speicher. Keine Modellaufrufe, keine Dateien, Prozesse, kein Netzwerk.
+- **Befehle:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,
+  `/ledger plan <abo> <tag|today> [preis]`, `/ledger reset`, `/ledger help`
+- **Rechte kurz:** liest Kosten, Verbrauch und Limitfenster der Session; beobachtet die Modellaufrufe anderer Mods und
+  gibt sie unverändert weiter; speichert Projektname, Git-Remote als `host/owner/repo`, die ersten 50 Zeichen der ersten
+  Nachricht eines Chats und deine Abo-Angabe im lokalen Plugin-Speicher. Keine Modellaufrufe, keine Dateien, Prozesse,
+  kein Netzwerk.
 - **Details:** [mods/cost-ledger](mods/cost-ledger/README.md) (englisch)
 
 ## Zusammenspiel
@@ -255,13 +265,30 @@ deine Projekte und die teuersten Chats, gezeichnet im Stil von Claude Code.
 
 Ein Mod ist Code, der in Claude Code mit deinen Rechten läuft. Jeder Mod hier legt offen, an welche Ereignisse er sich
 hängt und welche API-Aufrufe er macht; `claude plugin validate mods/<mod>` zeigt die genaue Liste, und jede README
-erklärt jeden Eintrag in Klartext. Keiner dieser Mods liest oder speichert Anmeldedaten oder Tokens, und keiner fasst
-Dateien außerhalb seines eigenen Plugin-Speichers an.
+erklärt in Klartext, wofür sie da sind. Keiner dieser Mods liest oder speichert Anmeldedaten oder Tokens, keiner hat einen
+eigenen Netzwerkzugang, und keiner schreibt irgendwohin außer in seinen eigenen Plugin-Speicher. Nur limit-bars schaut
+auf dein Laufwerk, und nur mit dem optionalen Speicher-Ring: Er liest Größen, nie Dateiinhalte. Sicherheitsproblem
+gefunden? Siehe [SECURITY.md](SECURITY.md) (englisch).
+
+## Fehlerbehebung
+
+| Problem | Lösung |
+|---|---|
+| Ein Mod zeichnet nichts | `claude --version` prüfen (Mods brauchen v2.1.287 oder neuer) und ob `/plugin` den Mod als `mod active` zeigt. Ein neu installierter Mod lädt in der nächsten Session oder nach `/reload-plugins`. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen die meisten Mods nichts. |
+| Nach einem Claude-Code-Update geht ein Mod nicht mehr | Die Mods aktualisieren (`claude plugin marketplace update fynn-mods`, dann `claude plugin update <mod>@fynn-mods`). Hilft das nicht, bitte ein Issue anlegen. |
+| Zwei Rückfragen hintereinander vor dem Senden mit kaltem Cache | limit-bars und sidekick fragen beide vor dem Senden mit kaltem Cache nach. Die Rückfrage von limit-bars mit `/cache warn off` abschalten. |
+| Alles ist englisch | Die Option `language` mit `/plugin configure <mod>@fynn-mods` auf `de` stellen. |
+| Der Speicher-Ring fehlt oder bleibt leer | Er läuft nur unter Windows und ist standardmäßig aus: `storagePath` (z. B. `D:\`) in `/config` setzen und prüfen, ob `/bars show storage on` gilt. Bleibt er leer, zeigt `/disk` den Fehler. |
+| cost-ledger zeigt einen Chat mit Haiku 5.5 etwa zehnfach zu teuer an | Claude Code v2.1.291 berechnet Haiku 5.5 in `/cost` wie Haiku 4.5, und cost-ledger bucht diesen Wert für den Chat. Modellaufrufe der Mods rechnet cost-ledger mit eigenen Preisen. |
+
+Warum ein Mod nichts tut, zeigt das Debug-Log: Claude Code mit `claude --debug-file mod-debug.log` starten und die
+Datei nach dem Namen des Mods durchsuchen ([Doku von Claude Code](https://code.claude.com/docs/de/plugins/mods/troubleshoot)).
 
 ## Feedback
 
-Fehlerberichte und Ideen gern als [Issue](https://github.com/FynnXland/fynn-mods/issues), gern auch auf Deutsch.
-Bitte die Version des Mods (`/plugin`), `claude --version` und Terminal oder Desktop-App angeben.
+Fehlerberichte und Ideen gern als [Issue](https://github.com/FynnXland/fynn-mods/issues), gern auch auf Deutsch; das
+Formular fragt nach der Version des Mods (`/plugin`), `claude --version` und Terminal oder Desktop-App. Bevor du einen
+Pull Request anfängst, lies bitte [CONTRIBUTING.md](CONTRIBUTING.md) (englisch).
 
 ## Hinweis
 
@@ -271,7 +298,9 @@ der Mod entfernt.
 
 ## Lizenz
 
-[MIT-Lizenz](LICENSE), Copyright (c) 2026 Fynn Hansen. Rechtlich maßgeblich ist der englische Lizenztext.
+[MIT-Lizenz](LICENSE), Copyright (c) 2026 Fynn Hansen. Rechtlich maßgeblich ist der englische Lizenztext. Sofern du
+nicht ausdrücklich etwas anderes angibst, steht jeder Beitrag, den du zur Aufnahme in dieses Projekt einreichst, unter
+der MIT-Lizenz, ohne zusätzliche Bedingungen.
 
 limit-bars ist nach Cache Keeper von Nate Herk gebaut (MIT); sidekick übernimmt die Cache-Logik von limit-bars. Siehe
 die `THIRD-PARTY-NOTICES.md` in beiden Mods.
