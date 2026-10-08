@@ -4,6 +4,7 @@
 Senden mitdenkt, Schnellantworten, eine To-do-Liste und ein Kostenbuch.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.291_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
 [![Mods](https://img.shields.io/badge/mods-6-555)](#die-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#die-mods)
