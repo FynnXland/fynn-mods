@@ -12,7 +12,7 @@ export type Settings = { haiku: boolean; doneLine: boolean; settleSeconds: numbe
 
 const HISTORY_MAX = 300
 const TODO_MAX = 2000 // Zeichen pro To-do; der Store hat 4 MiB für alles
-const QUEUE_MAX = 200
+export const QUEUE_MAX = 200
 
 const DEFAULT_SETTINGS: Settings = { haiku: true, doneLine: true, settleSeconds: 3, maxAutoRun: 15, lang: 'en' }
 
@@ -286,8 +286,9 @@ export type Runtime = {
   turn: { startedAt: number; todoId: string | null; text: string; fromFynn: boolean }
   state: CheckState
   stateReason: string
-  // kind 'background': Hintergrundarbeit läuft länger als die Wartegrenze (0.4.0); sonst Rückfrage, STOPP oder Halt ohne To-do
-  notice: { reason: string; todoId: string | null; kind?: 'background' } | null
+  // kind 'background': Hintergrundarbeit läuft länger als die Wartegrenze (0.4.0); 'cleared': To-do lief beim /clear (0.6.0, bleibt
+  // über Fynns Nachricht hinweg stehen); sonst Rückfrage, STOPP oder Halt ohne To-do
+  notice: { reason: string; todoId: string | null; kind?: 'background' | 'cleared' } | null
   autoRun: number
   strikes: { id: string; n: number }
   hold: boolean

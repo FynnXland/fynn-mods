@@ -198,6 +198,8 @@ function world(
     agentsThrow?: { on: boolean }
     registerThrows?: boolean
     storeFail?: { get: boolean; set: boolean }
+    // store.get dieses Schlüssels hängt, bis `open` gerufen wird (Rennen, Review 0.6.0 B1)
+    storeGate?: { key: string; wait: Promise<void> | null }
     // Befehle in der Warteschlange (0.3.0): welche es gibt, was ein Lauf ausgibt, Fehler
     commands?: string[]
     // laufen, stehen aber nicht in $.command.list (wie /cost im Smoke-Test, CLI 2.1.290)
@@ -228,9 +230,12 @@ function world(
     return { value: sid }
   })
   on('session.root', () => ({ value: '/proj' }))
-  on('store.get', ($, e) => {
+  on('store.get', async ($, e) => {
     if (o.storeFail?.get) throw new Error('Store kaputt')
-    return { value: saved.get(e.key) }
+    // Wert zum Zeitpunkt der Anfrage, wie ein echter Store; die Antwort kommt erst, wenn das Gate offen ist
+    const value = saved.get(e.key)
+    if (o.storeGate?.wait && o.storeGate.key === e.key) await o.storeGate.wait
+    return { value }
   })
   on('store.set', ($, e) => {
     if (o.storeFail?.set) throw new Error('voll')
@@ -293,6 +298,7 @@ function world(
   on('turn.complete', () => ({ text: '' }))
   on('classic.Stop', () => ({}))
   on('classic.StopFailure', () => ({}))
+  on('classic.SessionStart', () => ({}))
   on('tool.call', ($, e) => {
     if (e.tool === 'TaskCreate') return { result: { task: { id: String((e as unknown as { subject: string }).subject), subject: 'x' } } } as never
     if (e.tool === 'Bash' && String((e as unknown as { command: string }).command).includes('fail')) return { isError: true, result: 'exit 1' } as never
@@ -314,6 +320,12 @@ function world(
     haikuReqs,
     haikuSystems,
     setSid: (s: string) => (sid = s),
+    /** /clear: neue Session-ID, danach classic.SessionStart mit source clear (docs/raw/en/interface.md:789). */
+    clear: async ($: Engine, s: string) => {
+      sid = s
+      await $.classic.SessionStart({ hook_event_name: 'SessionStart', source: 'clear' } as never)
+      await flush()
+    },
     agentCalls: () => agentCalls,
     setAgents: (a: Agent[]) => (agents = a),
     setReply: (r: unknown) => (reply = r),
@@ -669,7 +681,7 @@ test('Stufe 10 (mock.clock): neuer Turn, Pause oder Session-Wechsel während der
   await cmd($, 'pause')
   await tick(w.clock, 5000)
   expect(w.sent).toHaveLength(1)
-  // Fortsetzen (kurze Wartezeit), dann Session-Wechsel (/clear) vor dem Senden
+  // Fortsetzen (kurze Wartezeit), dann Session-Wechsel (/resume; bei /clear zieht die Liste ab 0.6.0 um) vor dem Senden
   await cmd($, 'resume')
   w.setSid('s2')
   await tick(w.clock, 5000)
@@ -901,7 +913,7 @@ test('Stufe 5 mit TodoWrite (offene Schritte → FRAGEN) und TaskUpdate „delet
   expect(w.history()[0]?.text).toBe('A')
 })
 
-test('Nach /clear (neue Session-ID ohne session.start): alte Liste nicht zeigen, Knöpfe ändern sie nicht (Review S1)', DE, async ($, on) => {
+test('Nach einem Session-Wechsel ohne session.start (/resume; /clear vor seinem Hook): alte Liste nicht zeigen, Knöpfe ändern sie nicht (Review S1)', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
   await cmd($, 'pause')
@@ -2205,4 +2217,224 @@ test('0.5.0: haikuCost rechnet mit den Preisen des Modells', async () => {
   expect(Math.round(haikuCost(c) * 1e9)).toBe(135000000)
   // Unbekanntes Modell: lieber zu teuer als zu billig (Preise Haiku 4.5)
   expect(Math.round(haikuCost(u, 'irgendwas') * 1e9)).toBe(4500000)
+})
+
+// ---------- 0.6.0: Die Liste übersteht /clear ----------
+
+test('0.6.0: /clear → offene To-dos und Pause ziehen in den geleerten Chat um, alter Schlüssel gelöscht, Toast', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'pause')
+  await cmd($, 'A')
+  await cmd($, 'B')
+  await w.clear($, 's2')
+  expect(w.queue('s2')).toMatchObject({ paused: true, items: [{ text: 'A', status: 'open' }, { text: 'B', status: 'open' }] })
+  expect(w.saved.has('queue:s1')).toBe(false)
+  expect(w.toasts.at(-1)).toBe('To-do-Liste nach /clear übernommen (2 offen)')
+  expect((await cmd($, 'status')).text).toContain('Liste: 2 offen')
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual([])
+})
+
+test('0.6.0: /clear ohne Pause → Prüfstand „bereit“, das erste To-do startet erst nach Fynns erster Nachricht', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.user($, 'Arbeite an X.')
+  await cmd($, 'A')
+  await w.clear($, 's2')
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual([])
+  await w.user($, 'Start-Prompt: weiter mit Y.')
+  await w.end($, DONE)
+  await tick(w.clock, 3000)
+  expect(w.sent).toEqual(['A'])
+})
+
+test('0.6.0: laufendes To-do beim /clear → offen und vorn, Hinweis bleibt über den Start-Prompt; „Fortsetzen“ sendet es neu', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await cmd($, 'B')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  expect(w.queue().items[0]).toMatchObject({ text: 'A', status: 'running' })
+  await w.clear($, 's2')
+  expect(w.queue('s2').items.map((t) => [t.text, t.status])).toEqual([
+    ['A', 'open'],
+    ['B', 'open'],
+  ])
+  const ui = await $.ui.mount(PANE('desktop'))
+  expect(await ui.find({ type: 'Text', text: /lief, als der Chat geleert wurde/ })).toBeDefined()
+  for (const key of ['resume', 'mark-done', 'skip']) expect(await ui.find({ key }), key).toBeDefined()
+  await ui.unmount()
+  // Fynns Start-Prompt: eigener Chat-Turn, gehört nicht zu A; danach startet nichts
+  await w.user($, 'Start-Prompt: Übergabe lesen und weitermachen.')
+  await w.end($, DONE)
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual(['A'])
+  expect(w.history()).toEqual([])
+  expect(await press($, 'resume')).toBe(true)
+  await tick(w.clock, 300)
+  expect(w.sent).toEqual(['A', 'A'])
+})
+
+test('0.6.0: laufendes To-do beim /clear, „Abhaken“ → Verlauf, das nächste startet', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await cmd($, 'B')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.clear($, 's2')
+  expect(await press($, 'mark-done')).toBe(true)
+  expect(w.history()[0]).toMatchObject({ text: 'A', how: 'manual' })
+  await tick(w.clock, 300)
+  expect(w.sent.at(-1)).toBe('B')
+})
+
+test('0.6.0: laufendes To-do beim /clear wird entfernt → Hinweis verschwindet, Liste wieder „bereit“', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await cmd($, 'B')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.clear($, 's2')
+  const id = w.queue('s2').items[0]?.id ?? ''
+  expect(await press($, `remove-${id}`)).toBe(true)
+  const ui = await $.ui.mount(PANE('desktop'))
+  expect(await ui.find({ key: 'mark-done' })).toBeUndefined()
+  await ui.unmount()
+  await w.user($, 'weiter')
+  await w.end($, DONE)
+  await tick(w.clock, 3000)
+  expect(w.sent.at(-1)).toBe('B')
+})
+
+test('0.6.0: Wechsel schon vorher bemerkt (To-do im neuen Chat eingereiht), dann der Hook → Liste trotzdem umgezogen, neues hinten', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'pause')
+  await cmd($, 'A')
+  w.setSid('s2')
+  await cmd($, 'Neu')
+  expect(w.queue('s2').items.map((t) => t.text)).toEqual(['Neu'])
+  await $.classic.SessionStart({ hook_event_name: 'SessionStart', source: 'clear' } as never)
+  await flush()
+  expect(w.queue('s2')).toMatchObject({ paused: true })
+  expect(w.queue('s2').items.map((t) => t.text)).toEqual(['A', 'Neu'])
+  expect(w.saved.has('queue:s1')).toBe(false)
+})
+
+test('0.6.0: Wechsel vorher in der Seitenleiste bemerkt, dann der Hook → Liste umgezogen', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'pause')
+  await cmd($, 'A')
+  w.setSid('s2')
+  const ui = await $.ui.mount(PANE('desktop'))
+  await tick(w.clock, 10)
+  await ui.unmount()
+  await $.classic.SessionStart({ hook_event_name: 'SessionStart', source: 'clear' } as never)
+  await flush()
+  expect(w.queue('s2').items.map((t) => t.text)).toEqual(['A'])
+})
+
+test('0.6.0: /resume bzw. /branch (kein source clear) → Listen bleiben getrennt wie bisher', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'pause')
+  await cmd($, 'A')
+  w.setSid('s2')
+  await $.classic.SessionStart({ hook_event_name: 'SessionStart', source: 'resume' } as never)
+  await flush()
+  expect((await cmd($, 'status')).text).toContain('Liste: 0 offen')
+  expect(w.queue('s1').items.map((t) => t.text)).toEqual(['A'])
+})
+
+test('0.6.0: /clear mit leerer Liste → kein Toast, nichts gespeichert', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.clear($, 's2')
+  expect(w.toasts).toEqual([])
+  expect(w.saved.has('queue:s2')).toBe(false)
+})
+
+test('0.6.0: Store-Fehler beim Umzug → kein Absturz, Liste lebt im Speicher, alter Schlüssel bleibt', DE, async ($, on) => {
+  const fail = { get: false, set: false }
+  const w = world(on, { storeFail: fail })
+  await w.start($)
+  await cmd($, 'pause')
+  await cmd($, 'A')
+  fail.set = true
+  await w.clear($, 's2')
+  expect(w.saved.has('queue:s1')).toBe(true)
+  expect((await cmd($, 'status')).text).toContain('Liste: 1 offen')
+})
+
+test('0.6.0 en: /clear toast and notice in English', { options: { language: 'en' } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.clear($, 's2')
+  expect(w.toasts.at(-1)).toBe('To-do list kept after /clear (1 open), stopped: the to-do that was running waits for you (sidebar or /todos status).')
+  const ui = await $.ui.mount(PANE('desktop'))
+  expect(await ui.find({ type: 'Text', text: /running when the chat was cleared/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('0.6.0 Review B1: Seitenleiste stellt gleichzeitig um (store.get hängt), dann der Hook → Liste nicht verloren, alter Schlüssel erst danach weg', DE, async ($, on) => {
+  const gate: { key: string; wait: Promise<void> | null } = { key: 'queue:s2', wait: null }
+  const w = world(on, { storeGate: gate })
+  await w.start($)
+  await cmd($, 'pause')
+  await cmd($, 'A')
+  await cmd($, 'B')
+  let open = () => {}
+  gate.wait = new Promise<void>((res) => (open = res))
+  w.setSid('s2')
+  const ui = await $.ui.mount(PANE('desktop'))
+  // Der 1-ms-Timer der Seitenleiste startet den Abgleich; dessen store.get('queue:s2') hängt
+  await tick(w.clock, 1)
+  await $.classic.SessionStart({ hook_event_name: 'SessionStart', source: 'clear' } as never)
+  await flush()
+  gate.wait = null
+  open()
+  await tick(w.clock, 10)
+  await ui.unmount()
+  expect(w.queue('s2').items.map((t) => t.text)).toEqual(['A', 'B'])
+  expect(w.saved.has('queue:s1')).toBe(false)
+  expect((await cmd($, 'status')).text).toContain('Liste: 2 offen')
+})
+
+test('0.6.0: Toast sagt bei laufendem To-do, dass die Liste angehalten ist; „Überspringen“ und /todos clear lösen den Hinweis', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await cmd($, 'B')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.clear($, 's2')
+  expect(w.toasts.at(-1)).toContain('übernommen (2 offen), angehalten')
+  expect((await cmd($, 'skip')).text).toContain('A')
+  await tick(w.clock, 300)
+  expect(w.sent.at(-1)).toBe('B')
+  expect(w.queue('s2').items.map((t) => t.text)).toEqual(['B', 'A'])
+})
+
+test('0.6.0: /todos clear bei Hinweis „lief beim /clear“ → Hinweis weg, nichts gesendet', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await cmd($, 'A')
+  await tick(w.clock, 3000)
+  await w.todoTurn($)
+  await w.clear($, 's2')
+  await cmd($, 'clear')
+  const ui = await $.ui.mount(PANE('terminal'))
+  expect(await ui.find({ key: 'mark-done' })).toBeUndefined()
+  await ui.unmount()
+  await tick(w.clock, 5000)
+  expect(w.sent).toEqual(['A'])
 })

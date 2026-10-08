@@ -6,6 +6,7 @@
 // Im Zweifel wird nie gesendet. Alle beobachtenden Hooks geben das Ergebnis von next(e) unverändert weiter. Kontext hängt
 // worklist nur an seine eigenen To-dos und an Fynns Antwort auf die Rückfrage eines To-dos (unsichtbarer Hinweis). Beim Modell
 // kommt genau der To-do-Text an; ein To-do, das mit `/name` beginnt, läuft als Befehl. Texte auf Englisch oder Deutsch (i18n.ts).
+// Ab 0.6.0 zieht die Liste bei /clear in den geleerten Chat um (carryOver); /resume und /branch behalten getrennte Listen.
 // Vorbild für Ideen und Abläufe: arbeitsliste (nikisge/niklas-mods, ohne Lizenz, kein Code übernommen).
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
@@ -14,6 +15,7 @@ import type { Decision, StopFacts } from './check.ts'
 import { ANSWER_HINTS, CONTINUE_TEXTS, DONE_HINTS, T, cents, hhmm, shortDate } from './i18n.ts'
 import type { Strings } from './i18n.ts'
 import {
+  QUEUE_MAX,
   add,
   cleanCost,
   cleanHistory,
@@ -108,6 +110,9 @@ let answerInFlight = false
 // Befehls-To-do: dessen prompt.submit (Skill-Befehl, Herkunft worklist) ist schon durch, der Turn folgt gleich
 let cmdPrompt = false
 let storeWarned = false
+// Letzter Session-Wechsel, den syncSession bemerkt hat, mit der Liste des alten Chats: Kommt classic.SessionStart (clear) erst
+// danach, zieht carryOver sie trotzdem um (0.6.0; die Reihenfolge von Neuzeichnen und Hook ist nicht belegt)
+let switched: { from: string; to: string; q: Queue } | null = null
 let draft = ''
 let historyOpen = false
 let historyAll = false
@@ -204,6 +209,12 @@ function warnStore($: EngineInterface) {
 
 /** Nach jeder Änderung: speichern, Laufzustand sichern, neu zeichnen. */
 async function commit($: EngineInterface) {
+  // Hinweis „lief beim /clear“, dessen To-do entfernt oder gelöscht wurde: Es gibt nichts mehr zu entscheiden
+  if (rt.notice?.kind === 'cleared' && !q.items.some((t) => t.id === rt.notice?.todoId)) {
+    rt.notice = null
+    rt.state = openItems(q).length > 0 ? 'fresh' : 'idle'
+    rt.stateReason = ''
+  }
   redraw($)
   await saveQueue($)
   await persist($)
@@ -243,17 +254,86 @@ function freshStart(sid: string) {
 async function syncSession($: EngineInterface): Promise<boolean> {
   const id = await $.session.id()
   if (id === rt.sid) return false
+  switched = { from: rt.sid, to: id, q }
+  const next = await loadQueue($, id)
+  // Inzwischen hat ein anderer Pfad umgestellt (carryOver nach /clear): dessen Liste nicht mit der leeren überschreiben (Review 0.6.0 B1)
+  if (rt.sid === id) return true
+  await switchTo($, id, next)
+  return true
+}
+
+/**
+ * Auf einen anderen Chat umstellen: Laufzustand neu wie nach einem Neustart, mit der Liste `next`. Bis zum ersten await synchron,
+ * damit ein gleichzeitiger Abgleich `rt.sid` schon auf der neuen ID sieht. `cleared`: To-do, das beim /clear lief (Hinweis).
+ */
+async function switchTo($: EngineInterface, id: string, next: Queue, cleared?: string) {
   cancelSettle()
   stopWaitTimer()
   hintFor = null
   answerHint = null
-  q = await loadQueue($, id)
+  q = next
   freshStart(id)
+  if (cleared) {
+    rt.notice = { reason: tx().clearedRunning, todoId: cleared, kind: 'cleared' }
+    rt.state = 'ask'
+    rt.stateReason = rt.notice.reason
+  }
   rt.sent = cleanSent(await loadSafe($, `sent:${id}`))
   activity = ''
   stop = null
   await commit($)
-  return true
+}
+
+/**
+ * Nach /clear (classic.SessionStart, source clear; 0.6.0, Entscheidung Fynn 2026-10-08): Die Liste zieht in den geleerten Chat
+ * um, statt beim alten zu bleiben. Ein To-do, das gerade lief, wird wieder offen, und ein Hinweis hält die Liste an, bis Fynn
+ * entscheidet: Sein Start-Prompt führt die Arbeit oft schon weiter. Der Schlüssel des alten Chats wird erst gelöscht, wenn der
+ * neue geschrieben ist.
+ */
+async function carryOver($: EngineInterface) {
+  const to = await $.session.id()
+  let from = rt.sid
+  let moved = q
+  if (from === to) {
+    // Der Abgleich war schneller (Seitenleiste, Befehl, Turn): die gemerkte Liste des alten Chats nehmen
+    if (!switched || switched.to !== to) return
+    from = switched.from
+    moved = switched.q
+  }
+  switched = null
+  if (!from || moved.items.length === 0) {
+    if (rt.sid !== to) await syncSession($)
+    return
+  }
+  const r = running(moved)
+  // Was Fynn im neuen Chat schon eingereiht hat, kommt hinten dran, als offen (Review 0.6.0 K2). IDs sind nur je Chat eindeutig
+  // (Zeit + Platz): umbenennen
+  const taken = new Set(moved.items.map((t) => t.id))
+  const here = (rt.sid === to ? q.items : []).map((t, i) => ({ ...t, ...(t.status === 'running' ? { status: 'open' as const } : {}), ...(taken.has(t.id) ? { id: `${t.id}c${i}` } : {}) }))
+  const paused = moved.paused || (rt.sid === to && q.paused)
+  await switchTo($, to, { items: [...moved.items, ...here].slice(0, QUEUE_MAX), paused }, r?.id)
+  // commit hat schon gespeichert, schluckt aber Fehler: hier noch einmal. Der alte Schlüssel fällt nur, wenn geschrieben ist und
+  // die Liste alles aus dem alten Chat enthält (Review 0.6.0 B1)
+  const complete = moved.items.slice(0, QUEUE_MAX).every((t) => q.items.some((x) => x.id === t.id))
+  let saved = false
+  try {
+    await $.store.set(`queue:${to}`, q)
+    saved = true
+  } catch (err) {
+    $.ui.log(`worklist: list not saved after /clear: ${String(err)}`, { to: 'debug' })
+    warnStore($)
+  }
+  if (saved && complete) {
+    try {
+      await $.store.delete(`queue:${from}`)
+    } catch (err) {
+      $.ui.log(`worklist: old list not removed after /clear: ${String(err)}`, { to: 'debug' })
+    }
+  } else if (saved) $.ui.log('worklist: old list kept after /clear: the moved list is incomplete', { to: 'debug' })
+  const n = openItems(q).length
+  // Hält die Liste an, sagt es der Toast; die Seitenleiste erscheint nicht überall (Review 0.6.0 S1)
+  $.ui.toast(r ? tx().carriedStopped(n) : tx().carried(n), { timeoutMs: r ? 8000 : 5000 })
+  if (r) $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
 }
 
 /** Hinweisblock setzen, Toast, Seitenleiste öffnen (SPEC → Benachrichtigung). */
@@ -1378,6 +1458,18 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     return next(e)
   })
 
+  // Nach /clear läuft der Prozess unter neuer ID weiter, ohne session.start (types@2.1.291:10723); dieser Hook feuert danach
+  // mit source clear (docs/raw/en/interface.md:789). Die Liste zieht mit um (0.6.0). /resume und /branch bleiben getrennt.
+  on('classic.SessionStart', { source: 'clear' }, async ($, e, next) => {
+    const r = await next(e)
+    try {
+      await carryOver($)
+    } catch (err) {
+      $.ui.log(`worklist: carry over: ${String(err)}`, { to: 'debug' })
+    }
+    return r
+  })
+
   on('command.run', { command: 'todo' }, async ($, e) => {
     try {
       return await runTodo($, e.args)
@@ -1473,8 +1565,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       if (rt.notice?.kind === 'background') rt.notice = null
       if (fromFynn) {
         // Fynn antwortet bzw. schreibt selbst: Der Hinweis ist damit erledigt, auch nach dem zweiten Halt (SPEC 0.4.2);
-        // der Schleifenschutz zählt neu (ein Gespräch ist keine Schleife)
-        rt.notice = null
+        // der Schleifenschutz zählt neu (ein Gespräch ist keine Schleife). Ausnahme „lief beim /clear“ (0.6.0): Fynns erste
+        // Nachricht im geleerten Chat ist meist der Start-Prompt, das To-do bleibt angehalten, bis er per Knopf entscheidet
+        if (rt.notice?.kind !== 'cleared') rt.notice = null
         rt.hold = false
         rt.strikes = { id: '', n: 0 }
         // Neue Aufgabe aus dem Chat: Claudes Plan beginnt neu

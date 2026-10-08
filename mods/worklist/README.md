@@ -6,7 +6,7 @@ The list runs by default: worklist never pauses on its own (only you do), nothin
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** (desktop app: 2.1.288) · Plugin version **0.5.0**
+Tested with Claude Code **v2.1.291** (desktop app: 2.1.288) · Plugin version **0.6.0**
 
 **Cost:** when the rules can't decide whether Claude is done, worklist asks Haiku 5.5 (`claude-haiku-5-5`, effort `high`; measured at about 0.01 US cents per case). These calls run through your session and count toward your usage. You can switch this off with the `haiku` option (see [Configuration](#configuration)); the list then stops in those cases instead.
 
@@ -97,10 +97,11 @@ Neither is part of your message or shown in the chat; `/todos status` shows whet
 
 ## Stored data
 
-- **Queue per chat** in `$.store` under `queue:<session-id>`. Another chat in the same project doesn't see or start it. After `/clear` the old list belongs to the old chat; the new one starts empty.
+- **Queue per chat** in `$.store` under `queue:<session-id>`. Another chat in the same project doesn't see or start it. After `/clear` the list moves to the cleared chat (it is the same workplace, e.g. after a handoff); `/resume` and `/branch` keep separate lists.
 - **History per project** under `history:<project-folder>`, at most 300 entries.
 - **Haiku cost** per project under `cost:<project-folder>`.
 - **Sent to-dos per chat** under `sent:<session-id>`: the last 50, only a checksum of the text plus the number, so the orange box in the transcript stays after a restart.
+- `/clear`: open to-dos and the pause move along, and the list starts after your next message (usually the start prompt). A to-do that was running stops the list with a notice (Continue / Mark as done / Skip): your start prompt often carries that work on already, so worklist doesn't resend it on its own. The old chat's key is deleted once the new one is saved. After a restart or `--resume` that notice is gone, like every notice: the to-do is open again and starts after your next message.
 - Restart or `--resume`: a running to-do goes back to its place; the list stays as it was (paused only if you paused it) and starts after your next message. After `/reload-plugins` it keeps running (run state in `$.state`).
 
 ## Configuration
@@ -120,7 +121,7 @@ Neither is part of your message or shown in the chat; `/todos status` shows whet
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, command.run{command=todo}, command.run{command=todos}, prompt.submit, classic.UserPromptSubmit, turn.start, tool.call, tool.call{tool=TaskCreate}, tool.call{tool=TaskUpdate}, tool.call{tool=TodoWrite}, classic.Stop, classic.StopFailure, turn.complete, ui.render{component=UserMessage}, ui.render{component=AssistantMessage}, ui.render{component=Pane}
+hooks: session.start, classic.SessionStart{source=clear}, command.run{command=todo}, command.run{command=todos}, prompt.submit, classic.UserPromptSubmit, turn.start, tool.call, tool.call{tool=TaskCreate}, tool.call{tool=TaskUpdate}, tool.call{tool=TodoWrite}, classic.Stop, classic.StopFailure, turn.complete, ui.render{component=UserMessage}, ui.render{component=AssistantMessage}, ui.render{component=Pane}
 calls: $.agent.list, $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.complete, $.prompt.submit, $.session.id, $.session.root, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.set, $.ui.close, $.ui.focus, $.ui.log, $.ui.open, $.ui.resolve, $.ui.toast
 state writes: worklist.paint, worklist.rt
 state reads: worklist.paint, worklist.rt
@@ -131,11 +132,12 @@ In plain language:
 - `$.prompt.submit` (as your message): sends the next to-do or the continuation of a stopped one, only after a passed check or when you press a button.
 - `$.command.list`, `$.command.run`: a to-do starting with `/name` runs as that command, after checking it exists.
 - `prompt.submit`: only observes where a message comes from (you, another mod on your behalf, or something else); it never changes, drops or extends a message.
+- `classic.SessionStart` (only `source: clear`): observes `/clear` and passes it on unchanged; afterwards the list moves to the cleared chat.
 - `classic.UserPromptSubmit`: attaches the hidden hints, only to the to-do worklist just sent (or its continuation) and to your answer to a stopped to-do's question (switch off with `doneLine`); every other message passes unchanged.
 - `$.model.complete`: Haiku 5.5 (fixed model id `claude-haiku-5-5`, effort `high`), only in stage 9, and it can be switched off.
 - `$.agent.list`: reads whether helpers are still running (stage 4, and every 10 s while waiting).
 - `$.session.id`, `$.session.root`: list per chat, history per project.
-- `$.store`, `$.state`: list, history, cost, run state, and a redraw counter for the sidebar. `$.store.delete` only deletes this chat's list once it has become empty.
+- `$.store`, `$.state`: list, history, cost, run state, and a redraw counter for the sidebar. `$.store.delete` only deletes worklist's own lists: this chat's list once it has become empty, and after `/clear` the old chat's list once it has been saved under the cleared chat.
 - `$.ui.*`, `$.clock.*`, `$.command.register`: sidebar, toast, clock, `/todo` and `/todos`.
 - `ui.render{component=AssistantMessage}`: hides a standalone "Done." or "Fertig." at the end of Claude's answers (display only; the stored answer stays unchanged). This applies in every session where worklist is loaded, not only for to-dos.
 - `ui.render{component=UserMessage}`: shows a sent to-do in the transcript as an orange line with a box instead of the speech bubble (display only; your own messages stay unchanged).
@@ -179,7 +181,8 @@ claude --plugin-dir <path-to-clone>/mods/worklist
 - The elapsed-time clock only ticks while the sidebar is visible and Claude is working.
 - **Storage:** all of worklist's data shares 4 MiB. The history is limited to 300 entries per project (text cut to 200 characters); each project folder and worktree has its own. Empty lists are deleted; unfinished lists of old chats remain, and so do the sent-to-do checksums of every chat that sent a to-do (at most 50 small entries per chat). If saving fails, a toast appears and the list keeps running in memory only.
 - **Project folder** is read at startup; after a worktree switch or `/cd` in the same session, the history still goes to the old project.
-- **After `/clear`** worklist detects the new chat on the next redraw, command, button press or turn (via the session ID), not immediately.
+- **`/clear`** relies on the `SessionStart` hook with source `clear`; tested in the CLI and the desktop app.
+- **After `/resume` or `/branch`** worklist detects the other chat on the next redraw, command, button press or turn (via the session ID), not immediately.
 - Changing `language` affects new texts; reasons already shown in an open notice stay in the old language until the next decision. The descriptions of `/todo` and `/todos` in the command menu follow the language set when the session started.
 
 ## Credits
