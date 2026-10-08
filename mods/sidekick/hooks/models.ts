@@ -14,9 +14,10 @@ export const CHECK = { model: 'claude-haiku-5-5', effort: 'medium', maxTokens: 2
 /**
  * Fassung in der Stufe Autonom (Fynn, 2026-10-07): Hält Haiku dort eine Fassung für sinnvoll, schreibt Sonnet sie mit dem
  * Autonom-Zusatz. Mit dem Zusatz brauchte Haiku für eine diktierte Nachricht (754 Zeichen) 8,7–18 s; Sonnet 5 s (Probe 0.10.0
- * und 0.11.0). Werte wie die bisherige Prüfung.
+ * und 0.11.0). Werte wie die bisherige Prüfung, nur `maxTokens` 1500 (Nachtrag 0.12.0, R1): Sonnet denkt adaptiv, das zählt mit;
+ * eine Fassung mit 632 Zeichen brauchte 569 Ausgabe-Tokens (Probe 2026-10-08), mit 400 wäre das JSON abgeschnitten und still „durch“.
  */
-export const CHECK_AUTO = { model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 400, timeoutMs: 6000 } as const
+export const CHECK_AUTO = { model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 1500, timeoutMs: 6000 } as const
 
 /** Übergabe für „Neuer Chat mit Übergabe“ (Probe 2026-10-06: 8 s, 781 Ausgabe-Tokens). */
 export const HANDOFF = { model: 'claude-sonnet-5-5', effort: 'medium', maxTokens: 3000, timeoutMs: 45000 } as const

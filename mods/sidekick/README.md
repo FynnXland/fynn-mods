@@ -1,10 +1,10 @@
 # sidekick
 
-Checks your message just before it is sent: first with fixed rules, and only where it can pay off, also with a quick model call (Haiku 5.5; in level Auto, Sonnet 5.5 writes the rewritten version). If there is a clearly better move, a blue line appears under your message, or sidekick asks you. Examples of better moves: a new chat with a handoff, a matching skill, or a clearer wording. If a message clearly belongs to a different project than the chat ("wrong chat?"), sidekick holds it back and recommends cancelling. With the **worklist** mod installed, a long message with several separate tasks can be split into 3–4 to-dos, and `/later` plans text as to-dos without Claude reading it. Five levels, from off to autonomous, and a colored label in the prompt footer show how much sidekick does. sidekick never chats on its own. `/savings` shows what it costs and what it demonstrably saves.
+Checks your message just before it is sent: first with fixed rules, and only where it can pay off, also with a quick model call (Haiku 5.5; in level Auto, Sonnet 5.5 writes the rewritten version). If there is a clearly better move, a blue line appears under your message, or sidekick asks you. Examples of better moves: a new chat with a handoff (always as a question), a clearer version, a skill your message doesn't point to, or a gap only you can fill. If a message clearly belongs to a different project than the chat ("wrong chat?"), sidekick holds it back and recommends cancelling. With the **worklist** mod installed, a long message with several separate tasks can be split into 3–4 to-dos, and `/later` plans text as to-dos without Claude reading it. Five levels, from off to autonomous, and a colored label in the prompt footer show how much sidekick does. sidekick never chats on its own. `/savings` shows what it costs and what it demonstrably saves.
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.11.0**
+Tested with Claude Code **v2.1.291** · Plugin version **0.12.0**
 
 **Cost:** sidekick calls Haiku 5.5 and Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
 
@@ -64,17 +64,19 @@ Plans text as to-dos for later, also while Claude is working. sidekick answers t
    - the new message
    - facts such as context size, cache state, model and last commit
    - your skill list (name and one line each)
+
+   Since 0.12.0 the check knows that Claude sees the whole history, the files and the same skill list, and that you may be dictating. So it only speaks up with something Claude doesn't have: a gap only you can close (a detail that is nowhere in the chat, or a choice Claude has no yardstick for), or a skill your message doesn't point to. A misheard name ("Heiko" for Haiku) is never a reason on its own.
 4. **Result:**
    - *pass*: sent unchanged.
-   - *hint*: sent. A blue line `· sidekick: …` stays under your message. It only changes the display, not the stored message.
-   - *question* (the engine's dialog). The recommended answer is option **1** and is marked "(recommended)": without handoff if your message doesn't need the old history; send if resending is cheap (under $0.30); otherwise with handoff. The answers:
-     - **New chat with handoff**: Sonnet 5.5 (effort `medium`) writes a handoff from the summary and the end of the history (up to 100,000 characters, without tool results). Then `/clear` runs, and the handoff plus your message go into the new chat. The old chat stays reachable via `/resume`. Not offered when the message has an attachment or `@file`.
+   - *hint*: sent. A blue line `· sidekick: …` stays under your message. It only changes the display, not the stored message. Since 0.12.0 a hint line never talks about the size of the chat or a new chat; a line that does is dropped.
+   - *question* (the engine's dialog). A new topic in a large or cold chat always leads to this question, never to a line (since 0.12.0). The recommended answer is option **1** and is marked "(recommended)": without handoff if your message doesn't need the old history; send if resending is cheap (under $0.30); otherwise with handoff. The answers:
+     - **New chat with handoff**: Sonnet 5.5 (effort `medium`) writes a handoff from the summary, the beginning and the end of the history (your first two messages, then the newest, up to 100,000 characters together, without tool results; see Known limitations), the project root, the last commit and your new message. Since 0.12.0 its "Next" line is what your message asks for, and a table names the project and the last commit. Then `/clear` runs, and the handoff plus your message go into the new chat. The old chat stays reachable via `/resume`. Not offered when the message has an attachment or `@file`; then there is no new-chat line either, the message just goes through (since 0.12.0).
      - **New chat without handoff**: clears the chat and sends only your message, without a model call. Meant for messages that don't need the old history.
      - **Send Haiku's version** (in level Auto: Sonnet's): the rewritten version is sent. The desktop app still shows your original in the bubble, so below it sidekick shows `· sidekick: Haiku's version was sent` (in level Auto: Sonnet's) in blue, plus a box with the text that was actually sent. With worklist 0.4.0 this counts as your own answer: if a to-do stopped with a question, that to-do continues.
      - **Send anyway**
      - **Cancel**: the message is not sent; your text is shown in the notice.
    - **Split into to-dos** (since 0.9.0, only with worklist): see below.
-   - **Wrong chat** (since 0.5.0): if the message clearly belongs to a different project or field than the chat (e.g. a mobile-game chat and a question about a website's CSS), sidekick holds it back with "This doesn't fit this chat at all. … Are you in the wrong chat?". This is more than a change of topic: a new topic in the same project stays a "new chat" hint. Answers, in this order: **Cancel** (recommended; nothing is sent and your text is shown for copying, so you can paste it into the right chat; `/savings` counts it as *accepted*, and the message is removed from what the next check compares against), the fitting new chat (usually without handoff, since another field rarely needs the old history), the other new-chat variant, **Send anyway**. With an attachment or `@file`, only Cancel and Send anyway. After "Send anyway" the question stays quiet until +50k context or the next commit. It is never asked on the first message of a chat or for messages under 4 words, and it takes precedence over the cold-cache question (whose cost is then shown in the same dialog). Unlike the other questions, closing this dialog (Esc) does **not** send: the message is held back like Cancel. A new chat started from here books no savings, because without sidekick the message would have gone to another chat, not into this large one.
+   - **Wrong chat** (since 0.5.0): if the message clearly belongs to a different project or field than the chat (e.g. a mobile-game chat and a question about a website's CSS), sidekick holds it back with "This doesn't fit this chat at all. … Are you in the wrong chat?". This is more than a change of topic: a new topic in the same project stays a "new chat" question. Answers, in this order: **Cancel** (recommended; nothing is sent and your text is shown for copying, so you can paste it into the right chat; `/savings` counts it as *accepted*, and the message is removed from what the next check compares against), the fitting new chat (usually without handoff, since another field rarely needs the old history), the other new-chat variant, **Send anyway**. With an attachment or `@file`, only Cancel and Send anyway. After "Send anyway" the question stays quiet until +50k context or the next commit. It is never asked on the first message of a chat or for messages under 4 words, and it takes precedence over the cold-cache question (whose cost is then shown in the same dialog). Unlike the other questions, closing this dialog (Esc) does **not** send: the message is held back like Cancel. A new chat started from here books no savings, because without sidekick the message would have gone to another chat, not into this large one.
    - With trigger (c) the question always comes, with the cost of both paths, e.g. "Sending rewrites everything (≈ $2.40)" versus "New chat with handoff: ≈ $0.26" (Opus 5.5, 1-hour cache, about 20k base load in the new chat).
 5. A hint type you ignored only comes back once the context has grown by ≥ 50k or a commit happened in between.
 
@@ -104,7 +106,7 @@ Sonnet turns them into 3 to-dos with every point of your message; worklist works
 
 ## Maintenance hints
 
-Some commands only help if you remember to run them. **Once per chat**, on your first own message, sidekick names at most **one** due command as a line under the message. It runs nothing and makes no model call for this; the numbers come from a free local estimate (the `/context` breakdown). If the model check has its own hint or question for the same message, the check wins.
+Some commands only help if you remember to run them. **Once per chat**, on your first own message, sidekick checks what is due and names at most **one** command as a line under a message. It runs nothing and makes no model call for this; the numbers come from a free local estimate (the `/context` breakdown). If the model check has its own line or question for that message, the check wins, and since 0.12.0 the maintenance hint comes with your next message that has neither. It survives `/reload-plugins`; it is dropped if you run the command in between or turn the hint off. There is no second measurement later in the chat.
 
 | Rank | Rule | Command | Due when … | Quiet period after |
 |---|---|---|---|---|
@@ -167,7 +169,7 @@ When a blue line under your message names a command, a button sits next to it. T
 - **Handoff:** a line that suggests the handoff skill (`/uebergabe`, `limit-bars:uebergabe`) shows and runs limit-bars' **`/handoff`** instead: the skill writes the handoff, then you are asked whether to start a new chat with it. Without `/handoff` the full skill name is used.
 - Short names are resolved: `/uebergabe` finds `limit-bars:uebergabe` when exactly one plugin has it. Unknown or ambiguous names, file paths like `/hooks/hooks.json` or `/init.ts`, and words without a slash get no button. `/clear`, `/exit`, `/quit`, `/login`, `/logout` and `/rewind` never get one.
 - What the button says is what it does: the target is decided when the line is drawn.
-- Lines without a command (e.g. "new topic, a fresh chat would be cheaper") get no button. Other surfaces (VS Code) show the line as text, without a button.
+- Lines without a command (e.g. "Unclear which of the three projects is meant.") get no button. Other surfaces (VS Code) show the line as text, without a button.
 - If Claude Code refuses the command, it goes into the prompt box at the cursor and a toast says so (Enter sends it). If that is not possible either (a dialog is open) or `/todo` fails, the toast shows the command so you can type it.
 
 ## Working with other mods
@@ -184,7 +186,7 @@ Everything lives in the plugin's `$.store`:
 |---|---|---|
 | `settings` | `level`, `lastOn`, `threshold`, `big`, `skills`, `ttl`, `long` | permanent |
 | `cache:<session>` | last activity, TTL, context, model | 7 days |
-| `sitzung:<session>` | summary, last 3 messages, ignored hints, hint lines, last commit | 7 days |
+| `sitzung:<session>` | summary, last 3 messages, ignored hints, hint lines, last commit, a maintenance hint not shown yet | 7 days |
 | `bilanz:<session>` | daily values of this session, pending savings booking | until compacted |
 | `bilanz:tage` | daily totals of finished sessions (older than 7 days) | permanent |
 | `handoff:last`, `basis` | latest handoff with message; measured base load of a new chat | until the next one |
@@ -235,9 +237,9 @@ In plain language:
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=AbovePrompt}`: only while a new chat is being started or to-dos are being written, a small blue box above the prompt shows progress and seconds. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
 - `$.model.complete`: Haiku 5.5 for the check (effort `medium`, full ID `claude-haiku-5-5`); Sonnet 5.5 for the check in level Auto from 300 characters and for the rewritten version there (effort `low`), the handoff (effort `medium`) and the to-do texts (effort `low`; it gets the summary, your message and the step titles, or for `/later` only the text): after you chose to split, after an automatic split in level Auto, or after `/later`. The only model calls. Your messages reach the model only through your session's own login.
-- `$.session.messages`: end of the history for the handoff, the end of Claude's last reply for the check, and to detect the first message.
+- `$.session.messages`: beginning and end of the history for the handoff, the end of Claude's last reply for the check, and to detect the first message.
 - `$.session.usage`, `$.command.list`: context size, skill names and descriptions; for the maintenance hints, paths and token counts of instruction and memory files (no contents), size of the skill list, model, and whether a command exists.
-- `$.session.root`: project root as the key for maintenance hints. The path only.
+- `$.session.root`: project root as the key for maintenance hints, and as a fact in the handoff (since 0.12.0). The path only.
 - `$.session.surfaces`: detects the desktop app, because there typed messages carry the origin `sdk` like `claude -p`.
 - `$.session.id`: detects a new session after `/clear`.
 - `$.command.run`, `$.prompt.submit`: for "New chat with handoff" (`/clear`, then send). `$.command.run` also for the button and the to-dos of a split, see above. `$.prompt.submit` also for **Send anyway** after writing the to-dos failed (your message as typed).
@@ -286,12 +288,12 @@ claude --plugin-dir <path-to-clone>/mods/sidekick
   - `PromptHint` (the line under the prompt) is not triggered there. That's why the hint appears under your message.
   - Typed messages carry `origin` `sdk` there. sidekick recognizes them via `$.session.surfaces()`.
 - **VS Code and mobile:** only messages arriving as `composer`/`bridge`, or as `sdk` with the desktop in `$.session.surfaces()`, are checked. Which origin VS Code reports is not documented. By these rules sidekick either doesn't check there or checks only as in the terminal.
-- **Accepting hints:** only detectable for skills (the skill runs afterwards) and in the dialog. A line about a version, model, something else or a new chat counts as ignored with the next message and blocks its type until +50k or the next commit. "Ignored" here means "not detectably accepted".
+- **Accepting hints:** only detectable for skills (the skill runs afterwards) and in the dialog. A line about a version, model or something else counts as ignored with the next message and blocks its type until +50k or the next commit. "Ignored" here means "not detectably accepted".
 - **After `/resume`:** the hint lines of the resumed session appear only once something happens again, e.g. the next message or request. Showing them immediately would need an extra right (`classic.SessionStart`).
 - **The rewritten version** is only offered if it fits entirely into the dialog (≤ 600 characters). A longer one becomes a line. Messages under 4 words never get a rewritten version. The rewrite always stays your message to the assistant (you as sender); a version that reads like the assistant's reply or a question back to you ("I'm ready – what would you like to do?") is dropped. This is detected in English and German, whatever `language` is set to. The rewrite stays in the language of your message.
 - **Commit detection:** a commit made with `git commit -q` goes unnoticed, because the engine parses git's output. Then only the +50k rule applies.
 - **Compaction:** without the `session.compact` right, a context that shrank by more than 40 % counts as compaction, not as a cold start.
-- The handoff only sees the summary and the end of the history. The model is told not to invent anything; gaps are possible.
+- The handoff only sees the summary, your first two messages, the end of the history, the project root, the last commit and your new message. In very long chats "first" means the oldest of the newest 4,096 entries Claude Code returns. The model is told not to invent anything and to leave out what it is unsure about; gaps are possible, and open points unrelated to your new message may be left out.
 - **Maintenance hints:**
   - `/consolidate-memory` is missing in CLI sessions; the rule stays silent there.
   - A typed `/skill-doctor` is not detected as done in the desktop app. Afterwards run `/sidekick hints done skills-cut`.

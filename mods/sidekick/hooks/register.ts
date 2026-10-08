@@ -6,7 +6,7 @@
 import type { EngineInterface, On, RenderElement, RenderNode, Timer } from 'claude-code'
 import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.ts'
 import { setLang, spanText, t, tokensText, usdText } from './i18n.ts'
-import { CHECK, CHECK_AUTO, HANDOFF, SPLIT, modelName } from './models.ts'
+import { CHECK, CHECK_AUTO, HANDOFF, SPLIT, modelLabel, modelName } from './models.ts'
 import type { CacheMem, CompleteUsage, StepUsage } from './cache.ts'
 import { joinBand, layer, LEVEL, nameOf, splitBand } from './band.ts'
 import {
@@ -35,7 +35,7 @@ import {
   hintLine,
   lineCommand,
   handoffSystem,
-  historyTail,
+  historyParts,
   isLong,
   isSuppressed,
   parseSplit,
@@ -44,6 +44,7 @@ import {
   planCompaction,
   savingsArgs,
   savingsReport,
+  shownLine,
   splitPrompt,
   splitSystem,
   splits,
@@ -55,6 +56,7 @@ import type { Art, Booking, Choice, Day, Ignored, Ledger, Level, Period, Setting
 import { savingsTree } from './view.ts'
 import {
   HEAVY_TOKENS,
+  RULE_IDS,
   UNUSED_DAYS,
   accepted,
   addSessionDay,
@@ -105,10 +107,30 @@ type Sitzung = {
   commits: number
   commit: { sha: string; at: number } | null
   wartung: boolean // Wartungs-Hinweis in dieser Session schon geprüft (einmal pro Session, SPEC Nachtrag 0.2.0)
+  // Gewählter Wartungs-Hinweis, der noch nicht gezeigt wurde, weil die Prüfung eine eigene Zeile oder Rückfrage hatte; er kommt bei
+  // der nächsten eigenen Nachricht ohne beides (Nachtrag 0.12.0)
+  wartungOffen: Offen | null
 }
 
+/** Offener Wartungs-Hinweis; `at`: seit wann er wartet (Review 0.12.0 K5: in einer anderen Session gezeigt oder erledigt → verfällt). */
+type Offen = WHint & { at?: number }
+const offenOf = (h: WHint, now: number): Offen => ({ ...h, at: (h as Offen).at ?? now })
+
 function emptySitzung(): Sitzung {
-  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false }
+  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null }
+}
+
+/** Offener Wartungs-Hinweis aus dem Store, tolerant gelesen (fehlt oder kaputt → null). */
+function cleanOffen(v: unknown): Offen | null {
+  const o = (v && typeof v === 'object' ? v : null) as Record<string, unknown> | null
+  if (!o || !(RULE_IDS as readonly unknown[]).includes(o.id) || typeof o.line !== 'string' || !o.line || typeof o.key !== 'string' || !o.key) return null
+  return {
+    id: o.id as RuleId,
+    line: o.line,
+    key: o.key,
+    ...(typeof o.cmd === 'string' && o.cmd.startsWith('/') ? { cmd: o.cmd } : {}),
+    ...(typeof o.at === 'number' ? { at: o.at } : {}),
+  }
 }
 
 function cleanSitzung(v: unknown): Sitzung {
@@ -135,6 +157,7 @@ function cleanSitzung(v: unknown): Sitzung {
   if (typeof o.commits === 'number') s.commits = o.commits
   if (o.commit && typeof o.commit.sha === 'string') s.commit = o.commit
   if (o.wartung === true) s.wartung = true
+  s.wartungOffen = cleanOffen(o.wartungOffen)
   return s
 }
 
@@ -506,6 +529,11 @@ function noteDone($: EngineInterface, ids: RuleId[]): Promise<unknown> {
     .then(async () => {
       await bindSession($)
       const now = await $.clock.now()
+      // Der Befehl lief: ein noch offener Hinweis dazu kommt nicht mehr (Nachtrag 0.12.0)
+      if (ses.wartungOffen && ids.includes(ses.wartungOffen.id)) {
+        ses.wartungOffen = null
+        saveSes($, now)
+      }
       const r = await measureNow($, now)
       if (!r) return
       const w = r.w
@@ -517,6 +545,31 @@ function noteDone($: EngineInterface, ids: RuleId[]): Promise<unknown> {
   return wChain
 }
 
+/**
+ * Offener Wartungs-Hinweis (Nachtrag 0.12.0): Er verfällt, wenn Wartungs-Hinweise oder diese Regel inzwischen aus sind, oder wenn eine
+ * andere Session im selben Projekt ihn seitdem gezeigt oder erledigt hat (Review 0.12.0 K5). Dass der Befehl hier lief, räumt `noteDone`
+ * ab.
+ */
+async function stillOpen($: EngineInterface, h: Offen): Promise<WHint | null> {
+  const hs = cleanHints(await $.store.get('hints'))
+  let open = hs.on && !hs.off.includes(h.id)
+  if (open && h.at) {
+    const r = cleanWartung(await $.store.get(`wartung:${h.key}`)).regeln[h.id]
+    open = (r?.doneAt ?? 0) <= h.at && (r?.hintAt ?? 0) <= h.at
+  }
+  if (open) return h
+  ses.wartungOffen = null
+  saveSes($, await $.clock.now())
+  return null
+}
+
+/** Die Prüfung belegt diese Nachricht mit eigener Zeile oder Rückfrage: der gewählte Wartungs-Hinweis wartet auf die nächste. */
+function keepWartung($: EngineInterface, h: WHint | null, now: number) {
+  if (!h) return
+  ses.wartungOffen = offenOf(h, now)
+  saveSes($, now)
+}
+
 /** Den Wartungs-Hinweis als Zeile unter dieser Nachricht zeigen (wie der Hinweis der Prüfung, Verhalten 5), dann senden. */
 async function sendWithWartung<R>($: EngineInterface, e: { text: string }, h: WHint | null, send: () => Promise<R> | R): Promise<R> {
   if (!h) return send()
@@ -524,6 +577,7 @@ async function sendWithWartung<R>($: EngineInterface, e: { text: string }, h: WH
     const now = await $.clock.now()
     pending = { text: e.text, line: h.line, ...(h.cmd ? { cmd: h.cmd } : {}) }
     ses.last = { line: h.line, art: 'sonstiges', at: now }
+    ses.wartungOffen = null
     saveSes($, now)
     bookDay($, now, (d) => countWartung(d, h.id, 'gezeigt'))
     wChain = wChain
@@ -605,6 +659,9 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
   if (!ses.wartung && settings.level !== 'cache') {
     ses.wartung = true
     wp = maintenance($, now).catch(() => null)
+  } else if (ses.wartungOffen && settings.level !== 'cache') {
+    // Bei der ersten Nachricht gewählt, aber nicht gezeigt: jetzt erneut anbieten (Nachtrag 0.12.0). Keine zweite Messung
+    wp = stillOpen($, ses.wartungOffen).catch(() => null)
   }
   // Auslöser (d), lange Nachricht: nur dann die Befehlsliste laden (aus dem Cache) und nur mit worklist; ohne worklist keine Prüfung
   // wegen der Länge und keine Kosten (Nachtrag 0.9.0). Ein Fehler kostet nur das Aufteilen.
@@ -806,9 +863,19 @@ function hideBusy($: EngineInterface) {
 async function writeHandoff($: EngineInterface, text: string, c: Check) {
   const oldSession = sessionId
   const msgs = await $.session.messages()
-  const history = historyTail(msgs, 100000)
+  // Anfang und Ende des Verlaufs, die neue Nachricht und Fakten, die sidekick hat (Nachtrag 0.12.0, H1–H3)
+  const parts = historyParts(msgs, 100000)
   const start = await $.clock.now()
-  const r = await $.model.complete({ ...HANDOFF, system: handoffSystem(), prompt: handoffPrompt(ses.summary, history) })
+  let root = ''
+  try {
+    root = await $.session.root()
+  } catch {
+    // ohne Projektwurzel: „unbekannt“
+  }
+  const cm = ses.commit
+  const facts = { root, commit: cm ? `${cm.sha} vor ${spanText(start - cm.at)}` : 'keiner', model: mem.model ? modelLabel(mem.model) : '' }
+  const prompt = handoffPrompt(ses.summary, parts.start, parts.tail, text, facts)
+  const r = await $.model.complete({ ...HANDOFF, system: handoffSystem(), prompt })
   const end = await $.clock.now()
   const usd = completeCost(r.usage as CompleteUsage, HANDOFF.model)
   bookDay($, start, (d) => {
@@ -1147,6 +1214,7 @@ async function hintsCommand($: EngineInterface, rest: string): Promise<string> {
     // Geänderte Einstellung: in diesem Chat bei der nächsten eigenen Nachricht noch einmal prüfen
     await bindSession($)
     ses.wartung = false
+    ses.wartungOffen = null
     saveSes($, await $.clock.now())
   }
   if (r?.done) await noteDone($, [r.done])
@@ -1275,6 +1343,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
         // Wie „Fassung senden“: Die Sprechblase im Desktop zeigt das Original, die Zeile darunter und der Rahmen das Gesendete
         pending = { text: e.text, alt: fassung, line: t().sentFassung(whoOf(c)), sent: fassung }
         ses.last = { line: t().sentFassung(whoOf(c)), art: 'fassung', at: now }
+        if (g.w) ses.wartungOffen = offenOf(g.w, now)
         saveSes($, now)
         const r = await next({ ...e, text: fassung })
         $.ui.invalidate('ui.render')
@@ -1293,32 +1362,38 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
           countHint(x, 'aufteilen', 'angenommen')
           x.autonom += 1
         })
+        keepWartung($, g.w, now)
         return { drop: await startSplit($, e.text, v.schritte, now, true) }
       }
     }
     const d = dialog(c, resendable, base)
     buddy($, d ? 'stop' : null)
     if (!d) {
-      if (v && v.urteil !== 'durch' && v.zeile) {
+      // Neuer Chat ohne Dialog (Anhang oder @datei, Verhalten 4): auch keine Zeile, die Größe nennt (Nachtrag 0.12.0, Entscheidung 1).
+      // Ein „anhalten“ ohne Dialog (Fassung über 600 Zeichen) geht durch denselben Filter wie ein Hinweis (Review 0.12.0 S2)
+      const zeile = v && v.urteil !== 'durch' && v.art !== 'neuer_chat' ? shownLine(v) : ''
+      if (v && zeile) {
         // Zeile unter dieser Nachricht (Verhalten 5); bei einem „anhalten“ ohne mögliche Aktion ebenso
         // Button für den Skill-Hinweis (Name gegen die Skill-Liste geprüft, Review 0.7.0 S3) und, seit 0.8.1, für jeden Befehl im
         // Satz, den die Befehlsliste dieser Session kennt (Sonnet schrieb „bald /uebergabe … erwägen“ als Art „sonstiges“)
-        const hit = lineCommand(v.zeile, v.art === 'skill' ? v.skill : '', baseCache?.cmds ?? [])
-        const line = hit?.line ?? (v.skill && v.zeile.includes(v.skill) ? hintLine(v.zeile, v.skill) : v.zeile)
+        const hit = lineCommand(zeile, v.art === 'skill' ? v.skill : '', baseCache?.cmds ?? [])
+        const line = hit?.line ?? (v.skill && zeile.includes(v.skill) ? hintLine(zeile, v.skill) : zeile)
         pending = { text: e.text, line, ...(hit ? { cmd: hit.cmd } : {}) }
         ses.open = { art: v.art, skill: v.skill, ctx: c.ctx }
         ses.last = { line, art: v.art, at: now }
+        // Der Hinweis der Prüfung hat Vorrang; der Wartungs-Hinweis wartet auf die nächste Nachricht ohne Zeile (Nachtrag 0.12.0)
+        if (g.w) ses.wartungOffen = offenOf(g.w, now)
         saveSes($, now)
         bookDay($, now, (x) => countHint(x, v.art, 'gezeigt'))
-        // Der Hinweis der Prüfung hat Vorrang; der Wartungs-Hinweis gilt dann als nicht gezeigt
         const r = await next(e)
         $.ui.invalidate('ui.render')
         return r
       }
       return sendWithWartung($, e, g.w, () => next(e))
     }
-    // Rückfrage: die Prüfung hat Vorrang, der Wartungs-Hinweis entfällt
+    // Rückfrage: die Prüfung hat Vorrang, der Wartungs-Hinweis wartet auf die nächste Nachricht ohne Zeile (Nachtrag 0.12.0)
     bookDay($, now, (x) => countHint(x, d.art, 'gezeigt'))
+    keepWartung($, g.w, now)
     // Auch die Zeile einer Rückfrage merken (/sidekick status, Fehlersuche)
     if (v?.zeile) {
       ses.last = { line: v.zeile, art: d.art, at: now }
