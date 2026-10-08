@@ -56,6 +56,57 @@ export function tokens(n: number, lang: Lang): string {
   return String(v)
 }
 
+const WEEKDAYS: Record<Lang, string[]> = { en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], de: ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'] }
+
+/** Uhrzeit `HH:MM` (lokal) */
+export function clock(ms: number): string {
+  const d = new Date(ms)
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** Reset-Zeitpunkt: am selben Tag nur die Uhrzeit, sonst en `Mon Oct 12 04:00`, de `Mo 12.10. 04:00` */
+export function resetTime(ms: number, now: number, lang: Lang): string {
+  const d = new Date(ms)
+  const n = new Date(now)
+  if (d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate()) return clock(ms)
+  return `${WEEKDAYS[lang][d.getDay()]} ${dateTime(ms, lang)}`
+}
+
+/** Dauer, abgerundet: `3 h 50 min`, `12 min`, en `3 d 10 h`, de `3 T 10 h`; unter einer Minute `< 1 min` */
+export function duration(ms: number, lang: Lang): string {
+  const m = Math.floor(Math.max(0, ms) / 60000)
+  if (m < 1) return '< 1 min'
+  const d = Math.floor(m / 1440)
+  const h = Math.floor((m % 1440) / 60)
+  if (d > 0) return `${d} ${lang === 'de' ? 'T' : 'd'} ${h} h`
+  return h > 0 ? `${h} h ${m % 60} min` : `${m} min`
+}
+
+/** Auslastung ganzzahlig: `62 %` */
+export function pct(v: number): string {
+  return `${Math.round(v || 0)} %`
+}
+
+/** Faktor mit einer Stelle: en `4.1`, de `4,1` */
+export function factor(v: number, lang: Lang): string {
+  const s = (Number.isFinite(v) ? v : 0).toFixed(1)
+  return lang === 'de' ? s.replace('.', ',') : s
+}
+
+/**
+ * Fenster von–bis mit dem Datum des Beginns: de `08.10. 13–18`, en `Oct 8 16:10–21:10`; volle Stunden ohne Minuten,
+ * ein Ende um Mitternacht als `24`.
+ */
+export function span(start: number, end: number, lang: Lang): string {
+  const s = new Date(start)
+  const e = new Date(end)
+  const hours = s.getMinutes() === 0 && e.getMinutes() === 0
+  const endH = e.getHours() === 0 && e.getMinutes() === 0 && e.getDate() !== s.getDate() ? 24 : e.getHours()
+  const fmt = (h: number, m: number) => (hours ? pad(h) : `${pad(h)}:${pad(m)}`)
+  const day = lang === 'de' ? `${pad(s.getDate())}.${pad(s.getMonth() + 1)}.` : `${MONTHS[s.getMonth()]} ${s.getDate()}`
+  return `${day} ${fmt(s.getHours(), s.getMinutes())}–${fmt(endH, e.getMinutes())}`
+}
+
 /** Zeitraum in Tagen, 0 = alles: en `7 days`/`all time`, de `7 Tage`/`gesamt` */
 export function rangeLabel(range: number, lang: Lang): string {
   if (range <= 0) return lang === 'de' ? 'gesamt' : 'all time'
@@ -118,7 +169,9 @@ const en = {
     '**/ledger chats [7|30|all]**: the 20 most expensive chats (default 30 days)',
     '**/ledger projects [7|30|all]**: all projects in the period',
     '**/ledger models [7|30|all]**: models with share, input, output and cache tokens (default 30 days)',
-    '**/ledger reset**: delete all entries (asks first)',
+    '**/ledger limits**: 5-hour and weekly window (% used, API value, reset, projection), subscription month, last 5-hour windows',
+    '**/ledger plan <plan> <day|today> [price]**: set your plan and billing day, e.g. `/ledger plan max20 14` (`/ledger plan` shows the details)',
+    '**/ledger reset**: delete all entries (asks first; the plan setting stays)',
     'Recorded after every answer: chat costs as in /cost, plus model calls by other mods. API value; on a subscription it counts against your usage limits.',
   ].join('\n'),
   unknownArg: (s: string) => `Unknown: “${s}”.`,
@@ -129,6 +182,51 @@ const en = {
   notDeleted: 'Not deleted.',
   cleared: (n: number) => `Cost ledger cleared (${n} ${n === 1 ? 'entry' : 'entries'}).`,
   commandDescription: 'Cost ledger: what chats, mods and models have cost',
+  // Limits und Abo (0.5.0)
+  limitsHead: 'cost-ledger · limits',
+  fiveHours: '5 hours',
+  week: 'Week',
+  fiveShort: '5 h',
+  weekShort: 'week',
+  planShort: 'plan',
+  resetAt: (when: string) => `reset ${when}`,
+  inTime: (d: string) => `in ${d}`,
+  projection: (amt: string) => `100 % ≈ ${amt} (estimate)`,
+  projectionLater: 'projection from 5 %',
+  projectionPartial: 'projection from the next window',
+  projectionNone: 'no projection without a recorded amount',
+  partialFrom: (t: string) => `from ${t}`,
+  running: 'running',
+  resetPassed: 'reset passed, no new answer yet',
+  resetPassedShort: 'reset passed',
+  noWindowYet: 'no reading yet',
+  noLimitData: 'No limit data: no subscription detected, or no answer since the update yet.',
+  subMonth: 'Subscription month',
+  planNotSet: 'Plan not set: /ledger plan max20 14',
+  planValue: (amt: string, price: string, f: string) => `${amt} API value for a ${price} plan = ${f}×`,
+  planValueNoPrice: (amt: string) => `${amt} API value (no price set)`,
+  listPrice: 'list price',
+  renews: (d: string, n: number) => `renews ${d} (in ${n} ${n === 1 ? 'day' : 'days'})`,
+  lastWindows: 'Last 5-hour windows',
+  noWindows: 'No 5-hour window recorded yet.',
+  avg: (amt: string, n: number) => `Ø 100 % ≈ ${amt} from ${n} ${n === 1 ? 'window' : 'windows'} (≥ 20 %, estimate)`,
+  avgNone: 'Ø 100 %: no fully recorded, completed window with ≥ 20 % yet',
+  limitsFoot: '% applies to the whole account (incl. claude.ai) · $ only from chats with cost-ledger · projections are estimates · /ledger plan',
+  sumLimitsTitle: (t: string, tag: string) => `**Cost ledger · limits** · as of ${t} · ${tag}`,
+  sumLimitsLine: (list: string) => `Limits: ${list} · /ledger limits`,
+  sumLimitsFoot: '% applies to the whole account (incl. claude.ai); $ only counts chats with cost-ledger; projections are estimates.',
+  perMonth: (price: string) => `${price}/month`,
+  noPrice: 'no price',
+  planSaved: (label: string, day: number, price: string, start: string, next: string) =>
+    `Plan saved: ${label}, billing day ${day}, ${price}. Subscription month since ${start}, renews ${next} · details: /ledger limits`,
+  planCurrent: (label: string, day: number, price: string, at: string) => `Plan: ${label}, billing day ${day}, ${price} (set ${at}).`,
+  planNone: 'No plan set.',
+  planDeleted: 'Plan setting deleted.',
+  planInvalid: (s: string) => `Not saved: “${s}” is not valid.`,
+  planHelp: [
+    '**/ledger plan <plan> <day|today> [price]**: `pro`, `max5` (`5x`), `max20` (`20x`), `team` or `enterprise`; billing day 1–31 or `today`; monthly price in $, default list price (Pro $20, Max 5x $100, Max 20x $200).',
+    'Examples: `/ledger plan max20 14` · `/ledger plan max20 today 180` · `/ledger plan off` deletes the setting. Claude Code does not tell mods your plan, so it is set here.',
+  ].join('\n'),
 }
 
 export type Texts = typeof en
@@ -189,7 +287,9 @@ const de: Texts = {
     '**/ledger chats [7|30|all]**: die 20 teuersten Chats (Standard 30 Tage)',
     '**/ledger projects [7|30|all]**: alle Projekte im Zeitraum',
     '**/ledger models [7|30|all]**: Modelle mit Anteil, Input-, Output- und Cache-Tokens (Standard 30 Tage)',
-    '**/ledger reset**: alle Einträge löschen (mit Rückfrage)',
+    '**/ledger limits**: 5-Stunden- und Wochenfenster (% genutzt, API-Wert, Reset, Hochrechnung), Abo-Monat, letzte 5-Stunden-Fenster',
+    '**/ledger plan <plan> <tag|heute> [preis]**: Abo und Abrechnungstag einstellen, z. B. `/ledger plan max20 14` (`/ledger plan` zeigt die Details)',
+    '**/ledger reset**: alle Einträge löschen (mit Rückfrage; die Abo-Einstellung bleibt)',
     'Gezählt wird nach jeder Antwort: Chat-Kosten wie /cost, dazu die Modellaufrufe anderer Mods. API-Wert; im Abo zählt es aufs Kontingent.',
   ].join('\n'),
   unknownArg: (s) => `Unbekannt: „${s}“.`,
@@ -200,6 +300,50 @@ const de: Texts = {
   notDeleted: 'Nicht gelöscht.',
   cleared: (n) => `Kostenbuch geleert (${n} ${n === 1 ? 'Eintrag' : 'Einträge'}).`,
   commandDescription: 'Kostenbuch: was Chats, Mods und Modelle gekostet haben',
+  limitsHead: 'cost-ledger · Limits',
+  fiveHours: '5 Stunden',
+  week: 'Woche',
+  fiveShort: '5 Std.',
+  weekShort: 'Woche',
+  planShort: 'Abo',
+  resetAt: (when) => `Reset ${when}`,
+  inTime: (d) => `in ${d}`,
+  projection: (amt) => `100 % ≈ ${amt} (Schätzung)`,
+  projectionLater: 'Hochrechnung ab 5 %',
+  projectionPartial: 'Hochrechnung ab dem nächsten Fenster',
+  projectionNone: 'keine Hochrechnung ohne gebuchten Betrag',
+  partialFrom: (t) => `ab ${t}`,
+  running: 'läuft',
+  resetPassed: 'Reset vorbei, noch keine neue Antwort',
+  resetPassedShort: 'Reset vorbei',
+  noWindowYet: 'noch kein Messwert',
+  noLimitData: 'Keine Limit-Daten: kein Abo erkannt oder seit dem Update noch keine Antwort.',
+  subMonth: 'Abo-Monat',
+  planNotSet: 'Abo nicht eingestellt: /ledger plan max20 14',
+  planValue: (amt, price, f) => `${amt} API-Wert für ${price} Abo = ${f}×`,
+  planValueNoPrice: (amt) => `${amt} API-Wert (kein Preis eingestellt)`,
+  listPrice: 'Listenpreis',
+  renews: (d, n) => `erneuert ${d} (in ${n} ${n === 1 ? 'Tag' : 'Tagen'})`,
+  lastWindows: 'Letzte 5-Stunden-Fenster',
+  noWindows: 'Noch kein 5-Stunden-Fenster erfasst.',
+  avg: (amt, n) => `Ø 100 % ≈ ${amt} aus ${n} ${n === 1 ? 'Fenster' : 'Fenstern'} (≥ 20 %, Schätzung)`,
+  avgNone: 'Ø 100 %: noch kein vollständig erfasstes, abgeschlossenes Fenster mit ≥ 20 %',
+  limitsFoot: '% gilt fürs ganze Konto (auch claude.ai) · $ nur aus Chats mit cost-ledger · Hochrechnungen sind Schätzungen · /ledger plan',
+  sumLimitsTitle: (t, tag) => `**Kostenbuch · Limits** · Stand ${t} · ${tag}`,
+  sumLimitsLine: (list) => `Limits: ${list} · /ledger limits`,
+  sumLimitsFoot: '% gilt fürs ganze Konto (auch claude.ai); $ zählt nur Chats mit cost-ledger; Hochrechnungen sind Schätzungen.',
+  perMonth: (price) => `${price} im Monat`,
+  noPrice: 'ohne Preis',
+  planSaved: (label, day, price, start, next) =>
+    `Abo gespeichert: ${label}, Abrechnungstag ${day}, ${price}. Abo-Monat seit ${start}, erneuert ${next} · Details: /ledger limits`,
+  planCurrent: (label, day, price, at) => `Abo: ${label}, Abrechnungstag ${day}, ${price} (eingestellt ${at}).`,
+  planNone: 'Kein Abo eingestellt.',
+  planDeleted: 'Abo-Einstellung gelöscht.',
+  planInvalid: (s) => `Nicht gespeichert: „${s}“ ist ungültig.`,
+  planHelp: [
+    '**/ledger plan <plan> <tag|heute> [preis]**: `pro`, `max5` (`5x`), `max20` (`20x`), `team` oder `enterprise`; Abrechnungstag 1–31 oder `heute`; Monatspreis in $, Standard ist der Listenpreis (Pro 20 $, Max 5x 100 $, Max 20x 200 $).',
+    'Beispiele: `/ledger plan max20 14` · `/ledger plan max20 heute 180` · `/ledger plan off` löscht die Einstellung. Claude Code verrät Mods den Plan nicht, deshalb wird er hier eingestellt.',
+  ].join('\n'),
 }
 
 export const T: Record<Lang, Texts> = { en, de }

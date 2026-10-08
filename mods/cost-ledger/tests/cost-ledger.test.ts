@@ -1,7 +1,31 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { aggregate, callCost, partLabel, cleanRec, cleanRemote, dayBefore, dayKey, isoWeek, modelKey, modelName, newRec, priceFor, projectOf, summaryText, titleFromPrompt, weekStart } from '../hooks/logic.ts'
-import { T, dateTime, fullDate, langOf, rangeLabel, shortDate, tokens, usd, weekLabel } from '../hooks/i18n.ts'
+import {
+  aggregate,
+  callCost,
+  partLabel,
+  cleanPlan,
+  cleanRec,
+  cleanRemote,
+  dayBefore,
+  dayKey,
+  isoWeek,
+  limKey,
+  limitsOf,
+  limitsReport,
+  modelKey,
+  modelName,
+  newRec,
+  parsePlan,
+  planMonth,
+  priceFor,
+  projectOf,
+  projectionText,
+  summaryText,
+  titleFromPrompt,
+  weekStart,
+} from '../hooks/logic.ts'
+import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from '../hooks/i18n.ts'
 import { modelColors, stackedBar } from '../hooks/view.ts'
 import type { Rec } from '../hooks/logic.ts'
 
@@ -23,10 +47,23 @@ type W = {
 function world(on: On, o: W = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
-  const st = { cost: o.cost === undefined ? 0 : o.cost, setFails: false, logs: [] as string[], asks: [] as string[][], turn: 0, ctx: undefined as number | undefined, rl: [] as { kind: string; percentUsed: number }[] }
-  on('session.usage', () => ({
-    value: { startedAt: NOW, context: { window: 1000000, ...(st.ctx === undefined ? {} : { percent: st.ctx }) }, rateLimits: st.rl, ...(st.cost === null ? {} : { cost: { usd: st.cost } }) } as never,
-  }))
+  const st = {
+    cost: o.cost === undefined ? 0 : o.cost,
+    setFails: false,
+    logs: [] as string[],
+    asks: [] as string[][],
+    turn: 0,
+    ctx: undefined as number | undefined,
+    rl: [] as { kind: string; percentUsed: number; resetsAt?: string }[],
+    usageCalls: 0,
+    sets: 0,
+  }
+  on('session.usage', () => {
+    st.usageCalls++
+    return {
+      value: { startedAt: NOW, context: { window: 1000000, ...(st.ctx === undefined ? {} : { percent: st.ctx }) }, rateLimits: st.rl, ...(st.cost === null ? {} : { cost: { usd: st.cost } }) } as never,
+    }
+  })
   on('session.surfaces', () => ({ value: (o.surfaces ?? ['terminal']) as never }))
   on('session.root', () => ({ value: o.root ?? ROOT }))
   on('session.repo', () => ({ value: (o.repoName || o.remote ? { root: ROOT, remote: o.remote ?? null, internal: false, name: o.repoName ?? null } : null) as never }))
@@ -34,6 +71,7 @@ function world(on: On, o: W = {}) {
   on('store.set', ($, e) => {
     // Ein werfender Stub wird übersprungen; ohne weitere Antwort scheitert der Aufruf (docs/raw/en/test.md:182)
     if (st.setFails) throw new Error('Speicher voll')
+    st.sets++
     saved.set(e.key, JSON.parse(JSON.stringify(e.value)))
     return { value: undefined }
   })
@@ -457,6 +495,7 @@ test('cleanRec: Hin- und Rückweg der 0.3.0-Felder', () => {
   r.act[TODAY] = { turns: 3, sub: 1, ms: 900, abort: 1, err: 0, maxTurn: 0.4, ctx: 55 }
   r.hours[TODAY] = { '09': 0.6, '14': 0.4 }
   r.rl[TODAY] = { five_hour: 12.5, seven_day: 40 }
+  r.lim = { five_hour: { [String(NOW + 3600000)]: { chat: 1.5, mod: 0.25, pct: 42.5, first: NOW - 60000, last: NOW } }, seven_day: {} }
   expect(cleanRec(JSON.parse(JSON.stringify(r)))).toEqual(r)
 })
 
@@ -1027,4 +1066,678 @@ test('Deutsche Antwort „Löschen“ gilt auch bei englischer Einstellung (Spra
   await w.start($)
   await w.turn($, 1)
   expect(await w.ledger($, 'reset')).toMatch(/^Cost ledger cleared/)
+})
+
+// ---------- 0.5.0: Limits und Abo (SPEC Nachtrag 0.5.0) ----------
+
+const H = 60 * 60 * 1000
+const iso = (ms: number) => new Date(ms).toISOString()
+/** rateLimits wie in Phase 0 (`resetsAt` als ISO 8601); `weekAt` optional. */
+const RL = (fiveAt: number, fivePct: number, weekAt?: number, weekPct = 10) => [
+  { kind: 'five_hour', percentUsed: fivePct, resetsAt: iso(fiveAt) },
+  ...(weekAt === undefined ? [] : [{ kind: 'seven_day', percentUsed: weekPct, resetsAt: iso(weekAt) }]),
+]
+const T5 = NOW + 3 * H // 06.10. 15:00
+const TW = NOW + 4 * DAY // Sa 10.10. 12:00
+const limW = (o: Partial<{ chat: number; mod: number; pct: number; first: number; last: number }>) => ({ chat: 0, mod: 0, pct: 0, first: NOW - 30 * DAY, last: NOW - 30 * DAY, ...o })
+
+test('0.5.0: Turn bucht das Delta ins 5-Stunden- und ins Wochenfenster, pct ist der Höchstwert', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  w.st.rl = RL(T5, 30, TW, 50)
+  await w.turn($, 0.5)
+  w.st.rl = RL(T5, 25, TW, 55) // eine niedrigere Lesung senkt den Höchstwert nicht
+  await w.clock.advance(60_000)
+  await w.turn($, 0.75)
+  const five = w.rec()!.lim.five_hour![String(T5)]!
+  near(five.chat, 0.75)
+  expect([five.mod, five.pct, five.first, five.last]).toEqual([0, 30, NOW, NOW + 60_000])
+  const week = w.rec()!.lim.seven_day![String(TW)]!
+  near(week.chat, 0.75)
+  expect(week.pct).toBe(55)
+  expect(w.saved.get('meta:limSince')).toBe(NOW) // Beginn der Fenster-Daten, einmal gesetzt
+  near(w.sum(), 0.75) // die Tagesbuchung bleibt unverändert
+  // Das 5-Stunden-Fenster begann 10:00, gezählt wird ab 12:00: unvollständig, deshalb keine Hochrechnung (sie wäre zu niedrig)
+  expect(await w.ledger($, 'limits')).toMatch(/^5 Stunden: 30 % · 0,75 \$ · Reset 15:00 \(in 2 h 59 min\) · Hochrechnung ab dem nächsten Fenster · ab 12:00$/m)
+})
+
+test('0.5.0: resetsAt um 20 s verschieden → derselbe Schlüssel; um 40 s → in der Aggregation zusammengelegt', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  w.st.rl = RL(T5, 10)
+  await w.turn($, 0.1)
+  w.st.rl = RL(T5 + 20_000, 11)
+  await w.turn($, 0.3)
+  expect(Object.keys(w.rec()!.lim.five_hour!)).toEqual([String(T5)])
+  expect(limKey(T5 + 20_000)).toBe(String(T5))
+  w.st.rl = RL(T5 + 40_000, 12)
+  await w.turn($, 0.6)
+  expect(Object.keys(w.rec()!.lim.five_hour!)).toEqual([String(T5), String(T5 + 60_000)])
+  const l = limitsReport([{ rec: w.rec()! }], NOW, {})
+  expect(l.history).toHaveLength(1)
+  near(l.five!.usd, 0.6)
+  expect(l.five!.pct).toBe(12)
+})
+
+test('0.5.0: Fensterwechsel; abgelaufenes Fenster ohne neue Reset-Zeit → carry, beim nächsten Fenster gutgeschrieben', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  w.st.rl = RL(NOW + H, 40)
+  await w.turn($, 0.2)
+  await w.clock.advance(2 * H) // Reset vorbei, die letzte Lesung nennt noch das alte Fenster
+  w.st.cost = 0.3 // Rest, gebucht vor /ledger
+  await w.ledger($)
+  const old = w.rec()!.lim.five_hour!
+  expect(Object.keys(old)).toEqual([String(NOW + H)])
+  near(old[String(NOW + H)]!.chat, 0.2) // nicht ins abgelaufene Fenster
+  near(w.sum(), 0.3) // der Tag hat den Betrag trotzdem
+  w.st.rl = RL(NOW + 7 * H, 3)
+  await w.turn($, 0.5)
+  near(w.rec()!.lim.five_hour![String(NOW + 7 * H)]!.chat, 0.3) // 0,20 Turn + 0,10 aus carry
+})
+
+test('0.5.0: model.complete von sidekick → lim.mod des aktuellen Fensters, ohne eigenes usage()', { plugins: [sidekick], ...DE }, async ($, on) => {
+  const w = world(on)
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_IN } as never }))
+  await w.start($)
+  w.st.rl = RL(T5, 10, TW, 5)
+  await w.turn($, 0.1)
+  const calls = w.st.usageCalls
+  expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:OK')
+  expect(w.st.usageCalls).toBe(calls) // Mod-Pfad ohne zusätzlichen usage()-Aufruf
+  const five = w.rec()!.lim.five_hour![String(T5)]!
+  near(five.mod, 1) // Haiku 4.5: 1 $ je Million Input
+  near(five.chat, 0.1)
+  near(w.rec()!.lim.seven_day![String(TW)]!.mod, 1)
+})
+
+test('0.5.0: Mod-Aufruf vor der ersten Messung → carry, mit dem ersten Fenster gebucht', { plugins: [sidekick], ...DE }, async ($, on) => {
+  const w = world(on)
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_IN } as never }))
+  await w.start($)
+  await $.command.run({ command: 'probe', args: '' })
+  expect(w.rec()!.lim).toEqual({})
+  w.st.rl = RL(T5, 2)
+  await w.turn($, 0.1)
+  const five = w.rec()!.lim.five_hour![String(T5)]!
+  near(five.mod, 1)
+  near(five.chat, 0.1)
+})
+
+test('0.5.0: spend_limit, fehlendes oder ungültiges resetsAt werden ignoriert', DE, async ($, on) => {
+  expect(limitsOf([
+    { kind: 'spend_limit', percentUsed: 120, resetsAt: iso(T5) },
+    { kind: 'five_hour', percentUsed: 10 },
+    { kind: 'seven_day', percentUsed: 10, resetsAt: 'kaputt' },
+  ])).toEqual([])
+  expect(limitsOf(undefined)).toEqual([])
+  expect(limitsOf([{ kind: 'five_hour', percentUsed: 21, resetsAt: '2026-10-08T19:10:00.000Z' }])).toEqual([{ kind: 'five_hour', pct: 21, resetsAt: Date.parse('2026-10-08T19:10:00.000Z') }])
+  const w = world(on)
+  await w.start($)
+  w.st.rl = [{ kind: 'spend_limit', percentUsed: 120, resetsAt: iso(T5) }, { kind: 'five_hour', percentUsed: 10 }, { kind: 'seven_day', percentUsed: 10, resetsAt: 'kaputt' }]
+  await w.turn($, 0.1)
+  expect(w.rec()!.lim).toEqual({})
+  expect(w.saved.has('meta:limSince')).toBe(false)
+})
+
+test('0.5.0: höchstens 60 Fünf-Stunden- und 12 Wochenfenster je Datensatz, die ältesten fallen heraus', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  for (let i = 0; i < 62; i++) {
+    w.st.rl = RL(NOW + i * 5 * H + H, 50, NOW + i * 7 * DAY + H, 50)
+    await w.turn($, 0.01 * (i + 1))
+    await w.clock.advance(5 * H)
+  }
+  const five = Object.keys(w.rec()!.lim.five_hour!).map(Number).sort((a, b) => a - b)
+  expect(five).toHaveLength(60)
+  expect(five[0]).toBe(NOW + 2 * 5 * H + H)
+  expect(Object.keys(w.rec()!.lim.seven_day!)).toHaveLength(12)
+})
+
+test('0.5.0: Aggregation über zwei Sessions: Beträge summiert, pct Maximum; Ø nur aus abgeschlossenen, vollständigen Fenstern ≥ 20 %', () => {
+  const p1 = String(NOW - 6 * H)
+  const p2 = String(NOW - H)
+  const low = String(NOW - 11 * H)
+  const old = String(NOW - 40 * H) // begann vor limSince (−42 h) → unvollständig, zählt nicht zum Ø
+  const cur = String(NOW + 2 * H)
+  const at = (k: string, o: Parameters<typeof limW>[0]) => limW({ first: Number(k) - H, last: Number(k) - H, ...o })
+  const a = recOf('P', {}, { lim: { five_hour: { [p1]: at(p1, { chat: 10, pct: 50 }), [p2]: at(p2, { chat: 3, mod: 1, pct: 30 }), [cur]: at(cur, { chat: 2, pct: 20 }), [old]: at(old, { chat: 1, pct: 90 }) } } })
+  const b = recOf('Q', {}, { lim: { five_hour: { [p2]: at(p2, { chat: 4, pct: 35 }), [cur]: at(cur, { chat: 1, mod: 0.5, pct: 25 }), [low]: at(low, { chat: 9, pct: 10 }) } } })
+  const l = limitsReport([{ rec: a }, { rec: b }], NOW, { limSince: NOW - 42 * H })
+  near(l.five!.usd, 3.5)
+  expect(l.five!.pct).toBe(25)
+  near(l.five!.proj!, 14) // 3,50 $ ÷ 25 × 100
+  expect(l.history.map((w) => String(w.resetsAt))).toEqual([cur, p2, p1, low, old])
+  near(l.history[1]!.usd, 8)
+  expect(l.history[1]!.pct).toBe(35)
+  expect(l.history[4]!.partial).toBe(true)
+  near(l.avg!.usd, (18 / 85) * 100) // (10 + 8) ÷ (50 + 35) × 100
+  expect(l.avg!.n).toBe(2)
+  expect(l.week).toBeNull()
+  expect([l.seenFive, l.seenWeek]).toEqual([true, false])
+  // Ohne meta:limSince gilt die früheste Fenster-Buchung; ein später gesetztes meta:limSince zählt nie nach ihr
+  expect(limitsReport([{ rec: a }], NOW, {}).limSince).toBe(NOW - 41 * H)
+  expect(limitsReport([{ rec: a }], NOW, { limSince: NOW }).limSince).toBe(NOW - 41 * H)
+})
+
+test('0.5.0: Ø nur über die neuesten 60 Fenster; ältere Fenster eines gekürzten langen Chats verfälschen ihn nicht (Review)', () => {
+  // Chat L war in 120 Fenstern aktiv (10 $ je Fenster) und behält nur die neuesten 60; kurze Chats je 0,50 $ in allen 120
+  const long: Record<string, ReturnType<typeof limW>> = {}
+  const recs: { rec: Rec }[] = []
+  for (let i = 0; i < 120; i++) {
+    const k = String(NOW - (i + 1) * 5 * H)
+    if (i < 60) long[k] = limW({ chat: 10, pct: 50, first: NOW - 700 * H, last: NOW - 700 * H })
+    recs.push({ rec: recOf('S', {}, { lim: { five_hour: { [k]: limW({ chat: 0.5, pct: 50, first: NOW - 700 * H, last: NOW - 700 * H }) } } }) })
+  }
+  recs.push({ rec: recOf('L', {}, { lim: { five_hour: long } }) })
+  const l = limitsReport(recs, NOW, {})
+  expect(l.avg!.n).toBe(60)
+  near(l.avg!.usd, 21) // (10 + 0,50) ÷ 50 × 100
+})
+
+test('0.5.0: Hochrechnung erst ab 5 %; Messung dieses Prozesses (live) hebt pct', () => {
+  const mk = (p: number) => limitsReport([{ rec: recOf('P', {}, { lim: { five_hour: { [String(T5)]: limW({ chat: 1, pct: p }) } } }) }], NOW, {}).five!.proj
+  expect(mk(4.9)).toBeNull()
+  near(mk(5)!, 20)
+  const live = limitsReport([{ rec: recOf('P', {}, { lim: { five_hour: { [String(T5)]: limW({ chat: 1, pct: 4 }) } } }) }], NOW, { live: [{ kind: 'five_hour', pct: 10, resetsAt: T5 + 10_000 }] })
+  expect(live.five!.pct).toBe(10)
+  near(live.five!.proj!, 10)
+  // Nur eine Messung, noch keine Buchung: Fenster mit 0 $
+  const only = limitsReport([], NOW, { live: [{ kind: 'seven_day', pct: 6, resetsAt: TW }] })
+  expect([only.week!.pct, only.week!.usd, only.seenWeek, only.seenFive]).toEqual([6, 0, true, false])
+})
+
+test('0.5.0: /ledger plan speichert meta:plan; heute, Komma-Preis, Aliase, off; Ungültiges speichert nichts', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  expect(await w.ledger($, 'plan max20 14')).toBe('Abo gespeichert: Max 20x, Abrechnungstag 14, 200,00 $ im Monat (Listenpreis). Abo-Monat seit 14.09., erneuert 14.10. · Details: /ledger limits')
+  expect(w.saved.get('meta:plan')).toEqual({ v: 1, plan: 'max20', day: 14, at: NOW })
+  expect(await w.ledger($, 'plan 20X heute 207,50')).toMatch(/Max 20x, Abrechnungstag 6, 207,50 \$ im Monat\. Abo-Monat seit 06\.10\., erneuert 06\.11\./)
+  expect(w.saved.get('meta:plan')).toEqual({ v: 1, plan: 'max20', day: 6, price: 207.5, at: NOW })
+  expect(await w.ledger($, 'plan')).toMatch(/^Abo: Max 20x, Abrechnungstag 6, 207,50 \$ im Monat \(eingestellt 06\.10\. 12:00\)\.\n\*\*\/ledger plan/)
+  for (const bad of ['gold 3', 'max20', 'max20 32', 'max20 0', 'max20 14 abc', 'max20 14 0', 'max20 14 207 mehr', 'max20 1.5'])
+    expect(await w.ledger($, `plan ${bad}`), bad).toMatch(/^Nicht gespeichert: „.*“ ist ungültig\.\n\*\*\/ledger plan/)
+  expect((w.saved.get('meta:plan') as { day: number }).day).toBe(6) // unverändert
+  expect(await w.ledger($, 'plan team 1')).toMatch(/Team, Abrechnungstag 1, ohne Preis\./)
+  expect(await w.ledger($, 'plan off')).toBe('Abo-Einstellung gelöscht.')
+  expect(w.saved.has('meta:plan')).toBe(false)
+  expect(await w.ledger($, 'plan')).toMatch(/^Kein Abo eingestellt\./)
+  expect(await w.ledger($, 'plan max5x 31 $99.99')).toMatch(/Max 5x, Abrechnungstag 31, 99,99 \$ im Monat\./)
+  expect(await w.ledger($, 'plan aus')).toBe('Abo-Einstellung gelöscht.')
+})
+
+test('0.5.0: parsePlan und cleanPlan', () => {
+  expect(parsePlan(['Pro', 'today'], NOW)).toEqual({ v: 1, plan: 'pro', day: 6, at: NOW })
+  expect(parsePlan(['5x', '8', '100'], NOW)).toEqual({ v: 1, plan: 'max5', day: 8, price: 100, at: NOW })
+  expect(parsePlan(['enterprise', '31', '1.234'], NOW)).toBeNull()
+  expect(parsePlan([], NOW)).toBeNull()
+  expect(cleanPlan({ v: 1, plan: 'max20', day: 8, price: 207, at: NOW })).toEqual({ v: 1, plan: 'max20', day: 8, price: 207, at: NOW })
+  expect(cleanPlan({ v: 1, plan: 'max20', day: 8, price: -1, at: NOW })).toEqual({ v: 1, plan: 'max20', day: 8, at: NOW })
+  for (const bad of [null, { v: 2, plan: 'pro', day: 1, at: 1 }, { v: 1, plan: 'gold', day: 1, at: 1 }, { v: 1, plan: 'pro', day: 32, at: 1 }, { v: 1, plan: 'pro', day: 1.5, at: 1 }])
+    expect(cleanPlan(bad)).toBeNull()
+})
+
+test('0.5.0: Abo-Monat: 31. im 30-Tage-Monat, Jahreswechsel, Abrechnungstag heute (Fynns Fall am 08.10.)', () => {
+  const at = (y: number, m: number, d: number, h = 12) => new Date(y, m - 1, d, h).getTime()
+  expect(planMonth(31, at(2026, 10, 8))).toEqual({ start: '2026-09-30', next: '2026-10-31', daysLeft: 23 })
+  expect(planMonth(31, at(2026, 11, 30))).toEqual({ start: '2026-11-30', next: '2026-12-31', daysLeft: 31 })
+  expect(planMonth(31, at(2027, 1, 31))).toEqual({ start: '2027-01-31', next: '2027-02-28', daysLeft: 28 })
+  expect(planMonth(8, at(2027, 1, 5))).toEqual({ start: '2026-12-08', next: '2027-01-08', daysLeft: 3 })
+  expect(planMonth(8, at(2026, 10, 8, 9))).toEqual({ start: '2026-10-08', next: '2026-11-08', daysLeft: 31 })
+  expect(planMonth(8, at(2026, 10, 7, 23))).toEqual({ start: '2026-09-08', next: '2026-10-08', daysLeft: 1 })
+})
+
+test('0.5.0: Abo-Wert: nur Datensätze mit Abo-Limits, Chat + Mods seit Beginn; Faktor nur mit Preis; „ab“ vor meta:since', () => {
+  const d = (n: number) => dayBefore(NOW, n)
+  const sub = recOf('P', { [d(0)]: 3, [d(10)]: 2, [d(40)]: 50 }, { rl: { [d(10)]: { seven_day: 40 } }, mods: { sidekick: { days: { [d(1)]: { usd: 0.5, calls: 2 } } } } })
+  const viaLim = recOf('Q', { [d(2)]: 1 }, { lim: { five_hour: { [String(NOW - H)]: limW({ chat: 1, pct: 5 }) } } })
+  const apiKey = recOf('R', { [d(0)]: 100 }, { rl: { [d(0)]: { spend_limit: 50 } } }) // kein Abo: zählt nicht
+  const recs = [{ rec: sub }, { rec: viaLim }, { rec: apiKey }]
+  const p = limitsReport(recs, NOW, { plan: { v: 1, plan: 'max20', day: 14, at: NOW } }).plan!
+  expect([p.start, p.next, p.daysLeft, p.price, p.listPrice, p.from]).toEqual(['2026-09-14', '2026-10-14', 8, 200, true, null])
+  near(p.usd, 6.5) // 3 + 2 + 0,50 Mods + 1; der 40 Tage alte Tag liegt vor dem Beginn
+  near(p.factor!, 6.5 / 200)
+  const own = limitsReport(recs, NOW, { plan: { v: 1, plan: 'max20', day: 6, price: 207, at: NOW }, since: NOW - DAY }).plan!
+  expect([own.start, own.price, own.listPrice, own.from]).toEqual(['2026-10-06', 207, false, null])
+  near(own.usd, 3)
+  const team = limitsReport(recs, NOW, { plan: { v: 1, plan: 'team', day: 1, at: NOW }, since: NOW - 2 * DAY }).plan!
+  expect([team.price, team.factor, team.from]).toEqual([null, null, d(2)])
+  // Seit 01.10.: 3 $ heute + 0,50 $ Mods gestern; der 26.09. liegt davor
+  expect(summaryText(aggregate([{ id: 'P', rec: sub }], NOW, { plan: { v: 1, plan: 'team', day: 1, at: NOW } }), 'limits', 30, '#x', 'de')).toMatch(/^Abo-Monat: Team · seit 01\.10\. · erneuert 01\.11\. \(in 26 Tagen\) · 3,50 \$ API-Wert \(kein Preis eingestellt\)$/m)
+})
+
+test('0.5.0: /ledger reset lässt meta:plan stehen und leert lim; Reset aus einem anderen Chat leert lim', DE, async ($, on) => {
+  const w = world(on, { answer: 'Löschen' })
+  await w.start($)
+  await w.ledger($, 'plan max20 8 207')
+  w.st.rl = RL(T5, 30)
+  await w.turn($, 1)
+  expect(w.saved.has('meta:limSince')).toBe(true)
+  expect(await w.ledger($, 'reset')).toMatch(/geleert \(1 Eintrag\)/)
+  // meta:limSince wird mit dem Reset neu gesetzt statt gelöscht (Review: sonst setzte ein späterer Prozess es zu spät)
+  expect([...w.saved.keys()].sort()).toEqual(['meta:limSince', 'meta:plan', 'meta:resetAt', 'meta:since'])
+  expect(w.saved.get('meta:limSince')).toBe(NOW)
+  await w.turn($, 1.25)
+  near(w.rec()!.lim.five_hour![String(T5)]!.chat, 0.25)
+  // Ein anderer Chat setzt zurück: auch die Fenster dieses Chats beginnen neu
+  await w.clock.advance(1000)
+  w.saved.delete('s:S1')
+  w.saved.set('meta:resetAt', NOW + 1000)
+  await w.clock.advance(1000)
+  await w.turn($, 1.5)
+  near(w.rec()!.lim.five_hour![String(T5)]!.chat, 0.25)
+  expect(Object.keys(w.rec()!.days)).toEqual([TODAY])
+  near(w.sum(), 0.25)
+})
+
+test('0.5.0: alter Datensatz ohne lim lädt fehlerfrei; kaputte lim-Einträge fliegen raus', () => {
+  const old = { v: 1, days: { [TODAY]: 1 }, firstAt: 1, lastAt: 1, rl: { [TODAY]: { five_hour: 50 } } }
+  expect(cleanRec(old)!.lim).toEqual({})
+  const r = cleanRec({ ...old, lim: { five_hour: { [String(T5)]: limW({ chat: 1, pct: 3 }), abc: limW({}), [String(NOW)]: { chat: 'x' } }, spend_limit: { [String(T5)]: limW({}) }, seven_day: 5 } })!
+  expect(Object.keys(r.lim)).toEqual(['five_hour'])
+  expect(Object.keys(r.lim.five_hour!)).toEqual([String(T5)])
+})
+
+/** Ein Chat mit Fynns Abo, Fenstern und einem älteren, abgeschlossenen Fenster eines anderen Chats. */
+async function limitsWorld($: any, on: On) {
+  const old = recOf('Handy', { [TODAY]: 4 }, {
+    rl: { [TODAY]: { five_hour: 80 } },
+    lim: { five_hour: { [String(NOW - 2 * H)]: limW({ chat: 4, pct: 80, first: NOW - 4 * H, last: NOW - 2 * H }) } },
+  })
+  // Fenster-Daten seit 05:00: das alte Fenster (05–10) und das laufende (10–15) sind vollständig, die Woche nicht
+  const w = world(on, { saved: new Map<string, unknown>([['s:OLD', old], ['meta:limSince', NOW - 7 * H]]) })
+  await w.start($)
+  await w.ledger($, 'plan max20 8 207')
+  w.st.rl = RL(T5, 30, TW, 50)
+  await w.turn($, 1.2, { usage: U('claude-opus-5-5', 1000, 20000) })
+  return w
+}
+
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`0.5.0 UI ${surface}: /ledger limits mit 5 Stunden, Woche, Abo-Monat, Verlauf und Ø`, DE, async ($, on) => {
+    const w = await limitsWorld($, on)
+    const text = await w.ledger($, 'limits')
+    const ui = await mountLedger($, text, surface)
+    expect(await ui.find({ text: /^ENGINE:/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: 'cost-ledger · Limits' })).toBeDefined()
+    expect(await ui.find({ text: /Max 20x · Stand 06\.10\. 12:00 · neu laden: \/ledger limits/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '5 Stunden · Reset 15:00 (in 3 h 0 min)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Woche · Reset Sa 10.10. 12:00 (in 4 T 0 h)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'ab 06.10.' })).toBeDefined() // Woche begann vor den Fenster-Daten
+    expect(await ui.find({ type: 'Text', text: '30 %' })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: '50 %' }))?.props.color).toBe('success')
+    expect(await ui.find({ type: 'Text', text: '100 % ≈ 4,00 $ (Schätzung)' })).toBeDefined() // 1,20 $ ÷ 30 × 100
+    expect(await ui.find({ type: 'Text', text: 'Abo-Monat · Max 20x · seit 08.09. · erneuert 08.10. (in 2 Tagen)' })).toBeDefined()
+    expect(await ui.find({ text: /^5,20 \$ API-Wert für 207,00 \$ Abo = 0,0×/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Letzte 5-Stunden-Fenster' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '06.10. 10–15' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '06.10. 05–10' })).toBeDefined()
+    expect(await ui.find({ text: /läuft/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Ø 100 % ≈ 5,00 $ aus 1 Fenster (≥ 20 %, Schätzung)' })).toBeDefined() // 4 $ ÷ 80 × 100
+    expect(await ui.find({ text: /% gilt fürs ganze Konto \(auch claude\.ai\)/ })).toBeDefined()
+    if (surface === 'terminal') expect(await ui.find({ type: 'Text', text: /^▄+$/ })).toBeDefined()
+    else {
+      expect(await ui.find({ type: 'Text', text: /^▄+$/ })).toBeUndefined()
+      const widths = (await ui.findAll({ type: 'Box' })).map((b: any) => b.props.width).filter((x: unknown) => x !== undefined)
+      expect(widths.filter((x: unknown) => !(typeof x === 'number' || (typeof x === 'string' && /^\d+%$/.test(x))))).toEqual([])
+      expect((await ui.findAll({ type: 'Box' })).some((b: any) => b.props.backgroundColor === 'success')).toBe(true)
+    }
+    await ui.unmount()
+  })
+
+// Nach der angezeigten, gerundeten Zahl: 69,5 zeigt „70 %“ und ist gelb (Review)
+for (const [p, color] of [[69.4, 'success'], [69.5, 'warning'], [89.4, 'warning'], [89.5, 'error'], [33.3, 'success']] as const)
+  test(`0.5.0 UI: Ampel der Limit-Balken bei ${p} % → ${color}, alle Desktop-Breiten ganzzahlig`, DE, async ($, on) => {
+    const w = world(on)
+    await w.start($)
+    w.st.rl = RL(T5, p, TW, p)
+    await w.turn($, 0.1)
+    const ui = await mountLedger($, await w.ledger($, 'limits'), 'desktop')
+    const bars = (await ui.findAll({ type: 'Box' })).filter((b: any) => b.props.backgroundColor === color)
+    expect(bars.length).toBe(3) // 5 Stunden, Woche, Verlauf
+    expect((await ui.findAll({ type: 'Box' })).filter((b: any) => b.props.backgroundColor && b.props.backgroundColor !== color)).toEqual([])
+    const widths = (await ui.findAll({ type: 'Box' })).map((b: any) => b.props.width).filter((x: unknown) => typeof x === 'string')
+    expect(widths.every((x: string) => /^\d+%$/.test(x)), `${widths}`).toBe(true)
+    await ui.unmount()
+  })
+
+test('0.5.0 UI: /ledger limits bei 60 Spalten ohne Abschneiden', DE, async ($, on) => {
+  const w = await limitsWorld($, on)
+  const ui = await mountLedger($, await w.ledger($, 'limits'), 'terminal', 60)
+  const widths = (await ui.findAll({ type: 'Box' })).map((b: any) => b.props.width).filter((x: unknown) => typeof x === 'number')
+  expect(widths.every((x: number) => x <= 56)).toBe(true)
+  for (const r of (await ui.findAll({ type: 'Box' })).filter((b: any) => b.props.flexDirection === 'row' && !b.props.flexWrap)) {
+    const sum = (r as any).children.reduce((a: number, c: any) => a + (typeof c === 'object' && typeof c.props?.width === 'number' ? c.props.width : 0), 0)
+    expect(sum <= 56, `${sum}`).toBe(true)
+  }
+  expect(await ui.find({ type: 'Text', text: '1,20 $' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('0.5.0 UI: Leerzustand ohne Limits und ohne Plan; ohne Limits mit Plan; ohne Plan mit Limits', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const text = await w.ledger($, 'limits')
+  expect(text).toMatch(/Keine Limit-Daten: kein Abo erkannt oder seit dem Update noch keine Antwort\./)
+  expect(text).toMatch(/Abo nicht eingestellt: \/ledger plan max20 14/)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mountLedger($, text, surface)
+    expect(await ui.find({ type: 'Text', text: /^Keine Limit-Daten/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Abo nicht eingestellt: /ledger plan max20 14' })).toBeDefined()
+    await ui.unmount()
+  }
+  await w.ledger($, 'plan pro 1')
+  const withPlan = await mountLedger($, await w.ledger($, 'limits'), 'terminal')
+  expect(await withPlan.find({ type: 'Text', text: /^Keine Limit-Daten/ })).toBeDefined()
+  expect(await withPlan.find({ type: 'Text', text: /^Abo-Monat · Pro · seit 01\.10\./ })).toBeDefined()
+  expect(await withPlan.find({ text: /Listenpreis/ })).toBeDefined()
+  await withPlan.unmount()
+  await w.ledger($, 'plan off')
+  w.saved.set('meta:limSince', NOW - 7 * H) // Fenster vollständig erfasst
+  w.st.rl = RL(T5, 2)
+  await w.turn($, 0.1)
+  const noPlan = await w.ledger($, 'limits')
+  expect(noPlan).toMatch(/^5 Stunden: 2 % · 0,10 \$ · Reset 15:00 \(in 3 h 0 min\) · Hochrechnung ab 5 %$/m)
+  expect(noPlan).toMatch(/Woche: noch kein Messwert/)
+  expect(noPlan).toMatch(/Abo nicht eingestellt/)
+  expect(noPlan).toMatch(/Ø 100 %: noch kein vollständig erfasstes, abgeschlossenes Fenster mit ≥ 20 %/)
+})
+
+test('0.5.0: Reset vorbei, noch keine neue Antwort', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  w.st.rl = RL(NOW + H, 40)
+  await w.turn($, 0.2)
+  await w.clock.advance(2 * H)
+  const text = await w.ledger($, 'limits')
+  expect(text).toMatch(/5 Stunden: Reset vorbei, noch keine neue Antwort/)
+  expect(text).toMatch(/Letzte 5-Stunden-Fenster: 06\.10\. 08–13 0,20 \$ 40 %/)
+  expect(await w.ledger($)).toMatch(/^Limits: 5 Std\.: Reset vorbei · \/ledger limits$/m)
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`0.5.0 UI ${surface}: Übersicht mit Limit-Zeile, ohne Fenster und Plan ohne`, DE, async ($, on) => {
+    const w = await limitsWorld($, on)
+    const text = await w.ledger($)
+    expect(text.split('\n')[1]).toBe('Limits: 5 Std. 30 % · 1,20 $ · Reset 15:00 | Woche 50 % · 1,20 $ | Abo 5,20 $ = 0,0× · /ledger limits')
+    const ui = await mountLedger($, text, surface)
+    expect(await ui.find({ text: /^5 Std\. 30 % · 1,20 \$ · Reset 15:00$/ })).toBeDefined()
+    expect(await ui.find({ text: /^│ Woche 50 % · 1,20 \$$/ })).toBeDefined()
+    expect(await ui.find({ text: /^│ Abo 5,20 \$ = 0,0×$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '· /ledger limits' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Heute' })).toBeDefined()
+    await ui.unmount()
+  })
+
+test('0.5.0: ohne Fenster und Plan keine Limit-Zeile in der Übersicht', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.turn($, 0.5)
+  const text = await w.ledger($)
+  expect(text).not.toMatch(/^Limits:/m)
+  const ui = await mountLedger($, text, 'terminal')
+  expect(await ui.find({ text: /\/ledger limits/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('0.5.0: Text für Claude ≤ 10 Zeilen für limits und die Übersicht, auch mit allen Hinweisen', DE, async ($, on) => {
+  const w = await limitsWorld($, on)
+  for (const args of ['', 'limits', 'weeks']) expect((await w.ledger($, args)).split('\n').length <= 10, args).toBe(true)
+  const limits = await w.ledger($, 'limits')
+  expect(limits.split('\n')[0]).toMatch(/^\*\*Kostenbuch · Limits\*\* · Stand 06\.10\. 12:00 · #[0-9a-z]{5,}$/)
+  expect(limits).toMatch(/^5 Stunden: 30 % · 1,20 \$ · Reset 15:00 \(in 3 h 0 min\) · 100 % ≈ 4,00 \$ \(Schätzung\)$/m)
+  expect(limits).toMatch(/^Woche: 50 % · 1,20 \$ · Reset Sa 10\.10\. 12:00 \(in 4 T 0 h\) · Hochrechnung ab dem nächsten Fenster · ab 06\.10\.$/m)
+  expect(limits).toMatch(/^Abo-Monat: Max 20x · seit 08\.09\. · erneuert 08\.10\. \(in 2 Tagen\) · 5,20 \$ API-Wert für 207,00 \$ Abo = 0,0× \(ab 06\.10\.\)$/m)
+  expect(limits).toMatch(/^Letzte 5-Stunden-Fenster: 06\.10\. 10–15 1,20 \$ 30 % läuft · 06\.10\. 05–10 4,00 \$ 80 %$/m)
+  // Mit allen Hinweisen (Speicher voll, unlesbar, ohne Kosten, Schreibfehler) bleibt es bei 10 Zeilen
+  const r = aggregate([{ id: 'A', rec: recOf('P', { [TODAY]: 1 }) }], NOW, {
+    hasCost: false,
+    unreadable: 2,
+    storeBytes: 4 * 1024 * 1024,
+    writeError: 'voll',
+    plan: { v: 1, plan: 'max20', day: 8, at: NOW },
+    live: RL(T5, 30, TW, 50).map((x) => ({ kind: x.kind, pct: x.percentUsed, resetsAt: Date.parse(x.resetsAt) })),
+  })
+  for (const view of ['overview', 'weeks', 'limits'] as const) {
+    const s = summaryText(r, view, 30, '#x0000', 'de').split('\n')
+    expect(s.length <= 10, view).toBe(true)
+    expect(s[s.length - 1], view).toMatch(/Schätzungen|Kontingent/)
+  }
+})
+
+test('0.5.0: Formatierer für Reset, Dauer, Fenster, Prozent und Faktor in beiden Sprachen', () => {
+  expect(clock(NOW)).toBe('12:00')
+  expect(resetTime(T5, NOW, 'de')).toBe('15:00')
+  expect(resetTime(TW, NOW, 'de')).toBe('Sa 10.10. 12:00')
+  expect(resetTime(TW, NOW, 'en')).toBe('Sat Oct 10 12:00')
+  expect(duration(3 * H + 50 * 60_000 + 59_000, 'de')).toBe('3 h 50 min')
+  expect(duration(12 * 60_000, 'en')).toBe('12 min')
+  expect(duration(30_000, 'en')).toBe('< 1 min')
+  expect(duration(4 * DAY + 16 * H + 5 * 60_000, 'de')).toBe('4 T 16 h')
+  expect(duration(4 * DAY + 16 * H, 'en')).toBe('4 d 16 h')
+  expect(span(NOW + H, NOW + 6 * H, 'de')).toBe('06.10. 13–18')
+  expect(span(NOW + 7 * H, NOW + 12 * H, 'de')).toBe('06.10. 19–24') // Ende um Mitternacht
+  expect(span(NOW + 4 * H + 10 * 60_000, NOW + 9 * H + 10 * 60_000, 'en')).toBe('Oct 6 16:10–21:10')
+  expect(pct(62.4)).toBe('62 %')
+  expect(pct(23.5)).toBe('24 %')
+  expect(factor(4.06, 'de')).toBe('4,1')
+  expect(factor(4.06, 'en')).toBe('4.1')
+})
+
+test('0.5.0 Englisch (Standard): /ledger limits, plan und die Limit-Zeile', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['meta:limSince', NOW - 7 * H]]) })
+  await w.start($)
+  expect(await w.ledger($, 'plan max20 8 207')).toBe('Plan saved: Max 20x, billing day 8, $207.00/month. Subscription month since Sep 8, renews Oct 8 · details: /ledger limits')
+  w.st.rl = RL(T5, 30, TW, 50)
+  await w.turn($, 1.2)
+  const text = await w.ledger($, 'limits')
+  expect(text).toMatch(/^\*\*Cost ledger · limits\*\* · as of Oct 6 12:00 · #/)
+  expect(text).toMatch(/^5 hours: 30 % · \$1\.20 · reset 15:00 \(in 3 h 0 min\) · 100 % ≈ \$4\.00 \(estimate\)$/m)
+  expect(text).toMatch(/^Week: 50 % · \$1\.20 · reset Sat Oct 10 12:00 \(in 4 d 0 h\) · projection from the next window · from Oct 6$/m)
+  expect(text).toMatch(/^Subscription month: Max 20x · since Sep 8 · renews Oct 8 \(in 2 days\) · \$1\.20 API value for a \$207\.00 plan = 0\.0×/m)
+  expect(text).toMatch(/% applies to the whole account \(incl\. claude\.ai\)/)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mountLedger($, text, surface)
+    expect(await ui.find({ type: 'Text', text: 'cost-ledger · limits' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '5 hours · reset 15:00 (in 3 h 0 min)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Subscription month · Max 20x · since Sep 8 · renews Oct 8 (in 2 days)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Last 5-hour windows' })).toBeDefined()
+    expect(await ui.find({ text: /Stunden|Woche|Abo-Monat/ })).toBeUndefined()
+    await ui.unmount()
+  }
+  expect((await w.ledger($)).split('\n')[1]).toBe('Limits: 5 h 30 % · $1.20 · reset 15:00 | week 50 % · $1.20 | plan $1.20 = 0.0× · /ledger limits')
+  expect(await w.ledger($, 'help')).toMatch(/\*\*\/ledger limits\*\*: .*\n\*\*\/ledger plan <plan> <day\|today> \[price\]\*\*/)
+  expect(await w.ledger($, 'plan nope 3')).toMatch(/^Not saved: “nope 3” is not valid\.\n/)
+})
+
+// ---------- 0.5.0: Befunde aus dem Review ----------
+
+test('0.5.0 Review: Nachbuchung beim Resume geht ins Fenster der letzten Buchung, nicht ins laufende', DE, async ($, on) => {
+  const kOld = String(NOW - 2 * DAY + H)
+  const old = {
+    ...newRec({ project: 'P', root: ROOT, title: 'Alt', kind: 'terminal' }, NOW - 2 * DAY, 1),
+    days: { [dayBefore(NOW, 2)]: 1 },
+    lim: { five_hour: { [kOld]: limW({ chat: 1, pct: 40, first: NOW - 2 * DAY, last: NOW - 2 * DAY }) } },
+  }
+  // Hartes Ende mitten im Turn: gebucht war 1 $, der Zähler steht beim Resume auf 3 $
+  const w = world(on, { saved: new Map<string, unknown>([['s:S1', old]]), cost: 3 })
+  await w.start($, 'S1', 'resume')
+  w.st.rl = RL(T5, 10)
+  await w.turn($, 3.1)
+  near(w.rec()!.lim.five_hour![String(T5)]!.chat, 0.1)
+  near(w.rec()!.lim.five_hour![kOld]!.chat, 3) // 1 $ + Nachbuchung 2 $
+  near(w.rec()!.days[TODAY]!, 2.1) // der Tag bucht wie bisher alles heute
+})
+
+test('0.5.0 Review: Nachbuchung ohne Fenster der letzten Buchung (Datensatz vor 0.5.0) bleibt nur im Tag', DE, async ($, on) => {
+  const old = { ...newRec({ project: 'P', root: ROOT, title: 'Alt', kind: 'terminal' }, NOW - 2 * DAY, 1), days: { [dayBefore(NOW, 2)]: 1 } }
+  const w = world(on, { saved: new Map<string, unknown>([['s:S1', old]]), cost: 3 })
+  await w.start($, 'S1', 'resume')
+  w.st.rl = RL(T5, 10)
+  await w.turn($, 3.1)
+  expect(Object.keys(w.rec()!.lim.five_hour!)).toEqual([String(T5)])
+  near(w.rec()!.lim.five_hour![String(T5)]!.chat, 0.1)
+  near(w.rec()!.days[TODAY]!, 2.1)
+})
+
+test('0.5.0 Review: carry von vor einem fremden Reset verfällt auch nach /clear (ohne Datensatz)', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  w.st.rl = RL(NOW + H, 40)
+  await w.turn($, 0.2)
+  await w.clock.advance(2 * H)
+  w.st.cost = 0.3
+  await w.ledger($) // 0,10 $ warten in carry (Fenster abgelaufen)
+  await w.clock.advance(1000)
+  w.saved.delete('s:S1')
+  w.saved.set('meta:resetAt', NOW + 2 * H + 1000) // Reset in einem anderen Chat
+  await w.clock.advance(1000)
+  await $.session.end({ reason: 'clear' } as never)
+  w.st.cost = 0
+  await $.classic.SessionStart({ source: 'clear', session_id: 'S2' })
+  w.st.rl = RL(NOW + 7 * H, 3)
+  await w.turn($, 0.1)
+  near(w.rec('S2')!.lim.five_hour![String(NOW + 7 * H)]!.chat, 0.1)
+})
+
+test('0.5.0 Review: session.end bucht den Rest ins Fenster, mit genau einem store.set und ohne meta:limSince', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  w.st.rl = RL(T5, 30, TW, 50)
+  w.st.cost = 0.4
+  const before = w.st.sets
+  expect(await $.session.end({ reason: 'other' } as never)).toEqual({ sessionId: 'x' })
+  expect(w.st.sets - before).toBe(1) // Budget 1,5 s: nur der Datensatz
+  near(w.rec()!.lim.five_hour![String(T5)]!.chat, 0.4)
+  near(w.rec()!.lim.seven_day![String(TW)]!.chat, 0.4)
+  expect(w.saved.has('meta:limSince')).toBe(false)
+})
+
+test('0.5.0 Review: ein später gesetztes meta:limSince macht ältere Fenster anderer Chats nicht unvollständig', DE, async ($, on) => {
+  const k = String(NOW - 2 * H) // Chat B: 05–10 Uhr, abgeschlossen, 50 %, 5 $, ab Fensterbeginn erfasst
+  const b = recOf('B', { [TODAY]: 5 }, { lim: { five_hour: { [k]: limW({ chat: 5, pct: 50, first: NOW - 7 * H, last: NOW - 2 * H }) } } })
+  const w = world(on, { saved: new Map<string, unknown>([['s:B', b]]) }) // kein meta:limSince
+  await w.start($)
+  w.st.rl = RL(T5, 10)
+  await w.turn($, 0.1) // dieser Prozess setzt meta:limSince erst jetzt (12:00)
+  expect(w.saved.get('meta:limSince')).toBe(NOW)
+  const text = await w.ledger($, 'limits')
+  expect(text).toMatch(/^Ø 100 % ≈ 10,00 \$ aus 1 Fenster \(≥ 20 %, Schätzung\)$/m)
+  expect(text).toMatch(/06\.10\. 05–10 5,00 \$ 50 %$/m)
+})
+
+test('0.5.0 Review: /ledger plan constructor, __proto__ … sind ungültig und lassen den Plan stehen', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.ledger($, 'plan max20 8 207')
+  for (const bad of ['constructor 8', '__proto__ 8', 'tostring 8', 'hasownproperty 8'])
+    expect(await w.ledger($, `plan ${bad}`), bad).toMatch(/^Nicht gespeichert:/)
+  expect(w.saved.get('meta:plan')).toEqual({ v: 1, plan: 'max20', day: 8, price: 207, at: NOW })
+  expect(cleanPlan({ v: 1, plan: 'constructor', day: 8, at: NOW })).toBeNull()
+})
+
+test('0.5.0 Review: Limit-Zeile auch im Leerzustand direkt nach /ledger reset', DE, async ($, on) => {
+  const w = world(on, { answer: 'Löschen' })
+  await w.start($)
+  await w.ledger($, 'plan max20 8 207')
+  w.st.rl = RL(T5, 30)
+  await w.turn($, 1)
+  await w.ledger($, 'reset')
+  const text = await w.ledger($)
+  expect(text).toMatch(/^Limits: 5 Std\. 30 % · 0,00 \$ · Reset 15:00 \| Abo 0,00 \$ = 0,0× · \/ledger limits$/m)
+  expect(text).toMatch(/Noch keine Einträge/)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mountLedger($, text, surface)
+    expect(await ui.find({ text: /^5 Std\. 30 %/ })).toBeDefined()
+    expect(await ui.find({ text: /Noch keine Einträge/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+/** Mindestbreite einer Zeile ohne Umbruch: feste Breiten, sonst minWidth + marginRight (Desktop-Balken). */
+const minRow = (r: any) =>
+  r.children.reduce((a: number, c: any) => {
+    const p = typeof c === 'object' ? c.props ?? {} : {}
+    return a + (typeof p.width === 'number' ? p.width : (typeof p.minWidth === 'number' ? p.minWidth : 0) + (typeof p.marginRight === 'number' ? p.marginRight : 0))
+  }, 0)
+
+for (const surface of ['terminal', 'desktop'] as const)
+  for (const columns of [40, 57, 58, 60])
+    test(`0.5.0 Review UI ${surface}: /ledger limits bei ${columns} Spalten ohne Überlauf`, DE, async ($, on) => {
+      const w = await limitsWorld($, on)
+      const ui = await mountLedger($, await w.ledger($, 'limits'), surface, columns)
+      const boxes = await ui.findAll({ type: 'Box' })
+      expect(boxes.map((b: any) => b.props.width).filter((x: unknown) => typeof x === 'number').every((x: number) => x <= columns - 4)).toBe(true)
+      for (const r of boxes.filter((b: any) => b.props.flexDirection === 'row' && !b.props.flexWrap)) expect(minRow(r) <= columns - 4, `${minRow(r)}`).toBe(true)
+      expect(await ui.find({ type: 'Text', text: '06.10. 05–10' })).toBeDefined()
+      await ui.unmount()
+    })
+
+test('0.5.0 Review 2: Mod-Aufruf zwischen Resume und erstem Turn verschiebt die Nachbuchung nicht', { plugins: [sidekick], ...DE }, async ($, on) => {
+  const kOld = String(NOW - 2 * DAY + H)
+  const old = {
+    ...newRec({ project: 'P', root: ROOT, title: 'Alt', kind: 'terminal' }, NOW - 2 * DAY, 1),
+    days: { [dayBefore(NOW, 2)]: 1 },
+    lim: { five_hour: { [kOld]: limW({ chat: 1, pct: 40, first: NOW - 2 * DAY, last: NOW - 2 * DAY }) } },
+  }
+  const w = world(on, { saved: new Map<string, unknown>([['s:S1', old]]), cost: 3 })
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_IN } as never }))
+  await w.start($, 'S1', 'resume')
+  await $.command.run({ command: 'probe', args: '' }) // sidekick vor dem ersten Turn: kein Fenster bekannt → carry
+  w.st.rl = RL(T5, 10)
+  await w.turn($, 3.1)
+  near(w.rec()!.lim.five_hour![kOld]!.chat, 3)
+  const cur = w.rec()!.lim.five_hour![String(T5)]!
+  near(cur.chat, 0.1)
+  near(cur.mod, 1)
+})
+
+test('0.5.0 Review 2: Fenster ohne gebuchten Betrag zählen nicht zum Ø', () => {
+  const k1 = String(NOW - H)
+  const k2 = String(NOW - 6 * H)
+  const r = recOf('P', {}, { lim: { five_hour: { [k1]: limW({ chat: 0, pct: 50 }), [k2]: limW({ chat: 6, pct: 30 }) } } })
+  const l = limitsReport([{ rec: r }], NOW, {})
+  expect(l.avg!.n).toBe(1)
+  near(l.avg!.usd, 20)
+  expect(limitsReport([{ rec: recOf('P', {}, { lim: { five_hour: { [k1]: limW({ chat: 0, pct: 50 }) } } }) }], NOW, {}).avg).toBeNull()
+})
+
+test('0.5.0 Review 2: model.fork und model.classify mit {deny} buchen nichts und geben die Ablehnung weiter', { plugins: [sidekick], ...DE }, async ($, on) => {
+  const w = world(on)
+  on('model.fork', () => ({ deny: 'kein Fork' }))
+  on('model.classify', () => ({ deny: 'kein Classify' }))
+  await w.start($)
+  w.st.rl = RL(T5, 10)
+  // Die Probe fängt die Ablehnung bei fork/classify nicht ab: ihr command.run scheitert, cost-ledger bucht nichts
+  await expect($.command.run({ command: 'probe', args: 'fork' })).rejects.toThrow()
+  await expect($.command.run({ command: 'probe', args: 'classify' })).rejects.toThrow()
+  expect(w.rec()).toBeUndefined()
+})
+
+test('0.5.0 Review 2: /ledger plan und reset bei vollem Speicher → lesbarer Hinweis statt Fehler', DE, async ($, on) => {
+  const w = world(on, { answer: 'Löschen' })
+  await w.start($)
+  await w.turn($, 1)
+  w.st.setFails = true
+  // Ein werfender Stub wird übersprungen, der Aufruf scheitert dann mit „no implementation“ (docs/raw/en/test.md:182)
+  expect(await w.ledger($, 'plan max20 8 207')).toMatch(/^Speichern scheiterte zuletzt: .*store\.set/)
+  expect(w.saved.has('meta:plan')).toBe(false)
+  expect(await w.ledger($, 'reset')).toMatch(/^Speichern scheiterte zuletzt: .*store\.set/)
+})
+
+test('0.5.0 Review: keine Hochrechnung „100 % ≈ 0,00 $“ ohne gebuchten Betrag', () => {
+  const l = limitsReport([{ rec: recOf('P', {}, { lim: { five_hour: { [String(T5)]: limW({ chat: 0, pct: 30 }) } } }) }], NOW, {})
+  expect(l.five!.proj).toBeNull()
+  expect(projectionText(l.five!, 'de')).toBe('keine Hochrechnung ohne gebuchten Betrag')
+  expect(projectionText(l.five!, 'en')).toBe('no projection without a recorded amount')
+})
+
+test('0.5.0 Review: unvollständige abgeschlossene Fenster tragen „ab …“ auch im Text; der Ø-Hinweis sagt „vollständig erfasst“', DE, async ($, on) => {
+  const k = String(NOW - 2 * H) // 05–10, abgeschlossen, 80 %, erfasst ab 08:00
+  const b = recOf('B', { [TODAY]: 4 }, { rl: { [TODAY]: { five_hour: 80 } }, lim: { five_hour: { [k]: limW({ chat: 4, pct: 80, first: NOW - 4 * H, last: NOW - 2 * H }) } } })
+  const w = world(on, { saved: new Map<string, unknown>([['s:B', b], ['meta:limSince', NOW - 4 * H]]) })
+  await w.start($)
+  const text = await w.ledger($, 'limits')
+  expect(text).toMatch(/^Letzte 5-Stunden-Fenster: 06\.10\. 05–10 4,00 \$ 80 % ab 08:00$/m)
+  expect(text).toMatch(/^Ø 100 %: noch kein vollständig erfasstes, abgeschlossenes Fenster mit ≥ 20 %$/m)
 })

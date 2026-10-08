@@ -1,5 +1,5 @@
 // cost-ledger: reine Logik ohne $ (Buchen, Aggregieren, Preise, Kurzfassung). Alles hier ist ohne Engine testbar.
-import { T, dateTime, langOf, rangeLabel, tokens, usd, weekLabel } from './i18n.ts'
+import { T, clock, dateTime, duration, factor, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
 import type { Lang } from './i18n.ts'
 
 export const DAY = 24 * 60 * 60 * 1000
@@ -36,9 +36,16 @@ export type Rec = {
   hours: Record<string, Record<string, number>>
   /** Höchster gesehener `percentUsed` je Limit-Fenster (`kind`, z. B. `five_hour`) und Tag. */
   rl: Record<string, Record<string, number>>
+  /**
+   * Je Limit-Fenster (`five_hour`, `seven_day`) und Reset-Zeitpunkt (ms, auf die Minute gerundet, als String) der API-Wert,
+   * der in dieses Fenster fiel (SPEC Nachtrag 0.5.0).
+   */
+  lim: Record<string, Record<string, LimWin>>
   /** Git-Remote des Projekts als `host/owner/repo`, ohne Zugangsdaten. */
   remote: string
 }
+/** Ein Limit-Fenster im Datensatz: API-Wert aus Chat und Mods, höchster `percentUsed`, erste und letzte Buchung. */
+export type LimWin = { chat: number; mod: number; pct: number; first: number; last: number }
 
 export type Settings = { keepDays: number; dayYellow: number; dayRed: number; lang: Lang }
 const DEFAULTS: Settings = { keepDays: 365, dayYellow: 3, dayRed: 8, lang: 'en' }
@@ -236,6 +243,7 @@ export function newRec(meta: { project: string; root: string; title: string; kin
     act: {},
     hours: {},
     rl: {},
+    lim: {},
     remote: meta.remote ?? '',
   }
 }
@@ -265,6 +273,20 @@ function cleanModels(src: unknown): Rec['models'] {
         if (isObj(x) && [x.in, x.out, x.cr, x.cw, x.usd, x.n].every(isNum))
           md[k] = { in: x.in as number, out: x.out as number, cr: x.cr as number, cw: x.cw as number, usd: x.usd as number, n: x.n as number }
       out[name] = { days: md }
+    }
+  return out
+}
+
+function cleanLim(src: unknown): Rec['lim'] {
+  const out: Rec['lim'] = {}
+  if (isObj(src))
+    for (const [kind, m] of Object.entries(src)) {
+      if (!LIMIT_KINDS.includes(kind) || !isObj(m)) continue
+      const wins: Record<string, LimWin> = {}
+      for (const [k, x] of Object.entries(m))
+        if (/^\d+$/.test(k) && isObj(x) && [x.chat, x.mod, x.pct, x.first, x.last].every(isNum))
+          wins[k] = { chat: Math.max(0, x.chat as number), mod: Math.max(0, x.mod as number), pct: x.pct as number, first: x.first as number, last: x.last as number }
+      out[kind] = wins
     }
   return out
 }
@@ -308,6 +330,7 @@ export function cleanRec(v: unknown): Rec | null {
     act,
     hours: mapOfMaps(v.hours),
     rl: mapOfMaps(v.rl),
+    lim: cleanLim(v.lim),
     remote: typeof v.remote === 'string' ? cleanRemote(v.remote) : '',
   }
 }
@@ -393,6 +416,304 @@ export function bookRate(rec: Rec, day: string, limits: readonly { kind: string;
   }
 }
 
+// ---------- Limit-Fenster und Abo (SPEC Nachtrag 0.5.0) ----------
+
+/** Fenster, die gebucht werden; `spend_limit` (Gateway) und Unbekanntes bleiben außen vor (types:10953). */
+export const LIMIT_KINDS: readonly string[] = ['five_hour', 'seven_day']
+const MINUTE = 60 * 1000
+const HOUR = 60 * MINUTE
+/**
+ * Je Fenster: Länge (aus dem Namen abgeleitet, nur für Beschriftung und „unvollständig“), Toleranz beim Zusammenlegen in
+ * der Aggregation (Absicherung, Phase 0: `resetsAt` war über Antworten und parallele Sessions gleich) und wie viele
+ * Einträge ein Datensatz höchstens behält.
+ */
+const LIM: Record<string, { span: number; tol: number; keep: number }> = {
+  five_hour: { span: 5 * HOUR, tol: 10 * MINUTE, keep: 60 },
+  seven_day: { span: 7 * DAY, tol: 60 * MINUTE, keep: 12 },
+}
+
+/** Ein Fenster, wie `usage().rateLimits` es zuletzt meldete; `resetsAt` in ms. */
+export type Limit = { kind: string; pct: number; resetsAt: number }
+/** Beträge, die auf das nächste gültige Fenster warten (Fenster abgelaufen oder noch unbekannt). */
+export type Carry = Record<string, { chat: number; mod: number }>
+
+/** `five_hour` und `seven_day` mit Zahl und parsebarem `resetsAt` (types:10948-10966); sonst nichts. */
+export function limitsOf(rl: readonly { kind: string; percentUsed: number; resetsAt?: string }[] | undefined): Limit[] {
+  const out: Limit[] = []
+  for (const l of rl ?? []) {
+    if (!l || !LIMIT_KINDS.includes(l.kind) || !isNum(l.percentUsed) || out.some((x) => x.kind === l.kind)) continue
+    const at = typeof l.resetsAt === 'string' ? Date.parse(l.resetsAt) : NaN
+    if (Number.isFinite(at)) out.push({ kind: l.kind, pct: l.percentUsed, resetsAt: at })
+  }
+  return out
+}
+
+/** Schlüssel eines Fensters: `resetsAt` auf die volle Minute gerundet, als String (ms). */
+export function limKey(resetsAt: number): string {
+  return String(Math.round(resetsAt / MINUTE) * MINUTE)
+}
+
+/**
+ * Betrag (`chat`: Delta wie in `bookChat`, `mod`: Mod-Aufruf) dem laufenden Fenster je Art gutschreiben und dessen
+ * `percentUsed` als Höchstwert merken. Ist das Fenster abgelaufen (`now ≥ resetsAt`) oder unbekannt, wartet der Betrag in
+ * `carry` und kommt beim nächsten gültigen Fenster dazu. Je Datensatz bleiben die neuesten 60 bzw. 12 Fenster.
+ * Gibt zurück, ob ein Fenster gebucht wurde.
+ */
+export function bookLim(rec: Rec, limits: readonly Limit[], now: number, part: 'chat' | 'mod', amount: number, carry: Carry): boolean {
+  const v = Math.max(0, amount || 0)
+  let booked = false
+  for (const kind of LIMIT_KINDS) {
+    const l = limits.find((x) => x.kind === kind)
+    if (!l || now >= l.resetsAt) {
+      if (v > 0) {
+        const c = (carry[kind] ??= { chat: 0, mod: 0 })
+        c[part] = r8(c[part] + v)
+      }
+      continue
+    }
+    const wins = (rec.lim[kind] ??= {})
+    const e = (wins[limKey(l.resetsAt)] ??= { chat: 0, mod: 0, pct: 0, first: now, last: now })
+    const c = carry[kind]
+    if (c) {
+      e.chat = r8(e.chat + c.chat)
+      e.mod = r8(e.mod + c.mod)
+      delete carry[kind]
+    }
+    e[part] = r8(e[part] + v)
+    if (l.pct > e.pct) e.pct = l.pct
+    e.last = now
+    booked = true
+    const keys = Object.keys(wins).sort((a, b) => Number(a) - Number(b))
+    for (const k of keys.slice(0, Math.max(0, keys.length - LIM[kind]!.keep))) delete wins[k]
+  }
+  return booked
+}
+
+/**
+ * Nachbuchung beim Start (Rest nach der letzten Buchung, z. B. nach hartem Ende und `--resume`): Sie gehört in das Fenster,
+ * in das die letzte Buchung `at` fiel, nicht ins laufende. Gibt es dort keinen Eintrag (Buchung vor 0.5.0, ohne Abo),
+ * bleibt der Betrag nur im Tag.
+ */
+export function bookLimAt(rec: Rec, at: number, amount: number): void {
+  if (!(amount > 0)) return
+  for (const kind of LIMIT_KINDS) {
+    const wins = rec.lim[kind]
+    if (!wins) continue
+    let hit: string | null = null
+    for (const [k, e] of Object.entries(wins)) if (Number(k) > at && e.first <= at && (hit === null || Number(k) < Number(hit))) hit = k
+    if (hit !== null) wins[hit]!.chat = r8(wins[hit]!.chat + amount)
+  }
+}
+
+/** Abo-Pläne mit Listenpreis in $ je Monat: Pro claude.com/pricing (monatlich), Max support.claude.com Artikel 11049741 (2026-10-08). */
+export const PLANS: Record<string, { label: string; price?: number }> = {
+  pro: { label: 'Pro', price: 20 },
+  max5: { label: 'Max 5x', price: 100 },
+  max20: { label: 'Max 20x', price: 200 },
+  team: { label: 'Team' },
+  enterprise: { label: 'Enterprise' },
+}
+const PLAN_ALIASES: Record<string, string> = { pro: 'pro', max5: 'max5', max5x: 'max5', '5x': 'max5', max20: 'max20', max20x: 'max20', '20x': 'max20', team: 'team', enterprise: 'enterprise' }
+/** Nur eigene Schlüssel: `constructor` oder `__proto__` sind kein Plan. */
+const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
+
+/** `meta:plan`: Plan, Abrechnungstag, eigener Preis (ohne: Listenpreis), Zeitpunkt der Einstellung. */
+export type Plan = { v: 1; plan: string; day: number; price?: number; at: number }
+
+export function planLabel(plan: string): string {
+  return own(PLANS, plan) ? PLANS[plan]!.label : plan
+}
+
+/** Gespeicherte Einstellung prüfen; `null` bei fehlender oder kaputter. */
+export function cleanPlan(v: unknown): Plan | null {
+  if (!isObj(v) || v.v !== 1 || typeof v.plan !== 'string' || !own(PLANS, v.plan) || !isNum(v.day) || !isNum(v.at)) return null
+  if (!Number.isInteger(v.day) || v.day < 1 || v.day > 31) return null
+  return { v: 1, plan: v.plan, day: v.day, ...(isNum(v.price) && v.price > 0 ? { price: v.price } : {}), at: v.at }
+}
+
+/**
+ * `/ledger plan <plan> <tag|heute> [preis]` → Einstellung, sonst `null` (dann wird nichts gespeichert). Plan in beliebiger
+ * Schreibweise samt Aliasen, Tag 1–31 oder `today`/`heute`, Preis mit Komma oder Punkt, optional mit `$`.
+ */
+export function parsePlan(args: readonly string[], now: number): Plan | null {
+  const [p = '', d = '', price, ...rest] = args.map((a) => a.trim().toLowerCase())
+  const plan = own(PLAN_ALIASES, p) ? PLAN_ALIASES[p] : undefined
+  if (!plan || rest.length) return null
+  const day = d === 'today' || d === 'heute' ? new Date(now).getDate() : /^\d{1,2}$/.test(d) ? Number(d) : NaN
+  if (!Number.isInteger(day) || day < 1 || day > 31) return null
+  if (price === undefined) return { v: 1, plan, day, at: now }
+  const s = price.replace(/^\$|\$$/g, '').replace(',', '.')
+  const n = /^\d{1,6}(\.\d{1,2})?$/.test(s) ? Number(s) : NaN
+  return n > 0 ? { v: 1, plan, day, price: n, at: now } : null
+}
+
+/** Tag `day` im Monat (Jahr, Monat 0–11), gekürzt auf die Länge des Monats (31. → 30.09.). */
+function billingDay(y: number, m: number, day: number): Date {
+  const len = new Date(y, m + 1, 0, 12).getDate()
+  return new Date(y, m, Math.min(day, len), 12)
+}
+
+/**
+ * Laufender Abo-Monat zum Abrechnungstag: Beginn = letzter Tag ≤ heute mit dem Tag `min(day, Länge des Monats)`,
+ * nächste Erneuerung einen Monat später, Resttage bis dahin (lokal, über Mittag gerechnet).
+ */
+export function planMonth(day: number, now: number): { start: string; next: string; daysLeft: number } {
+  const t = new Date(now)
+  let s = billingDay(t.getFullYear(), t.getMonth(), day)
+  if (t.getDate() < s.getDate()) s = billingDay(t.getFullYear(), t.getMonth() - 1, day)
+  const n = billingDay(s.getFullYear(), s.getMonth() + 1, day)
+  const noon = new Date(t.getFullYear(), t.getMonth(), t.getDate(), 12).getTime()
+  return { start: dayKey(s.getTime()), next: dayKey(n.getTime()), daysLeft: Math.round((n.getTime() - noon) / DAY) }
+}
+
+/** Ein Fenster in der Auswertung, über alle Datensätze summiert und zusammengelegt. */
+export type LimWindow = {
+  kind: string
+  resetsAt: number
+  /** `resetsAt` minus Fensterlänge (aus dem Namen abgeleitet) */
+  start: number
+  usd: number
+  pct: number
+  running: boolean
+  /** Begann vor der ersten Fenster-Buchung (`meta:limSince`): der Betrag ist unvollständig */
+  partial: boolean
+  /** Hochrechnung `usd ÷ pct × 100`, erst ab 5 % und nur für vollständige Fenster */
+  proj: number | null
+}
+export type PlanReport = {
+  plan: string
+  day: number
+  price: number | null
+  /** Kein eigener Preis: Listenpreis des Plans */
+  listPrice: boolean
+  start: string
+  next: string
+  daysLeft: number
+  /** API-Wert seit Beginn des Abo-Monats aus Datensätzen, die Abo-Limits gesehen haben */
+  usd: number
+  factor: number | null
+  /** Beginn liegt vor `meta:since`: gezählt ab diesem Tag */
+  from: string | null
+}
+export type LimitsReport = {
+  five: LimWindow | null
+  week: LimWindow | null
+  seenFive: boolean
+  seenWeek: boolean
+  /** Letzte 10 Fünf-Stunden-Fenster, neueste zuerst */
+  history: LimWindow[]
+  /** Ø „100 % ≈ usd“ über abgeschlossene, vollständige Fünf-Stunden-Fenster ab 20 % */
+  avg: { usd: number; n: number } | null
+  plan: PlanReport | null
+  limSince: number | null
+}
+
+/** Hat der Datensatz je Abo-Limits gesehen? Läufe mit API-Schlüssel (ohne Limits) zählen nicht zum Abo-Monat. */
+function sawLimits(rec: Rec): boolean {
+  return Object.values(rec.rl).some((d) => LIMIT_KINDS.some((k) => k in d)) || Object.values(rec.lim).some((w) => Object.keys(w).length > 0)
+}
+
+/**
+ * Limits und Abo für `/ledger limits` und die Zeile in der Übersicht. Je Fenster werden `chat + mod` über alle Datensätze
+ * summiert, `pct` ist das Maximum (innerhalb eines Fensters steigt der Wert nur). Schlüssel, die näher als die Toleranz
+ * beieinanderliegen, werden zusammengelegt. `live`: die Fenster der letzten Messung dieses Prozesses (nur für `pct`).
+ */
+export function limitsReport(
+  recs: { rec: Rec }[],
+  now: number,
+  o: { plan?: Plan | null; limSince?: number | null; since?: number | null; live?: readonly Limit[] } = {},
+): LimitsReport {
+  const byKind = new Map<string, Map<number, { usd: number; pct: number }>>(LIMIT_KINDS.map((k) => [k, new Map()]))
+  let first = Infinity
+  for (const { rec } of recs)
+    for (const [kind, wins] of Object.entries(rec.lim)) {
+      const m = byKind.get(kind)
+      if (m)
+        for (const [k, w] of Object.entries(wins)) {
+          const x = m.get(Number(k)) ?? { usd: 0, pct: 0 }
+          x.usd += w.chat + w.mod
+          x.pct = Math.max(x.pct, w.pct)
+          m.set(Number(k), x)
+          first = Math.min(first, w.first)
+        }
+    }
+  for (const l of o.live ?? []) {
+    const m = byKind.get(l.kind)
+    if (!m || l.resetsAt <= now) continue
+    const at = Number(limKey(l.resetsAt))
+    const x = m.get(at) ?? { usd: 0, pct: 0 }
+    x.pct = Math.max(x.pct, l.pct)
+    m.set(at, x)
+  }
+  // Beginn der Fenster-Daten: `meta:limSince`, aber nie später als die früheste vorhandene Fenster-Buchung (setzt ein
+  // Prozess den Wert erst nach Buchungen anderer Chats, z. B. nach einem Reset, würden deren Fenster sonst rückwirkend
+  // unvollständig; Review 0.5.0). Ohne `meta:limSince` gilt die früheste Buchung.
+  const firstAt = Number.isFinite(first) ? first : null
+  const limSince = typeof o.limSince === 'number' && firstAt !== null ? Math.min(o.limSince, firstAt) : (o.limSince ?? firstAt)
+  const windows = (kind: string): LimWindow[] => {
+    const spec = LIM[kind]!
+    const merged: { resetsAt: number; usd: number; pct: number }[] = []
+    for (const [at, x] of [...byKind.get(kind)!.entries()].sort((a, b) => a[0] - b[0])) {
+      const last = merged[merged.length - 1]
+      if (last && at - last.resetsAt < spec.tol) {
+        last.resetsAt = at
+        last.usd += x.usd
+        last.pct = Math.max(last.pct, x.pct)
+      } else merged.push({ resetsAt: at, usd: x.usd, pct: x.pct })
+    }
+    // Hochrechnung nur für vollständige Fenster: Bei einem unvollständigen fehlt der API-Wert vor `limSince`, die Prozent
+    // zählen aber das ganze Fenster; die Zahl wäre systematisch zu niedrig (Smoke-Test 2026-10-08: Woche „100 % ≈ 2,37 $“).
+    // Ohne gebuchten Betrag (Host ohne Kostenbuch) gibt es ebenfalls keine.
+    return merged.map((w) => {
+      const start = w.resetsAt - spec.span
+      const partial = limSince === null || start < limSince
+      return { kind, ...w, start, running: w.resetsAt > now, partial, proj: w.pct >= 5 && w.usd > 0 && !partial ? (w.usd / w.pct) * 100 : null }
+    })
+  }
+  const five = windows('five_hour')
+  const week = windows('seven_day')
+  // Ø nur über die neuesten 60 Fenster: Ein Datensatz behält höchstens 60 (`bookLim`); in älteren Fenstern fehlte sonst
+  // der gekürzte Betrag eines langen Chats, während andere Chats das volle `pct` liefern (Review 0.5.0)
+  // Fenster ohne gebuchten Betrag (Host ohne Kostenbuch) zählen nicht
+  const done = five.slice(-LIM.five_hour!.keep).filter((w) => !w.running && !w.partial && w.pct >= 20 && w.usd > 0)
+  const pctSum = done.reduce((a, w) => a + w.pct, 0)
+
+  let plan: PlanReport | null = null
+  if (o.plan) {
+    const pm = planMonth(o.plan.day, now)
+    const today = dayKey(now)
+    const inMonth = (d: string) => d >= pm.start && d <= today
+    let usd = 0
+    for (const { rec } of recs) {
+      if (!sawLimits(rec)) continue
+      for (const [d, v] of Object.entries(rec.days)) if (inMonth(d)) usd += v
+      for (const m of Object.values(rec.mods)) for (const [d, v] of Object.entries(m.days)) if (inMonth(d)) usd += v.usd
+    }
+    const price = o.plan.price ?? PLANS[o.plan.plan]?.price ?? null
+    const sinceDay = typeof o.since === 'number' ? dayKey(o.since) : null
+    plan = {
+      plan: o.plan.plan,
+      day: o.plan.day,
+      price,
+      listPrice: o.plan.price === undefined && price !== null,
+      ...pm,
+      usd,
+      factor: price ? usd / price : null,
+      from: sinceDay && pm.start < sinceDay ? sinceDay : null,
+    }
+  }
+  return {
+    five: five.find((w) => w.running) ?? null,
+    week: week.find((w) => w.running) ?? null,
+    seenFive: five.length > 0,
+    seenWeek: week.length > 0,
+    history: five.slice(-10).reverse(),
+    avg: pctSum > 0 ? { usd: (done.reduce((a, w) => a + w.usd, 0) / pctSum) * 100, n: done.length } : null,
+    plan,
+    limSince,
+  }
+}
+
 // ---------- Aggregation für /ledger ----------
 
 /** Gruppen-Schlüssel der Skript-Läufe in Projekten (Anzeige übersetzt). */
@@ -422,6 +743,7 @@ export type Report = {
   /** Geschätzte Größe des Plugin-Speichers in Byte (Grenze 4 MiB, docs/raw/en/reference.md:259) */
   storeBytes: number
   writeError: string
+  limits: LimitsReport
 }
 
 export const STORE_LIMIT = 4 * 1024 * 1024
@@ -430,7 +752,17 @@ export const STORE_LIMIT = 4 * 1024 * 1024
 export function aggregate(
   recs: { id: string; rec: Rec }[],
   now: number,
-  opts: { range?: number; unreadable?: number; hasCost?: boolean; since?: number | null; storeBytes?: number; writeError?: string },
+  opts: {
+    range?: number
+    unreadable?: number
+    hasCost?: boolean
+    since?: number | null
+    storeBytes?: number
+    writeError?: string
+    plan?: Plan | null
+    limSince?: number | null
+    live?: readonly Limit[]
+  },
 ): Report {
   const today = dayKey(now)
   const inRange = (d: string, n: number) => (n <= 0 ? true : d >= dayBefore(now, n - 1) && d <= today)
@@ -504,6 +836,7 @@ export function aggregate(
     total: recs.length,
     storeBytes: opts.storeBytes ?? 0,
     writeError: opts.writeError ?? '',
+    limits: limitsReport(recs, now, { plan: opts.plan, limSince: opts.limSince, since: opts.since, live: opts.live }),
   }
 }
 
@@ -619,7 +952,75 @@ export function notesOf(r: Report, lang: Lang): string[] {
   return out
 }
 
-export type ViewName = 'overview' | 'chats' | 'projects' | 'models' | 'weeks'
+export type ViewName = 'overview' | 'chats' | 'projects' | 'models' | 'weeks' | 'limits'
+
+/** Seit wann ein unvollständiges Fenster zählt: 5 Stunden mit Uhrzeit, Woche mit Datum. */
+export function partialLabel(w: LimWindow, limSince: number | null, lang: Lang): string {
+  if (!w.partial || limSince === null) return ''
+  return T[lang].partialFrom(w.kind === 'five_hour' ? clock(limSince) : shortDate(dayKey(limSince), lang))
+}
+
+/** Hochrechnung „100 % ≈ …“ (als Schätzung beschriftet), sonst warum es noch keine gibt. */
+export function projectionText(w: LimWindow, lang: Lang): string {
+  const t = T[lang]
+  if (w.proj !== null) return t.projection(usd(w.proj, lang))
+  if (w.partial) return t.projectionPartial
+  return w.pct >= 5 ? t.projectionNone : t.projectionLater
+}
+
+/** Teile der kompakten Limit-Zeile (Übersicht); leer, wenn es weder ein Fenster noch einen Plan gibt. */
+export function limitsLineParts(l: LimitsReport, now: number, lang: Lang): string[] {
+  const t = T[lang]
+  const out: string[] = []
+  if (l.five) out.push(`${t.fiveShort} ${pct(l.five.pct)} · ${usd(l.five.usd, lang)} · ${t.resetAt(resetTime(l.five.resetsAt, now, lang))}`)
+  else if (l.seenFive) out.push(`${t.fiveShort}: ${t.resetPassedShort}`)
+  if (l.week) out.push(`${t.weekShort} ${pct(l.week.pct)} · ${usd(l.week.usd, lang)}`)
+  if (l.plan) out.push(`${t.planShort} ${usd(l.plan.usd, lang)}${l.plan.factor !== null ? ` = ${factor(l.plan.factor, lang)}×` : ''}`)
+  return out
+}
+
+/** Abo-Monat in einer Zeile: Plan, Beginn, Erneuerung, API-Wert gegen Preis (ohne Preis kein Faktor). */
+export function planLine(p: PlanReport, lang: Lang): { head: string; value: string; note: string } {
+  const t = T[lang]
+  const money = (v: number) => usd(v, lang)
+  const value = p.price !== null && p.factor !== null ? t.planValue(money(p.usd), money(p.price), factor(p.factor, lang)) : t.planValueNoPrice(money(p.usd))
+  const note = [p.listPrice ? t.listPrice : '', p.from ? t.partialFrom(shortDate(p.from, lang)) : ''].filter(Boolean).join(' · ')
+  return { head: `${planLabel(p.plan)} · ${t.since(shortDate(p.start, lang))} · ${t.renews(shortDate(p.next, lang), p.daysLeft)}`, value, note }
+}
+
+/** `/ledger limits` als Text: 5 Stunden, Woche, Abo-Monat, Verlauf, Ø (ohne Kopf- und Fußzeile). */
+function limitsLines(l: LimitsReport, now: number, lang: Lang): string[] {
+  const t = T[lang]
+  const money = (v: number) => usd(v, lang)
+  const out: string[] = []
+  const hasLim = l.seenFive || l.seenWeek
+  if (!hasLim) out.push(t.noLimitData)
+  else
+    for (const [w, seen, label] of [[l.five, l.seenFive, t.fiveHours], [l.week, l.seenWeek, t.week]] as const) {
+      if (!w) {
+        out.push(`${label}: ${seen ? t.resetPassed : t.noWindowYet}`)
+        continue
+      }
+      const bits = [`${label}: ${pct(w.pct)}`, money(w.usd), `${t.resetAt(resetTime(w.resetsAt, now, lang))} (${t.inTime(duration(w.resetsAt - now, lang))})`]
+      bits.push(projectionText(w, lang))
+      const from = partialLabel(w, l.limSince, lang)
+      if (from) bits.push(from)
+      out.push(bits.join(' · '))
+    }
+  if (l.plan) {
+    const p = planLine(l.plan, lang)
+    out.push(`${t.subMonth}: ${p.head} · ${p.value}${p.note ? ` (${p.note})` : ''}`)
+  } else out.push(t.planNotSet)
+  if (hasLim) {
+    const rows = l.history.slice(0, 4).map((w) => {
+      const from = partialLabel(w, l.limSince, lang)
+      return `${span(w.start, w.resetsAt, lang)} ${money(w.usd)} ${pct(w.pct)}${w.running ? ` ${t.running}` : ''}${from ? ` ${from}` : ''}`
+    })
+    if (rows.length) out.push(`${t.lastWindows}: ${rows.join(' · ')}${l.history.length > 4 ? ` · ${t.more(l.history.length - 4)}` : ''}`)
+    out.push(l.avg ? t.avg(money(l.avg.usd), l.avg.n) : t.avgNone)
+  }
+  return out
+}
 
 /**
  * Kurze Markdown-Fassung für Claude und für `-p` (höchstens 10 Zeilen, SPEC Verhalten 7). `tag` macht den Text eindeutig,
@@ -632,8 +1033,18 @@ export function summaryText(r: Report, view: ViewName, range: number, tag: strin
     const shown = rows.slice(0, max).map(fmt).join(' · ')
     return rows.length > max ? `${shown} · ${t.more(rows.length - max)}` : shown
   }
-  const lines = [t.sumTitle(dateTime(r.now, lang), tag)]
   const notes = notesOf(r, lang)
+  // Hinweise und Fußzeile immer am Ende, auch wenn Listen gekürzt werden müssen (höchstens 10 Zeilen)
+  const capped = (lines: string[], foot: string) => {
+    const tail = [...notes, foot]
+    return [...lines.slice(0, 10 - tail.length), ...tail].slice(0, 10).join('\n')
+  }
+  // Limits gibt es auch ohne Buchung (Plan eingestellt, Messung dieses Prozesses)
+  if (view === 'limits') return capped([t.sumLimitsTitle(dateTime(r.now, lang), tag), ...limitsLines(r.limits, r.now, lang)], t.sumLimitsFoot)
+  const lines = [t.sumTitle(dateTime(r.now, lang), tag)]
+  // Die Limit-Zeile auch im Leerzustand (z. B. direkt nach /ledger reset: Plan und Messung sind noch da)
+  const lim = view === 'overview' || view === 'weeks' ? limitsLineParts(r.limits, r.now, lang) : []
+  if (lim.length) lines.push(t.sumLimitsLine(lim.join(' | ')))
   if (r.total === 0) return [...lines, ...notes, t.empty].join('\n')
   const w = r.windows
   if (view === 'overview' || view === 'weeks') {
@@ -665,7 +1076,5 @@ export function summaryText(r: Report, view: ViewName, range: number, tag: strin
       lines.push(shown.slice(i, i + 6).map((p) => t.sumProjectRow(projectLabel(p.name, lang), money(p.usd), p.chats)).join(' · '))
     if (r.projects.length > shown.length) lines[lines.length - 1] += ` · ${t.more(r.projects.length - shown.length)}`
   }
-  // Hinweise und Fußzeile immer am Ende, auch wenn Listen gekürzt werden müssen (höchstens 10 Zeilen)
-  const tail = [...notes, t.sumFoot]
-  return [...lines.slice(0, 10 - tail.length), ...tail].slice(0, 10).join('\n')
+  return capped(lines, t.sumFoot)
 }

@@ -6,10 +6,10 @@
 // als eine Zelle. Spalten sind deshalb Boxen mit fester Breite; im Desktop sind Balken Boxen mit Hintergrundfarbe und
 // ganzzahliger Prozentbreite (Kommaprozente verwirft er), im Terminal dünne `▄`. Der leere Teil zeigt den Hintergrund.
 import type { RenderElement, RenderNode } from 'claude-code'
-import { T, dateTime, fullDate, rangeLabel, shortDate, tokens, usd, weekLabel } from './i18n.ts'
+import { T, dateTime, duration, factor, fullDate, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
 import type { Lang } from './i18n.ts'
-import { MOD_PART, UNKNOWN_MODEL, chatLabel, isoWeek, modelName, notesOf, partLabel, projectLabel } from './logic.ts'
-import type { Bucket, Report, Settings, ViewName } from './logic.ts'
+import { MOD_PART, UNKNOWN_MODEL, chatLabel, isoWeek, modelName, notesOf, partLabel, partialLabel, planLabel, planLine, projectLabel, projectionText } from './logic.ts'
+import type { Bucket, LimWindow, LimitsReport, Report, Settings, ViewName } from './logic.ts'
 
 export type View = { report: Report; view: ViewName; range: number }
 type Surface = 'terminal' | 'desktop'
@@ -194,10 +194,105 @@ function modsBlock(r: Report, title: string, lang: Lang): RenderElement {
   return col({}, [heading(title), text(line, r.mods.length ? {} : { dimColor: true }), dim(t.modsExtra)])
 }
 
+/**
+ * Ampel für die Auslastung eines Limit-Fensters: grün unter 70 %, gelb unter 90 %, rot ab 90 % (SPEC Nachtrag 0.5.0).
+ * Nach der angezeigten, gerundeten Zahl, damit „70 %“ nie grün ist (`percentUsed` hat eine Nachkommastelle).
+ */
+function limColor(p: number): string {
+  const v = Math.round(p || 0)
+  return v >= 90 ? RED : v >= 70 ? YELLOW : 'success'
+}
+
+/**
+ * Ein Limit-Fenster (5 Stunden oder Woche): Überschrift mit Reset und Countdown (Stand beim Aufruf), rechts „ab …“, falls
+ * das Fenster vor der ersten Fenster-Buchung begann; darunter Balken = % genutzt, %, API-Wert und die Hochrechnung.
+ */
+function windowBlock(w: LimWindow | null, seen: boolean, title: string, l: LimitsReport, now: number, sf: Surface, inner: number, lang: Lang): RenderNode[] {
+  const t = T[lang]
+  if (!w) return [heading(title), dim(seen ? t.resetPassed : t.noWindowYet)]
+  const from = partialLabel(w, l.limSince, lang)
+  const head = row({ justifyContent: 'space-between', flexWrap: 'wrap', marginTop: 1 }, [
+    text(`${title} · ${t.resetAt(resetTime(w.resetsAt, now, lang))} (${t.inTime(duration(w.resetsAt - now, lang))})`, { color: ORANGE, bold: true }),
+    ...(from ? [dim(from)] : []),
+  ])
+  // Terminal: Balken, % 7, Betrag 12; die Hochrechnung bricht bei schmaler Breite in die nächste Zeile um
+  const cells = Math.max(6, Math.min(32, inner - 7 - 12 - 1))
+  const line = row({ flexWrap: 'wrap' }, [
+    bar(sf, w.pct / 100, cells, limColor(w.pct)),
+    cell(7, text(pct(w.pct), { color: limColor(w.pct) }), true),
+    cell(12, text(usd(w.usd, lang), { bold: true }), true),
+    el('Box', { paddingLeft: 3 }, [dim(projectionText(w, lang))]),
+  ])
+  return [head, line]
+}
+
+function planBlock(l: LimitsReport, lang: Lang): RenderNode[] {
+  const t = T[lang]
+  if (!l.plan) return [heading(t.subMonth), dim(t.planNotSet)]
+  const p = planLine(l.plan, lang)
+  return [heading(`${t.subMonth} · ${p.head}`), el('Text', {}, [text(p.value), ...(p.note ? [dim(` · ${p.note}`)] : [])])]
+}
+
+/** Die letzten 10 Fünf-Stunden-Fenster: Balken = API-Wert relativ zum teuersten, Farbe nach % wie oben; darunter das Ø. */
+function windowsHistory(l: LimitsReport, sf: Surface, inner: number, lang: Lang): RenderNode[] {
+  const t = T[lang]
+  const max = Math.max(0, ...l.history.map((w) => w.usd))
+  const labelW = 19
+  // Beschriftung 19, Betrag 10, % 7, Marke 12 → der Rest ist Balken. Reicht die Breite nicht, brechen die Zellen um:
+  // Der kleinste Balken braucht im Terminal 5 Zellen, im Desktop minWidth 6 + marginRight 1 (stackedBar)
+  const cells = Math.max(4, Math.min(24, inner - labelW - 10 - 7 - 12 - 1))
+  const narrow = inner < labelW + (sf === 'desktop' ? 7 : cells + 1) + 10 + 7 + 12
+  const rows = l.history.map((w) =>
+    row(narrow ? { flexWrap: 'wrap' } : {}, [
+      cell(labelW, dim(span(w.start, w.resetsAt, lang))),
+      bar(sf, max > 0 ? w.usd / max : 0, cells, limColor(w.pct)),
+      cell(10, text(usd(w.usd, lang)), true),
+      cell(7, dim(pct(w.pct)), true),
+      cell(12, dim(w.running ? `  ${t.running}` : w.partial ? `  ${partialLabel(w, l.limSince, lang)}` : '')),
+    ]),
+  )
+  return [
+    heading(t.lastWindows),
+    ...(rows.length ? rows : [dim(t.noWindows)]),
+    el('Box', { marginTop: 1 }, [l.avg ? text(t.avg(usd(l.avg.usd, lang), l.avg.n)) : dim(t.avgNone)]),
+  ]
+}
+
+/** `/ledger limits`: 5 Stunden, Woche, Abo-Monat, Verlauf; ohne Limit-Daten ein Hinweis statt der Fenster. */
+function limitsBlocks(r: Report, sf: Surface, inner: number, lang: Lang): RenderNode[] {
+  const t = T[lang]
+  const l = r.limits
+  if (!l.seenFive && !l.seenWeek)
+    return [el('Box', { marginTop: 1 }, [text(t.noLimitData)]), ...(l.plan ? planBlock(l, lang) : [dim(t.planNotSet)])]
+  return [
+    ...windowBlock(l.five, l.seenFive, t.fiveHours, l, r.now, sf, inner, lang),
+    ...windowBlock(l.week, l.seenWeek, t.week, l, r.now, sf, inner, lang),
+    ...planBlock(l, lang),
+    ...windowsHistory(l, sf, inner, lang),
+  ]
+}
+
+/** Kompakte Limit-Zeile oben in der Übersicht; bricht bei schmaler Breite um. Entfällt ohne Fenster und ohne Plan. */
+function limitsLine(r: Report, lang: Lang): RenderElement | null {
+  const t = T[lang]
+  const l = r.limits
+  const money = (v: number) => usd(v, lang)
+  const parts: RenderNode[][] = []
+  if (l.five)
+    parts.push([text(`${t.fiveShort} `), text(pct(l.five.pct), { color: limColor(l.five.pct) }), dim(' · '), text(money(l.five.usd)), dim(` · ${t.resetAt(resetTime(l.five.resetsAt, r.now, lang))}`)])
+  else if (l.seenFive) parts.push([dim(`${t.fiveShort}: ${t.resetPassedShort}`)])
+  if (l.week) parts.push([text(`${t.weekShort} `), text(pct(l.week.pct), { color: limColor(l.week.pct) }), dim(' · '), text(money(l.week.usd))])
+  if (l.plan) parts.push([text(`${t.planShort} ${money(l.plan.usd)}`), ...(l.plan.factor !== null ? [dim(' = '), text(`${factor(l.plan.factor, lang)}×`)] : [])])
+  if (!parts.length) return null
+  const kids: RenderNode[] = parts.map((p, i) => el('Box', { marginRight: 1 }, [el('Text', {}, [...(i ? [dim('│ ')] : []), ...p])]))
+  kids.push(dim('· /ledger limits'))
+  return row({ flexWrap: 'wrap', marginTop: 1 }, kids)
+}
+
 /** Der Befehl, der dieselbe Ansicht mit frischen Zahlen zeichnet (samt Zeitraum). */
 function reloadCommand(v: View): string {
   if (v.view === 'overview') return '/ledger'
-  if (v.view === 'weeks') return '/ledger weeks'
+  if (v.view === 'weeks' || v.view === 'limits') return `/ledger ${v.view}`
   return `/ledger ${v.view}${v.range === 30 ? '' : v.range <= 0 ? ' all' : ` ${v.range}`}`
 }
 
@@ -208,14 +303,20 @@ export function ledgerTree(v: View, s: Settings, columns: number, surface: Surfa
   const r = v.report
   const cols = Math.max(30, Math.min(columns || 100, 140))
   const inner = cols - 4 // Rahmen und paddingX
-  // Ohne Knopf (er bräuchte neue Rechte): oben rechts Stand und wie man neu lädt
-  const stand = `${r.since ? `${t.since(fullDate(r.since, lang))} · ` : ''}${t.asOf(dateTime(r.now, lang))} · ${t.reload(reloadCommand(v))}`
-  const head = row({ justifyContent: 'space-between', flexWrap: 'wrap' }, [text('cost-ledger', { color: ORANGE, bold: true }), dim(stand)])
+  const limits = v.view === 'limits'
+  // Ohne Knopf (er bräuchte neue Rechte): oben rechts Stand und wie man neu lädt; bei den Limits statt „seit“ der Plan
+  const first = limits ? (r.limits.plan ? `${planLabel(r.limits.plan.plan)} · ` : '') : r.since ? `${t.since(fullDate(r.since, lang))} · ` : ''
+  const stand = `${first}${t.asOf(dateTime(r.now, lang))} · ${t.reload(reloadCommand(v))}`
+  const head = row({ justifyContent: 'space-between', flexWrap: 'wrap' }, [text(limits ? t.limitsHead : 'cost-ledger', { color: ORANGE, bold: true }), dim(stand)])
   const notes: RenderNode[] = notesOf(r, lang).map((n) => text(n, { color: YELLOW }))
-  const foot = el('Box', { marginTop: 1 }, [dim(t.foot)])
+  const foot = el('Box', { marginTop: 1 }, [dim(limits ? t.limitsFoot : t.foot)])
   const frame = (kids: RenderNode[]) => col({ borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%' }, [head, ...notes, ...kids, foot])
 
-  if (r.total === 0) return frame([el('Box', { marginTop: 1 }, [text(t.empty)])])
+  // Limits gibt es auch ohne Buchung (Plan eingestellt, Messung dieses Prozesses)
+  if (limits) return frame(limitsBlocks(r, surface, inner, lang))
+  // Die Limit-Zeile entfällt nur ohne Fenster und ohne Plan, auch im Leerzustand (z. B. direkt nach /ledger reset)
+  const lim = v.view === 'overview' || v.view === 'weeks' ? limitsLine(r, lang) : null
+  if (r.total === 0) return frame([...(lim ? [lim] : []), el('Box', { marginTop: 1 }, [text(t.empty)])])
   const range = rangeLabel(v.range, lang)
   if (v.view === 'chats') return frame([chatsBlock(r, t.chatsIn(range), inner, 20, '100%', lang)])
   if (v.view === 'projects') return frame([projectsBlock(r, t.projectsIn(range), surface, inner, 40, '100%', lang)])
@@ -228,6 +329,7 @@ export function ledgerTree(v: View, s: Settings, columns: number, surface: Surfa
   const half = side ? Math.floor(inner / 2) - 2 : inner
   const fw = inner >= 80 ? '25%' : inner >= 40 ? '50%' : '100%'
   return frame([
+    ...(lim ? [lim] : []),
     row({ flexWrap: 'wrap', marginTop: 1 }, [
       figure(t.today, w.today, fw, lang),
       figure(t.days7, w.d7, fw, lang),
