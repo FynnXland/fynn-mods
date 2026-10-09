@@ -376,9 +376,12 @@ test('/cache Bericht: Zustand, Kosten in $, letzte Anfrage, Warmhalten, Einstell
 
 // ---------- 0.6.1: Preise Haiku 5.5 und Sonnet 5.5 (SPEC, Nachtrag 0.6.1) ----------
 
-test('0.6.1 Preise: Haiku 5.5 neu, Alias haiku bleibt 4.5, Sonnet 5.5 liest für 0,10 $', async () => {
+test('0.6.1 Preise: Haiku 5.5 neu, Alias haiku seit 0.7.2 Haiku 5.5, Sonnet 5.5 liest für 0,10 $', async () => {
   expect(priceFor('claude-haiku-5-5')).toEqual({ id: 'haiku-5-5', input: 0.1, read: 0.01 })
-  expect(priceFor('haiku').id).toBe('haiku-4-5')
+  // Alias `haiku` = Haiku 5.5 seit Claude Code 2.1.293 (SPEC Nachtrag 0.7.2); volle 4.5-IDs bleiben 4.5
+  expect(priceFor('haiku')).toEqual({ id: 'haiku-5-5', input: 0.1, read: 0.01 })
+  expect(priceFor('haiku[1m]').id).toBe('haiku-5-5')
+  expect(priceFor('claude-haiku-4-5').id).toBe('haiku-4-5')
   expect(priceFor('claude-haiku-4-5-20251001')).toEqual({ id: 'haiku-4-5', input: 1, read: 0.1 })
   expect(priceFor('claude-sonnet-5-5').read).toBe(0.1)
   expect(priceFor('claude-sonnet-5-5').input).toBe(2)

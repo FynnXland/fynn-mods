@@ -2,6 +2,7 @@
 // Die Idee, die Session zu forken und nach den nächsten Nachrichten zu fragen, stammt vom Community-Plugin next-steps
 // (anthropics/claude-plugins-community). Umsetzung, Frage und Bereinigung sind eigene; aus dem Plugin ist kein Code übernommen.
 
+import type { HelpData } from './help.ts'
 import type { Lang } from './i18n.ts'
 import { T } from './i18n.ts'
 
@@ -110,4 +111,55 @@ export function parseFork(reply: string): string[] {
     if (out.length === FORK_MAX) break
   }
   return out
+}
+
+// Wörter, die /replies annimmt (erstes Wort klein geschrieben). Der Parser in register.ts nutzt sie, und ein Test prüft jedes
+// gegen die Hilfe (docs/HELP-SPEC.md §6 Punkt 5).
+export const STATUS_WORDS: readonly string[] = ['status']
+export const TOGGLE_WORDS: readonly string[] = ['on', 'off']
+export const MORE_WORD = 'more'
+export const HELP_WORDS: readonly string[] = ['help', '?']
+
+/** Was die Hilfe zeigt: Zustand dieser Session (`enabled`, `more` nach /replies) und die Werte aus userConfig. */
+export type HelpInput = {
+  lang: Lang
+  enabled: boolean
+  more: boolean
+  config: { more: boolean; layout: 'auto' | 'grid' | 'list' }
+}
+
+/** Schnappschuss für `/replies help` (docs/HELP-SPEC.md §5): Befehle genau so, wie der Parser sie annimmt. */
+export function repliesHelp(s: HelpInput): HelpData {
+  const t = T[s.lang]
+  return {
+    mod: 'quick-replies',
+    lang: s.lang,
+    intro: t.helpIntro,
+    commands: [
+      { cmd: '/replies status', does: t.helpStatus },
+      { cmd: '/replies on', does: t.helpOn },
+      { cmd: '/replies off', does: t.helpOff },
+      { cmd: '/replies more on', does: t.helpMoreOn },
+      { cmd: '/replies more off', does: t.helpMoreOff },
+      { cmd: '/replies help', does: t.helpHelp },
+    ],
+    notes: [t.helpForkCost, t.helpMoreOverrides],
+    controls: [
+      { cmd: t.ctlClick, does: t.ctlClickDoes },
+      { cmd: t.ctlKey, does: t.ctlKeyDoes },
+      { cmd: t.ctlSend, does: t.ctlSendDoes },
+    ],
+    features: [
+      { name: t.featReplies, state: { kind: s.enabled ? 'on' : 'off' }, toggle: s.enabled ? '/replies off' : '/replies on' },
+      // Bei ausgeschalteten Vorschlägen läuft auch der Fork nicht (register.ts, turn.complete): „an (pausiert)“
+      { name: t.featMore, state: s.more ? { kind: 'on', ...(s.enabled ? {} : { text: t.paused }) } : { kind: 'off' }, toggle: s.more ? '/replies more off' : '/replies more on' },
+      { name: t.featLayout, state: { kind: 'value', text: s.config.layout, isDefault: s.config.layout === 'auto' }, toggle: t.setting },
+    ],
+    settings: [
+      { title: t.setLanguage, value: s.lang, isDefault: s.lang === 'en' },
+      { title: t.setMore, value: s.config.more ? t.on : t.off, isDefault: !s.config.more },
+      { title: t.setLayout, value: s.config.layout, isDefault: s.config.layout === 'auto' },
+    ],
+    footer: { terminal: t.helpFooterTerminal, desktop: t.helpFooterDesktop },
+  }
 }

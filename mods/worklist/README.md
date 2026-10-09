@@ -6,7 +6,7 @@ The list runs by default: worklist never pauses on its own (only you do), nothin
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** (desktop app: 2.1.288) · Plugin version **0.6.0**
+Tested with Claude Code **v2.1.295** · Plugin version **0.7.2**
 
 **Cost:** when the rules can't decide whether Claude is done, worklist asks Haiku 5.5 (`claude-haiku-5-5`, effort `high`; measured at about 0.01 US cents per case). These calls run through your session and count toward your usage. You can switch this off with the `haiku` option (see [Configuration](#configuration)); the list then stops in those cases instead.
 
@@ -24,6 +24,7 @@ Tested with Claude Code **v2.1.291** (desktop app: 2.1.288) · Plugin version **
 | `/todos history` | show the history (last 30) |
 | `/todos status` | check state, last decision with reason, Haiku cost |
 | `/todos close` | close the sidebar |
+| `/todos help` · `/todos ?` | all commands, the sidebar's buttons, each feature with its current state and how to change it, and your settings, drawn as a table (terminal and desktop app; Markdown elsewhere). The state is the one at the time you run it. `/todo help` queues a to-do "help". |
 
 **What Claude receives** is exactly your to-do text, nothing added to the message. With the `doneLine` option on (default), worklist also passes Claude a hidden closing hint beside it (see [below](#when-it-continues-the-certainly-free-check)).
 
@@ -121,7 +122,7 @@ Neither is part of your message or shown in the chat; `/todos status` shows whet
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, classic.SessionStart{source=clear}, command.run{command=todo}, command.run{command=todos}, prompt.submit, classic.UserPromptSubmit, turn.start, tool.call, tool.call{tool=TaskCreate}, tool.call{tool=TaskUpdate}, tool.call{tool=TodoWrite}, classic.Stop, classic.StopFailure, turn.complete, ui.render{component=UserMessage}, ui.render{component=AssistantMessage}, ui.render{component=Pane}
+hooks: session.start, classic.SessionStart{source=clear}, command.run{command=todo}, command.run{command=todos}, prompt.submit, classic.UserPromptSubmit, turn.start, tool.call, tool.call{tool=TaskCreate}, tool.call{tool=TaskUpdate}, tool.call{tool=TodoWrite}, classic.Stop, classic.StopFailure, turn.complete, ui.render{component=UserMessage}, ui.render{component=AssistantMessage}, ui.render{component=Pane}, ui.render{component=CommandOutput, props has {command=todos}}
 calls: $.agent.list, $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.complete, $.prompt.submit, $.session.id, $.session.root, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.set, $.ui.close, $.ui.focus, $.ui.log, $.ui.open, $.ui.resolve, $.ui.toast
 state writes: worklist.paint, worklist.rt
 state reads: worklist.paint, worklist.rt
@@ -140,6 +141,7 @@ In plain language:
 - `$.store`, `$.state`: list, history, cost, run state, and a redraw counter for the sidebar. `$.store.delete` only deletes worklist's own lists: this chat's list once it has become empty, and after `/clear` the old chat's list once it has been saved under the cleared chat.
 - `$.ui.*`, `$.clock.*`, `$.command.register`: sidebar, toast, clock, `/todo` and `/todos`.
 - `ui.render{component=AssistantMessage}`: hides a standalone "Done." or "Fertig." at the end of Claude's answers (display only; the stored answer stays unchanged). This applies in every session where worklist is loaded, not only for to-dos.
+- `ui.render{component=CommandOutput, props has {command=todos}}`: draws the output of `/todos help` as a table (display only; every other `/todos` output stays as the engine draws it).
 - `ui.render{component=UserMessage}`: shows a sent to-do in the transcript as an orange line with a box instead of the speech bubble (display only; your own messages stay unchanged).
 - Apart from the hidden hints and the display-only changes above, the hooks only observe and pass everything through unchanged. No file system, no processes, no network.
 
@@ -168,6 +170,8 @@ claude --plugin-dir <path-to-clone>/mods/worklist
 ```
 
 ## Known limitations
+
+- **`/todos help`** keeps its drawn table only while the session runs: after a restart, `--resume` or `/reload-plugins`, older `/todos help` lines in the transcript show the Markdown version. Run it again for the table.
 
 - **Hover flicker in the desktop app** over buttons and the input field: not caused by worklist (it persists even without any redraw from worklist), probably caused by frequent redraws from other mods (clawd-buddy).
 - **Cursor in the input field:** `/todo` or `/todos` puts focus into the field, but the desktop app (2.1.286) doesn't show the cursor there. Click into the field once.

@@ -3,10 +3,16 @@
 // Fail-open: Jeder Erfassungs-Hook gibt das Ergebnis von `next` unverändert zurück, Fehler gehen nur ins Debug-Log; kein `.catch`.
 // Ein $.store-Schlüssel pro Session (`s:<sessionId>`), den nur diese Session schreibt: $.store ist nicht atomar (CHEATSHEET).
 import type { EngineInterface, On } from 'claude-code'
+import { helpMarkdown, helpTree } from './help.ts'
+import type { HelpData } from './help.ts'
 import { T, dateTime, shortDate, usd } from './i18n.ts'
 import {
+  HELP_WORDS,
   NO_FOLDER,
+  OFF_WORDS,
   PLANS,
+  VIEW_WORDS,
+  ledgerHelp,
   aggregate,
   baselineFor,
   bookChat,
@@ -36,7 +42,7 @@ import {
   titleFromPrompt,
   tokensOf,
 } from './logic.ts'
-import type { Carry, Kind, Limit, Plan, Rec, Settings, TurnInfo, Usage } from './logic.ts'
+import type { Carry, HelpInfo, Kind, Limit, Plan, Rec, Settings, TurnInfo, Usage } from './logic.ts'
 import { ledgerTree } from './view.ts'
 import type { View } from './view.ts'
 
@@ -54,8 +60,25 @@ let title = ''
 let titleDirty = false
 let titleFromSession = false // Titel kam als session_title (gewinnt immer) statt aus der ersten Nachricht
 const meta: { project: string; root: string; kind: Kind; remote: string } = { project: NO_FOLDER, root: '', kind: 'terminal', remote: '' }
-const reports = new Map<string, View>() // Kennung im Text → Daten der Zeichnung, höchstens 10
+// Kennung im Text → Daten der Zeichnung, höchstens 10: eine Ansicht von /ledger oder die Hilfe, dazu die Argumente des
+// Aufrufs. Der Render-Hook zeichnet nur, wenn die Zeile dieselben Argumente hat: `/ledger #<kennung>` gibt „Unbekannt: …“
+// mit der Kennung in der ersten Zeile zurück und darf trotzdem nicht als Tabelle erscheinen (Review worklist 0.7.0, K2).
+type Drawn = ({ kind: 'ledger'; view: View } | { kind: 'help'; data: HelpData }) & { args: string }
+const reports = new Map<string, Drawn>()
 let reportNo = 0
+// Akzent der Hilfe als Theme-Key: passt sich hell und dunkel an (docs/HELP-SPEC.md §4, Fynn 2026-10-09)
+const ACCENT = 'success'
+
+/** Argumente vergleichbar machen: ohne Rand, klein, einfache Leerzeichen. */
+const normArgs = (s: string | undefined) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+
+/** Neue, eindeutige Kennung `#…` für die erste Textzeile; ui.render findet darüber die Daten der Zeichnung. */
+function remember(now: number, d: Drawn): string {
+  const tag = `#${(++reportNo).toString(36)}${now.toString(36).slice(-5)}`
+  reports.set(tag, d)
+  while (reports.size > 10) reports.delete(reports.keys().next().value as string)
+  return tag
+}
 let chain: Promise<unknown> = Promise.resolve() // Messen und Schreiben dieser Session nacheinander
 let writeError = '' // letzter Schreibfehler (z. B. Speicher voll), /ledger zeigt ihn
 // Limit-Fenster der letzten Messung: Mod-Aufrufe buchen hierhin, ohne eigenes usage() (SPEC Nachtrag 0.5.0, Verhalten 2)
@@ -232,7 +255,7 @@ async function bookCall($: EngineInterface, origin: string | undefined, model: s
 /**
  * Alle Datensätze lesen; dabei alte löschen (älter als `keepDays` seit der letzten Buchung). Das Aufräumen liegt hier und
  * nicht im awaiteten session.start, weil `/ledger` ohnehin jeden Datensatz liest. `bytes` schätzt die Größe des Speichers
- * (4 MiB JSON insgesamt, docs/raw/en/reference.md:259).
+ * (4 MiB JSON insgesamt, docs/raw/en/reference.md:294).
  */
 async function collect($: EngineInterface, now: number) {
   const recs: { id: string; rec: Rec }[] = []
@@ -262,6 +285,27 @@ async function collect($: EngineInterface, now: number) {
 }
 
 /**
+ * `/ledger help` (docs/HELP-SPEC.md §3): Schnappschuss mit Plan, Speicherbelegung und Beginn der Erfassung, nur lesend
+ * (kein Aufräumen, kein Buchen). Scheitert das Lesen, zeigt die Hilfe trotzdem Befehle und Einstellungen.
+ */
+async function helpCommand($: EngineInterface, args: string): Promise<string> {
+  const now = await $.clock.now()
+  const info: HelpInfo = { plan: null, storeBytes: 0, since: null }
+  try {
+    for (const key of await $.store.keys()) {
+      const value = await $.store.get(key)
+      info.storeBytes += key.length + (JSON.stringify(value ?? null)?.length ?? 0)
+      if (key === 'meta:plan') info.plan = cleanPlan(value)
+      if (key === 'meta:since' && typeof value === 'number') info.since = value
+    }
+  } catch (err) {
+    log($, `/ledger help: ${msg(err)}`)
+  }
+  const data = ledgerHelp(settings, info)
+  return helpMarkdown(data, remember(now, { kind: 'help', data, args: normArgs(args) }))
+}
+
+/**
  * `/ledger plan …`: Abo und Abrechnungstag in `meta:plan` (SPEC Nachtrag 0.5.0, Bedienung). Den Plan kann ein Mod nicht
  * abfragen (kein Feld in der Mods-API, Login-Daten sind tabu: CLAUDE.md Grundregel 3), deshalb stellt der Nutzer ihn ein.
  */
@@ -278,7 +322,7 @@ async function planCommand($: EngineInterface, args: string[]): Promise<string> 
     const p = cleanPlan(await $.store.get('meta:plan'))
     return `${p ? t.planCurrent(planLabel(p.plan), p.day, price(p), dateTime(p.at, lang)) : t.planNone}\n${t.planHelp}`
   }
-  if (first === 'off' || first === 'aus') {
+  if (OFF_WORDS.includes(first)) {
     await $.store.delete('meta:plan')
     return t.planDeleted
   }
@@ -360,7 +404,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       await $.command.register({
         name: 'ledger',
         description: T[settings.lang].commandDescription,
-        argumentHint: '[days|weeks|chats|projects|models|limits|plan|reset|help]',
+        argumentHint: '[weeks|chats|projects|models|limits|plan|reset|help]',
       })
     } catch (err) {
       log($, `/ledger nicht registriert: ${msg(err)}`)
@@ -474,7 +518,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const [sub = '', ...rest] = e.args.trim().split(/\s+/)
     const arg = rest[0]
     const what = sub.toLowerCase()
-    if (what === 'help' || what === 'hilfe') return { text: t.help }
+    // Hilfe: nur das erste Wort, ohne weitere Wörter (docs/HELP-SPEC.md §2)
+    if (HELP_WORDS.includes(what)) return { text: rest.length ? t.unknownArg(e.args.trim()) : await helpCommand($, e.args) }
     // Speicher voll o. Ä.: ein lesbarer Hinweis statt einer Fehlerzeile (Review 0.5.0 K1)
     if (what === 'reset' || what === 'plan') {
       try {
@@ -484,7 +529,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         return { text: t.writeFailed(msg(err)) }
       }
     }
-    if (what && !['chats', 'projects', 'models', 'weeks', 'days', 'limits'].includes(what)) return { text: `${t.unknownArg(sub)}\n${t.help}` }
+    if (what && !VIEW_WORDS.includes(what)) return { text: t.unknownArg(sub) }
     try {
       await serial(() => measure($)) // den laufenden Chat mitzählen
     } catch (err) {
@@ -507,20 +552,20 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       live: limits,
     })
     // Eindeutige Kennung im Text: ui.render findet darüber die Daten der Zeichnung (SPEC Verhalten 7)
-    const tag = `#${(++reportNo).toString(36)}${now.toString(36).slice(-5)}`
-    reports.set(tag, { report, view, range })
-    while (reports.size > 10) reports.delete(reports.keys().next().value as string)
+    const tag = remember(now, { kind: 'ledger', view: { report, view, range }, args: normArgs(e.args) })
     return { text: summaryText(report, view, range, tag, settings.lang) }
   })
 
-  // Die Übersicht: ein eigener Baum statt der Markdown-Zeile; „a hook's own tree draws in the row's place“ (types
-  // CommandOutput). `command` gehört zu den Props, daher `props: { command }` im Matcher (oben auf `e` feuert er nie).
+  // Die Übersicht und die Hilfe: ein eigener Baum statt der Markdown-Zeile; „a hook's own tree draws in the row's place“
+  // (types CommandOutput). `command` gehört zu den Props, daher `props: { command }` im Matcher (oben auf `e` feuert er nie).
   on('ui.render', { component: 'CommandOutput', props: { command: 'ledger' } }, async ($, e, next) => {
     if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
+    // Kennung irgendwo in der ersten Zeile: in -p steht davor „cost-ledger: “ (HELP-SPEC §8 Punkt 1)
     const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
-    const v = tag ? reports.get(tag) : undefined
-    // Unbekannt (nach Neustart, alte Zeile, help, reset): die Engine zeichnet den Markdown-Text
-    if (!v) return next(e)
-    return ledgerTree(v, settings, e.viewport?.columns ?? 100, e.surface)
+    const d = tag ? reports.get(tag) : undefined
+    // Unbekannt (nach Neustart, alte Zeile, reset, plan): die Engine zeichnet den Markdown-Text
+    if (!d || d.args !== normArgs(e.props.args)) return next(e)
+    const columns = e.viewport?.columns ?? 100
+    return d.kind === 'help' ? helpTree(d.data, columns, e.surface, ACCENT) : ledgerTree(d.view, settings, columns, e.surface)
   })
 }

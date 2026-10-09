@@ -1,4 +1,5 @@
 // clawd-buddy: Hooks-Modul. Beobachtet nur: jeder Event-Hook gibt per `next(e)` unverändert weiter, nichts wird blockiert oder verändert.
+// Ausnahme seit 0.7.0: Der CommandOutput-Hook zeichnet die eigene Ausgabe von `/clawd help` als Tabelle (docs/HELP-SPEC.md).
 //
 // Aufgabe: aus Events *Fakten* sammeln (wann begann der Turn, welches Tool läuft seit wann, ob eine Frage offen ist, wann zuletzt
 // getippt wurde, wie der letzte Turn endete) und sie als `props` an das Client-Modul `./buddy.ts` reichen. Die Stimmung leitet der Client
@@ -11,12 +12,20 @@ import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, 
 import type { Strain } from './mood.ts'
 import { createDesk, DESK_TICK, stillSource } from './desk.ts'
 import { T, clipLabel, langOf, num as fmt } from './i18n.ts'
+import { ACCENT, SUBCOMMANDS, clawdHelp, isHelp } from './clawdhelp.ts'
+import { helpMarkdown, helpTree } from './help.ts'
+import type { HelpData } from './help.ts'
 import type { Lang } from './i18n.ts'
 import { H, W } from './stage.ts'
 import type { Desk } from './desk.ts'
 import type { Facts, ToolKind } from './mood.ts'
 
 type Stored = { enabled?: boolean; annoy?: number; seenAt?: number }
+
+// /clawd help (docs/HELP-SPEC.md §3): Schnappschuss beim Aufruf unter einer Kennung `#…`; der CommandOutput-Hook zeichnet ihn.
+// Höchstens 10 Einträge, der älteste fällt heraus. Status = Stand beim Aufruf, die Zeichnung schreibt sich nicht um.
+const helps = new Map<string, HelpData>()
+let helpNo = 0
 
 // Flüchtiger Zustand dieses Moduls (wird aus Events neu abgeleitet; Reload setzt zurück)
 let enabled = true
@@ -193,7 +202,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       $.ui.log(`clawd-buddy: store not read: ${String(err)}`, { to: 'debug' })
     }
     try {
-      await $.command.register({ name: 'clawd', description: tx.description, argumentHint: 'on | off | list | demo <animation> | nap | boop | status | flicker' })
+      await $.command.register({ name: 'clawd', description: tx.description, argumentHint: 'on | off | list | demo <animation> | nap | boop | status | flicker | help' })
     } catch (err) {
       $.ui.log(`/clawd not registered: ${String(err)}`, { to: 'debug' })
     }
@@ -444,10 +453,26 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   // ---- /clawd
   on('command.run', { command: 'clawd' }, async ($, e) => {
+    // Hilfe: nur `help` oder `?` als einziges Wort (docs/HELP-SPEC.md §2)
+    if (isHelp(e.args)) {
+      const data = clawdHelp({ lang, enabled, nightStart, nightEnd, idleSeconds, reduced, side: flip ? 'left' : 'right', birthday })
+      let now = 0
+      try {
+        now = await $.clock.now()
+      } catch (err) {
+        $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+      }
+      const tag = `#${(++helpNo).toString(36)}${now.toString(36).slice(-5).padStart(5, '0')}`
+      helps.set(tag, data)
+      while (helps.size > 10) helps.delete(helps.keys().next().value as string)
+      return { text: helpMarkdown(data, tag) }
+    }
     // Ohne Argument ist `args` "" (types:1616): dann Status
     const [first, ...rest] = e.args.trim().split(/\s+/)
     const sub = first || 'status'
     const arg = rest.join(' ').trim()
+    // Nur die Unterbefehle aus SUBCOMMANDS (clawdhelp.ts; ein Test prüft jeden gegen die Hilfe). Sonst Kurzhilfe und Verweis (HELP-SPEC §2)
+    if (!(SUBCOMMANDS as readonly string[]).includes(sub)) return { text: `${tx.unknown(sub)} ${tx.help} ${tx.seeHelp}` }
     // demo und nap schalten ihn ein; das wird wie bei /clawd on gespeichert
     const ensureOn = async () => {
       if (enabled) return
@@ -536,7 +561,20 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       const text = tx.status({ on: enabled, mood, temper: fmt(lang, t.temper, 2), tired: Math.round(t.tired * 100), annoy, desk: deskInfo })
       return { text: `${text} ${tx.help}` }
     }
-    return { text: `${tx.unknown(sub)} ${tx.help}` }
+    // Nicht erreichbar, solange jeder Eintrag von SUBCOMMANDS oben einen Zweig hat; Schutz, falls beide auseinanderlaufen
+    return { text: `${tx.unknown(sub)} ${tx.help} ${tx.seeHelp}` }
+  })
+
+  // ---- /clawd help als Tabelle an der Stelle der Befehlsausgabe: „a hook's own tree draws in the row's place“ (types CommandOutput).
+  // `command` gehört zu den Props, daher `props: { command }` im Matcher (wie cost-ledger /ledger).
+  on('ui.render', { component: 'CommandOutput', props: { command: 'clawd' } }, async ($, e, next) => {
+    // Nur die Antwort auf `help`/`?`: eine Kennung, die jemand als Argument eintippt (`/clawd demo #…`), zeichnet keine Hilfe
+    // (`args` ist ein Prop von CommandOutput, types@2.1.295:10044-10048)
+    if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop') || !isHelp(e.props.args ?? '')) return next(e)
+    // Die Kennung nicht am Zeilenanfang suchen: vor der Antwort steht „clawd-buddy: “ (templates/help/README.md, Befunde)
+    const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
+    const data = tag ? helps.get(tag) : undefined
+    return data ? helpTree(data, e.viewport?.columns ?? 100, e.surface, ACCENT) : next(e)
   })
 
   // ---- Zeichnen

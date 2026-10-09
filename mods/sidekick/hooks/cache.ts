@@ -93,13 +93,15 @@ const TABLE: readonly [string, Price][] = [
   ['haiku-5-5', { input: 0.1, output: 0.5, read: 0.01, long: { above: 100_000, factor: 5 } }],
   ['haiku-4-5', { input: 1, output: 5, read: 0.1 }],
 ]
-// Der Alias `haiku` bleibt Haiku 4.5: Claude Code 2.1.291 löst ihn noch zu claude-haiku-4-5 auf (SPEC Nachtrag 0.11.0)
+// Der Alias `haiku` ist seit Claude Code 2.1.293 Haiku 5.5 (Probe unter 2.1.295: modelUsage nur claude-haiku-5-5, Kosten zu den
+// Listenpreisen von Haiku 5.5; Befund cost-ledger a57f8d4, Vorbild limit-bars 0.7.2; SPEC Nachtrag 0.14.1). Bis 2.1.291 war er 4.5
+// (Nachtrag 0.11.0). Volle IDs wie claude-haiku-4-5-… treffen weiter die Tabelle oben.
 const FAMILY: readonly [string, string][] = [
   ['fable', 'fable-5-1'],
   ['mythos', 'mythos-5-1'],
   ['opus', 'opus-5-5'],
   ['sonnet', 'sonnet-5-5'],
-  ['haiku', 'haiku-4-5'],
+  ['haiku', 'haiku-5-5'],
 ]
 
 /**

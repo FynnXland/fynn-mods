@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 15
     env:
       # The Claude Code version the README names as tested. Validate and test need no login.
-      CLAUDE_CODE_VERSION: 2.1.291
+      CLAUDE_CODE_VERSION: 2.1.295
     steps:
       - uses: actions/checkout@v7
       - name: Install Claude Code

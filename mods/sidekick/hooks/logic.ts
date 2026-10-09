@@ -28,9 +28,10 @@ export type Settings = {
   skills: boolean // Skill-Liste an die Prüfung
   ttl: 0 | 5 | 60 // 0 = gemessen/Standard
   long: number // Auslöser (d): Zeichen ab hier, 0 = Aufteilen aus (Nachtrag 0.9.0)
+  notes: boolean // „Gut zu wissen“ (Nachtrag 0.13.0); Standard aus, jede Prüfung kostet auf dem Hauptmodell
 }
 
-export const DEFAULT_SETTINGS: Settings = { level: 'guide', lastOn: 'guide', threshold: 80000, big: 150000, skills: true, ttl: 0, long: 800 }
+export const DEFAULT_SETTINGS: Settings = { level: 'guide', lastOn: 'guide', threshold: 80000, big: 150000, skills: true, ttl: 0, long: 800, notes: false }
 
 /** Gespeicherte Einstellungen absichern. Bis 0.9 gab es nur `on`: `true` → Begleiter, `false` → Aus (Nachtrag 0.10.0). */
 export function cleanSettings(v: unknown): Settings {
@@ -46,12 +47,25 @@ export function cleanSettings(v: unknown): Settings {
     skills: typeof o.skills === 'boolean' ? o.skills : DEFAULT_SETTINGS.skills,
     ttl: o.ttl === 5 || o.ttl === 60 ? o.ttl : 0,
     long: o.long === 0 ? 0 : num(o.long, DEFAULT_SETTINGS.long),
+    notes: o.notes === true,
   }
 }
+
+/**
+ * Erste Wörter, die `/sidekick` über `applySetting` annimmt (dazu `status`, `help`, `hints …`, `notes …` im Hook). Der Parser nimmt
+ * nur diese, und ein Test prüft jedes gegen `/sidekick help` (Nachtrag 0.14.0, HELP-SPEC §6.5): Wer eins ergänzt, muss die Hilfe mitziehen.
+ */
+export const SETTING_WORDS = ['on', 'off', 'cache', 'guide', 'plan', 'auto', 'threshold', 'big', 'skills', 'ttl', 'long'] as const
+export const TTL_WORDS = ['5', '60', 'auto'] as const
+/** `help` und `?` öffnen die Hilfe, nur als einziges Wort (HELP-SPEC §2). */
+export const HELP_WORDS = ['help', '?'] as const
+export const isHelp = (args: string) => (HELP_WORDS as readonly string[]).includes(args.trim().toLowerCase())
+const has = (list: readonly string[], w: string | undefined) => list.includes(w ?? '')
 
 /** `/sidekick <key> <value>` (Befehle und Argumente englisch); null, wenn nichts davon passt. */
 export function applySetting(s: Settings, args: string): Settings | null {
   const [key, value] = args.trim().toLowerCase().split(/\s+/)
+  if (!has(SETTING_WORDS, key)) return null
   // `on` holt die zuletzt aktive Stufe zurück, `off` merkt sie sich (Nachtrag 0.10.0)
   if (key === 'on' && !value) return { ...s, level: s.lastOn }
   if (key === 'off' && !value) return { ...s, level: 'off' }
@@ -61,11 +75,7 @@ export function applySetting(s: Settings, args: string): Settings | null {
     return n ? { ...s, [key]: n } : null
   }
   if (key === 'skills' && (value === 'on' || value === 'off')) return { ...s, skills: value === 'on' }
-  if (key === 'ttl') {
-    if (value === '5') return { ...s, ttl: 5 }
-    if (value === '60') return { ...s, ttl: 60 }
-    if (value === 'auto') return { ...s, ttl: 0 }
-  }
+  if (key === 'ttl' && has(TTL_WORDS, value)) return { ...s, ttl: value === '5' ? 5 : value === '60' ? 60 : 0 }
   if (key === 'long') {
     if (value === 'off') return { ...s, long: 0 }
     const n = parseTokens(value ?? '')
@@ -74,7 +84,7 @@ export function applySetting(s: Settings, args: string): Settings | null {
   return null
 }
 
-export const USAGE = '`/sidekick off|cache|guide|plan|auto|on` · `status` · `threshold 80k` · `big 150k` · `skills on|off` · `ttl 5|60|auto` · `long 800|off` · `hints …`'
+export const USAGE = '`/sidekick off|cache|guide|plan|auto|on` · `status` · `threshold 80k` · `big 150k` · `skills on|off` · `ttl 5|60|auto` · `long 800|off` · `hints …` · `notes on|off|forget` · `help`'
 
 // ---------- Regeln ----------
 
@@ -797,9 +807,32 @@ type Counts = { gezeigt: number; angenommen: number; ignoriert: number; abgebroc
 
 /** Eigene Modellaufrufe je Modell-ID und Rolle (SPEC Nachtrag 0.5.0): Anzahl, $ und Dauer, dazu Tokens. */
 export type Use = { n: number; usd: number; ms: number }
-export const ROLES = ['pruefung', 'uebergabe', 'aufteilung'] as const
+/** `hinweis`: Prüfung „Gut zu wissen“ über `$.model.fork` (Nachtrag 0.13.0); ihre Kosten stehen nicht in `kosten` (eigene Rechnung). */
+export const ROLES = ['pruefung', 'uebergabe', 'aufteilung', 'hinweis'] as const
 export type Role = (typeof ROLES)[number]
 export type ModelUse = Record<Role, Use> & { in: number; out: number }
+
+/**
+ * „Gut zu wissen“ je Tag (Nachtrag 0.13.0): Prüfungen mit Kosten und Dauer, dann was daraus wurde. `keins`: Antwort ohne Thema,
+ * `verworfen`: Thema verworfen (doppelt, zu lang, Kontext-Rede, veraltet), `fehler`: keine Antwort oder kein gültiges JSON.
+ */
+export type Notizen = {
+  n: number
+  usd: number
+  ms: number
+  gezeigt: number
+  erklaert: number
+  bekannt: number
+  spaeter: number
+  chat: number
+  ignoriert: number
+  keins: number
+  verworfen: number
+  fehler: number
+}
+export const NOTE_FIELDS = ['gezeigt', 'erklaert', 'bekannt', 'spaeter', 'chat', 'ignoriert', 'keins', 'verworfen', 'fehler'] as const
+export type NoteField = (typeof NOTE_FIELDS)[number]
+const emptyNotizen = (): Notizen => ({ n: 0, usd: 0, ms: 0, gezeigt: 0, erklaert: 0, bekannt: 0, spaeter: 0, chat: 0, ignoriert: 0, keins: 0, verworfen: 0, fehler: 0 })
 
 export type Day = {
   kosten: number // eigene Modellaufrufe, $
@@ -814,6 +847,7 @@ export type Day = {
   skills: Record<string, number>
   wartung: Partial<Record<RuleId, { gezeigt: number; angenommen: number }>> // Wartungs-Hinweise (SPEC Nachtrag 0.2.0)
   modelle: Record<string, ModelUse> // seit 0.5.0; ältere Kosten stehen nur in `kosten`
+  notizen: Notizen // „Gut zu wissen“ (Nachtrag 0.13.0), nicht in `kosten`
 }
 
 export function emptyDay(): Day {
@@ -830,11 +864,12 @@ export function emptyDay(): Day {
     skills: {},
     wartung: {},
     modelle: {},
+    notizen: emptyNotizen(),
   }
 }
 
 const emptyUse = (): Use => ({ n: 0, usd: 0, ms: 0 })
-const emptyModel = (): ModelUse => ({ pruefung: emptyUse(), uebergabe: emptyUse(), aufteilung: emptyUse(), in: 0, out: 0 })
+const emptyModel = (): ModelUse => ({ pruefung: emptyUse(), uebergabe: emptyUse(), aufteilung: emptyUse(), hinweis: emptyUse(), in: 0, out: 0 })
 const addUse = (a: Use, b: Use): Use => ({ n: a.n + b.n, usd: a.usd + b.usd, ms: a.ms + b.ms })
 
 const n0 = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : 0)
@@ -861,8 +896,10 @@ function cleanDay(v: unknown): Day {
     for (const [k, m] of Object.entries(o.modelle as Record<string, any>)) {
       if (!k || !m || typeof m !== 'object') continue
       const use = (u: any): Use => ({ n: n0(u?.n), usd: n0(u?.usd), ms: n0(u?.ms) })
-      d.modelle[k] = { pruefung: use(m.pruefung), uebergabe: use(m.uebergabe), aufteilung: use(m.aufteilung), in: n0(m.in), out: n0(m.out) }
+      d.modelle[k] = { pruefung: use(m.pruefung), uebergabe: use(m.uebergabe), aufteilung: use(m.aufteilung), hinweis: use(m.hinweis), in: n0(m.in), out: n0(m.out) }
     }
+  const nz = o.notizen && typeof o.notizen === 'object' ? o.notizen : {}
+  d.notizen = { n: n0(nz.n), usd: n0(nz.usd), ms: n0(nz.ms), ...(Object.fromEntries(NOTE_FIELDS.map((f) => [f, n0(nz[f])])) as Record<NoteField, number>) }
   return d
 }
 
@@ -889,9 +926,37 @@ export function addDay(a: Day, b: Day): Day {
   }
   for (const [k, x] of Object.entries(b.modelle)) {
     const y = out.modelle[k] ?? emptyModel()
-    out.modelle[k] = { pruefung: addUse(y.pruefung, x.pruefung), uebergabe: addUse(y.uebergabe, x.uebergabe), aufteilung: addUse(y.aufteilung, x.aufteilung), in: y.in + x.in, out: y.out + x.out }
+    out.modelle[k] = {
+      pruefung: addUse(y.pruefung, x.pruefung),
+      uebergabe: addUse(y.uebergabe, x.uebergabe),
+      aufteilung: addUse(y.aufteilung, x.aufteilung),
+      hinweis: addUse(y.hinweis, x.hinweis),
+      in: y.in + x.in,
+      out: y.out + x.out,
+    }
   }
+  const nz = out.notizen
+  out.notizen = { n: nz.n + b.notizen.n, usd: nz.usd + b.notizen.usd, ms: nz.ms + b.notizen.ms, ...(Object.fromEntries(NOTE_FIELDS.map((f) => [f, nz[f] + b.notizen[f]])) as Record<NoteField, number>) }
   return out
+}
+
+/**
+ * Eine Prüfung „Gut zu wissen“ buchen (Kosten, Dauer, je Modell unter `hinweis`); `kosten` bleibt unberührt (Nachtrag 0.13.0).
+ * Ohne Tokens an `bookModel`: Ist das Hauptmodell zugleich ein Prüfmodell, verzerrten ≈ 100k je Fork sonst die Ø-Tokens im
+ * Vergleich der Prüfung (Review 0.13.0 K3).
+ */
+export function bookNote(d: Day, model: string, usd: number, ms: number) {
+  d.notizen.n += 1
+  d.notizen.usd += usd
+  d.notizen.ms += Math.max(0, ms)
+  bookModel(d, model, 'hinweis', usd, ms)
+}
+
+/** Aufrufe eines Modells ohne „Gut zu wissen“ (eigene Rechnung): für Ø-Tokens je Aufruf und die Tage-Spalte. */
+const ownCalls = (m: ModelUse) => ROLES.reduce((a, r) => a + (r === 'hinweis' ? 0 : m[r].n), 0)
+
+export function countNote(d: Day, field: NoteField) {
+  d.notizen[field] += 1
 }
 
 /** Einen eigenen Modellaufruf je Modell buchen; `kosten` bucht der Aufrufer wie bisher (Summe aller Modelle und älterer Tage). */
@@ -909,7 +974,8 @@ export function modelRows(d: Day): { list: { key: string; m: ModelUse; usd: numb
   const list = Object.entries(d.modelle)
     .map(([key, m]) => ({ key, m, usd: ROLES.reduce((a, r) => a + m[r].usd, 0) }))
     .sort((a, b) => b.usd - a.usd || a.key.localeCompare(b.key))
-  const usd = Math.max(0, d.kosten - list.reduce((a, x) => a + x.usd, 0))
+  // `kosten` enthält „Gut zu wissen“ nicht (Nachtrag 0.13.0), der Rest ohne Modell also auch nicht
+  const usd = Math.max(0, d.kosten - list.reduce((a, x) => a + x.usd - x.m.hinweis.usd, 0))
   const n = Math.max(0, d.pruefungen - list.reduce((a, x) => a + x.m.pruefung.n, 0))
   // Rundungsreste der Summen sind kein „früher“
   return { list, earlier: usd >= 0.005 || n > 0 ? { usd, n } : { usd: 0, n: 0 } }
@@ -1036,11 +1102,15 @@ export type Period = 'today' | 'week' | 'all'
 /** `/savings` knapp (Kennzahlen und Ersparnis) oder `/savings detail` mit Modellen, Vergleich, Tagesverlauf (Fynn 2026-10-06). */
 export type View = { p: Period; detail: boolean }
 
+/** Wörter, die `/savings` annimmt (dazu `help`/`?` im Hook); ein Test prüft jedes gegen `/sidekick help` (Nachtrag 0.14.0). */
+export const SAVINGS_WORDS = ['detail', 'details', 'today', 'week', 'all'] as const
+
 /** Wörter in beliebiger Reihenfolge: `detail`/`details` und ein Zeitraum. Standard: knapp `week`, Details `all`. */
 export function savingsArgs(arg: string): View | null {
   let p: Period | null = null
   let detail = false
   for (const w of arg.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+    if (!has(SAVINGS_WORDS, w)) return null
     if (w === 'detail' || w === 'details') detail = true
     else if ((w === 'today' || w === 'week' || w === 'all') && !p) p = w
     else return null
@@ -1125,7 +1195,7 @@ export function modelCompare(d: Day, days: Record<string, Day>): CompareRow[] {
     .filter((m) => m.m.pruefung.n)
     .map((m) => {
       const pr = m.m.pruefung
-      const calls = ROLES.reduce((a, r) => a + m.m[r].n, 0)
+      const calls = ownCalls(m.m)
       return {
         key: m.key,
         label: modelLabel(m.key),
@@ -1188,7 +1258,7 @@ export function compareNote(r: CompareRow): string {
 
 /** Tage mit Aktivität, neueste zuerst, höchstens `max`; dazu wie viele ältere es noch gibt. */
 /** Ein Tag mit Kosten, Prüfungen oder Ersparnis. */
-export const active = (d: Day) => d.kosten > 0 || d.pruefungen > 0 || savedOf(d) !== 0
+export const active = (d: Day) => d.kosten > 0 || d.pruefungen > 0 || savedOf(d) !== 0 || d.notizen.n > 0
 
 export function dayRows(days: Record<string, Day>, max = 14): { list: { key: string; d: Day }[]; more: number } {
   const ks = Object.keys(days)
@@ -1201,7 +1271,8 @@ export function dayRows(days: Record<string, Day>, max = 14): { list: { key: str
 /** Modelle eines Tages mit ihren Aufrufen (alle Rollen; „früher“: nur Prüfungen), z. B. `Sonnet 5.5 12× · früher 3×`. */
 export function dayModels(d: Day): string {
   const { list, earlier } = modelRows(d)
-  const parts = list.map((m) => `${modelLabel(m.key)} ${ROLES.reduce((a, r) => a + m.m[r].n, 0)}×`)
+  // Wie die Kostenspalte daneben ohne „Gut zu wissen“ (Review 0.13.0 K3); ein Modell nur mit Hinweis-Aufrufen fällt weg
+  const parts = list.filter((m) => ownCalls(m.m) > 0).map((m) => `${modelLabel(m.key)} ${ownCalls(m.m)}×`)
   if (earlier.n || earlier.usd) parts.push(`${t().vEarlier}${earlier.n ? ` ${earlier.n}×` : ''}`)
   return parts.join(' · ')
 }
@@ -1223,6 +1294,7 @@ export function savingsReport(d: Day, p: Period, now: number, tag = '', days?: R
     out.push(x.itemsHeadShort, '|---|---|---|')
     out.push(`| ${x.vColdAvoided} | ${d.kaltVermieden.n} | ${usdText(d.kaltVermieden.usd)} |`)
     out.push(`| ${x.vWarmNew} | ${d.neuWarm.n} | ${usdText(d.neuWarm.usd)} |`)
+    if (d.notizen.n) out.push('', x.notesShort(d.notizen.n, usdText(d.notizen.usd), d.notizen.gezeigt))
     out.push('', x.moreHint)
     return out.join('\n')
   }
@@ -1272,6 +1344,12 @@ export function savingsReport(d: Day, p: Period, now: number, tag = '', days?: R
     out.push('', x.wartungHead, '|---|---|---|')
     for (const id of ws) out.push(`| ${x.rule[id]} | ${d.wartung[id]!.gezeigt} | ${d.wartung[id]!.angenommen} |`)
     out.push('')
+  }
+  // „Gut zu wissen“ (Nachtrag 0.13.0): eigene Tabelle, nicht in Kosten und Verhältnis
+  const nz = d.notizen
+  if (nz.n) {
+    out.push('', x.notesHead, '', x.notesCols, '|---|---|---|---|---|---|---|---|---|---|---|---|')
+    out.push(`| ${nz.n} | ${usdText(nz.usd)} | ${secsText(nz.ms, nz.n)} | ${nz.gezeigt} | ${nz.erklaert} | ${nz.bekannt} | ${nz.spaeter} | ${nz.chat} | ${nz.ignoriert} | ${nz.keins} | ${nz.verworfen} | ${nz.fehler} |`, '')
   }
   out.push(x.handoffs(d.uebergaben, d.hinweise.modell?.gezeigt ?? 0))
   if (d.autonom) out.push(x.autoSent(d.autonom))

@@ -311,6 +311,9 @@ export function accepted(st: RuleState | undefined, now: number, restDays: numbe
 
 export const hintsUsage = (): string => t().hintsUsage(RULE_IDS.join(', '))
 
+/** Erste Wörter nach `/sidekick hints`, dazu die Regeln (`RULE_IDS`); ein Test prüft jedes gegen `/sidekick help` (Nachtrag 0.14.0). */
+export const HINTS_WORDS = ['status', 'on', 'off', 'done', 'audit-min'] as const
+
 /** `/sidekick hints …`; `status` und leer liefern null für „nichts ändern“. Fehler: `{ error }`. */
 export function applyHints(
   s: HintSettings,
@@ -319,6 +322,7 @@ export function applyHints(
 ): { settings?: HintSettings; done?: RuleId; error?: string } | null {
   const [a, b] = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (!a || a === 'status') return null
+  if (!(HINTS_WORDS as readonly string[]).includes(a) && !(RULE_IDS as readonly string[]).includes(a)) return { error: t().unknownHints(args.trim()) }
   if (a === 'on' || a === 'off') return { settings: { ...s, on: a === 'on' } }
   if (a === 'audit-min') {
     const n = parseTokens(b ?? '')

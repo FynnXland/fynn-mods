@@ -5,7 +5,9 @@
 // „Neuer Chat mit Übergabe“ wird bei einem Fehler nie stillschweigend in den kalten Chat gesendet, es wird erneut gefragt.
 import type { EngineInterface, On, RenderElement, RenderNode, Timer } from 'claude-code'
 import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.ts'
-import { setLang, spanText, t, tokensText, usdText } from './i18n.ts'
+import { lang, setLang, spanText, t, tokensText, usdText } from './i18n.ts'
+import { NOTES_WORDS, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, nonNeg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.ts'
+import type { Note } from './notes.ts'
 import { CHECK, CHECK_AUTO, HANDOFF, SPLIT, modelLabel, modelName } from './models.ts'
 import type { CacheMem, CompleteUsage, StepUsage } from './cache.ts'
 import { joinBand, layer, LEVEL, nameOf, splitBand } from './band.ts'
@@ -18,7 +20,9 @@ import {
   autoFassung,
   book,
   bookModel,
+  bookNote,
   bookingStep,
+  countNote,
   cacheText,
   checkPrompt,
   isHostText,
@@ -33,6 +37,7 @@ import {
   handoffEstimate,
   handoffPrompt,
   hintLine,
+  isHelp,
   lineCommand,
   handoffSystem,
   historyParts,
@@ -52,8 +57,11 @@ import {
   triggerOf,
   wrongChatChoices,
 } from './logic.ts'
-import type { Art, Booking, Choice, Day, Ignored, Ledger, Level, Period, Settings, Skill, Trigger, Verdict } from './logic.ts'
+import type { Art, Booking, Choice, Day, Ignored, Ledger, Level, NoteField, Period, Settings, Skill, Trigger, Verdict } from './logic.ts'
 import { savingsTree } from './view.ts'
+import { helpMarkdown, helpTree } from './help.ts'
+import type { HelpData } from './help.ts'
+import { sidekickHelp } from './helpdata.ts'
 import {
   HEAVY_TOKENS,
   RULE_IDS,
@@ -84,6 +92,10 @@ const DAY = 24 * 60 * 60000
 const HEADER = 'Sidekick'
 // Farbe der sidekick-Zeile und des Fassungs-Rahmens (andere Farbe als die Nachricht)
 const ACCENT = '#6CB6FF'
+// Akzent der Hilfe-Tabelle als Theme-Key (docs/HELP-SPEC.md §4, Fynn 2026-10-09; Nachtrag 0.14.1): Ein Hex folgt dem Theme nicht und
+// lag auf hellem Grund bei 2,2:1. `ide` ist in den eingebauten RGB-Themes von 2.1.295 (hell, dunkel, je daltonisiert) rgb(71,130,200),
+// auf Weiß ≈ 4,2:1, auf Schwarz ≈ 5:1; ANSI- und eigene Themes nehmen ihre eigene Farbe
+const HELP_ACCENT = 'ide'
 // Kreis der Anzeige im Desktop (0.10.2): bereit, arbeitet oder fragt, aus
 const MODE_GREEN = '#3FB950'
 const MODE_ORANGE = '#F0883E'
@@ -110,6 +122,7 @@ type Sitzung = {
   // Gewählter Wartungs-Hinweis, der noch nicht gezeigt wurde, weil die Prüfung eine eigene Zeile oder Rückfrage hatte; er kommt bei
   // der nächsten eigenen Nachricht ohne beides (Nachtrag 0.12.0)
   wartungOffen: Offen | null
+  note: Note | null // „Gut zu wissen“ über dem Prompt (Nachtrag 0.13.0)
 }
 
 /** Offener Wartungs-Hinweis; `at`: seit wann er wartet (Review 0.12.0 K5: in einer anderen Session gezeigt oder erledigt → verfällt). */
@@ -117,7 +130,7 @@ type Offen = WHint & { at?: number }
 const offenOf = (h: WHint, now: number): Offen => ({ ...h, at: (h as Offen).at ?? now })
 
 function emptySitzung(): Sitzung {
-  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null }
+  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null, note: null }
 }
 
 /** Offener Wartungs-Hinweis aus dem Store, tolerant gelesen (fehlt oder kaputt → null). */
@@ -158,6 +171,7 @@ function cleanSitzung(v: unknown): Sitzung {
   if (o.commit && typeof o.commit.sha === 'string') s.commit = o.commit
   if (o.wartung === true) s.wartung = true
   s.wartungOffen = cleanOffen(o.wartungOffen)
+  s.note = cleanNote(o.note)
   return s
 }
 
@@ -181,6 +195,9 @@ let chain: Promise<unknown> = Promise.resolve() // Buchungen dieser Session nach
 // Die letzten /savings-Ausgaben: ui.render findet über die Kennung im Text die Daten der Zeichnung (wie cost-ledger)
 const reports = new Map<string, { d: Day; p: Period; now: number; days?: Record<string, Day> }>()
 let reportNo = 0
+// Die letzten `/sidekick help`-Schnappschüsse (höchstens 10), über die Kennung `#…` gefunden wie bei /savings (Nachtrag 0.14.0)
+const helps = new Map<string, HelpData>()
+let helpNo = 0
 
 /** Ein Zeichen-Element als reine Daten (StyledElement, types:8851): Box oder Text mit einfachen Props. */
 function el(type: 'Box' | 'Text', props: Record<string, string | number | boolean>, children: RenderNode[]): RenderElement {
@@ -1106,6 +1123,247 @@ async function runLater($: EngineInterface, text: string, sid: string) {
   }
 }
 
+// ---------- Gut zu wissen (SPEC Nachtrag 0.13.0) ----------
+
+let noteRunning = false // eine Prüfung zur Zeit
+let noteTurn = '' // Runde, in der zuletzt ein Hinweis erschien: höchstens einer je Runde
+let curTurn = '' // laufende Runde; ein Ergebnis aus einer älteren ist veraltet
+let notePressing = false // ein Knopf zur Zeit
+
+type StepFacts = { index: number; turnId: string; model: string }
+
+/**
+ * Aus `turn.step` der Hauptschleife, ohne zu warten: an Schritt 6, 12, 18 … einmal `$.model.fork` (den ganzen Verlauf, aus dem Cache,
+ * types:2551-2569). Der Schritt geht sofort weiter; ein Hinweis erscheint über dem Prompt. Fehler und Abbruch: nichts zeigen, nur zählen.
+ */
+function maybeNote($: EngineInterface, e: StepFacts) {
+  curTurn = e.turnId
+  const go = shouldCheck({
+    on: settings.notes,
+    off: settings.level === 'off',
+    index: e.index,
+    hasNote: !!ses.note,
+    shownThisTurn: noteTurn === e.turnId,
+    running: noteRunning,
+    busy: busy !== null || splitting,
+  })
+  if (!go) return
+  noteRunning = true
+  runNote($, e)
+    .catch(() => {})
+    .finally(() => {
+      noteRunning = false
+    })
+}
+
+async function runNote($: EngineInterface, e: StepFacts) {
+  await bindSession($)
+  const sid = sessionId
+  if (ses.note || noteTurn === e.turnId) return
+  // Nur, wo jemand das Band sieht: AbovePrompt gibt es im Terminal und im Desktop (types:9922); in `-p` ist die Liste leer
+  const surfaces = await $.session.surfaces()
+  if (!surfaces.some((s) => s === 'terminal' || s === 'desktop')) return
+  // Zurückhaltung nach ignorierten Hinweisen (Verhalten 7)
+  const skip = nonNeg(await $.store.get('notes:skip'))
+  if (skip > 0) {
+    await $.store.set('notes:skip', skip - 1)
+    return
+  }
+  const seen = cleanTopics(await $.store.get('notes:seen'))
+  const known = cleanTopics(await $.store.get('notes:known'))
+  const t0 = await $.clock.now()
+  const r = await $.model.fork({ prompt: notesPrompt(seen, known, lang()) })
+  // Vor der ersten Antwort und nach /clear gibt es nichts zu forken; dann lief keine Anfrage (types:6184-6197)
+  if (!r.isAnswered && r.reason === 'nothing-to-fork') return
+  const ms = (await $.clock.now()) - t0
+  const usage = 'usage' in r ? (r.usage as CompleteUsage) : undefined
+  const p = r.isAnswered ? parseNote(r.text, seen, known) : null
+  // Veraltet: inzwischen /clear, eine neue Runde (der Nutzer hat weitergeschrieben) oder schon ein Hinweis
+  await bindSession($)
+  const stale = sessionId !== sid || curTurn !== e.turnId || !!ses.note
+  const field: NoteField = !p ? 'fehler' : p.kind === 'none' ? 'keins' : p.kind === 'bad' ? (p.why === 'json' ? 'fehler' : 'verworfen') : stale ? 'verworfen' : 'gezeigt'
+  bookDay($, t0, (d) => {
+    // Auf dem Hauptmodell der Runde; eigene Rechnung, nicht in `kosten` (Nachtrag 0.13.0, Kosten)
+    if (usage) bookNote(d, e.model, completeCost(usage, e.model), ms)
+    countNote(d, field)
+  })
+  if (!p || p.kind !== 'note' || stale) return
+  const now = await $.clock.now()
+  ses.note = { thema: p.thema, art: p.art, titel: p.titel, text: p.text, shownAt: now, turnId: e.turnId, survived: 0, open: false }
+  noteTurn = e.turnId
+  saveSes($, now)
+  // Frisch gelesen: eine andere Session kann inzwischen geschrieben haben
+  await $.store.set('notes:seen', addTopic(cleanTopics(await $.store.get('notes:seen')), p.thema))
+  $.ui.invalidate('ui.render')
+}
+
+/** Eine eigene Nachricht (kein Befehl): Ein nicht erklärter Hinweis verschwindet mit der zweiten als „ignoriert“ (Verhalten 7). */
+async function noteAfterOwn($: EngineInterface, text: string, kind: string) {
+  if (text.trim().startsWith('/') || isHostText(text)) return
+  await bindSession($)
+  if (!ses.note || !(await isOwn($, kind))) return
+  const r = afterOwnMessage(ses.note)
+  if (r.note === ses.note) return
+  const now = await $.clock.now()
+  ses.note = r.note
+  saveSes($, now)
+  if (!r.ignored) return
+  const n = nonNeg(await $.store.get('notes:ignored')) + 1
+  await $.store.set('notes:ignored', n)
+  await $.store.set('notes:skip', skipAfter(n))
+  bookDay($, now, (d) => countNote(d, 'ignoriert'))
+  $.ui.invalidate('ui.render')
+}
+
+type NoteAction = 'explain' | 'known' | 'later' | 'gotit' | 'close' | 'chat'
+
+/**
+ * „Im Chat fragen“: senden, ohne zu warten. Der Aufruf löst sich erst, wenn die neue Runde beginnt, also nach Claudes laufender Arbeit
+ * (docs/raw/en/api.md:138); der Knopf soll sofort fertig sein (Review 0.13.0 S1). Als Nachricht von sidekick, nicht `asUser`:
+ * worklist wertet `asUser` als Antwort des Nutzers und setzte ein angehaltenes To-do fort (Review 0.13.0 S2). Fehler als Toast.
+ */
+function askInChat($: EngineInterface, n: Note) {
+  const x = t()
+  void $.prompt.submit({ text: x.noteAskText(n.titel, n.thema) }).catch((err) => $.ui.toast(x.noteAskFailed(msg(err)), { timeoutMs: 15000 }))
+}
+
+/**
+ * „Im Chat besprechen“: ins leere Eingabefeld schreiben, nie selbst senden. Der Desktop zeichnet ein eigenes Eingabefeld, dort
+ * verweigert `fill` mit `no_composer` (types:8440-8450): dann senden wie das Vorbild, der Knopf heißt dort „Im Chat fragen“.
+ */
+async function noteToChat($: EngineInterface, n: Note, surface: string): Promise<boolean> {
+  const x = t()
+  if (surface === 'desktop') {
+    askInChat($, n)
+    return true
+  }
+  const box = await $.prompt.read().catch(() => null)
+  if (box && box.text.trim()) {
+    $.ui.toast(x.noteBoxFull, { timeoutMs: 8000 })
+    return false
+  }
+  // `append`: tippt der Nutzer zwischen read und fill, bleibt sein Text stehen; bei leerem Feld dasselbe wie `replace` (Review K2)
+  const next = afterFill(await $.prompt.fill({ text: `${x.noteChatText(n.titel, n.thema)}\n\n`, mode: 'append' }))
+  if (next === 'filled') return true
+  if (next === 'submit') {
+    askInChat($, n)
+    return true
+  }
+  $.ui.toast(next === 'dialog' ? x.noteDialog : x.noteNotTaken, { timeoutMs: 8000 })
+  return false
+}
+
+/** Ein Knopf am Hinweis. `shownAt` bindet den Druck an den Hinweis, der gezeichnet war; jede Wahl beendet die Zurückhaltung. */
+async function pressNote($: EngineInterface, shownAt: number, action: NoteAction, surface: string) {
+  if (notePressing) return
+  notePressing = true
+  try {
+    await bindSession($)
+    const n = ses.note
+    if (!n || n.shownAt !== shownAt) return
+    if (action === 'chat' && !(await noteToChat($, n, surface))) return
+    const now = await $.clock.now()
+    ses.note = action === 'explain' ? { ...n, open: true } : null
+    saveSes($, now)
+    // „Weiß ich schon“ und „Verstanden“: das Thema nie wieder anbieten
+    if (action === 'known' || action === 'gotit') await $.store.set('notes:known', addTopic(cleanTopics(await $.store.get('notes:known')), n.thema))
+    const field: NoteField | null = action === 'explain' ? 'erklaert' : action === 'known' ? 'bekannt' : action === 'later' ? 'spaeter' : action === 'chat' ? 'chat' : null
+    if (field) bookDay($, now, (d) => countNote(d, field))
+    await $.store.set('notes:ignored', 0)
+    await $.store.set('notes:skip', 0)
+  } catch {
+    // Beiwerk: ein gescheiterter Druck ändert nichts
+  } finally {
+    notePressing = false
+    $.ui.invalidate('ui.render')
+  }
+}
+
+/** Steht irgendwo im Baum ein Element mit diesem `key` (z. B. die Pillen von quick-replies)? */
+function hasKey(node: unknown, key: string): boolean {
+  const n = node as { props?: Record<string, unknown>; children?: unknown[] } | null
+  if (!n || typeof n !== 'object') return false
+  if (n.props?.key === key) return true
+  return Array.isArray(n.children) && n.children.some((c) => hasKey(c, key))
+}
+
+type NoteButton = (p: { key: string; label: string; hotkey?: string; plain?: true; onPress: () => void }) => RenderNode
+
+/**
+ * Der Hinweis über dem Prompt: `✦ Achtung · <thema>` mit 1 Erklären, 2 Weiß ich schon, 0 Später; aufgeklappt Titel und Erklärung mit
+ * 1 Verstanden, 2 Im Chat besprechen, 0 Schließen. `digits`: Ziffern als hotkey; nicht, solange quick-replies 1 … n belegt (types:9073).
+ */
+function noteView(n: Note, cols: number, surface: string, digits: boolean, button: NoteButton, press: (a: NoteAction) => void): RenderElement {
+  const x = t()
+  const b = (key: string, label: string, hotkey: string, a: NoteAction) => button({ key, label, plain: true, ...(digits ? { hotkey } : {}), onPress: () => press(a) })
+  const head = (label: string, rest: string) =>
+    el('Text', {}, [el('Text', { color: ACCENT }, ['✦ ']), el('Text', { color: ACCENT, bold: true }, [label]), ...(rest ? [el('Text', { dimColor: true }, [' · ']), el('Text', {}, [rest])] : [])])
+  const buttons = (kids: RenderNode[]) => el('Box', { key: 'sidekick-note-buttons', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3 }, kids)
+  const frame = { key: 'sidekick-note', flexDirection: 'column', width: Math.max(20, cols), marginBottom: 1 }
+  if (!n.open)
+    return el('Box', frame, [
+      head(x.noteTag[n.art], n.thema),
+      buttons([b('sidekick-note-explain', x.noteExplain, '1', 'explain'), b('sidekick-note-known', x.noteKnown, '2', 'known'), b('sidekick-note-later', x.noteLater, '0', 'later')]),
+    ])
+  return el('Box', frame, [
+    head(n.titel || x.noteTag[n.art], ''),
+    el('Text', {}, [n.text || n.thema]),
+    buttons([
+      b('sidekick-note-gotit', x.noteGotIt, '1', 'gotit'),
+      b('sidekick-note-chat', surface === 'desktop' ? x.noteAsk : x.noteChat, '2', 'chat'),
+      b('sidekick-note-close', x.noteClose, '0', 'close'),
+    ]),
+  ])
+}
+
+/**
+ * `/sidekick help` und `?` (Nachtrag 0.14.0, docs/HELP-SPEC.md §3): Schnappschuss des Zustands beim Aufruf unter einer Kennung `#…`,
+ * zurück kommt die knappe Markdown-Fassung (Fallback für `-p` und VS Code, und was Claude mitliest). Gezeichnet wird über
+ * `ui.render{CommandOutput, command=sidekick}`. Die Zeichnung schreibt sich nach einem Umschalten nicht um (HELP-SPEC §3.3).
+ */
+async function helpCommand($: EngineInterface): Promise<string> {
+  settings = cleanSettings(await $.store.get('settings'))
+  await bindSession($)
+  const now = await $.clock.now()
+  const hs = cleanHints(await $.store.get('hints'))
+  const known = cleanTopics(await $.store.get('notes:known')).length
+  // worklist erkannt: direkt aus der Befehlsliste, nicht über loadBase (das scheitert schon, wenn nur die Kontext-Schätzung
+  // scheitert; Review 0.14.0 K4). Scheitert die Liste, steht „nein“
+  const worklist = await $.command.list().then(hasTodo, () => false)
+  const source = settings.ttl ? 'set' : mem.ttlSource === 'gemessen' ? 'measured' : 'default'
+  const data = sidekickHelp({ settings, ttl: { min: ttlOf(mem, settings.ttl), source }, hints: { on: hs.on, off: hs.off }, known, worklist })
+  const tag = `#${(++helpNo).toString(36)}${now.toString(36).slice(-5)}`
+  helps.set(tag, data)
+  while (helps.size > 10) helps.delete(helps.keys().next().value as string)
+  return helpMarkdown(data, tag)
+}
+
+/** `/sidekick notes [on|off|forget|status]` (Nachtrag 0.13.0, Verhalten 8). */
+async function notesCommand($: EngineInterface, rest: string): Promise<string> {
+  const a = rest.trim().toLowerCase()
+  // Nur die Wörter aus NOTES_WORDS (die Hilfe nennt jedes, Nachtrag 0.14.0)
+  if (a && !(NOTES_WORDS as readonly string[]).includes(a)) return t().notesUnknown(a)
+  settings = cleanSettings(await $.store.get('settings'))
+  if (a === 'on' || a === 'off') {
+    settings = { ...settings, notes: a === 'on' }
+    await $.store.set('settings', settings)
+    if (a === 'off') {
+      await bindSession($)
+      if (ses.note) {
+        ses.note = null
+        saveSes($, await $.clock.now())
+      }
+      $.ui.invalidate('ui.render')
+    }
+  } else if (a === 'forget') {
+    const n = cleanTopics(await $.store.get('notes:known')).length
+    await $.store.set('notes:known', [])
+    return t().notesForgot(n)
+  }
+  const known = cleanTopics(await $.store.get('notes:known')).length
+  return t().notesStatus(settings.notes, known, settings.level === 'off')
+}
+
 /** Eine Anfrage der Hauptschleife: Cache-Messung wie limit-bars, Kaltstarts ohne Rückfrage, offene Ersparnis-Buchung. */
 async function afterStep($: EngineInterface, u: StepUsage, startedAt: number) {
   await bindSession($)
@@ -1175,6 +1433,7 @@ async function statusText($: EngineInterface): Promise<string> {
   out.push(x.rowSkills(onOff(settings.skills)))
   out.push(x.rowTtl(ttl, settings.ttl ? x.ttlSet : mem.ttlSource === 'gemessen' ? x.ttlMeasured : x.ttlDefault))
   out.push(x.rowLong(settings.long))
+  out.push(x.rowNotes(onOff(settings.notes), cleanTopics(await $.store.get('notes:known')).length))
   if (mem.ctx) out.push(x.rowCtx(tokensText(mem.ctx), cacheText(st.kind, st.left)))
   out.push('', x.summary(ses.summary), '')
   out.push(x.lastHint(ses.last ? `${hhmm(ses.last.at)} · ${ses.last.line}` : ''), '')
@@ -1207,7 +1466,7 @@ async function statusText($: EngineInterface): Promise<string> {
 async function hintsCommand($: EngineInterface, rest: string): Promise<string> {
   let hs = cleanHints(await $.store.get('hints'))
   const r = applyHints(hs, rest, parseTokens)
-  if (r?.error) return `${r.error}. ${t().possible(hintsUsage())}`
+  if (r?.error) return `${r.error}. ${t().possible(hintsUsage())} · ${t().allCommands}`
   if (r?.settings) {
     hs = r.settings
     await $.store.set('hints', hs)
@@ -1246,8 +1505,8 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     // Befehle zuletzt, jeder für sich (CLAUDE.md, Registrieren in session.start); englisch. `/later` mit `immediate`: läuft auch,
     // während Claude arbeitet (types:3018), und zuletzt (Nachtrag 0.10.0)
     for (const c of [
-      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|plan|auto|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|long 800|off|hints …]' },
-      { name: 'savings', description: t().cmdSavings, argumentHint: '[detail] [today|week|all]' },
+      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|plan|auto|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|long 800|off|hints …|notes on|off|forget|help]' },
+      { name: 'savings', description: t().cmdSavings, argumentHint: '[detail] [today|week|all|help]' },
       { name: 'later', description: t().cmdLater, argumentHint: '<text>', immediate: true as const },
     ]) {
       try {
@@ -1262,6 +1521,12 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   // Jede Anfrage der Hauptschleife beobachten (Vorlage limit-bars register.ts:348-380); Subagenten nicht
   on('turn.step', async function* ($, e, next) {
     if (e.agentId) return yield* next(e)
+    // „Gut zu wissen“ (Nachtrag 0.13.0): an Schritt 6, 12, 18 … im Hintergrund, der Schritt wartet nicht
+    try {
+      maybeNote($, e)
+    } catch {
+      // Beiwerk
+    }
     let startedAt = 0
     try {
       startedAt = await $.clock.now()
@@ -1301,6 +1566,12 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     // Ein getippter Wartungs-Befehl gilt als erledigt; im Hintergrund, die Nachricht geht unverändert weiter (SPEC Nachtrag 0.2.0)
     try {
       if (e.text.trim().startsWith('/')) noteDone($, doneFromText(e.text))
+    } catch {
+      // Beiwerk
+    }
+    // „Gut zu wissen“: eine eigene Nachricht lässt einen nicht erklärten Hinweis altern (Nachtrag 0.13.0, Verhalten 7)
+    try {
+      await noteAfterOwn($, e.text, e.origin.kind)
     } catch {
       // Beiwerk
     }
@@ -1541,10 +1812,39 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
 
   // Während „Neuer Chat“ läuft: kleine blaue Box über dem Prompt (sonst nichts Sichtbares, während das Modell
   // die Übergabe schreibt). Sonst unverändert durchreichen; das Band teilen sich limit-bars und clawd-buddy (types:9702-9713).
+  // Seit 0.13.0 außerdem „Gut zu wissen“: der Hinweis auf derselben Ebene; die Übergabe-Box hat Vorrang, der Hinweis wartet.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (!busy || (e.surface !== 'terminal' && e.surface !== 'desktop') || e.props.hasSurvey) return next(e)
+    if ((e.surface !== 'terminal' && e.surface !== 'desktop') || e.props.hasSurvey) return next(e)
     const step = busy
+    let note: Note | null = null
+    // Nur mit eingeschaltetem „Gut zu wissen“ die Session binden (jede Zeichnung des Bands läuft hier durch)
+    if (!step && settings.notes && settings.level !== 'off') {
+      try {
+        await bindSession($)
+        note = ses.note
+      } catch {
+        note = null
+      }
+    }
+    if (!step && !note) return next(e)
     const theirs = await next(e)
+    if (!step && note) {
+      const n = note
+      try {
+        const { layers, base } = splitBand(theirs)
+        // Ziffern nur, solange Claude arbeitet: Danach löst eine allein getippte Ziffer im leeren Eingabefeld den Knopf aus
+        // (docs/raw/en/reference.md:244), etwa die Antwort „2“ auf „Variante 1 oder 2?“ (Review 0.13.0 K1). quick-replies belegt
+        // 1 … n ebenfalls erst nach der Runde; liegt es doch im Band, ohne Ziffern
+        const qr = layers.some((l) => nameOf(l) === 'quick-replies') || hasKey(base, 'quick-replies')
+        const digits = e.props.isWorking && !qr
+        const ui = $.ui.resolve(e)
+        const view = noteView(n, e.props.bodyColumns, e.surface, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a, e.surface))
+        return joinBand([...layers, layer(LEVEL.sidekick, 'sidekick', view)], base)
+      } catch {
+        return theirs
+      }
+    }
+    if (!step) return theirs
     try {
       const secs = Math.max(0, Math.round(((await $.clock.now()) - step.since) / 1000))
       // Eine Leerzeile Abstand unter der Box (wirkt sauberer; marginBottom wie unter der Hinweis-Zeile)
@@ -1563,7 +1863,10 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
 
   on('command.run', { command: 'sidekick' }, async ($, e) => {
     const args = e.args.trim()
+    // `help` und `?` nur als einziges Wort (HELP-SPEC §2); `help foo` gilt als unbekannt
+    if (isHelp(args)) return { text: await helpCommand($) }
     if (/^hints\b/i.test(args)) return { text: await hintsCommand($, args.slice(5)) }
+    if (/^notes\b/i.test(args)) return { text: await notesCommand($, args.slice(5)) }
     // Immer frisch laden: eine andere Session kann die Stufe geändert haben
     settings = cleanSettings(await $.store.get('settings'))
     if (args && args.toLowerCase() !== 'status') {
@@ -1662,6 +1965,8 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   })
 
   on('command.run', { command: 'savings' }, async ($, e) => {
+    // Nebenbefehl: keine eigene Tabelle, nur der Verweis (HELP-SPEC §2)
+    if (isHelp(e.args)) return { text: t().allCommands }
     const v = savingsArgs(e.args)
     if (!v) return { text: t().savingsUsage }
     const { p } = v
@@ -1687,6 +1992,24 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (!v) return next(e)
     try {
       return savingsTree(v.d, v.p, v.now, e.viewport?.columns ?? 100, e.surface, v.days)
+    } catch {
+      return next(e)
+    }
+  })
+
+  // /sidekick help gezeichnet (Nachtrag 0.14.0, docs/HELP-SPEC.md §3.2, Vorlage templates/help/): ein zweiter Matcher neben dem für
+  // savings. Die Kennung steht in der ersten Zeile hinter „sidekick: “, darum ohne Anker gesucht (templates/help/README.md, Befunde).
+  // Status, Fehlermeldungen und andere Oberflächen: Markdown der Engine.
+  on('ui.render', { component: 'CommandOutput', props: { command: 'sidekick' } }, async ($, e, next) => {
+    if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
+    // Nur die Zeile von `/sidekick help` bzw. `?`: `/sidekick #<gültige Kennung>` trägt die Kennung auch in Zeile 1
+    // („Unbekannt: „#…““) und zeigte sonst die Tabelle (templates/help/README.md Punkt 4, Review worklist 0.7.0 K2; Nachtrag 0.14.1)
+    if (!isHelp(String(e.props.args ?? ''))) return next(e)
+    const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
+    const data = tag ? helps.get(tag) : undefined
+    if (!data) return next(e)
+    try {
+      return helpTree(data, e.viewport?.columns ?? 100, e.surface, HELP_ACCENT)
     } catch {
       return next(e)
     }

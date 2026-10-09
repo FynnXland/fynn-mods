@@ -1,6 +1,7 @@
 // cost-ledger: reine Logik ohne $ (Buchen, Aggregieren, Preise, Kurzfassung). Alles hier ist ohne Engine testbar.
-import { T, clock, dateTime, duration, factor, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
+import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
 import type { Lang } from './i18n.ts'
+import type { HelpData } from './help.ts'
 
 export const DAY = 24 * 60 * 60 * 1000
 
@@ -49,6 +50,14 @@ export type LimWin = { chat: number; mod: number; pct: number; first: number; la
 
 export type Settings = { keepDays: number; dayYellow: number; dayRed: number; lang: Lang }
 const DEFAULTS: Settings = { keepDays: 365, dayYellow: 3, dayRed: 8, lang: 'en' }
+
+// Wörter, die `/ledger` annimmt. Parser, Hilfe und ein Test nutzen dieselben Listen: Was der Parser neu lernt, muss in
+// der Hilfe stehen, sonst scheitert der Test (docs/HELP-SPEC.md §6 Punkt 5). Deutsche Wörter sind Aliase (release/I18N.md §3).
+export const HELP_WORDS: readonly string[] = ['help', 'hilfe', '?']
+export const VIEW_WORDS: readonly string[] = ['weeks', 'chats', 'projects', 'models', 'limits']
+export const RANGE_WORDS: readonly string[] = ['all', 'alle']
+export const TODAY_WORDS: readonly string[] = ['today', 'heute']
+export const OFF_WORDS: readonly string[] = ['off', 'aus']
 
 function num(v: unknown, def: number, min: number): number {
   const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN
@@ -101,12 +110,15 @@ const TABLE: readonly [string, Price][] = [
   ['haiku-5-5', { input: 0.1, output: 0.5, read: 0.01, long: { above: 100_000, factor: 5 } }],
   ['haiku-4-5', { input: 1, output: 5, read: 0.1 }],
 ]
+// Alias → Eintrag. `haiku` ist seit Claude Code 2.1.293 Haiku 5.5 (Probe 2.1.295: `claude -p --model haiku` →
+// `claude-haiku-5-5`, SPEC Nachtrag 0.6.0); bis 2.1.291 war es Haiku 4.5. Das Ergebnis eines Mod-Aufrufs nennt das
+// aufgelöste Modell nicht (types ModelUsage), deshalb gilt die Zuordnung der getesteten Version.
 const FAMILY: readonly [string, string][] = [
   ['fable', 'fable-5-1'],
   ['mythos', 'mythos-5-1'],
   ['opus', 'opus-5-5'],
   ['sonnet', 'sonnet-5-5'],
-  ['haiku', 'haiku-4-5'],
+  ['haiku', 'haiku-5-5'],
 ]
 
 /** `claude-opus-5-5-20260101` → `opus-5-5` (ohne Präfix, Kontext-Zusatz und Datum). */
@@ -169,7 +181,7 @@ export const UNKNOWN_MODEL = 'unbekannt'
 
 /**
  * Modell-Schlüssel: `claude-opus-5-5-20260101` → `opus-5-5`. Ein Alias ohne Version (`haiku`, `opus[1m]`, wie ihn Mods
- * übergeben) wird über die Preistabelle zur aktuellen Version (`haiku-4-5`), damit Turns und Mod-Aufrufe in einer Zeile
+ * übergeben) wird über die Preistabelle zur aktuellen Version (`haiku-5-5`, `FAMILY`), damit Turns und Mod-Aufrufe in einer Zeile
  * landen; leer → `UNKNOWN_MODEL`.
  */
 export function modelKey(model: string): string {
@@ -517,6 +529,11 @@ const PLAN_ALIASES: Record<string, string> = { pro: 'pro', max5: 'max5', max5x: 
 /** Nur eigene Schlüssel: `constructor` oder `__proto__` sind kein Plan. */
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 
+/** Alle Schreibweisen eines Plans, die `/ledger plan` annimmt (für Hilfe und Vollständigkeitstest). */
+export function planWords(): string[] {
+  return Object.keys(PLAN_ALIASES)
+}
+
 /** `meta:plan`: Plan, Abrechnungstag, eigener Preis (ohne: Listenpreis), Zeitpunkt der Einstellung. */
 export type Plan = { v: 1; plan: string; day: number; price?: number; at: number }
 
@@ -539,7 +556,7 @@ export function parsePlan(args: readonly string[], now: number): Plan | null {
   const [p = '', d = '', price, ...rest] = args.map((a) => a.trim().toLowerCase())
   const plan = own(PLAN_ALIASES, p) ? PLAN_ALIASES[p] : undefined
   if (!plan || rest.length) return null
-  const day = d === 'today' || d === 'heute' ? new Date(now).getDate() : /^\d{1,2}$/.test(d) ? Number(d) : NaN
+  const day = TODAY_WORDS.includes(d) ? new Date(now).getDate() : /^\d{1,2}$/.test(d) ? Number(d) : NaN
   if (!Number.isInteger(day) || day < 1 || day > 31) return null
   if (price === undefined) return { v: 1, plan, day, at: now }
   const s = price.replace(/^\$|\$$/g, '').replace(',', '.')
@@ -740,7 +757,7 @@ export type Report = {
   unreadable: number
   hasCost: boolean
   total: number
-  /** Geschätzte Größe des Plugin-Speichers in Byte (Grenze 4 MiB, docs/raw/en/reference.md:259) */
+  /** Geschätzte Größe des Plugin-Speichers in Byte (Grenze 4 MiB, docs/raw/en/reference.md:294) */
   storeBytes: number
   writeError: string
   limits: LimitsReport
@@ -922,7 +939,7 @@ function seriesOf(recs: { rec: Rec }[], now: number): { days: Bucket[]; weeks: B
 /** Argument `7|30|all` → Tage (0 = alles); sonst Standard 30. `alle` bleibt als Alias gültig. */
 export function parseRange(a: string | undefined): number {
   const s = (a ?? '').trim().toLowerCase()
-  if (s === 'all' || s === 'alle') return 0
+  if (RANGE_WORDS.includes(s)) return 0
   const n = Number(s)
   return Number.isInteger(n) && n > 0 && n <= 3650 ? n : 30
 }
@@ -1077,4 +1094,57 @@ export function summaryText(r: Report, view: ViewName, range: number, tag: strin
     if (r.projects.length > shown.length) lines[lines.length - 1] += ` · ${t.more(r.projects.length - shown.length)}`
   }
   return capped(lines, t.sumFoot)
+}
+
+// ---------- /ledger help (docs/HELP-SPEC.md §5 „cost-ledger 0.6.0“) ----------
+
+/** Was die Hilfe außer den Einstellungen braucht: Plan, Belegung des Speichers, Beginn der Erfassung. */
+export type HelpInfo = { plan: Plan | null; storeBytes: number; since: number | null }
+
+/** Zahl einer Einstellung in der Sprache: en `2.5`, de `2,5`. */
+const settingNum = (v: number, lang: Lang) => (lang === 'de' ? String(v).replace('.', ',') : String(v))
+
+/**
+ * Schnappschuss für `/ledger help`: Befehle genau so, wie der Parser sie annimmt (Wörter aus `HELP_WORDS` & Co.),
+ * Funktionen mit Zustand beim Aufruf, Einstellungen mit ihrem wirksamen Wert (nach `cleanSettings`).
+ */
+export function ledgerHelp(s: Settings, info: HelpInfo): HelpData {
+  const lang = s.lang
+  const t = T[lang]
+  const money = (v: number) => usd(v, lang)
+  const p = info.plan
+  const price = p ? (p.price ?? (own(PLANS, p.plan) ? PLANS[p.plan]!.price : undefined)) : undefined
+  const priceText = p ? (price === undefined ? t.noPrice : `${t.perMonth(money(price))}${p.price === undefined ? ` (${t.listPrice})` : ''}`) : ''
+  const pctUsed = Math.round((Math.max(0, info.storeBytes) / STORE_LIMIT) * 100)
+  return {
+    mod: 'cost-ledger',
+    lang,
+    intro: t.helpIntro,
+    commands: [
+      { cmd: '/ledger', does: t.helpOverview },
+      { cmd: '/ledger weeks', does: t.helpWeeks },
+      { cmd: '/ledger chats|projects|models [7|30|all]', does: t.helpLists },
+      { cmd: '/ledger limits', does: t.helpLimits },
+      { cmd: '/ledger plan', does: t.helpPlanShow },
+      { cmd: '/ledger plan <plan> <day|today> [price]', does: t.helpPlanSet },
+      { cmd: '/ledger plan off', does: t.helpPlanOff },
+      { cmd: '/ledger reset', does: t.helpReset },
+      { cmd: '/ledger help', does: t.helpHelp },
+    ],
+    notes: [t.helpAliases],
+    features: [
+      p
+        ? { name: t.helpPlanName, state: { kind: 'on', text: `${planLabel(p.plan)} · ${t.helpDay(p.day)} · ${priceText}` }, toggle: '/ledger plan off' }
+        : { name: t.helpPlanName, state: { kind: 'off', text: t.helpNoPlan }, toggle: '/ledger plan max20 14' },
+      { name: t.helpStorageName, state: { kind: 'value', text: t.helpStorage(pctUsed) }, toggle: t.helpInfo },
+      { name: t.helpSinceName, state: { kind: 'value', text: info.since === null ? '–' : fullDate(info.since, lang) }, toggle: t.helpInfo },
+    ],
+    settings: [
+      { title: t.setLanguage, value: lang, isDefault: lang === DEFAULTS.lang },
+      { title: t.setKeepDays, value: String(s.keepDays), isDefault: s.keepDays === DEFAULTS.keepDays },
+      { title: t.setDayYellow, value: settingNum(s.dayYellow, lang), isDefault: s.dayYellow === DEFAULTS.dayYellow },
+      { title: t.setDayRed, value: settingNum(s.dayRed, lang), isDefault: s.dayRed === DEFAULTS.dayRed },
+    ],
+    footer: { terminal: t.helpFooterTerminal, desktop: t.helpFooterDesktop },
+  }
 }

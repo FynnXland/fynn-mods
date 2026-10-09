@@ -63,14 +63,36 @@ export function parseOnOff(s: string): boolean | undefined {
   return undefined
 }
 
-export type BarsCommand = { kind: 'status' } | { kind: 'reset' } | { kind: 'set'; part: Part; on: boolean } | { kind: 'bad' }
+export type BarsCommand = { kind: 'status' } | { kind: 'reset' } | { kind: 'help' } | { kind: 'set'; part: Part; on: boolean } | { kind: 'bad' }
 
-/** `/bars`, `/bars reset`, `/bars show <teil> on|off` und kurz `/bars <teil> on|off`. */
+// Wortlisten des Parsers, exportiert für den Vollständigkeitstest der Hilfe (docs/HELP-SPEC.md §6 Punkt 5)
+/** `help` und `?`, nur als einziges Wort (HELP-SPEC §2); gilt auch für die Nebenbefehle `/cache`, `/handoff`, `/keepwarm`, `/disk`. */
+export const HELP_WORDS: readonly string[] = ['help', '?']
+export const STATUS_WORDS: readonly string[] = ['status', 'show']
+export const RESET_WORDS: readonly string[] = ['reset', 'zurücksetzen', 'zuruecksetzen']
+export const SHOW_WORDS: readonly string[] = ['show', 'zeigen']
+export const ON_OFF_WORDS: readonly string[] = ['on', 'off', 'an', 'aus']
+export const PART_WORDS: readonly string[] = PART_ALIASES.flatMap(([, names]) => names)
+
+// Wortlisten der Nebenbefehle (register.ts nutzt sie; Vollständigkeitstest der Hilfe)
+export const HANDOFF_SHOW_WORDS: readonly string[] = ['show', 'zeigen']
+export const HANDOFF_CONTINUE_WORDS: readonly string[] = ['continue', 'weiter']
+export const KEEP_OFF_WORDS: readonly string[] = ['off', 'aus']
+export const DISK_WORDS: readonly string[] = ['refresh']
+
+/** Ist das ganze Argument `help` oder `?` (ein Wort, Groß-/Kleinschreibung egal)? */
+export function isHelp(args: string): boolean {
+  const w = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  return w.length === 1 && HELP_WORDS.includes(w[0]!)
+}
+
+/** `/bars`, `/bars help`, `/bars reset`, `/bars show <teil> on|off` und kurz `/bars <teil> on|off`. */
 export function parseBars(args: string): BarsCommand {
   const w = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (w.length === 0 || (w.length === 1 && (w[0] === 'status' || w[0] === 'show'))) return { kind: 'status' }
-  if (w.length === 1 && (w[0] === 'reset' || w[0] === 'zurücksetzen' || w[0] === 'zuruecksetzen')) return { kind: 'reset' }
-  const rest = w[0] === 'show' || w[0] === 'zeigen' ? w.slice(1) : w
+  if (w.length === 0 || (w.length === 1 && STATUS_WORDS.includes(w[0]!))) return { kind: 'status' }
+  if (isHelp(args)) return { kind: 'help' }
+  if (w.length === 1 && RESET_WORDS.includes(w[0]!)) return { kind: 'reset' }
+  const rest = SHOW_WORDS.includes(w[0]!) ? w.slice(1) : w
   if (rest.length !== 2) return { kind: 'bad' }
   const part = parsePart(rest[0]!)
   const on = parseOnOff(rest[1]!)

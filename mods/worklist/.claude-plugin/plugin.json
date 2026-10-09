@@ -1,7 +1,7 @@
 {
   "name": "worklist",
-  "version": "0.6.0",
-  "description": "To-do sidebar next to the chat: queue tasks, even while Claude is working. When Claude is clearly done, the to-do is checked off and the next one starts; otherwise the list stops with a reason and buttons (Continue keeps the order). Runs by default, never pauses on its own. Survives /clear. History per project. /todo",
+  "version": "0.7.2",
+  "description": "To-do sidebar next to the chat: queue tasks, even while Claude is working. When Claude is clearly done, the to-do is checked off and the next one starts; otherwise the list stops with a reason and buttons (Continue keeps the order). Runs by default, never pauses on its own. Survives /clear. History per project. /todo, /todos help",
   "author": {
     "name": "Fynn Hansen"
   },

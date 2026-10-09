@@ -4,7 +4,7 @@ An animated pixel mascot ("Clawd") sits to the right above the prompt. It reacts
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** (terminal and desktop app) · Plugin version **0.6.13**
+Tested with Claude Code **v2.1.295** (terminal and desktop app) · Plugin version **0.7.1**
 
 ## What it does
 
@@ -37,6 +37,7 @@ Clawd runs on his own. What he does depends on what is happening:
 | `/clawd demo <name>` | play one animation, e.g. `/clawd demo type_laptop` |
 | `/clawd nap` | sends him to sleep |
 | `/clawd boop` | pokes him |
+| `/clawd help` or `/clawd ?` | a table of all commands, the mouse controls, what is on or off right now and your settings with their values (drawn in the terminal and the desktop app, plain text elsewhere) |
 | `/clawd flicker` | desktop app only: a 20-second test in two parts (number top left): Clawd is redrawn every 2 s, first as an image (as in normal operation), then in a frame as up to 0.6.5, for comparison; afterwards he continues normally |
 | Mouse (terminal): click | giggles; many clicks in a row make him annoyed, then offended |
 | Mouse (terminal): drag an arm | the arm follows briefly and snaps back |
@@ -60,19 +61,19 @@ Runs in: the terminal (half-block pixels, with mouse) and the desktop app's Code
 
 ## Language
 
-Texts are English by default; set `language` to `de` for German (`/config` → clawd-buddy → Language / Sprache). This covers everything the mod writes: the output of `/clawd` (status, list, demo, nap, errors), the animation names and the image's alt text. Clawd himself shows no text. `/clawd demo` finds animations by their English and German names in both languages. Commands and arguments are English either way.
+Texts are English by default; set `language` to `de` for German (`/config` → clawd-buddy → Language / Sprache). This covers everything the mod writes: the output of `/clawd` (status, help, list, demo, nap, errors), the animation names and the image's alt text. Clawd himself shows no text. `/clawd demo` finds animations by their English and German names in both languages. Commands and arguments are English either way.
 
 ## Rights
 
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, session.measure, turn.start, turn.complete, tool.call, tool.check, session.compact, skill.prompt, prompt.edit, ui.message, command.run{command=clawd}, ui.render{component=AbovePrompt}
+hooks: session.start, session.measure, turn.start, turn.complete, tool.call, tool.check, session.compact, skill.prompt, prompt.edit, ui.message, command.run{command=clawd}, ui.render{component=CommandOutput, props has {command=clawd}}, ui.render{component=AbovePrompt}
 calls: $.command.register, $.store.get, $.store.set, $.ui.invalidate, $.ui.resolve, $.clock.now, $.clock.every, $.ui.log, $.state.get
 state reads: sidekick.buddy
 ```
 
-All event hooks **only observe** and pass everything through unchanged. No file system, no processes, no network, no model calls.
+Apart from drawing the `/clawd help` table (see below), all event hooks **only observe** and pass everything through unchanged. No file system, no processes, no network, no model calls.
 
 In plain language:
 
@@ -80,6 +81,7 @@ In plain language:
 - `$.store.get` / `$.store.set`: stores only on/off, the annoyance counter, and when you were last around (one timestamp, written at most every 5 min, for the welcome after a break). The plugin's own storage.
 - `$.ui.invalidate`: redraws the band when something changes (turn, tool, typing at most once per second; in the desktop app typing at most every 3 s, plus once before each animation runs out, usually every 15 to 30 s; 2 to 3 times a minute when idle).
 - `$.ui.resolve`: fetches the drawing components (Box, Client, Svg).
+- Hook `ui.render` on `CommandOutput` (only `/clawd`): draws the answer of `/clawd help` as a table in place of the text. It reads only the reference mark in its own command output; every other output of `/clawd` stays plain text.
 - `$.clock.now`: time of day for day/night, waiting times, mood, and the break before the welcome.
 - Hook `session.measure`: reads only the percentage and reset time of the 5-hour and weekly limits (for the limit animations) and the fill percentage of the context window (for the "context almost full" hint); never the conversation itself.
 - `$.clock.every`: a watcher (every 250 ms, no drawing of its own) **only in the desktop app**, while it draws the band and Clawd is on; it asks for the next animation shortly before the current one ends, or shortly before new facts would change what is shown. In the terminal the client ticks on its own.

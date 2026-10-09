@@ -5,7 +5,7 @@ worklist and a cost ledger.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.291_tested-D97757)](https://code.claude.com/docs/en/plugins/mods/overview)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.295_tested-D97757)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![Mods](https://img.shields.io/badge/mods-6-555)](#the-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#the-mods)
 
@@ -37,9 +37,13 @@ This repository is a Claude Code plugin marketplace named `fynn-mods`.
 | [worklist](#worklist) | To-do sidebar that feeds Claude one task after another, only when it's clearly done |
 | [cost-ledger](#cost-ledger) | Cost ledger across all chats, by day, project, chat and model |
 
+**Help in every mod:** `/<command> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/todos`, `/ledger`) draws a
+table of all commands, what is on or off right now and how to switch it, and the mod's settings with their values.
+In `claude -p` and VS Code you get the same as short text.
+
 ## Requirements
 
-- Claude Code with mods. Mods need **v2.1.287 or later**; this set is tested with **v2.1.291**. Check with
+- Claude Code with mods. Mods need **v2.1.287 or later**; this set is tested with **v2.1.295**. Check with
   `claude --version`.
 - Runs in the terminal and in the Code tab of the Claude desktop app. In `claude -p`, the Agent SDK, VS Code and on
   mobile most mods draw nothing; see each mod's README.
@@ -88,7 +92,8 @@ Three mods make model calls **on your account** (on a subscription they count to
   made only when you choose it. In level `plan` or `auto` with worklist installed, a long message (800+ characters) is
   checked too, and splitting it into to-dos or `/later` costs about $0.01 more. Level `auto` checks every message from
   300 characters with Sonnet 5.5 (about $0.012 each) and lets Sonnet write its rewritten versions; level `cache` makes no model call at all. `/savings` sets both against the measured
-  savings. Turn it off with `/sidekick off`.
+  savings. Turn it off with `/sidekick off`. *Good to know* (off by default, `/sidekick notes on`) asks your session's
+  own model during longer tasks, mostly from the cache: about $0.04 per check at 150k context with Opus 5.5.
 - **worklist** asks Haiku 5.5 (effort `high`) only when its rules can't tell whether Claude is done: about $0.0001 per case. Turn it off
   with the `haiku` setting in `/config`; the list then stops in those cases and waits for you.
 - **quick-replies** forks the session after each answer **only with `/replies more on`** (off by default): roughly
@@ -108,9 +113,10 @@ laptop while Claude edits, waits with an hourglass during long tool runs, celebr
 grumpy when errors pile up. When idle he passes the time depending on the hour, and at night he falls asleep.
 Subagents show up as small helpers next to him.
 
-- **Commands:** `/clawd` (status), `/clawd on|off`, `/clawd list`, `/clawd demo <name>`, `/clawd nap`, `/clawd boop`
-- **Rights in short:** observes events only and passes them on unchanged; remembers on/off and a few counters in its
-  own plugin store. No files, processes, network or model calls.
+- **Commands:** `/clawd` (status), `/clawd on|off`, `/clawd list`, `/clawd demo <name>`, `/clawd nap`, `/clawd boop`,
+  `/clawd help`
+- **Rights in short:** observes events and passes them on unchanged; draws only its own `/clawd help` table;
+  remembers on/off and a few counters in its own plugin store. No files, processes, network or model calls.
 - **Details:** [mods/clawd-buddy](mods/clawd-buddy/README.md)
 
 ### limit-bars
@@ -130,7 +136,7 @@ An optional third ring shows how full a drive is, split by file type (programs, 
 `/cache warn off`.
 
 - **Commands:** `/cache` (overview and settings), `/handoff [continue|show]` (write a handoff and continue in a fresh
-  chat), `/keepwarm [hours|off]`, `/disk [refresh]`, `/bars [show <part> on|off | reset]`
+  chat), `/keepwarm [hours|off]`, `/disk [refresh]`, `/bars [show <part> on|off | reset]`, `/bars help`
 - **Rights in short:** reads limits, context size and cache statistics; can hold a message back to ask you first; runs
   `/clear` and `/compact` and sends a handoff only after you choose so; `$.model.fork` only while `/keepwarm` runs;
   only with `storagePath` set, runs Windows PowerShell with two fixed, read-only scripts (drive size, sizes by file
@@ -167,14 +173,19 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
   `/handoff`) runs it with one click or, with worklist installed, queues a skill as a to-do.
 - **Savings you can check:** `/savings` shows what sidekick cost and what it measurably saved; `/savings detail` adds
   the calculation, a model comparison and a day-by-day history.
+- **Good to know (optional, off by default):** with `/sidekick notes on`, sidekick asks during a longer task whether
+  you very likely missed something with consequences, and shows it above the prompt with *Explain*, *Know this* and
+  *Later*. Most of the time nothing appears.
 
 If a check fails or times out, your message goes through unchanged.
 
 - **Commands:** `/sidekick` (status and settings), `/sidekick off|cache|guide|plan|auto|on`, `/sidekick long 800|off`,
-  `/sidekick hints …`, `/later <text>`, `/savings [today|week|all]`, `/savings detail`
+  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick help`, `/later <text>`, `/savings [today|week|all]`,
+  `/savings detail`
 - **Rights in short:** reads your message before it is sent; holds it back or replaces it only after your choice in
   the dialog (in level `auto` also without asking: a rewritten version or a split); Haiku 5.5 and Sonnet 5.5 via `$.model.complete` with a short running summary, your last 3 messages and the end of Claude's last reply, never the whole
-  history; on a button click it runs the command shown in the line (plugin and your own commands, `/skill-doctor`,
+  history; only with Good to know on, one question via `$.model.fork` to your session's own model over the
+  conversation, with every tool denied; on a button click it runs the command shown in the line (plugin and your own commands, `/skill-doctor`,
   `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) or worklist's `/todo` (also for
   the to-dos of a split or `/later`); in level `auto` it sends a rewritten version in your name without asking, only
   after you chose that level; draws its label in the prompt footer; and fills
@@ -190,7 +201,7 @@ Claude Code often suggests your next message as grey text in the prompt. quick-r
 own pill above Clawd. Click it, or type `1` into the empty prompt, and it's sent as your message. With
 `/replies more on` a fork of the session fills up to four places in total; Claude Code's own stays on `1`.
 
-- **Commands:** `/replies` (status), `/replies on|off`, `/replies more on|off`
+- **Commands:** `/replies` (status), `/replies on|off`, `/replies more on|off`, `/replies help`
 - **Rights in short:** reads Claude Code's suggestion; sends a suggestion as your message only on click or key, never
   automatically; `$.model.fork` only with `more` on. No files, processes or network.
 - **Details:** [mods/quick-replies](mods/quick-replies/README.md)
@@ -206,7 +217,8 @@ plan), it stops at that to-do, tells you why and offers **Continue**, **Mark as 
 question in the chat continues it as well. Queueing while Claude is free starts the list even after a question.
 The list survives `/clear`; history is kept per project.
 
-- **Commands:** `/todo <task>`, `/todos` (sidebar), `/todos pause|resume|done|skip|retry|clear|history|status|close`
+- **Commands:** `/todo <task>`, `/todos` (sidebar), `/todos pause|resume|done|skip|retry|clear|history|status|close`,
+  `/todos help`
 - **Rights in short:** sends the next to-do (or the continuation of a stopped one) as your message only after its
   check passes or on your click; Haiku 5.5 for
   unclear cases (can be turned off); reads whether subagents are still running. In the chat it shows sent to-dos as an
@@ -263,7 +275,7 @@ optional storage ring: it reads sizes, never file contents. Found a security pro
 | Two questions in a row before a cold send | limit-bars and sidekick both guard against cold sends. Turn off limit-bars' question with `/cache warn off`. |
 | Everything is in English | Set the `language` option to `de` with `/plugin configure <mod>@fynn-mods`. |
 | The storage ring is missing or empty | It is Windows only and off by default: set `storagePath` (for example `D:\`) in `/config`, and check that `/bars show storage on` is set. If it stays empty, `/disk` shows the error. |
-| cost-ledger shows a Haiku 5.5 chat at about ten times its cost | Claude Code v2.1.291 prices Haiku 5.5 like Haiku 4.5 in `/cost`, and cost-ledger books that value for the chat. Model calls of the mods use cost-ledger's own prices. |
+| cost-ledger shows a Haiku 5.5 chat at about ten times its cost | Claude Code v2.1.291 priced Haiku 5.5 like Haiku 4.5 in `/cost`, and cost-ledger books that value for the chat. Update Claude Code; v2.1.295 prices it correctly. Model calls of the mods use cost-ledger's own prices. |
 
 To see why a mod does nothing, start Claude Code with `claude --debug-file mod-debug.log` and search the file for the
 mod's name ([Claude Code docs](https://code.claude.com/docs/en/plugins/mods/troubleshoot)).

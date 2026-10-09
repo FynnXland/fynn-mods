@@ -12,6 +12,9 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
 import { AGENT_TASKS, BUSY_STATUS, HAIKU, decideHaiku, decideRules, filterStop, haikuCost, haikuPrompt, haikuSystem, otherBackground, parseHaiku } from './check.ts'
 import type { Decision, StopFacts } from './check.ts'
+import { helpMarkdown, helpTree } from './help.ts'
+import type { HelpData } from './help.ts'
+import { HELP_WORDS, TODOS_WORDS, worklistHelp } from './helpdata.ts'
 import { ANSWER_HINTS, CONTINUE_TEXTS, DONE_HINTS, T, cents, hhmm, shortDate } from './i18n.ts'
 import type { Strings } from './i18n.ts'
 import {
@@ -49,6 +52,9 @@ import { ORANGE, clamp, clock, duration, renderPane } from './view.ts'
 import type { Actions, Control, NoticeKind, NowView, StatusLine, View } from './view.ts'
 
 const PANE = 'worklist'
+// Akzent der Hilfe-Tabelle (/todos help): Theme-Key statt ORANGE, passt sich hell und dunkel an; #D77757 lag auf Weiß bei
+// etwa 3,2:1 (docs/HELP-SPEC.md §4, Fynn 2026-10-09; ThemeKey types@2.1.295:12590)
+const HELP_ACCENT = 'claude'
 const TITLE = 'To-dos'
 // Fynns eigene Nachrichten: im Desktop `composer`, in -p/SDK `sdk`, vom Handy `bridge` (types: PromptOrigin)
 const FYNN = ['composer', 'sdk', 'bridge']
@@ -114,6 +120,9 @@ let storeWarned = false
 // danach, zieht carryOver sie trotzdem um (0.6.0; die Reihenfolge von Neuzeichnen und Hook ist nicht belegt)
 let switched: { from: string; to: string; q: Queue } | null = null
 let draft = ''
+// /todos help (0.7.0): Schnappschüsse der gezeichneten Hilfe unter ihrer Kennung, höchstens 10 (docs/HELP-SPEC.md §3)
+const drawnHelp = new Map<string, HelpData>()
+let helpNo = 0
 let historyOpen = false
 let historyAll = false
 let inputGen = 0
@@ -1265,13 +1274,26 @@ async function runTodo($: EngineInterface, args: string): Promise<{ text?: strin
   return {}
 }
 
+/** Hilfe-Schnappschuss ablegen; die Kennung steht in der ersten Zeile des Texts, darüber findet der Render-Hook ihn. */
+function rememberHelp(at: number, data: HelpData): string {
+  const tag = `#${(++helpNo).toString(36)}${at.toString(36).slice(-5)}`
+  drawnHelp.set(tag, data)
+  while (drawnHelp.size > 10) drawnHelp.delete(drawnHelp.keys().next().value as string)
+  return tag
+}
+
 /** /todos: Seitenleiste und alle übrigen Befehle. */
 async function runTodos($: EngineInterface, args: string): Promise<{ text?: string }> {
   const L = tx()
   await syncSession($)
   const word = args.trim().toLowerCase()
   if (word === '') return openPane($)
-  if (word === 'help' || word === '?') return { text: L.help }
+  // Nur die Wörter, die auch in der Hilfe stehen (helpdata.ts); ein Test prüft jedes gegen sie (HELP-SPEC §6 Punkt 5)
+  if (!(TODOS_WORDS as readonly string[]).includes(word)) return { text: `${L.unknown(args.trim())}\n\n${L.help}\n\n${L.allCommands}` }
+  if (HELP_WORDS.includes(word)) {
+    const data = worklistHelp(settings, { paused: q.paused, hold: rt.hold })
+    return { text: helpMarkdown(data, rememberHelp(await now($), data)) }
+  }
   if (word === 'status') return { text: statusText() }
   if (word === 'history') {
     historyOpen = true
@@ -1323,7 +1345,7 @@ async function runTodos($: EngineInterface, args: string): Promise<{ text?: stri
     await commit($)
     return { text: L.cleared(n) }
   }
-  return { text: `${L.unknown(args.trim())}\n\n${L.help}` }
+  return { text: `${L.unknown(args.trim())}\n\n${L.help}\n\n${L.allCommands}` }
 }
 
 // ---------- Hooks ----------
@@ -1449,7 +1471,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       await $.command.register({
         name: 'todos',
         description: L.cmdTodos,
-        argumentHint: '[status | pause | resume | done | skip | retry | clear | history | close]',
+        argumentHint: '[status | pause | resume | done | skip | retry | clear | history | close | help]',
         immediate: true,
       })
     } catch (err) {
@@ -1760,6 +1782,18 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       return Box({})
     }
     return next({ ...e, props: { ...e.props, text: shown } })
+  })
+
+  // /todos help als gezeichnete Tabelle an der Stelle der Befehlsausgabe (0.7.0, docs/HELP-SPEC.md §3 Punkt 2). `command` liegt in
+  // e.props (Matcher `props`, Befund cost-ledger Phase 0). Nur Terminal und Desktop, sonst zeigt die Engine den Markdown-Text.
+  // Die Kennung steht nicht am Zeilenanfang („worklist: …“ davor, templates/help/README.md); ohne `$`-Aufrufe.
+  on('ui.render', { component: 'CommandOutput', props: { command: 'todos' } }, async ($, e, next) => {
+    if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
+    // Nur der Lauf von help/?: sonst zeigte z. B. „/todos #<Kennung>“ (Antwort „Unbekannt: #…“) die Tabelle (Review 0.7.0 K2)
+    if (!HELP_WORDS.includes(e.props.args.trim().toLowerCase())) return next(e)
+    const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
+    const data = tag ? drawnHelp.get(tag) : undefined
+    return data ? helpTree(data, e.viewport?.columns ?? 100, e.surface, HELP_ACCENT) : next(e)
   })
 
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {

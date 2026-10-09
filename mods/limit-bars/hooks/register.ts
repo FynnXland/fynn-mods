@@ -31,8 +31,23 @@ import {
 } from './cache.ts'
 import type { CacheMem, KeepWarm, ReportLimit, Settings, StepUsage } from './cache.ts'
 import { BARS_HINT, CACHE_ARGS, CACHE_HINT, HANDOFF_HINT, T, hhmm, langOf, usd } from './i18n.ts'
-import { PARTS, cleanOverrides, displayFromOptions, effectiveDisplay, parseBars } from './display.ts'
+import {
+  DISK_WORDS,
+  HELP_WORDS,
+  HANDOFF_CONTINUE_WORDS,
+  HANDOFF_SHOW_WORDS,
+  KEEP_OFF_WORDS,
+  PARTS,
+  cleanOverrides,
+  displayFromOptions,
+  effectiveDisplay,
+  isHelp,
+  parseBars,
+} from './display.ts'
 import type { Display, Overrides } from './display.ts'
+import { helpMarkdown, helpTree } from './help.ts'
+import type { HelpData } from './help.ts'
+import { HELP_ACCENT, barsHelpData } from './helpdata.ts'
 import type { Lang } from './i18n.ts'
 import { ringFilled } from './ring.ts'
 import {
@@ -114,6 +129,19 @@ const SCAN_PAUSE = 24 * 60 * 60000 // nach einem gescheiterten Scan keine automa
 // Daten der /disk-Ansichten für das Zeichnen der Befehlszeile (Kennung im Text, wie cost-ledger /ledger)
 const reports = new Map<string, StorageReport>()
 let reportNo = 0
+// /bars help: Schnappschuss je Aufruf, höchstens 10 (docs/HELP-SPEC.md §3, templates/help/README.md)
+const helps = new Map<string, HelpData>()
+let helpNo = 0
+// userConfig, wie register() sie bekommt: für die Spalte EINSTELLUNGEN der Hilfe
+let rawOptions: Readonly<Record<string, unknown>> = {}
+
+/** Schnappschuss unter einer neuen Kennung `#…` ablegen; die älteste fällt heraus. */
+function rememberHelp(now: number, data: HelpData): string {
+  const tag = `#${(++helpNo).toString(36)}${now.toString(36).slice(-5)}`
+  helps.set(tag, data)
+  while (helps.size > 10) helps.delete(helps.keys().next().value as string)
+  return tag
+}
 
 const STYLES: readonly ResetStyle[] = ['mixed', 'clock', 'countdown']
 const KEEP_MAX_H = 4
@@ -528,6 +556,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   }
   storagePath = typeof options.storagePath === 'string' ? options.storagePath.trim() : ''
   baseDisplay = displayFromOptions(options)
+  rawOptions = options
 
   on('session.start', async ($, e, next) => {
     // Nur wo das Band gezeichnet wird (types@2.1.288:9576); `-p`/SDK liefern null, VS Code und mobil zeichnen kein Band
@@ -688,6 +717,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   on('command.run', { command: 'cache' }, async ($, e) => {
     const t = T[lang]
+    // Nebenbefehl: die Hilfe steht unter /bars help (HELP-SPEC §2)
+    if (isHelp(e.args)) return { text: t.seeHelp }
     const [key, value] = e.args.trim().toLowerCase().split(/\s+/)
     let note = ''
     if (key) {
@@ -723,12 +754,14 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   on('command.run', { command: 'handoff' }, async ($, e) => {
     const t = T[lang]
+    // Vor allem anderen: bis 0.6.x startete jedes Argument eine Übergabe, also auch `help` (HELP-SPEC §2)
+    if (isHelp(e.args)) return { text: t.seeHelp }
     const arg = e.args.trim().toLowerCase()
-    if (arg === 'show' || arg === 'zeigen') {
+    if (HANDOFF_SHOW_WORDS.includes(arg)) {
       const list = await loadHandoffs($)
       return { text: list[0] ? t.handoffLast(hhmm(list[0].at), list[0].text) : t.handoffNoneSaved }
     }
-    if (arg === 'continue' || arg === 'weiter') {
+    if (HANDOFF_CONTINUE_WORDS.includes(arg)) {
       later($, 300, () => {
         clearAndContinue($).catch(() => {})
       })
@@ -761,8 +794,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   on('command.run', { command: 'keepwarm' }, async ($, e) => {
     const t = T[lang]
+    if (isHelp(e.args)) return { text: t.seeHelp }
     const arg = e.args.trim().toLowerCase()
-    if (arg === 'off' || arg === 'aus' || (arg === '' && keep)) {
+    if (KEEP_OFF_WORDS.includes(arg) || (arg === '' && keep)) {
       if (!keep) return { text: t.keepAlreadyOff }
       stopKeep($, t.whyTurnedOff)
       return { text: t.keepTurnedOff }
@@ -799,6 +833,28 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const c = parseBars(e.args)
     if (c.kind === 'bad') return { text: t.unknownArg(e.args.trim(), BARS_HINT) }
     await readDisplay($)
+    if (c.kind === 'help') {
+      // Stand beim Aufruf (HELP-SPEC §3 Punkt 3): Einstellungen frisch aus dem Store, wie /cache
+      try {
+        settings = cleanSettings(await $.store.get('settings'))
+      } catch {
+        // Stand dieser Session
+      }
+      await bindSession($)
+      const data = barsHelpData({
+        lang,
+        options: rawOptions,
+        shown: shownParts(),
+        overrides,
+        storagePath,
+        hasDrive: !!driveOf(storagePath),
+        settings,
+        memTtl: mem.ttl,
+        memTtlSource: mem.ttlSource,
+        keep,
+      })
+      return { text: helpMarkdown(data, rememberHelp(await $.clock.now(), data)) }
+    }
     let note = ''
     if (c.kind === 'reset') {
       overrides = {}
@@ -846,8 +902,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   // stattdessen den großen Ring mit Legende (types@2.1.290:9695-9725, Vorbild cost-ledger /ledger).
   on('command.run', { command: 'disk' }, async ($, e) => {
     const t = T[lang]
+    if (isHelp(e.args)) return { text: t.seeHelp }
     const arg = e.args.trim().toLowerCase()
-    if (arg && arg !== 'refresh') return { text: t.unknownArg(e.args.trim(), 'refresh') }
+    if (arg && !DISK_WORDS.includes(arg)) return { text: t.unknownArg(e.args.trim(), DISK_WORDS.join('|')) }
     if (!storagePath) return { text: t.storageOff }
     const drive = driveOf(storagePath)
     if (!drive) return { text: t.storageWindowsOnly }
@@ -880,6 +937,18 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     reports.set(tag, r)
     while (reports.size > 10) reports.delete(reports.keys().next().value as string)
     return { text: storageMarkdown(r, tag, lang, note) }
+  })
+
+  // Die Zeile von /bars help: gezeichnete Tabelle (help.ts). Nur mit bekannter Kennung; die übrigen /bars-Antworten, Fehlerzeilen
+  // und andere Oberflächen zeichnet die Engine als Text. Kennung ohne Anker suchen: der Text beginnt mit „limit-bars: “
+  // (templates/help/README.md, Befunde).
+  on('ui.render', { component: 'CommandOutput', props: { command: 'bars' } }, async ($, e, next) => {
+    if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
+    // Nur die Zeile von `/bars help` bzw. `/bars ?`: sonst zeigte `/bars #<gültige Kennung>` die Tabelle (Review worklist, K2)
+    if (!HELP_WORDS.includes(e.props.args.trim().toLowerCase())) return next(e)
+    const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
+    const data = tag ? helps.get(tag) : undefined
+    return data ? helpTree(data, e.viewport?.columns ?? 100, e.surface, HELP_ACCENT) : next(e)
   })
 
   // Die Zeile von /disk: eigener Baum statt Markdown. Unbekannte Kennung (nach Neustart, Hinweise), Fehlerzeile oder eine

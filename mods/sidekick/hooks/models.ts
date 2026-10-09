@@ -5,7 +5,8 @@ import { priceFor } from './cache.ts'
 /**
  * Prüfung vor dem Senden: Haiku 5.5, effort `medium` (Nachtrag 0.11.0, Probe 2026-10-07, Claude Code 2.1.291, 13 Fälle × 2).
  * Ohne den Autonom-Fall 24/24 in ≤ 6 s (Median 3,1 s), JSON 26/26, Urteil wie Sonnet in 91 %, ≈ 0,0009 $ je Prüfung (Sonnet
- * 0,012 $). Volle ID: der Alias `haiku` ist in 2.1.291 noch Haiku 4.5. Haiku 5.5 denkt immer, das zählt gegen `maxTokens`
+ * 0,012 $). Volle ID: der Alias `haiku` war in 2.1.291 noch Haiku 4.5 (seit 2.1.293 Haiku 5.5, Nachtrag 0.14.1); die volle ID bleibt
+ * eindeutig, egal wie eine Version den Alias auflöst. Haiku 5.5 denkt immer, das zählt gegen `maxTokens`
  * (bis ≈ 1 200 Ausgabe-Tokens gemessen), daher 2000. `high` lag bei 21/26 in ≤ 6 s, `low` urteilte gleich gut, aber `medium`
  * ist die im Nachtrag bevorzugte Stufe.
  */

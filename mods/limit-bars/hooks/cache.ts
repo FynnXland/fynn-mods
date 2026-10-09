@@ -106,13 +106,15 @@ const TABLE: readonly [string, Price][] = [
   ['haiku-5-5', { input: 0.1, read: 0.01, long: { above: 100_000, factor: 5 } }],
   ['haiku-4-5', { input: 1, read: 0.1 }],
 ]
-// Der Alias `haiku` bleibt Haiku 4.5: Claude Code 2.1.291 löst ihn noch zu claude-haiku-4-5 auf (SPEC, Nachtrag 0.6.1)
+// Der Alias `haiku` ist seit Claude Code 2.1.293 Haiku 5.5 (Probe unter 2.1.295: modelUsage nur claude-haiku-5-5, Kosten zu
+// den Listenpreisen von Haiku 5.5; Befund cost-ledger a57f8d4, SPEC Nachtrag 0.7.2). Volle IDs wie claude-haiku-4-5-… treffen
+// weiter die Tabelle oben.
 const FAMILY: readonly [string, string][] = [
   ['fable', 'fable-5-1'],
   ['mythos', 'mythos-5-1'],
   ['opus', 'opus-5-5'],
   ['sonnet', 'sonnet-5-5'],
-  ['haiku', 'haiku-4-5'],
+  ['haiku', 'haiku-5-5'],
 ]
 
 /**
@@ -245,17 +247,27 @@ export function parseTokens(text: string): number | null {
  * Einstellungen aus `/cache <schlüssel> <wert>`; null, wenn nichts davon passt. Englisch (`warn`, `hints`, `big`, `on`/`off`),
  * dazu die älteren Formen `guard`, `alerts` und die deutschen Aliase `warnung`, `hinweise`, `gross`/`groß`, `an`/`aus`.
  */
+/** Schlüssel und feste Werte von `/cache` (exportiert für den Vollständigkeitstest der Hilfe). */
+export const CACHE_WORDS = {
+  ttl: ['ttl'],
+  ttlValues: ['5', '60', 'auto'],
+  warn: ['warn', 'guard', 'warnung'],
+  hints: ['hints', 'alerts', 'hinweise'],
+  big: ['big', 'gross', 'groß'],
+} as const
+
 export function applySetting(s: Settings, key: string, value: string): Settings | null {
   const onOff = value === 'on' || value === 'an' ? true : value === 'off' || value === 'aus' ? false : null
-  if (key === 'ttl') {
+  const is = (list: readonly string[]) => list.includes(key)
+  if (is(CACHE_WORDS.ttl)) {
     if (value === '5') return { ...s, ttl: 5 }
     if (value === '60') return { ...s, ttl: 60 }
     if (value === 'auto') return { ...s, ttl: 0 }
     return null
   }
-  if ((key === 'warn' || key === 'guard' || key === 'warnung') && onOff !== null) return { ...s, guard: onOff }
-  if ((key === 'hints' || key === 'alerts' || key === 'hinweise') && onOff !== null) return { ...s, alerts: onOff }
-  if (key === 'big' || key === 'gross' || key === 'groß') {
+  if (is(CACHE_WORDS.warn) && onOff !== null) return { ...s, guard: onOff }
+  if (is(CACHE_WORDS.hints) && onOff !== null) return { ...s, alerts: onOff }
+  if (is(CACHE_WORDS.big)) {
     const n = parseTokens(value)
     return n ? { ...s, bigTokens: n } : null
   }

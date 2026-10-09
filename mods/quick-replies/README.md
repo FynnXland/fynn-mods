@@ -4,7 +4,7 @@ After Claude answers, Claude Code often suggests your next message itself (the g
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.4.3**
+Tested with Claude Code **v2.1.295** · Plugin version **0.5.2**
 
 ## Display
 
@@ -45,6 +45,9 @@ The fork only runs after a normal answer of at least 40 characters, not for suba
 | `/replies` or `/replies status` | On/off, `more` on/off, the current suggestions with their source, fork state, the fork calls in this chat with their estimated cost, how often Claude Code supplied a suggestion in this session, surface, band width, layout and position in the band |
 | `/replies on` · `/replies off` | Turn the mod on or off |
 | `/replies more on` · `/replies more off` | Turn the extra fork suggestions on or off |
+| `/replies help` | Help as a table: all commands, how to send a suggestion (click, key, lone digit), the current state of the suggestions and the fork, and your settings with their values, plus how to change them and how to turn the mod off. Also `/replies ?` |
+
+**Help:** `/replies help` draws a table in the terminal and the desktop app (accent violet, the theme's auto-accept color, so it adapts to light and dark), with the state as of the moment you ran it; run it again to see a change. Everywhere else (`claude -p`, the Agent SDK, VS Code, mobile) you get a short Markdown version, which is also what Claude reads. Unknown arguments answer with the usage line and a pointer to `/replies help`.
 
 `on`/`off` and `more on|off` are saved in the mod's plugin store, so they apply in all projects and sessions. Every session rereads them after each answer, so a change takes effect everywhere from the next answer on. They override the `userConfig` defaults.
 
@@ -60,14 +63,14 @@ The fork only runs after a normal answer of at least 40 characters, not for suba
 
 ### Language
 
-`language` switches everything the mod writes: the `/replies` output, the command description and the toast. With `more` on, it also sets the language the fork writes its suggestions in. The fork's question itself is always English. Claude Code's own suggestion is not affected; it comes in whatever language Claude Code uses. Default is `en`; set `de` for German, e.g. in `/config` → quick-replies. Commands and arguments (`on`, `off`, `more on|off`, `status`) are English in both languages.
+`language` switches everything the mod writes: the `/replies` output, the help, the command description and the toast. With `more` on, it also sets the language the fork writes its suggestions in. The fork's question itself is always English. Claude Code's own suggestion is not affected; it comes in whatever language Claude Code uses. Default is `en`; set `de` for German, e.g. in `/config` → quick-replies. Commands and arguments (`on`, `off`, `more on|off`, `status`, `help`) are English in both languages.
 
 ## Rights
 
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.start, turn.complete, prompt.suggest, prompt.edit, prompt.submit, command.run{command=replies}, ui.render{component=AbovePrompt}
+hooks: session.start, turn.start, turn.complete, prompt.suggest, prompt.edit, prompt.submit, command.run{command=replies}, ui.render{component=CommandOutput, props has {command=replies}}, ui.render{component=AbovePrompt}
 calls: $.clock.every, $.command.register, $.model.fork, $.prompt.submit, $.session.id, $.store.get, $.store.set, $.ui.invalidate, $.ui.log, $.ui.resolve, $.ui.toast
 ```
 
@@ -78,6 +81,7 @@ In plain language:
 - Hook `prompt.submit`: this hook sees every message you send and could change it. quick-replies only replaces a message that is just a digit `1`–`4` (or the same digit repeated) with the suggestion shown under that number, before the turn starts. Every other message passes through unchanged and is not stored or logged.
 - Hooks `turn.start`, `turn.complete`: clear the suggestions when you send, mark when an answer is finished.
 - Hook `ui.render` for `AbovePrompt`: draws the pill above the rest of the band.
+- Hook `ui.render` for `CommandOutput` of `/replies` (since 0.5.0): draws `/replies help` as a table in place of the command's text line. Other `/replies` output stays text.
 - Hook `command.run` and `$.command.register`: the `/replies` command.
 - `$.prompt.submit` (as your message): sends a suggestion, only on click or key.
 - `$.model.fork`: the extra suggestions, only with `more` on (off by default).

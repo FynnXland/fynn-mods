@@ -5,7 +5,7 @@ Senden mitdenkt, Schnellantworten, eine To-do-Liste und ein Kostenbuch.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.291_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.295_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
 [![Mods](https://img.shields.io/badge/mods-6-555)](#die-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#die-mods)
 
@@ -38,9 +38,13 @@ Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mod
 | [worklist](#worklist) | To-do-Seitenleiste, die Claude eine Aufgabe nach der anderen gibt, aber nur, wenn es sicher fertig ist |
 | [cost-ledger](#cost-ledger) | Kostenbuch über alle Chats, nach Tag, Projekt, Chat und Modell |
 
+**Hilfe in jedem Mod:** `/<befehl> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/todos`, `/ledger`) zeichnet
+eine Tabelle mit allen Befehlen, was gerade an oder aus ist und wie man es umschaltet, und den Einstellungen des Mods
+mit ihren Werten. In `claude -p` und VS Code kommt dasselbe als kurzer Text.
+
 ## Voraussetzungen
 
-- Claude Code mit Mods. Mods brauchen **v2.1.287 oder neuer**; dieses Set ist mit **v2.1.291** getestet. Prüfen mit
+- Claude Code mit Mods. Mods brauchen **v2.1.287 oder neuer**; dieses Set ist mit **v2.1.295** getestet. Prüfen mit
   `claude --version`.
 - Läuft im Terminal und im Code-Tab der Claude-Desktop-App. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen
   die meisten Mods nichts; Details in der README des jeweiligen Mods.
@@ -93,7 +97,9 @@ Drei Mods lösen Modellaufrufe **über dein Konto** aus (im Abo zählen sie auf 
   ist ein größerer Sonnet-Aufruf, nur wenn du ihn wählst. In der Stufe `plan` oder `auto` mit worklist prüft er auch
   eine lange Nachricht (ab 800 Zeichen), und das Aufteilen in To-dos oder `/later` kostet etwa 0,01 $ mehr. Die Stufe
   `auto` prüft jede Nachricht ab 300 Zeichen mit Sonnet 5.5 (je etwa 0,012 $) und lässt Sonnet ihre Fassungen schreiben; die Stufe `cache` ruft gar kein Modell auf. `/savings`
-  stellt beides der gemessenen Ersparnis gegenüber. Abschalten mit `/sidekick off`.
+  stellt beides der gemessenen Ersparnis gegenüber. Abschalten mit `/sidekick off`. *Gut zu wissen* (standardmäßig
+  aus, `/sidekick notes on`) fragt bei längeren Aufgaben das Modell deiner Session, großteils aus dem Cache: etwa
+  0,04 $ je Prüfung bei 150k Kontext mit Opus 5.5.
 - **worklist** fragt Haiku 5.5 (Effort `high`) nur, wenn die Regeln nicht sicher erkennen, ob Claude fertig ist: etwa 0,0001 $ je Fall.
   Abschalten mit der Option `haiku` in `/config`; die Liste hält dann in diesen Fällen an.
 - **quick-replies** forkt die Session nach jeder Antwort **nur mit `/replies more on`** (standardmäßig aus): etwa so
@@ -113,9 +119,10 @@ dem Laptop, während Claude Dateien bearbeitet, wartet mit der Sanduhr bei lange
 Turns und wird sichtbar grantig, wenn sich Fehler häufen. Im Leerlauf vertreibt er sich je nach Tageszeit die Zeit,
 nachts schläft er ein. Subagenten erscheinen als kleine Helfer neben ihm.
 
-- **Befehle:** `/clawd` (Status), `/clawd on|off`, `/clawd list`, `/clawd demo <name>`, `/clawd nap`, `/clawd boop`
-- **Rechte kurz:** beobachtet nur Ereignisse und gibt sie unverändert weiter; merkt sich an/aus und ein paar Zähler im
-  eigenen Plugin-Speicher. Keine Dateien, Prozesse, kein Netzwerk, keine Modellaufrufe.
+- **Befehle:** `/clawd` (Status), `/clawd on|off`, `/clawd list`, `/clawd demo <name>`, `/clawd nap`, `/clawd boop`,
+  `/clawd help`
+- **Rechte kurz:** beobachtet Ereignisse und gibt sie unverändert weiter; zeichnet nur seine eigene Tabelle zu
+  `/clawd help`; merkt sich an/aus und ein paar Zähler im eigenen Plugin-Speicher. Keine Dateien, Prozesse, kein Netzwerk, keine Modellaufrufe.
 - **Details:** [mods/clawd-buddy](mods/clawd-buddy/README.md) (englisch)
 
 ### limit-bars
@@ -137,7 +144,7 @@ ausblenden, mit `/bars show cache off` (wirkt sofort in allen offenen Chats) ode
 die schaltest du mit `/cache warn off` ab.
 
 - **Befehle:** `/cache` (Überblick und Einstellungen), `/handoff [continue|show]` (Übergabe schreiben und in einem
-  frischen Chat weitermachen), `/keepwarm [stunden|off]`, `/disk [refresh]`, `/bars [show <teil> on|off | reset]`
+  frischen Chat weitermachen), `/keepwarm [stunden|off]`, `/disk [refresh]`, `/bars [show <teil> on|off | reset]`, `/bars help`
 - **Rechte kurz:** liest Limits, Kontextgröße und Cache-Werte; kann eine Nachricht für eine Rückfrage anhalten; führt
   `/clear` und `/compact` aus und sendet eine Übergabe nur auf deine Wahl; `$.model.fork` nur, solange `/keepwarm`
   läuft; nur mit gesetztem `storagePath` startet er Windows PowerShell mit zwei festen, nur lesenden Skripten
@@ -176,15 +183,19 @@ Nachricht oder fragt nach.
   ist, als To-do ein.
 - **Nachprüfbare Ersparnis:** `/savings` zeigt, was sidekick gekostet und was er messbar gespart hat;
   `/savings detail` ergänzt Rechenweg, Modellvergleich und Verlauf je Tag.
+- **Gut zu wissen (optional, standardmäßig aus):** Mit `/sidekick notes on` fragt sidekick bei einer längeren Aufgabe,
+  ob du sehr wahrscheinlich etwas mit Folgen übersehen hast, und zeigt es über dem Prompt mit *Erklären*, *Weiß ich schon*
+  und *Später*. Meist erscheint nichts.
 
 Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unverändert raus.
 
 - **Befehle:** `/sidekick` (Status und Einstellungen), `/sidekick off|cache|guide|plan|auto|on`, `/sidekick long 800|off`,
-  `/sidekick hints …`, `/later <Text>`,
+  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick help`, `/later <Text>`,
   `/savings [today|week|all]`, `/savings detail`
 - **Rechte kurz:** liest deine Nachricht vor dem Senden; hält sie nur an oder ersetzt sie nur nach deiner Wahl im
   Dialog (in der Stufe `auto` auch ohne Rückfrage: eine Fassung oder eine Aufteilung); Haiku 5.5 und Sonnet 5.5 über `$.model.complete` mit einer laufenden Kurzfassung, deinen letzten 3 Nachrichten und dem Ende von Claudes letzter Antwort, nie dem
-  ganzen Verlauf; auf Knopfdruck führt er den Befehl der Zeile aus (Befehle aus Plugins und eigene, `/skill-doctor`, `/init`;
+  ganzen Verlauf; nur mit Gut zu wissen an eine Frage über `$.model.fork` an das Modell deiner Session über den
+  Gesprächsverlauf, mit allen Tools gesperrt; auf Knopfdruck führt er den Befehl der Zeile aus (Befehle aus Plugins und eigene, `/skill-doctor`, `/init`;
   nie MCP-Prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) oder ruft `/todo` von worklist auf (auch
   für die To-dos einer Aufteilung oder von `/later`); in der Stufe `auto` sendet er eine umformulierte Nachricht ohne
   Rückfrage in deinem Namen, nur wenn du diese Stufe gewählt hast; zeichnet sein Label in die Fußzeile; und
@@ -201,7 +212,7 @@ Claude Code schlägt oft deine nächste Nachricht als grauen Text im Prompt vor.
 in einer eigenen Pille über Clawd. Ein Klick oder die Taste `1` im leeren Prompt schickt ihn als deine Nachricht ab.
 Mit `/replies more on` füllt ein Fork der Session bis zu vier Plätze; Claude Codes eigener Vorschlag bleibt auf `1`.
 
-- **Befehle:** `/replies` (Status), `/replies on|off`, `/replies more on|off`
+- **Befehle:** `/replies` (Status), `/replies on|off`, `/replies more on|off`, `/replies help`
 - **Rechte kurz:** liest den Vorschlag von Claude Code; sendet einen Vorschlag nur auf Klick oder Taste als deine
   Nachricht, nie automatisch; `$.model.fork` nur mit `more` an. Keine Dateien, Prozesse, kein Netzwerk.
 - **Details:** [mods/quick-replies](mods/quick-replies/README.md) (englisch)
@@ -217,7 +228,8 @@ offener Plan), hält sie bei diesem To-do an, nennt den Grund und bietet **Forts
 **Überspringen**; auch deine Antwort auf Claudes Rückfrage im Chat setzt es fort. Einreihen bei freiem Claude startet
 die Liste auch nach einer Rückfrage. Die Liste übersteht `/clear`; der Verlauf gilt pro Projekt.
 
-- **Befehle:** `/todo <aufgabe>`, `/todos` (Seitenleiste), `/todos pause|resume|done|skip|retry|clear|history|status|close`
+- **Befehle:** `/todo <aufgabe>`, `/todos` (Seitenleiste), `/todos pause|resume|done|skip|retry|clear|history|status|close`,
+  `/todos help`
 - **Rechte kurz:** sendet das nächste To-do (oder die Fortsetzung eines angehaltenen) nur nach bestandener Prüfung
   oder auf deinen Klick als deine Nachricht;
   Haiku 5.5 für unklare Fälle (abschaltbar); liest, ob noch Subagenten laufen. Im Chat zeigt es gesendete To-dos als orange
@@ -280,7 +292,7 @@ gefunden? Siehe [SECURITY.md](SECURITY.md) (englisch).
 | Zwei Rückfragen hintereinander vor dem Senden mit kaltem Cache | limit-bars und sidekick fragen beide vor dem Senden mit kaltem Cache nach. Die Rückfrage von limit-bars mit `/cache warn off` abschalten. |
 | Alles ist englisch | Die Option `language` mit `/plugin configure <mod>@fynn-mods` auf `de` stellen. |
 | Der Speicher-Ring fehlt oder bleibt leer | Er läuft nur unter Windows und ist standardmäßig aus: `storagePath` (z. B. `D:\`) in `/config` setzen und prüfen, ob `/bars show storage on` gilt. Bleibt er leer, zeigt `/disk` den Fehler. |
-| cost-ledger zeigt einen Chat mit Haiku 5.5 etwa zehnfach zu teuer an | Claude Code v2.1.291 berechnet Haiku 5.5 in `/cost` wie Haiku 4.5, und cost-ledger bucht diesen Wert für den Chat. Modellaufrufe der Mods rechnet cost-ledger mit eigenen Preisen. |
+| cost-ledger zeigt einen Chat mit Haiku 5.5 etwa zehnfach zu teuer an | Claude Code v2.1.291 berechnete Haiku 5.5 in `/cost` wie Haiku 4.5, und cost-ledger bucht diesen Wert für den Chat. Claude Code aktualisieren; v2.1.295 rechnet richtig. Modellaufrufe der Mods rechnet cost-ledger mit eigenen Preisen. |
 
 Warum ein Mod nichts tut, zeigt das Debug-Log: Claude Code mit `claude --debug-file mod-debug.log` starten und die
 Datei nach dem Namen des Mods durchsuchen ([Doku von Claude Code](https://code.claude.com/docs/de/plugins/mods/troubleshoot)).

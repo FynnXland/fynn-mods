@@ -140,6 +140,16 @@ function wartungBlock(d: Day): RenderElement | null {
   ])
 }
 
+/** „Gut zu wissen“ (Nachtrag 0.13.0): Prüfungen, Kosten, Dauer, was daraus wurde; getrennt von Kosten und Verhältnis. */
+function notesBlock(d: Day, full: boolean): RenderElement | null {
+  const x = t()
+  const nz = d.notizen
+  if (!nz.n) return null
+  const lines = [x.vNotesLine(nz.n, usdText(nz.usd), secsText(nz.ms, nz.n)), x.vNotesCounts(nz.gezeigt, nz.erklaert, nz.bekannt, nz.spaeter, nz.chat, nz.ignoriert)]
+  if (full) lines.push(x.vNotesRest(nz.keins, nz.verworfen, nz.fehler))
+  return col({ marginTop: full ? 0 : 1 }, [heading(x.vNotesHead), ...lines.map((l) => dim(l))])
+}
+
 function countsBlock(d: Day): RenderElement {
   const x = t()
   const sk = Object.entries(d.skills).sort((a, b) => b[1] - a[1])
@@ -231,13 +241,17 @@ export function savingsTree(d: Day, p: Period, now: number, columns: number, sur
     figure(x.vRatio, ratioOf(d), x.vRatioSub, fw),
   ])
   const box = (kids: RenderNode[]) => col({ key: 'sidekick-savings', borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%' }, kids)
-  if (!days) return box([head, figures, ...savingsBlock(d, surface, inner, false), el('Box', { marginTop: 1 }, [dim(x.vMore)])])
+  if (!days) {
+    const notes = notesBlock(d, false)
+    return box([head, figures, ...savingsBlock(d, surface, inner, false), ...(notes ? [notes] : []), el('Box', { marginTop: 1 }, [dim(x.vMore)])])
+  }
   const span = spanOf(days, active)
   const nodes = [
     compareBlock(d, days, surface, inner),
     daysBlock(days, surface, inner),
     hintsBlock(d),
     wartungBlock(d),
+    notesBlock(d, true),
   ].filter((n): n is RenderElement => n !== null)
   return box([
     head,

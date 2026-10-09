@@ -24,9 +24,18 @@ import {
   summaryText,
   titleFromPrompt,
   weekStart,
+  HELP_WORDS,
+  OFF_WORDS,
+  RANGE_WORDS,
+  TODAY_WORDS,
+  VIEW_WORDS,
+  cleanSettings,
+  ledgerHelp,
+  planWords,
 } from '../hooks/logic.ts'
 import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from '../hooks/i18n.ts'
 import { modelColors, stackedBar } from '../hooks/view.ts'
+import { helpMarkdown, helpTree, stateText } from '../hooks/help.ts'
 import type { Rec } from '../hooks/logic.ts'
 
 const NOW = new Date(2026, 9, 6, 12, 0).getTime() // 06.10.2026 12:00 lokal
@@ -44,6 +53,9 @@ type W = {
   answer?: string | null // Antwort auf $.ui.ask; null: Dialog abgelehnt (wie in -p)
 }
 
+/** Argumente des letzten `/ledger`-Aufrufs; `mountLedger` gibt sie wie die echte Zeile als `props.args` mit. */
+let lastArgs = ''
+
 function world(on: On, o: W = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
@@ -57,6 +69,7 @@ function world(on: On, o: W = {}) {
     rl: [] as { kind: string; percentUsed: number; resetsAt?: string }[],
     usageCalls: 0,
     sets: 0,
+    keysFail: false,
   }
   on('session.usage', () => {
     st.usageCalls++
@@ -75,7 +88,10 @@ function world(on: On, o: W = {}) {
     saved.set(e.key, JSON.parse(JSON.stringify(e.value)))
     return { value: undefined }
   })
-  on('store.keys', () => ({ value: [...saved.keys()] }))
+  on('store.keys', () => {
+    if (st.keysFail) throw new Error('kaputt')
+    return { value: [...saved.keys()] }
+  })
   on('store.delete', ($, e) => {
     saved.delete(e.key)
     return { value: undefined }
@@ -117,6 +133,7 @@ function world(on: On, o: W = {}) {
       return $.turn.complete({ turnId: `t${st.turn}`, answer: 'ok', durationMs: 1, isAborted: false, reason: 'answer', usage, ...extra })
     },
     async ledger($: any, args = '') {
+      lastArgs = args // die Zeile trägt die Argumente des Aufrufs (CommandOutput props.args)
       return (await $.command.run({ command: 'ledger', args })).text as string
     },
   }
@@ -288,7 +305,7 @@ test('titleFromPrompt und Modellnamen', () => {
   expect(modelKey('claude-opus-5-5')).toBe('opus-5-5')
   expect(modelKey('claude-haiku-4-5-20251001')).toBe('haiku-4-5')
   expect(modelKey('opus[1m]')).toBe('opus-5-5')
-  expect(modelKey('haiku')).toBe('haiku-4-5')
+  expect(modelKey('haiku')).toBe('haiku-5-5') // Alias seit CC 2.1.293 (Nachtrag 0.6.0)
   expect(modelKey('gpt-x')).toBe('gpt-x')
   expect(modelKey('')).toBe('unbekannt')
   expect(modelName('opus-5-5', 'de')).toBe('Opus 5.5')
@@ -328,7 +345,7 @@ test('model.complete von sidekick@inline: Mod sidekick, Betrag nach Preistabelle
   expect(out.text).toBe('complete:OK')
   const m = w.rec()!.mods.sidekick!.days[TODAY]!
   expect(m.calls).toBe(1)
-  near(m.usd, 1) // Haiku 1 $ je Million Input
+  near(m.usd, 0.5) // Alias haiku = Haiku 5.5; 1 Mio. Prompt-Tokens > 100k: fünffach, 0,50 $
   expect(w.sum()).toBe(0) // Mod-Kosten stecken nicht in den Chat-Kosten (Probe Phase 0)
 })
 
@@ -363,22 +380,22 @@ test('model.fork „nothing-to-fork“ zählt nicht; model.complete ohne Antwort
   expect((await $.command.run({ command: 'probe', args: 'fork' })).text).toBe('fork:false')
   expect(w.rec()).toBeUndefined()
   expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:empty-reply')
-  near(w.rec()!.mods.sidekick!.days[TODAY]!.usd, 1) // „usage rides every arm“ (types ModelCompleteResult)
+  near(w.rec()!.mods.sidekick!.days[TODAY]!.usd, 0.5) // „usage rides every arm“ (types ModelCompleteResult)
 })
 
 test('Preistabelle: Alias, volle ID, unbekannt → Opus 5.5', () => {
-  expect(priceFor('haiku').id).toBe('haiku-4-5')
+  expect(priceFor('haiku').id).toBe('haiku-5-5')
   expect(priceFor('claude-haiku-4-5-20251001').id).toBe('haiku-4-5')
   expect(priceFor('opus[1m]').id).toBe('opus-5-5')
   expect(priceFor('claude-opus-5').id).toBe('opus-5')
   expect(priceFor('???').id).toBe('opus-5-5')
-  near(callCost({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1e6, cache_creation_input_tokens: 1e6 }, 'haiku'), 0.1 + 1.25)
+  near(callCost({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1e6, cache_creation_input_tokens: 1e6 }, 'haiku'), 0.01 + 0.125)
 })
 
 test('0.4.3: Preise Haiku 5.5 und Sonnet 5.5, Stufe über 100k Prompt-Tokens', () => {
   const h = priceFor('claude-haiku-5-5')
   expect([h.id, h.input, h.output, h.read]).toEqual(['haiku-5-5', 0.1, 0.5, 0.01])
-  expect(priceFor('haiku').id).toBe('haiku-4-5') // CC 2.1.291 löst den Alias noch zu Haiku 4.5 auf
+  expect(priceFor('haiku').id).toBe('haiku-5-5') // seit CC 2.1.293 Haiku 5.5 (bis 2.1.291: 4.5)
   expect(priceFor('claude-sonnet-5-5').read).toBe(0.1)
   const h4 = priceFor('claude-haiku-4-5-20251001')
   expect([h4.id, h4.input, h4.output, h4.read, h4.long]).toEqual(['haiku-4-5', 1, 5, 0.1, undefined])
@@ -395,7 +412,7 @@ test('0.4.3: Preise Haiku 5.5 und Sonnet 5.5, Stufe über 100k Prompt-Tokens', (
   near(callCost({ cache_read_input_tokens: 1_000_000 }, 'claude-sonnet-5-5'), 0.1)
   expect(modelKey('claude-haiku-5-5')).toBe('haiku-5-5')
   expect(modelName(modelKey('claude-haiku-5-5'), 'de')).toBe('Haiku 5.5')
-  expect(modelName(modelKey('haiku'), 'de')).toBe('Haiku 4.5')
+  expect(modelName(modelKey('haiku'), 'de')).toBe('Haiku 5.5')
 })
 
 test('0.4.3: Stufe nur bei Einzelaufrufen; Turn-Summe über 100k bleibt normal (Review B1)', { plugins: [sidekick], ...DE }, async ($, on) => {
@@ -421,17 +438,17 @@ test('/ledger models: Tokens je Modell aus Turns, Subagents und Mod-Aufrufen; so
   await w.start($)
   await w.turn($, 1, { usage: U('claude-opus-5-5', 1000, 50000, 2000000, 100000) })
   await w.turn($, 1.2, { usage: U('claude-opus-5-5', 500, 10000) })
-  await w.turn($, 1.3, { agentId: 'a1', usage: U('claude-haiku-4-5-20251001', 200, 3000) })
-  await $.command.run({ command: 'probe', args: '' }) // sidekick: Haiku, 1M Input
+  await w.turn($, 1.3, { agentId: 'a1', usage: U('claude-haiku-5-5', 200, 3000) })
+  await $.command.run({ command: 'probe', args: '' }) // sidekick: Alias haiku = Haiku 5.5, 1M Input
   const m = w.rec()!.models
   expect(m['opus-5-5']!.days[TODAY]).toMatchObject({ in: 1500, out: 60000, cr: 2000000, cw: 100000, n: 2 })
-  expect(m['haiku-4-5']!.days[TODAY]!.n).toBe(1) // Subagent
-  expect(w.rec()!.modModels['haiku-4-5']!.days[TODAY]!.n).toBe(1) // sidekick, getrennt (ab 0.3.0)
+  expect(m['haiku-5-5']!.days[TODAY]!.n).toBe(1) // Subagent
+  expect(w.rec()!.modModels['haiku-5-5']!.days[TODAY]!.n).toBe(1) // sidekick, getrennt (ab 0.3.0)
   expect(w.rec()!.mods.sidekick!.days[TODAY]).toMatchObject({ calls: 1, in: 1000000 })
   const text = await w.ledger($, 'models')
   expect(text).toMatch(/Opus 5\.5: .*2× · Input 1,5k · Output 60k · Cache 2,0M gelesen, 100k geschrieben/)
-  expect(text).toMatch(/Haiku 4\.5: .*2×/) // Modellsicht zählt Chat und Mods zusammen
-  expect(text.indexOf('Opus 5.5') < text.indexOf('Haiku 4.5')).toBe(true) // Opus ≈ 2,3 $, Haiku ≈ 1,0 $
+  expect(text).toMatch(/Haiku 5\.5: .*2×/) // Modellsicht zählt Chat und Mods zusammen
+  expect(text.indexOf('Opus 5.5') < text.indexOf('Haiku 5.5')).toBe(true) // Opus ≈ 2,3 $, Haiku ≈ 0,50 $
   expect(text.split('\n').length <= 10).toBe(true)
 })
 
@@ -783,8 +800,8 @@ test('/ledger reset in -p (ask abgelehnt): nichts gelöscht, Hinweis', DE, async
 test('/ledger help und unbekanntes Argument', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
-  expect(await w.ledger($, 'help')).toMatch(/\/ledger chats \[7\|30\|all\]/)
-  expect(await w.ledger($, 'quatsch')).toMatch(/Unbekannt: „quatsch“/)
+  expect(await w.ledger($, 'help')).toMatch(/^- `\/ledger chats\|projects\|models \[7\|30\|all\]`: Teuerste Chats/m)
+  expect(await w.ledger($, 'quatsch')).toBe('Unbekannt: „quatsch“. Alle Befehle: /ledger help')
 })
 
 test('/ledger chats 7 und projects all', DE, async ($, on) => {
@@ -802,14 +819,14 @@ test('/ledger chats 7 und projects all', DE, async ($, on) => {
 
 // ---------- Zeichnung ----------
 
-async function mountLedger($: any, text: string, surface: string, columns = 120) {
+async function mountLedger($: any, text: string, surface: string, columns = 120, args = lastArgs) {
   return $.ui.mount({
     plugin: 'cost-ledger',
     component: 'CommandOutput',
     requestId: `r-${surface}-${columns}`,
     surface,
     viewport: { columns, rows: 40 },
-    props: { command: 'ledger', args: '', text, isErrored: false },
+    props: { command: 'ledger', args, text, isErrored: false },
   })
 }
 
@@ -1019,9 +1036,9 @@ test('Englisch (Standard): Hilfe, unbekanntes Argument, Aliase hilfe/alle, leere
   const saved = new Map<string, unknown>([['s:A', recOf('(ohne Ordner)', { [dayBefore(NOW, 20)]: 5 }, { title: 'Old chat' })]])
   const w = world(on, { saved })
   await w.start($)
-  expect(await w.ledger($, 'help')).toMatch(/\*\*\/ledger chats \[7\|30\|all\]\*\*: the 20 most expensive chats/)
-  expect(await w.ledger($, 'hilfe')).toMatch(/^\*\*\/ledger\*\*: overview/)
-  expect(await w.ledger($, 'xyz')).toMatch(/^Unknown: “xyz”\.\n\*\*\/ledger\*\*/)
+  expect(await w.ledger($, 'help')).toMatch(/^- `\/ledger chats\|projects\|models \[7\|30\|all\]`: Most expensive chats/m)
+  expect(await w.ledger($, 'hilfe')).toMatch(/^\*\*cost-ledger · Help\*\* · #[0-9a-z]{5,}\n/)
+  expect(await w.ledger($, 'xyz')).toBe('Unknown: “xyz”. All commands: /ledger help')
   expect(await w.ledger($, 'projects alle')).toMatch(/Projects \(all time\):\n\(no folder\) \$5\.00 \(1 chat\)/)
 })
 
@@ -1146,9 +1163,9 @@ test('0.5.0: model.complete von sidekick → lim.mod des aktuellen Fensters, ohn
   expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:OK')
   expect(w.st.usageCalls).toBe(calls) // Mod-Pfad ohne zusätzlichen usage()-Aufruf
   const five = w.rec()!.lim.five_hour![String(T5)]!
-  near(five.mod, 1) // Haiku 4.5: 1 $ je Million Input
+  near(five.mod, 0.5) // Alias haiku = Haiku 5.5, 1 Mio. Prompt-Tokens: fünffach (0,50 $)
   near(five.chat, 0.1)
-  near(w.rec()!.lim.seven_day![String(TW)]!.mod, 1)
+  near(w.rec()!.lim.seven_day![String(TW)]!.mod, 0.5)
 })
 
 test('0.5.0: Mod-Aufruf vor der ersten Messung → carry, mit dem ersten Fenster gebucht', { plugins: [sidekick], ...DE }, async ($, on) => {
@@ -1160,7 +1177,7 @@ test('0.5.0: Mod-Aufruf vor der ersten Messung → carry, mit dem ersten Fenster
   w.st.rl = RL(T5, 2)
   await w.turn($, 0.1)
   const five = w.rec()!.lim.five_hour![String(T5)]!
-  near(five.mod, 1)
+  near(five.mod, 0.5)
   near(five.chat, 0.1)
 })
 
@@ -1546,7 +1563,7 @@ test('0.5.0 Englisch (Standard): /ledger limits, plan und die Limit-Zeile', asyn
     await ui.unmount()
   }
   expect((await w.ledger($)).split('\n')[1]).toBe('Limits: 5 h 30 % · $1.20 · reset 15:00 | week 50 % · $1.20 | plan $1.20 = 0.0× · /ledger limits')
-  expect(await w.ledger($, 'help')).toMatch(/\*\*\/ledger limits\*\*: .*\n\*\*\/ledger plan <plan> <day\|today> \[price\]\*\*/)
+  expect(await w.ledger($, 'help')).toMatch(/^- `\/ledger limits`: .*\n- `\/ledger plan`: .*\n- `\/ledger plan <plan> <day\|today> \[price\]`: /m)
   expect(await w.ledger($, 'plan nope 3')).toMatch(/^Not saved: “nope 3” is not valid\.\n/)
 })
 
@@ -1689,7 +1706,7 @@ test('0.5.0 Review 2: Mod-Aufruf zwischen Resume und erstem Turn verschiebt die 
   near(w.rec()!.lim.five_hour![kOld]!.chat, 3)
   const cur = w.rec()!.lim.five_hour![String(T5)]!
   near(cur.chat, 0.1)
-  near(cur.mod, 1)
+  near(cur.mod, 0.5)
 })
 
 test('0.5.0 Review 2: Fenster ohne gebuchten Betrag zählen nicht zum Ø', () => {
@@ -1740,4 +1757,259 @@ test('0.5.0 Review: unvollständige abgeschlossene Fenster tragen „ab …“ a
   const text = await w.ledger($, 'limits')
   expect(text).toMatch(/^Letzte 5-Stunden-Fenster: 06\.10\. 05–10 4,00 \$ 80 % ab 08:00$/m)
   expect(text).toMatch(/^Ø 100 %: noch kein vollständig erfasstes, abgeschlossenes Fenster mit ≥ 20 %$/m)
+})
+
+// ---------- 0.6.0: /ledger help (docs/HELP-SPEC.md §6) ----------
+
+const GREEN = 'success' // Akzent als Theme-Key (HELP-SPEC §4, Fynn 2026-10-09)
+
+/** Alle Texte eines Baums, rekursiv (für Suchen ohne die Engine). */
+const allText = (n: any): string => (typeof n === 'string' ? n : (n?.children ?? []).map(allText).join(''))
+
+test('0.6.0 Hilfe: help, hilfe, ? und HELP liefern Markdown mit Kennung, en und de; weitere Wörter sind unbekannt', async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  for (const word of ['help', 'hilfe', '?', 'HELP']) {
+    const text = await w.ledger($, word)
+    expect(text, word).toMatch(/^\*\*cost-ledger · Help\*\* · #[0-9a-z]{5,}\n\nRecords what your chats and other mods cost/)
+    expect(text.length < 10_000, word).toBe(true)
+  }
+  expect(await w.ledger($, 'help me')).toBe('Unknown: “help me”. All commands: /ledger help')
+  expect(await w.ledger($, 'days')).toBe('Unknown: “days”. All commands: /ledger help') // days ist gestrichen (HELP-SPEC §5)
+})
+
+test('0.6.0 Hilfe (de): Markdown mit Befehlen, Funktionen, Einstellungen und Terminal-Fußzeile', { options: { language: 'de', keepDays: 30 } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const text = await w.ledger($, 'hilfe')
+  const lines = text.split('\n')
+  expect(lines[0]).toMatch(/^\*\*cost-ledger · Hilfe\*\* · #[0-9a-z]{5,}$/)
+  expect(lines).toContain('**BEFEHLE**')
+  expect(lines).toContain('- `/ledger`: Übersicht: heute, 7 und 30 Tage, gesamt, letzte 14 Tage, Projekte, teuerste Chats, Mods')
+  expect(lines).toContain('- `/ledger plan off`: Abo-Einstellung löschen')
+  expect(lines).toContain('Deutsche Wörter gehen auch: hilfe, alle, heute, aus.')
+  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Abo ○ kein Abo \(\/ledger plan max20 14\) · Speicher belegt 0 % von 4 MiB \(nur Info\) · Erfasst seit 06\.10\.2026 \(nur Info\)$/m)
+  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Aufbewahrung \(Tage\) 30 · Tagesbetrag gelb ab \(\$\) 3 \(Standard\) · Tagesbetrag rot ab \(\$\) 8 \(Standard\)$/m)
+  expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure cost-ledger · Mod abschalten: /plugin disable cost-ledger')
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`0.6.0 Hilfe UI ${surface}: Tabelle mit Titel, Abschnitten, Befehlen in Grün, Schaltern und passender Fußzeile`, DE, async ($, on) => {
+    const w = world(on)
+    await w.start($)
+    const ui = await mountLedger($, await w.ledger($, 'help'), surface)
+    expect(await ui.find({ text: /^ENGINE:/ })).toBeUndefined()
+    const tree = await ui.drawn()
+    expect(tree.props).toMatchObject({ borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%', key: 'cost-ledger-help' })
+    expect((await ui.find({ type: 'Text', text: 'cost-ledger · Hilfe' }))?.props).toMatchObject({ color: GREEN, bold: true })
+    for (const h of ['BEFEHLE', 'FUNKTIONEN', 'STATUS', 'UMSCHALTEN', 'EINSTELLUNGEN (/plugin)', 'WERT'])
+      expect((await ui.find({ type: 'Text', text: h }))?.props.color, h).toBe(GREEN)
+    expect(await ui.find({ type: 'Text', text: 'BEDIENUNG' })).toBeUndefined() // keine Klicks oder Tasten → Abschnitt entfällt
+    for (const cmd of ['/ledger', '/ledger weeks', '/ledger chats|projects|models [7|30|all]', '/ledger limits', '/ledger plan <plan> <day|today> [price]', '/ledger reset', '/ledger help'])
+      expect((await ui.find({ type: 'Text', text: cmd }))?.props.color, cmd).toBe(GREEN)
+    // Akzentfarbe nur für Titel, Überschriften und Befehle, nie für Fließtext
+    expect((await ui.find({ type: 'Text', text: /^Übersicht: heute/ }))?.props.color).toBeUndefined()
+    const texts = await ui.findAll({ type: 'Text' })
+    expect(texts.some((x: any) => x.children?.[0] === '○ ' && x.props.color === 'inactive')).toBe(true)
+    expect(texts.some((x: any) => x.children?.[0] === 'kein Abo' && x.props.color === 'inactive')).toBe(true)
+    expect(await ui.find({ type: 'Text', text: '/ledger plan max20 14' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: ' (Standard)' })).toBeDefined()
+    const footer =
+      surface === 'desktop'
+        ? 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure cost-ledger'
+        : 'Einstellungen ändern: /plugin configure cost-ledger · Mod abschalten: /plugin disable cost-ledger'
+    expect(await ui.find({ type: 'Text', text: footer })).toBeDefined()
+    await ui.unmount()
+  })
+
+test('0.6.0 Hilfe: Zustand stimmt beim Aufruf: Abo einstellen → ●, Abo aus → ○; Speicher und Erfasst seit', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.turn($, 1)
+  await w.ledger($, 'plan max20 8 207')
+  const on1 = await mountLedger($, await w.ledger($, 'help'), 'terminal')
+  expect((await on1.findAll({ type: 'Text' })).some((x: any) => x.children?.[0] === '● ' && x.props.color === 'success')).toBe(true)
+  expect(await on1.find({ type: 'Text', text: 'Max 20x · Tag 8 · 207,00 $ im Monat' })).toBeDefined()
+  expect(await on1.find({ type: 'Text', text: '/ledger plan off' })).toBeDefined()
+  expect(await on1.find({ type: 'Text', text: '06.10.2026' })).toBeDefined()
+  expect(await on1.find({ type: 'Text', text: /^\d+ % von 4 MiB$/ })).toBeDefined()
+  await on1.unmount()
+  await w.ledger($, 'plan max5 1')
+  expect(await w.ledger($, 'help')).toMatch(/Abo ● Max 5x · Tag 1 · 100,00 \$ im Monat \(Listenpreis\) \(\/ledger plan off\)/)
+  await w.ledger($, 'plan off')
+  const off = await mountLedger($, await w.ledger($, 'help'), 'desktop')
+  expect(await off.find({ type: 'Text', text: 'kein Abo' })).toBeDefined()
+  expect((await off.findAll({ type: 'Text' })).some((x: any) => x.children?.[0] === '● ')).toBe(false)
+  await off.unmount()
+})
+
+test('0.6.0 Hilfe: nur lesend (kein Schreiben, kein Aufräumen); Lesefehler → Hilfe trotzdem', { options: { keepDays: 1, language: 'de' } }, async ($, on) => {
+  const old = recOf('P', { [dayBefore(NOW, 40)]: 1 }, { lastAt: NOW - 40 * DAY })
+  const w = world(on, { saved: new Map<string, unknown>([['s:OLD', old], ['meta:since', NOW - 50 * DAY]]) })
+  await w.start($)
+  const sets = w.st.sets
+  const text = await w.ledger($, 'help')
+  expect(w.st.sets).toBe(sets)
+  expect(w.saved.has('s:OLD')).toBe(true) // aufgeräumt wird nur bei /ledger
+  expect(text).toMatch(/Erfasst seit 17\.08\.2026/) // 50 Tage vor dem 06.10.
+  expect(text).toMatch(/Aufbewahrung \(Tage\) 1 ·/)
+})
+
+test('0.6.0 Hilfe: store.keys scheitert → Hilfe mit Befehlen und Einstellungen, Fehler im Debug-Log', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  w.st.keysFail = true
+  const text = await w.ledger($, 'help')
+  expect(text).toMatch(/^\*\*cost-ledger · Hilfe\*\*/)
+  expect(text).toMatch(/Abo ○ kein Abo/)
+  expect(w.st.logs.some((l) => /\/ledger help/.test(l))).toBe(true)
+})
+
+test('0.6.0 Hilfe UI: VS Code, Fehlerzeile und unbekannte Kennung → Engine zeichnet den Markdown-Text', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const text = await w.ledger($, 'help')
+  const vscode = await mountLedger($, text, 'vscode')
+  expect(await vscode.find({ text: /^ENGINE:/ })).toBeDefined()
+  await vscode.unmount()
+  const errored = await $.ui.mount({
+    plugin: 'cost-ledger', component: 'CommandOutput', requestId: 'help-err', surface: 'terminal', viewport: { columns: 100, rows: 30 },
+    props: { command: 'ledger', args: 'help', text, isErrored: true },
+  })
+  expect(await errored.find({ text: /^ENGINE:/ })).toBeDefined()
+  await errored.unmount()
+  const unknown = await mountLedger($, '**cost-ledger · Hilfe** · #zzzzzz', 'desktop')
+  expect(await unknown.find({ text: /^ENGINE:/ })).toBeDefined()
+  await unknown.unmount()
+  // Kennung auch hinter einem Präfix wie in -p („cost-ledger: …“)
+  const prefixed = await mountLedger($, `cost-ledger: ${text}`, 'terminal', 120, 'help')
+  expect(await prefixed.find({ type: 'Text', text: 'cost-ledger · Hilfe' })).toBeDefined()
+  await prefixed.unmount()
+})
+
+test('0.6.0 Review: eine gültige Kennung als Argument zeigt „Unbekannt“, nicht die Tabelle (Review worklist 0.7.0, K2)', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.turn($, 1)
+  const help = await w.ledger($, 'help')
+  const helpTag = /#[0-9a-z]{5,}/.exec(help)![0]
+  const overview = await w.ledger($)
+  const viewTag = /#[0-9a-z]{5,}/.exec(overview)![0]
+  for (const tag of [helpTag, viewTag]) {
+    const text = await w.ledger($, tag) // „Unbekannt: „#…“. Alle Befehle: /ledger help“, mit der Kennung in Zeile 1
+    expect(text).toBe(`Unbekannt: „${tag}“. Alle Befehle: /ledger help`)
+    const ui = await mountLedger($, text, 'terminal', 120, tag)
+    expect(await ui.find({ text: /^ENGINE:Unbekannt/ }), tag).toBeDefined()
+    await ui.unmount()
+  }
+  // Groß- und Kleinschreibung und Leerzeichen der Argumente stören die eigene Zeile nicht
+  const ui = await mountLedger($, help, 'desktop', 120, '  HELP ')
+  expect(await ui.find({ type: 'Text', text: 'cost-ledger · Hilfe' })).toBeDefined()
+  await ui.unmount()
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  for (const columns of [30, 40, 59, 60, 100, 140, 200])
+    test(`0.6.0 Hilfe UI ${surface} bei ${columns} Spalten: nichts zu breit, Desktop nur ganzzahlige Prozent`, DE, async ($, on) => {
+      const w = world(on)
+      await w.start($)
+      await w.ledger($, 'plan max20 8 207')
+      const ui = await mountLedger($, await w.ledger($, 'help'), surface, columns)
+      const inner = Math.max(30, Math.min(140, columns)) - 4
+      const boxes = await ui.findAll({ type: 'Box' })
+      const widths = boxes.map((b: any) => b.props.width).filter((x: unknown) => x !== undefined)
+      if (surface === 'desktop') expect(widths.filter((x: unknown) => !(typeof x === 'string' && /^\d+%$/.test(x)))).toEqual([])
+      else expect(widths.filter((x: unknown) => typeof x === 'number' && x > inner)).toEqual([])
+      // Prozent-Spalten einer Zeile ergeben zusammen genau 100
+      for (const r of boxes.filter((b: any) => b.props.flexDirection === 'row' && b.children?.length && b.children.every((c: any) => typeof c === 'object' && /^\d+%$/.test(String(c.props?.width)))))
+        expect((r as any).children.reduce((a: number, c: any) => a + parseInt(c.props.width, 10), 0)).toBe(100)
+      // Feste Spalten einer Zeile passen in die Zeile
+      for (const r of boxes.filter((b: any) => b.props.flexDirection === 'row'))
+        expect((r as any).children.reduce((a: number, c: any) => a + (typeof c === 'object' && typeof c.props?.width === 'number' ? c.props.width : 0), 0) <= inner).toBe(true)
+      // Unter 60 Spalten stehen die Spalten untereinander: keine Zeile mit festen Spalten
+      if (columns < 60) expect(boxes.some((b: any) => b.props.flexDirection === 'row' && b.children?.some((c: any) => typeof c === 'object' && c.props?.width !== undefined))).toBe(false)
+      expect(await ui.find({ type: 'Text', text: '/ledger plan <plan> <day|today> [price]' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'Tagesbetrag rot ab ($)' })).toBeDefined()
+      await ui.unmount()
+    })
+
+test('0.6.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht als ganzes Wort in der Hilfe (HELP-SPEC §6 Punkt 5)', () => {
+  // Ganze Wörter statt Teilstrings (Review 0.6.0): „pro“ steckt sonst in „projects“, „all“ in „all time“
+  const tokens = (s: string) => new Set(s.toLowerCase().split(/[^a-z0-9?]+/).filter(Boolean))
+  for (const lang of ['en', 'de'] as const) {
+    const d = ledgerHelp(cleanSettings({ language: lang }), { plan: null, storeBytes: 0, since: null })
+    const cmds = tokens(d.commands.map((c) => c.cmd).join(' '))
+    const notes = tokens((d.notes ?? []).join(' '))
+    const row = (cmd: string) => d.commands.find((c) => c.cmd === cmd)!
+    // Erstes Wort: Ansichten, plan, reset, help stehen als Befehl; '?' und deutsche Aliase in Wirkung bzw. Notiz
+    for (const w of [...VIEW_WORDS, 'plan', 'reset', 'help']) expect(cmds.has(w), `${lang}: ${w}`).toBe(true)
+    expect(row('/ledger help').does.includes('?'), lang).toBe(true)
+    // Englische Wörter im Befehl, deutsche Aliase in der Notiz
+    const english = (list: readonly string[]) => list.filter((w) => /^[a-z]+$/.test(w) && !notes.has(w))
+    const lists = /\[([^\]]+)\]/.exec(row('/ledger chats|projects|models [7|30|all]').cmd)![1]!.split('|')
+    for (const w of english(RANGE_WORDS)) expect(lists, `${lang}: ${w}`).toContain(w)
+    for (const w of english(TODAY_WORDS)) expect(cmds.has(w), `${lang}: ${w}`).toBe(true)
+    for (const w of english(OFF_WORDS)) expect(cmds.has(w), `${lang}: ${w}`).toBe(true)
+    for (const w of [...HELP_WORDS, ...RANGE_WORDS, ...TODAY_WORDS, ...OFF_WORDS].filter((w) => w !== '?'))
+      expect(cmds.has(w) || notes.has(w), `${lang}: ${w}`).toBe(true)
+    // Plan-Namen samt Aliasen als ganze Wörter in der Plan-Zeile
+    const planRow = tokens(row('/ledger plan <plan> <day|today> [price]').does)
+    for (const w of planWords()) expect(planRow.has(w), `${lang}: ${w}`).toBe(true)
+    expect(lists).toEqual(['7', '30', 'all'])
+    expect(cmds.has('days'), lang).toBe(false) // days ist kein Befehl mehr
+  }
+})
+
+test('0.6.0 Hilfe: Werte, Standard und Zustandstexte (stateText, ledgerHelp)', () => {
+  const de = ledgerHelp(cleanSettings({ language: 'de', dayYellow: 2.5, dayRed: 9 }), { plan: { v: 1, plan: 'team', day: 3, at: NOW }, storeBytes: 1024 * 1024, since: NOW })
+  expect(de.features[0]).toEqual({ name: 'Abo', state: { kind: 'on', text: 'Team · Tag 3 · ohne Preis' }, toggle: '/ledger plan off' })
+  expect(de.features[1]!.state).toEqual({ kind: 'value', text: '25 % von 4 MiB' })
+  expect(de.settings.map((s) => [s.value, s.isDefault])).toEqual([['de', false], ['365', true], ['2,5', false], ['9', false]])
+  const en = ledgerHelp(cleanSettings({}), { plan: null, storeBytes: 0, since: null })
+  expect(en.settings[0]).toEqual({ title: 'Language', value: 'en', isDefault: true })
+  expect(en.features[2]!.state).toEqual({ kind: 'value', text: '–' })
+  expect(stateText({ kind: 'on' }, 'de')).toBe('● an')
+  expect(stateText({ kind: 'off' }, 'en')).toBe('○ off')
+  expect(stateText({ kind: 'value', text: '365', isDefault: true }, 'en')).toBe('365 (default)')
+})
+
+test('0.6.0 Hilfe-Modul allgemein: BEDIENUNG nur mit Einträgen, leere Abschnitte entfallen, Akzent frei wählbar', () => {
+  const d = {
+    mod: 'demo', lang: 'en' as const, intro: 'Demo.', commands: [{ cmd: '/demo', does: 'Status' }],
+    controls: [{ cmd: 'Click', does: 'Pokes it' }], features: [], settings: [], footer: { terminal: 'T', desktop: 'D' },
+  }
+  const t = helpTree(d, 100, 'terminal', '#123456') as any
+  const all = allText(t)
+  expect(all).toMatch(/CONTROLS/)
+  expect(all).not.toMatch(/FEATURES|SETTINGS/)
+  expect(all.endsWith('T')).toBe(true)
+  expect(t.children[0].props.color).toBe('#123456')
+  expect(allText(helpTree(d, 100, 'desktop', '#123456')).endsWith('D')).toBe(true)
+  // Leerzeilen zwischen den Blöcken: sonst hängt Markdown alles nach der Liste an deren letzten Punkt (Review 0.6.0)
+  expect(helpMarkdown(d, '#abcde').split('\n')).toEqual(['**demo · Help** · #abcde', '', 'Demo.', '', '**COMMANDS**', '- `/demo`: Status', '', '**CONTROLS**', '- `Click`: Pokes it', '', 'T'])
+  // Schalter: ohne eigenen Text ist „an“ grün wie der Punkt; mit Text nur der Punkt
+  const sw = helpTree({ ...d, controls: [], features: [{ name: 'A', state: { kind: 'on' }, toggle: '/demo off' }, { name: 'B', state: { kind: 'on', text: 'lang' }, toggle: 'x' }] }, 100, 'terminal', '#123456') as any
+  const flat: any[] = []
+  const walk = (n: any) => {
+    if (n && typeof n === 'object') {
+      flat.push(n)
+      for (const c of n.children ?? []) walk(c)
+    }
+  }
+  walk(sw)
+  expect(flat.some((n) => n.type === 'Text' && n.children?.[0] === 'on' && n.props?.color === 'success')).toBe(true)
+  expect(flat.some((n) => n.type === 'Text' && n.children?.[0] === 'lang' && n.props?.color === undefined)).toBe(true)
+  // Unter 60 Spalten: Zustand und Umschalten in einem Text (bricht als ein Absatz um, nicht als zwei Spalten)
+  const narrow = helpTree({ ...d, controls: [], features: [{ name: 'A', state: { kind: 'on', text: 'Max 5x · Tag 1 · 100,00 $ im Monat (Listenpreis)' }, toggle: '/demo off' }] }, 50, 'terminal', '#123456') as any
+  const nodes: any[] = []
+  const walk2 = (n: any) => {
+    if (n && typeof n === 'object') {
+      nodes.push(n)
+      for (const c of n.children ?? []) walk2(c)
+    }
+  }
+  walk2(narrow)
+  const holder = nodes.find((n) => n.type === 'Text' && n.children?.some((c: any) => typeof c === 'object' && c.children?.[0] === ' · /demo off'))
+  expect(holder).toBeDefined()
+  expect(nodes.some((n) => n.type === 'Box' && n.props?.flexDirection === 'row' && n.children?.some((c: any) => c === holder))).toBe(false)
 })

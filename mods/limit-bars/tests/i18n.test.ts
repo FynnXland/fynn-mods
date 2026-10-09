@@ -267,7 +267,7 @@ test('Aliase: englische und deutsche Argumente wirken in beiden Sprachen (en)', 
   expect((await cache($, 'big 300k')).text).toContain('from 300k')
   expect(w.saved.get('settings')).toMatchObject({ guard: false, alerts: true, bigTokens: 300000 })
   const bad = await cache($, 'quatsch')
-  expect(bad.text).toBe('Unknown: "quatsch". Possible: ttl 5|60|auto · warn on|off · big 150k · hints on|off')
+  expect(bad.text).toBe('Unknown: "quatsch". Possible: ttl 5|60|auto · warn on|off · big 150k · hints on|off → `/bars help`')
 })
 
 test('Aliase in de: warn, hints, big wirken auch bei deutscher Sprache', DE, async ($, on) => {
@@ -370,5 +370,5 @@ test('en: /keepwarm auf Englisch; off und das Alias aus schalten ab', async ($, 
   expect(w.toasts.some((t) => t.startsWith('Keep-warm off (turned off). 0 ping(s), ≈ $0 API value.'))).toBe(true)
   await $.command.run({ command: 'keepwarm', args: '1' } as never)
   expect((await $.command.run({ command: 'keepwarm', args: 'aus' } as never)).text).toBe('Keep-warm off.')
-  expect((await $.command.run({ command: 'keepwarm', args: 'x' } as never)).text).toBe('Usage: /keepwarm [hours|off], at most 4 h.')
+  expect((await $.command.run({ command: 'keepwarm', args: 'x' } as never)).text).toBe('Usage: /keepwarm [hours|off], at most 4 h. → `/bars help`')
 })

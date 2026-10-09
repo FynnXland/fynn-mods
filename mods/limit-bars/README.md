@@ -4,7 +4,7 @@ Two slim bars on the left of the band above the prompt show live how much of the
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.291** · Plugin version **0.6.1**
+Tested with Claude Code **v2.1.295** · Plugin version **0.7.2**
 
 ## Display
 
@@ -70,8 +70,10 @@ Every part of the display can be shown or hidden on its own. **The storage ring 
 | `/keepwarm [hours]` · `/keepwarm off` | Keep the cache warm, default 2 h, at most 4 h. **Off by default**, because every ping costs quota. `/keepwarm` without a number turns off a running keep-warm |
 | `/disk` · `/disk refresh` | Drive usage by file type, as a ring with a legend (see [Storage ring](#storage-ring)). Scans again if the last scan is older than an hour, or always with `refresh` |
 | `/bars` · `/bars show 5h\|week\|cache\|storage on\|off` · `/bars reset` | Show or hide parts of the display in all open chats (see [Customize](#customize)) |
+| `/bars help` · `/bars ?` | All commands, features and settings at a glance, with their current state and how to switch them. In the terminal and the desktop app a drawn table with headings in the theme's warning color (yellow, follows light and dark); in `claude -p` and VS Code the same as Markdown. It shows the state at the moment you call it; call it again after switching something |
+| `/cache help` · `/handoff help` · `/keepwarm help` · `/disk help` | Answer only with "All commands: `/bars help`". `/handoff help` does not start a handoff |
 
-The German arguments of earlier versions still work: `warnung an|aus`, `gross`/`groß`, `hinweise an|aus` (and the older `guard`, `alerts`), `/handoff weiter|zeigen`, `/keepwarm aus`.
+The German arguments of earlier versions still work: `warnung an|aus`, `gross`/`groß`, `hinweise an|aus` (and the older `guard`, `alerts`), `/handoff weiter|zeigen`, `/keepwarm aus`. An unknown argument names the possible ones and points to `/bars help`.
 
 **Question before a cold send:** If the cache is cold and the chat is big (≥ 150k), the next typed message asks **Send anyway** · **Compact first** · **Cancel**, with the cost in the question text. Compacting also reads everything once and saves little with a cold cache; the mod then holds the message back, compacts, and sends it afterwards on its own (this option is not offered with attachments or `@file` in the text, because they would be missing when resent). If you close the dialog, the message goes out unchanged (fail-open). Slash commands, messages during a turn, and messages from plugins never trigger the question.
 
@@ -109,7 +111,7 @@ The cache guard is modeled on Cache Keeper by Nate Herk (MIT); the skill `ueberg
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, command.run{command=cache}, command.run{command=handoff}, command.run{command=keepwarm}, command.run{command=bars}, command.run{command=disk}, ui.render{component=CommandOutput, props has {command=disk}}, session.measure, ui.render{component=AbovePrompt}
+hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, command.run{command=cache}, command.run{command=handoff}, command.run{command=keepwarm}, command.run{command=bars}, command.run{command=disk}, ui.render{component=CommandOutput, props has {command=bars}}, ui.render{component=CommandOutput, props has {command=disk}}, session.measure, ui.render{component=AbovePrompt}
 calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.fork, $.process.run, $.prompt.submit, $.session.compact, $.session.id, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
 ```
 
@@ -126,6 +128,7 @@ In plain language:
 - Hooks `command.run` for `cache`, `handoff`, `keepwarm`, `disk`, `bars` and `$.command.register`: the five commands
 - `$.process.run`: only with `storagePath` set, `powershell.exe` with the two fixed, read-only scripts of the storage ring (size and free space; sizes by file extension)
 - Hook `ui.render` for `CommandOutput` of `disk`: draws the ring with the legend in place of the Markdown row of `/disk`
+- Hook `ui.render` for `CommandOutput` of `bars`: draws the help table in place of the Markdown row of `/bars help` (new in 0.7.0); other `/bars` rows stay Markdown
 - `$.command.list`, `$.command.run`: find and start the skill `uebergabe` (with the language as its argument); `/clear` for "clear and continue"
 - `$.prompt.submit`: the handoff as the first message in the cleared chat, or the held-back message after compacting
 - `$.session.compact`: **Compact first** in the question

@@ -3,7 +3,9 @@ import { expect, mock, test } from 'claude-code/testing'
 import { HAIKU, decideHaiku, decideRules, haikuCost, haikuSystem, isDone, isProblem, isQuestion, parseHaiku } from '../hooks/check.ts'
 import type { Facts } from '../hooks/check.ts'
 import { ANSWER_HINTS, CONTINUE_TEXTS, DONE_HINTS, DONE_LINES, T, cents, cleanLang, dayDate, hhmm, shortDate } from '../hooks/i18n.ts'
-import { commandOfTurn, findSent, firstSentence, hideDoneMarker, move, parseCommand, parseSent, pushSent, textHash } from '../hooks/model.ts'
+import { cleanSettings, commandOfTurn, findSent, firstSentence, hideDoneMarker, move, parseCommand, parseSent, pushSent, textHash } from '../hooks/model.ts'
+import { helpMarkdown, helpTree } from '../hooks/help.ts'
+import { TODOS_WORDS, worklistHelp } from '../hooks/helpdata.ts'
 import type { Queue } from '../hooks/model.ts'
 import { renderPane } from '../hooks/view.ts'
 import type { Actions, View } from '../hooks/view.ts'
@@ -400,7 +402,7 @@ async function tick(clock: { advance(ms: number): Promise<void> }, ms: number) {
 }
 
 // /todo <Aufgabe> reiht ein; alles andere läuft über /todos (Fynn, 2026-10-06)
-const ALL = ['', 'status', 'pause', 'resume', 'done', 'skip', 'retry', 'clear', 'history', 'close', 'help']
+const ALL = ['', 'status', 'pause', 'resume', 'done', 'skip', 'retry', 'clear', 'history', 'close', 'help', '?', 'HELP', 'help me', 'xyz']
 const cmd = ($: Engine, args: string) => $.command.run({ command: ALL.includes(args) ? 'todos' : 'todo', args })
 const DONE = 'Umgesetzt.\n\nFertig.'
 
@@ -1518,7 +1520,7 @@ test('Englisch (Standard): Ablauf, Toast, Seitenleiste, Chat-Zeile, Status', asy
   expect(status).toContain('List: 0 open, 1 running · done in this chat: 1')
   expect(status).toContain('Check state: stopped (Claude has a question.)')
   expect(status).toContain('0.00 ¢')
-  expect((await cmd($, 'help')).text).toContain('Usage:')
+  expect((await cmd($, 'help')).text).toContain('**worklist · Help**')
   expect((await cmd($, 'history')).text).toContain('History (1, newest first)')
 })
 
@@ -1761,7 +1763,7 @@ test('/todos mit allen Argumenten', DE, async ($, on) => {
   expect(await cmd($, 'clear')).toMatchObject({ text: expect.stringContaining('gelöscht') })
   expect(w.queue().items.filter((t) => t.status === 'open')).toEqual([])
   expect(await cmd($, 'close')).toEqual({})
-  expect((await cmd($, 'help')).text).toContain('Nutzung')
+  expect((await cmd($, 'help')).text).toContain('**worklist · Hilfe**')
   // Ausgaben ohne eigenes „worklist:“ davor (der Desktop setzt es selbst)
   expect((await cmd($, 'status')).text).not.toStartWith('worklist')
 })
@@ -2437,4 +2439,205 @@ test('0.6.0: /todos clear bei Hinweis „lief beim /clear“ → Hinweis weg, ni
   await ui.unmount()
   await tick(w.clock, 5000)
   expect(w.sent).toEqual(['A'])
+})
+
+// ---------- 0.7.0: /todos help (docs/HELP-SPEC.md §6) ----------
+
+const ACCENT = 'claude' // Theme-Key (0.7.2, docs/HELP-SPEC.md §4)
+/** Alle Texte eines Baums, rekursiv (für Suchen ohne die Engine). */
+const allText = (n: any): string => (typeof n === 'string' ? n : (n?.children ?? []).map(allText).join(''))
+/** Die Engine zeichnet sonst den Markdown-Text der Befehlsausgabe. */
+const engineStub = (on: On) => on('ui.render', ($, e) => ({ type: 'Text', props: {}, children: [`ENGINE:${String((e.props as { text?: string }).text ?? '')}`] }))
+
+function mountHelp($: Engine, text: string, surface: string, columns = 120, isErrored = false, args = 'help') {
+  return $.ui.mount({
+    plugin: 'worklist',
+    component: 'CommandOutput',
+    requestId: `h-${surface}-${columns}-${isErrored}-${args}`,
+    surface,
+    viewport: { columns, rows: 40 },
+    props: { command: 'todos', args, text, isErrored },
+  } as never)
+}
+
+test('0.7.0 Hilfe: help, ? und HELP liefern Markdown mit Kennung (en); weitere Wörter sind unbekannt und verweisen auf /todos help', async ($, on) => {
+  const w = world(on)
+  engineStub(on)
+  await w.start($)
+  for (const word of ['help', '?', 'HELP']) {
+    const text = (await cmd($, word)).text ?? ''
+    // Leerzeilen zwischen den Blöcken (Vorlage seit 3ad541e): sonst hängt Markdown alles an den letzten Listenpunkt
+    expect(text, word).toMatch(/^\*\*worklist · Help\*\* · #[0-9a-z]{5,}\n\nTo-do list next to the chat/)
+    expect(text, word).toContain('\n\n**FEATURES:**')
+    expect(text.length < 10_000, word).toBe(true)
+  }
+  for (const word of ['help me', 'xyz']) {
+    const text = (await cmd($, word)).text ?? ''
+    expect(text, word).toStartWith(`Unknown: ${word}.`)
+    expect(text, word).toContain('Usage:')
+    expect(text, word).toEndWith('All commands: /todos help')
+  }
+})
+
+test('0.7.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstellungen und Terminal-Fußzeile', DE, async ($, on) => {
+  const w = world(on)
+  engineStub(on)
+  await w.start($)
+  const lines = ((await cmd($, 'help')).text ?? '').split('\n')
+  expect(lines[0]).toMatch(/^\*\*worklist · Hilfe\*\* · #[0-9a-z]{5,}$/)
+  expect(lines).toContain('**BEFEHLE**')
+  expect(lines).toContain('- `/todo <Aufgabe>`: Aufgabe einreihen (alles nach /todo ist die Aufgabe)')
+  expect(lines).toContain('- `/todos help`: diese Hilfe (auch /todos ?)')
+  expect(lines).toContain('/todo help reiht ein To-do „help“ ein; die Hilfe ist /todos help.')
+  expect(lines).toContain('**BEDIENUNG**')
+  expect(lines).toContain('- `Fortsetzen · Abhaken · Überspringen`: wenn die Liste anhält: in der Reihenfolge weiter, abhaken oder ans Ende')
+  expect(lines).toContain(
+    '**FUNKTIONEN:** Liste pausiert ○ aus (/todos pause) · Haiku-Prüfung ● an (Einstellung) · Unsichtbare Hinweise ● an (Einstellung) · Beruhigungszeit 3 s (Standard) (Einstellung) · To-dos in Folge 15 (Standard) (Einstellung) · Schleifenschutz ○ ruht (nur Info)',
+  )
+  expect(lines).toContain(
+    '**EINSTELLUNGEN (/plugin):** Sprache de · Haiku 5.5 für unklare Fälle an (Standard) · Unsichtbare Hinweise an (Standard) · Beruhigungszeit (Sekunden) 3 (Standard) · To-dos in Folge 15 (Standard)',
+  )
+  expect(lines.at(-1)).toBe('Einstellungen ändern: /plugin configure worklist · Mod abschalten: /plugin disable worklist')
+})
+
+test('0.7.0 Hilfe: Zustand beim Aufruf; pausieren bzw. andere Einstellungen ändern ● / ○ und Werte', { options: { language: 'de', haiku: false, settleSeconds: 5, maxAutoRun: 3 } }, async ($, on) => {
+  const w = world(on)
+  engineStub(on)
+  await w.start($)
+  await cmd($, 'pause')
+  const text = (await cmd($, 'help')).text ?? ''
+  expect(text).toContain('Liste pausiert ● an (/todos resume)')
+  expect(text).toContain('Haiku-Prüfung ○ aus (Einstellung)')
+  expect(text).toContain('Beruhigungszeit 5 s (Einstellung)')
+  expect(text).toContain('To-dos in Folge 3 (Einstellung)')
+  expect(text).toContain('Haiku 5.5 für unklare Fälle aus ·')
+  const ui = await mountHelp($, text, 'terminal')
+  expect(await ui.find({ type: 'Text', text: 'Liste pausiert' })).toBeDefined()
+  // find trifft auch die umschließenden Texte; gezählt werden nur die farbigen Punkte selbst
+  const dots = ((await ui.findAll({ type: 'Text', text: '● ' })) as any[]).filter((n) => n.props.color)
+  expect(dots.map((n) => n.props.color)).toEqual(['success', 'success']) // Liste pausiert und Unsichtbare Hinweise
+  expect(((await ui.findAll({ type: 'Text', text: '○ ' })) as any[]).filter((n) => n.props.color).map((n) => n.props.color)).toEqual(['inactive', 'inactive']) // Haiku-Prüfung, Schleifenschutz
+  await ui.unmount()
+  // Schleifenschutz: zweimal FRAGEN beim selben To-do → hält an
+  await cmd($, 'resume')
+  await cmd($, 'A')
+  await tick(w.clock, 5000)
+  await w.todoTurn($)
+  await w.end($, 'Soll ich das so machen?')
+  await cmd($, 'resume')
+  await tick(w.clock, 300)
+  await w.todoTurn($)
+  await w.end($, 'Soll ich es wirklich so machen?')
+  expect((await cmd($, 'help')).text).toContain('Schleifenschutz ● hält an (nur Info)')
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`0.7.0 Hilfe UI ${surface}: Rahmen, Titel und Überschriften in der Akzentfarbe (Theme-Key claude), Fließtext ohne Akzent, Fußzeile je Surface`, DE, async ($, on) => {
+    const w = world(on)
+    engineStub(on)
+    await w.start($)
+    const ui = await mountHelp($, (await cmd($, 'help')).text ?? '', surface)
+    expect(await ui.find({ text: /^ENGINE:/ })).toBeUndefined()
+    const tree = (await ui.drawn()) as any
+    expect(tree.props).toMatchObject({ borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%', key: 'worklist-help' })
+    expect((await ui.find({ type: 'Text', text: 'worklist · Hilfe' }))?.props).toMatchObject({ color: ACCENT, bold: true })
+    for (const h of ['BEFEHLE', 'BEDIENUNG', 'FUNKTIONEN', 'EINSTELLUNGEN (/plugin)']) expect((await ui.find({ type: 'Text', text: h }))?.props, h).toMatchObject({ color: ACCENT, bold: true })
+    for (const c of ['/todo <Aufgabe>', '/todos', '/todos retry', '/todos help', '↑ ↓ ✕', 'neues To-do, Enter']) expect((await ui.find({ type: 'Text', text: c }))?.props, c).toMatchObject({ color: ACCENT })
+    expect((await ui.find({ type: 'Text', text: 'Seitenleiste öffnen' }))?.props.color).toBeUndefined()
+    const footer =
+      surface === 'desktop' ? 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure worklist' : 'Einstellungen ändern: /plugin configure worklist · Mod abschalten: /plugin disable worklist'
+    expect((await ui.find({ type: 'Text', text: footer }))?.props).toMatchObject({ dimColor: true })
+    await ui.unmount()
+  })
+
+test('0.7.0 Hilfe UI: VS Code, Fehlerzeile, unbekannte Kennung und andere /todos-Ausgaben → Engine; Kennung hinter „worklist: “ wird gefunden', DE, async ($, on) => {
+  const w = world(on)
+  engineStub(on)
+  await w.start($)
+  const text = (await cmd($, 'help')).text ?? ''
+  const cases: [string, string, boolean][] = [
+    [text, 'vscode', false],
+    [text, 'terminal', true],
+    ['**worklist · Hilfe** · #zzzzzz', 'desktop', false],
+    ['Liste: 0 offen', 'terminal', false],
+  ]
+  for (const [t, sf, err] of cases) {
+    const ui = await mountHelp($, t, sf, 100, err)
+    expect(await ui.find({ text: /^ENGINE:/ }), `${sf} ${err} ${t.slice(0, 20)}`).toBeDefined()
+    await ui.unmount()
+  }
+  // Review 0.7.0 K2: eine gültige Kennung in einer anderen /todos-Ausgabe zeichnet keine Tabelle
+  const tag = /#[0-9a-z]{5,}/.exec(text)?.[0] ?? ''
+  const other = await mountHelp($, `Unbekannt: ${tag}.`, 'terminal', 100, false, tag)
+  expect(await other.find({ text: /^ENGINE:/ })).toBeDefined()
+  await other.unmount()
+  const alias = await mountHelp($, text, 'desktop', 100, false, ' ? ')
+  expect(await alias.find({ type: 'Text', text: 'worklist · Hilfe' })).toBeDefined()
+  await alias.unmount()
+  const prefixed = await mountHelp($, `worklist: ${text}`, 'terminal')
+  expect(await prefixed.find({ type: 'Text', text: 'worklist · Hilfe' })).toBeDefined()
+  await prefixed.unmount()
+})
+
+test('0.7.0 Hilfe: höchstens 10 Schnappschüsse; der älteste fällt heraus', DE, async ($, on) => {
+  const w = world(on)
+  engineStub(on)
+  await w.start($)
+  const first = (await cmd($, 'help')).text ?? ''
+  for (let i = 0; i < 10; i++) await cmd($, 'help')
+  const old = await mountHelp($, first, 'terminal')
+  expect(await old.find({ text: /^ENGINE:/ })).toBeDefined()
+  await old.unmount()
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  for (const columns of [30, 40, 50, 59, 60, 100, 140, 200])
+    test(`0.7.0 Hilfe UI ${surface} bei ${columns} Spalten: nichts zu breit, Desktop nur ganzzahlige Prozent`, DE, async ($, on) => {
+      const w = world(on)
+      engineStub(on)
+      await w.start($)
+      const ui = await mountHelp($, (await cmd($, 'help')).text ?? '', surface, columns)
+      const inner = Math.max(30, Math.min(140, columns)) - 4
+      const boxes = (await ui.findAll({ type: 'Box' })) as any[]
+      const widths = boxes.map((b) => b.props.width).filter((x: unknown) => x !== undefined && x !== '100%')
+      if (surface === 'desktop') expect(widths.filter((x: unknown) => !(typeof x === 'string' && /^\d+%$/.test(x)))).toEqual([])
+      else expect(widths.filter((x: unknown) => typeof x === 'number' && x > inner)).toEqual([])
+      for (const r of boxes.filter((b) => b.props.flexDirection === 'row' && b.children?.length && b.children.every((c: any) => typeof c === 'object' && /^\d+%$/.test(String(c.props?.width)))))
+        expect(r.children.reduce((a: number, c: any) => a + parseInt(c.props.width, 10), 0)).toBe(100)
+      for (const r of boxes.filter((b) => b.props.flexDirection === 'row'))
+        expect(r.children.reduce((a: number, c: any) => a + (typeof c === 'object' && typeof c.props?.width === 'number' ? c.props.width : 0), 0) <= inner).toBe(true)
+      if (columns < 60) expect(boxes.some((b) => b.props.flexDirection === 'row' && b.children?.some((c: any) => typeof c === 'object' && c.props?.width !== undefined))).toBe(false)
+      expect(await ui.find({ type: 'Text', text: '/todos history' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'Beruhigungszeit (Sekunden)' })).toBeDefined()
+      await ui.unmount()
+    })
+
+test('0.7.0 Hilfe Vollständigkeit: jedes Wort, das /todos annimmt, steht in der Hilfe und wird vom Parser angenommen (HELP-SPEC §6 Punkt 5)', DE, async ($, on) => {
+  for (const lang of ['en', 'de'] as const) {
+    const d = worklistHelp(cleanSettings({ language: lang }), { paused: false, hold: false })
+    const cmds = d.commands.map((c) => c.cmd)
+    for (const word of TODOS_WORDS) {
+      if (word === '?') expect(d.commands.some((c) => c.does.includes('/todos ?')), lang).toBe(true)
+      else expect(cmds, `${lang}: ${word}`).toContain(`/todos ${word}`)
+    }
+    expect(cmds).toContain('/todos')
+    expect(cmds).toContain('/todo')
+    expect(cmds.filter((c) => c.startsWith('/todos ')).length).toBe(TODOS_WORDS.length - 1)
+    // Markdown und Baum kommen ohne Engine aus
+    expect(helpMarkdown(d, '#abcde').split('\n')[0]).toBe(`**worklist · ${lang === 'de' ? 'Hilfe' : 'Help'}** · #abcde`)
+    expect(allText(helpTree(d, 100, 'desktop', ACCENT))).toContain('+ → Plugins → Manage plugins')
+  }
+  const w = world(on)
+  engineStub(on)
+  await w.start($)
+  for (const word of TODOS_WORDS) expect((await cmd($, word)).text ?? '', word).not.toContain('Unbekannt')
+})
+
+test('0.7.0: /todo help bleibt ein To-do „help“ (HELP-SPEC §8 Punkt 4)', DE, async ($, on) => {
+  const w = world(on)
+  engineStub(on)
+  await w.start($)
+  await cmd($, 'pause')
+  expect(await $.command.run({ command: 'todo', args: 'help' })).toEqual({})
+  expect(w.queue().items.map((t) => t.text)).toEqual(['help'])
 })

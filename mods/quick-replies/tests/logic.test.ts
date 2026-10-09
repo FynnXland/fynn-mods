@@ -99,7 +99,7 @@ test('Kosten: Preis nach Modell-ID, Alias und unbekannt; Summe über Aufrufe', (
   expect(priceFor('claude-opus-5-5-20260101')).toEqual({ id: 'opus-5-5', input: 4, output: 20, read: 0.2 })
   expect(priceFor('opus-5')).toEqual({ id: 'opus-5', input: 5, output: 25, read: 0.5 })
   expect(priceFor('claude-sonnet-5-5[1m]').input).toBe(2)
-  expect(priceFor('haiku').input).toBe(1)
+  expect(priceFor('haiku').input).toBe(0.1)
   expect(priceFor('irgendwas').input).toBe(4)
   const u = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 38000, cache_creation_input_tokens: 2000 }
   // 1000 × 4 + 38000 × 0,2 + 2000 × 4 × 1,25 + 50 × 20 = 22600 → 0,0226 $
@@ -112,8 +112,9 @@ test('Kosten: Preis nach Modell-ID, Alias und unbekannt; Summe über Aufrufe', (
 
 test('0.4.3: Preise Haiku 5.5 und Sonnet 5.5; ein Fork über 100k Prompt-Tokens bleibt auf der günstigen Stufe', () => {
   expect(priceFor('claude-haiku-5-5')).toMatchObject({ id: 'haiku-5-5', input: 0.1, output: 0.5, read: 0.01 })
-  // Alias haiku löst Claude Code 2.1.291 noch zu Haiku 4.5 auf
-  expect(priceFor('haiku')).toMatchObject({ id: 'haiku-4-5', input: 1 })
+  // Alias haiku ist seit Claude Code 2.1.293 Haiku 5.5 (wie cost-ledger a57f8d4); die API-ID des Forks trifft die TABLE direkt
+  expect(priceFor('haiku')).toMatchObject({ id: 'haiku-5-5', input: 0.1 })
+  expect(priceFor('claude-haiku-5-5-20260601')).toMatchObject({ id: 'haiku-5-5', input: 0.1 })
   expect(priceFor('claude-haiku-4-5-20251001')).toMatchObject({ id: 'haiku-4-5', input: 1, output: 5, read: 0.1 })
   expect(priceFor('claude-sonnet-5-5').read).toBe(0.1)
   expect(priceFor('claude-sonnet-5').read).toBe(0.2)

@@ -14,7 +14,7 @@ const HISTORY_MAX = 300
 const TODO_MAX = 2000 // Zeichen pro To-do; der Store hat 4 MiB für alles
 export const QUEUE_MAX = 200
 
-const DEFAULT_SETTINGS: Settings = { haiku: true, doneLine: true, settleSeconds: 3, maxAutoRun: 15, lang: 'en' }
+export const DEFAULT_SETTINGS: Settings = { haiku: true, doneLine: true, settleSeconds: 3, maxAutoRun: 15, lang: 'en' }
 
 const clampNum = (v: unknown, lo: number, hi: number, d: number) => {
   const n = typeof v === 'number' ? v : Number(v)

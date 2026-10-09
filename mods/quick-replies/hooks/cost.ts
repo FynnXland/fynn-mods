@@ -26,13 +26,15 @@ const TABLE: readonly [string, Price][] = [
   ['haiku-5-5', { input: 0.1, output: 0.5, read: 0.01, long: { above: 100_000, factor: 5 } }],
   ['haiku-4-5', { input: 1, output: 5, read: 0.1 }],
 ]
-// Claude Code 2.1.291 löst den Alias `haiku` noch zu claude-haiku-4-5 auf (SPEC Nachtrag 0.4.3)
+// Alias → Eintrag, wie cost-ledger (a57f8d4): `haiku` ist Haiku 5.5 (Probe 2.1.295; Haiku 5.5 als Hauptmodell ab 2.1.293,
+// rel/advisor.md:110), bis 2.1.291 war es Haiku 4.5. Der Fork läuft auf dem Modell der Hauptschleife (types@2.1.295:2620-2624);
+// quick-replies kennt es als API-ID aus turn.complete (types@2.1.295:13654, :13658-13660), die die TABLE direkt trifft.
 const FAMILY: readonly [string, string][] = [
   ['fable', 'fable-5-1'],
   ['mythos', 'mythos-5-1'],
   ['opus', 'opus-5-5'],
   ['sonnet', 'sonnet-5-5'],
-  ['haiku', 'haiku-4-5'],
+  ['haiku', 'haiku-5-5'],
 ]
 
 /** Preis je Million Tokens für eine Modell-ID oder einen Alias (`claude-opus-5-5-20260101`, `opus[1m]` …); unbekannt → Opus 5.5. */

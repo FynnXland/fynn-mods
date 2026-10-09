@@ -31,12 +31,39 @@ type Texts = {
   flicker: string
   flickerNone: string
   alt: string
+  /** Verweis hinter der Kurzhilfe bei einem unbekannten Argument (docs/HELP-SPEC.md §2) */
+  seeHelp: string
+  /** Texte der Hilfe-Tabelle `/clawd help` (docs/HELP-SPEC.md §5 „clawd-buddy 0.7.0“); Überschriften stehen in help.ts */
+  hx: {
+    intro: string
+    status: string
+    on: string
+    off: string
+    list: string
+    demo: string
+    nap: string
+    boop: string
+    flicker: string
+    help: string
+    click: string
+    arm: string
+    hold: string
+    mouse: { click: string; arm: string; hold: string }
+    buddy: string
+    reduced: string
+    setting: string
+    titles: { nightStart: string; nightEnd: string; idleSeconds: string; reducedMotion: string; side: string; birthday: string; language: string }
+    sides: { right: string; left: string }
+    birthdayOff: string
+    footerTerminal: string
+    footerDesktop: string
+  }
 }
 
 export const T: Readonly<Record<Lang, Texts>> = {
   en: {
     description: 'Control the mascot',
-    help: 'Commands: on | off | list | demo <animation> | nap | boop | status | flicker',
+    help: 'Commands: on | off | list | demo <animation> | nap | boop | status | flicker | help',
     on: 'clawd-buddy: on',
     off: 'clawd-buddy: off',
     demoUsage: 'clawd demo <animation>. /clawd list shows all of them.',
@@ -59,10 +86,47 @@ export const T: Readonly<Record<Lang, Texts>> = {
       'does the dot blink, and does Clawd blink? Afterwards he continues normally.',
     flickerNone: 'Flicker test only works in the desktop app while the band is shown.',
     alt: 'Clawd, the mascot',
+    seeHelp: '→ /clawd help',
+    hx: {
+      intro: 'An animated pixel mascot above the prompt that reacts to Claude\'s work, waiting times and the time of day, with a mood of his own that builds up over the session.',
+      status: 'Status: on/off, mood, tiredness, annoyance; in the desktop app also drawing measurements',
+      on: 'Show Clawd (persists)',
+      off: 'Hide Clawd (persists)',
+      list: 'All animations by group',
+      demo: 'Play one animation (switches him on), e.g. type_laptop',
+      nap: 'Send him to sleep for about 5 minutes',
+      boop: 'Poke him',
+      flicker: 'Desktop app only: 20-second flicker test',
+      help: 'This help (also /clawd ?)',
+      click: 'Click on Clawd',
+      arm: 'Drag an arm',
+      hold: 'Hold the body ~0.7 s, then drag',
+      mouse: {
+        click: 'Terminal: giggles; many clicks annoy him (counted in status)',
+        arm: 'Terminal: the arm follows briefly and snaps back',
+        hold: 'Terminal: he hangs from the pointer, falls when you let go',
+      },
+      buddy: 'Buddy',
+      reduced: 'Reduced motion',
+      setting: 'setting',
+      titles: {
+        nightStart: 'Night starts (hour)',
+        nightEnd: 'Night ends (hour)',
+        idleSeconds: 'Idle time before pastimes (s)',
+        reducedMotion: 'Reduced motion',
+        side: 'Position in the band',
+        birthday: 'Birthday (DD.MM.)',
+        language: 'Language',
+      },
+      sides: { right: 'right', left: 'left' },
+      birthdayOff: 'off (empty)',
+      footerTerminal: 'Change settings: /plugin configure clawd-buddy · Turn the mod off: /plugin disable clawd-buddy',
+      footerDesktop: 'Turn the mod off: + → Plugins → Manage plugins · Change settings: /plugin configure clawd-buddy in a terminal',
+    },
   },
   de: {
     description: 'Maskottchen steuern',
-    help: 'Befehle: on | off | list | demo <animation> | nap | boop | status | flicker',
+    help: 'Befehle: on | off | list | demo <animation> | nap | boop | status | flicker | help',
     on: 'clawd-buddy: an',
     off: 'clawd-buddy: aus',
     demoUsage: 'clawd demo <animation>. Mit /clawd list siehst du alle.',
@@ -85,6 +149,43 @@ export const T: Readonly<Record<Lang, Texts>> = {
       'Punkt, und blinkt Clawd? Danach geht es normal weiter.',
     flickerNone: 'Der Flacker-Test geht nur in der Desktop-App, während das Band angezeigt wird.',
     alt: 'Clawd, das Maskottchen',
+    seeHelp: '→ /clawd help',
+    hx: {
+      intro: 'Ein animiertes Pixel-Maskottchen über dem Prompt, das auf Claudes Arbeit, Wartezeiten und die Tageszeit reagiert, mit eigener Laune, die sich im Lauf der Sitzung aufbaut.',
+      status: 'Status: an/aus, Laune, Müdigkeit, Ärger; im Desktop auch Messwerte der Zeichnung',
+      on: 'Zeigt Clawd (bleibt gespeichert)',
+      off: 'Blendet Clawd aus (bleibt gespeichert)',
+      list: 'Zeigt alle Animationen nach Gruppen',
+      demo: 'Spielt eine Animation ab (schaltet ihn ein), z. B. type_laptop',
+      nap: 'Schickt ihn für etwa 5 Minuten schlafen',
+      boop: 'Stupst ihn an',
+      flicker: 'Nur Desktop-App: 20-s-Flacker-Test',
+      help: 'Zeigt diese Hilfe (auch /clawd ?)',
+      click: 'Klick auf Clawd',
+      arm: 'Arm ziehen',
+      hold: 'Körper ~0,7 s halten, dann ziehen',
+      mouse: {
+        click: 'Terminal: kichert; viele Klicks ärgern ihn (zählt in status)',
+        arm: 'Terminal: der Arm folgt kurz und schnappt zurück',
+        hold: 'Terminal: er hängt am Zeiger und fällt beim Loslassen',
+      },
+      buddy: 'Buddy',
+      reduced: 'Weniger Bewegung',
+      setting: 'Einstellung',
+      titles: {
+        nightStart: 'Nacht beginnt (Stunde)',
+        nightEnd: 'Nacht endet (Stunde)',
+        idleSeconds: 'Leerlauf bis Zeitvertreib (s)',
+        reducedMotion: 'Weniger Bewegung',
+        side: 'Position im Band',
+        birthday: 'Geburtstag (TT.MM.)',
+        language: 'Sprache',
+      },
+      sides: { right: 'rechts', left: 'links' },
+      birthdayOff: 'aus (leer)',
+      footerTerminal: 'Einstellungen ändern: /plugin configure clawd-buddy · Mod abschalten: /plugin disable clawd-buddy',
+      footerDesktop: 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure clawd-buddy',
+    },
   },
 }
 

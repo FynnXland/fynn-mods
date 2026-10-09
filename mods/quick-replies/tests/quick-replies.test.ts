@@ -1,6 +1,8 @@
 import type { Engine, On, RenderNode } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { joinBand, layer, LEVEL, levelOf, nameOf, splitBand } from '../hooks/band.ts'
+import { HELP_WORDS, MORE_WORD, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from '../hooks/logic.ts'
+import { T } from '../hooks/i18n.ts'
 
 type Over = { isWorking?: boolean; hasSurvey?: boolean }
 type Surface = 'terminal' | 'desktop'
@@ -14,7 +16,7 @@ const usage = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, c
 type Fork = 'ok' | 'junk' | 'unanswered' | 'nothing' | 'deny' | 'slow' | 'cut'
 
 // Grundausstattung: ein Mod weiter innen (clawd), Kern-Stubs, Uhr, Store, Fork-Stub
-function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'deny' | 'drop'; stored?: unknown; forkUsage?: typeof usage } = {}) {
+function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'drop'; stored?: unknown; forkUsage?: typeof usage } = {}) {
   const clock = mock.clock(on, { now: 0 })
   const w = {
     clock,
@@ -24,14 +26,18 @@ function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'deny' | 'drop'; sto
     forks: [] as string[],
     registered: [] as string[],
     descriptions: [] as string[],
+    hints: [] as string[],
     store: new Map<string, unknown>(opts.stored === undefined ? [] : [['settings', opts.stored]]),
   }
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', props: {}, children: ['clawd'] }))
+  // Wie die Engine die Befehlsausgabe zeichnet, wenn der Mod sie nicht übernimmt
+  on('ui.render', { component: 'CommandOutput' }, ($, e) => ({ type: 'Text', props: {}, children: [`ENGINE: ${e.props.text}`] }))
   on('session.start', () => ({ cwd: '/work' }))
   on('session.id', () => (w.sid === 'DENY' ? { deny: 'kaputt' } : { value: w.sid }))
   on('command.register', ($, e) => {
     w.registered.push(e.name)
     w.descriptions.push(e.description ?? '')
+    w.hints.push(e.argumentHint ?? '')
     return { value: undefined }
   })
   on('store.get', ($, e) => ({ value: w.store.get(e.key) }))
@@ -47,7 +53,7 @@ function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'deny' | 'drop'; sto
   on('prompt.submit', ($, e) => {
     w.sent.push({ text: e.text, asUser: e.origin.kind === 'plugin' ? e.origin.asUser : undefined })
     if (opts.submit === 'drop') return { drop: 'blockiert' }
-    return opts.submit === 'deny' ? { deny: 'nein' } : { text: e.text }
+    return { text: e.text }
   })
   on('ui.toast', ($, e) => {
     w.toasts.push(e.text)
@@ -308,12 +314,19 @@ test('de: Toast beim Fehlschlag deutsch', { options: { language: 'de' } }, async
   await ui.unmount()
 })
 
+// prompt.submit ist ein Event: Sein Stub liefert das Ergebnis des Events (docs/raw/en/test.md:110, :192); ein { deny } lässt den
+// Test ab 2.1.295 scheitern (docs/SUMMARY.md:956; beobachtet: „returned neither { text } nor { drop }“). Den abgelehnten Aufruf bildet deshalb $.session.id nach, das vor dem Senden läuft: Auch das endet
+// im selben .catch von send (register.ts).
 test('Senden: abgelehnter Aufruf → Toast', async ($, on) => {
-  const w = world(on, { submit: 'deny' })
-  const ui = await boot($, 'terminal')
+  const w = world(on)
+  const ui = await boot($, 'desktop')
   await finish($)
   await suggest($, 'Lauf die Tests')
+  expect(await ui.find({ key: 'reply-1' })).toBeDefined()
+  w.sid = 'DENY'
   await ui.press({ key: 'reply-1' })
+  await ui.find({ type: 'Text', text: 'clawd' })
+  expect(w.sent).toEqual([])
   expect(w.toasts.some((t) => t.includes('Lauf die Tests'))).toBe(true)
   await ui.unmount()
 })
@@ -852,4 +865,205 @@ test('Kostenzeile: abgebrochener Fork zählt, was vor dem Abbruch kam; direkt na
   w.sid = 's2'
   expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork in this chat: –')
   await ui.unmount()
+})
+
+// ---------- 0.5.0: /replies help (docs/HELP-SPEC.md §6) ----------
+
+const ACCENT = 'autoAccept'
+const DE = { options: { language: 'de' } }
+const replies = async ($: Engine, args: string) => String((await $.command.run({ command: 'replies', args })).text)
+const mountHelp = ($: Engine, text: string, surface: string, columns = 120, isErrored = false, args = 'help') =>
+  $.ui.mount({
+    plugin: 'quick-replies',
+    component: 'CommandOutput',
+    requestId: `help-${surface}-${columns}-${isErrored}-${args}`,
+    surface,
+    viewport: { columns, rows: 40 },
+    props: { command: 'replies', args, text, isErrored },
+  } as Parameters<Engine['ui']['mount']>[0])
+
+test('0.5.0 Hilfe: help, ? und HELP liefern Markdown mit Kennung; argumentHint und Nutzung nennen help; weitere Wörter sind unbekannt', async ($, on) => {
+  const w = world(on)
+  await boot($)
+  expect(w.hints[0]).toBe('[status|on|off|more on|more off|help]')
+  // Nutzungszeile und argumentHint laufen nicht auseinander (beide Sprachen)
+  for (const lang of ['en', 'de'] as const) expect(T[lang].usage, lang).toContain(`/replies ${w.hints[0]}`)
+  for (const word of ['help', '?', 'HELP', ' help ']) {
+    const text = await replies($, word)
+    expect(text, word).toMatch(/^\*\*quick-replies · Help\*\* · #[0-9a-z]{5,}\n\nShows Claude Code's own suggestion/)
+    expect(text.length < 10_000, word).toBe(true)
+  }
+  // jede Hilfe bekommt eine eigene Kennung
+  expect((await replies($, 'help')).split('\n')[0]).not.toBe((await replies($, 'help')).split('\n')[0])
+  for (const bad of ['help me', 'quatsch', 'status x'])
+    expect(await replies($, bad), bad).toBe('Usage: /replies [status|on|off|more on|more off|help] · All commands: /replies help')
+})
+
+test('0.5.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstellungen und Terminal-Fußzeile', DE, async ($, on) => {
+  world(on, { stored: { enabled: true, more: false } })
+  await boot($)
+  const text = await replies($, 'help')
+  const lines = text.split('\n')
+  expect(lines[0]).toMatch(/^\*\*quick-replies · Hilfe\*\* · #[0-9a-z]{5,}$/)
+  expect(lines).toContain('**BEFEHLE**')
+  expect(lines).toContain('- `/replies more on`: Weitere Vorschläge per Fork, bis zu vier insgesamt, in allen Sessions')
+  expect(lines).toContain('- `/replies help`: Diese Hilfe (auch: ?)')
+  expect(lines).toContain('**BEDIENUNG**')
+  expect(lines).toContain('- `1–4 im leeren Prompt`: Sendet diesen Vorschlag sofort; die Ziffer bleibt nicht im Prompt')
+  expect(text).toMatch(/^Fork: kostet pro Antwort etwa eine kurze Antwort/m)
+  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Vorschläge ● an \(\/replies off\) · Mehr per Fork ○ aus \(\/replies more on\) · Anordnung auto \(Standard\) \(Einstellung\)$/m)
+  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Mehr Vorschläge per Fork aus \(Standard\) · Anordnung auto \(Standard\)$/m)
+  expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure quick-replies · Mod abschalten: /plugin disable quick-replies')
+  expect(await replies($, 'quatsch')).toBe('Nutzung: /replies [status|on|off|more on|more off|help] · Alle Befehle: /replies help')
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`0.5.0 Hilfe UI ${surface}: Tabelle mit Titel, Abschnitten, Befehlen in Violett, Schaltern und passender Fußzeile`, DE, async ($, on) => {
+    world(on, { stored: { enabled: true, more: false } })
+    await boot($)
+    const ui = await mountHelp($, await replies($, 'help'), surface)
+    expect(await ui.find({ text: /^ENGINE:/ })).toBeUndefined()
+    const tree = await ui.drawn()
+    expect(tree.props).toMatchObject({ borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%', key: 'quick-replies-help' })
+    expect((await ui.find({ type: 'Text', text: 'quick-replies · Hilfe' }))?.props).toMatchObject({ color: ACCENT, bold: true })
+    for (const h of ['BEFEHLE', 'BEDIENUNG', 'FUNKTIONEN', 'STATUS', 'UMSCHALTEN', 'EINSTELLUNGEN (/plugin)', 'WERT'])
+      expect((await ui.find({ type: 'Text', text: h }))?.props.color, h).toBe(ACCENT)
+    for (const cmd of ['/replies status', '/replies on', '/replies off', '/replies more on', '/replies more off', '/replies help', 'Klick auf einen Vorschlag', '1–4 im leeren Prompt', 'Nur 1–4 abschicken'])
+      expect((await ui.find({ type: 'Text', text: cmd }))?.props.color, cmd).toBe(ACCENT)
+    // Akzentfarbe nur für Titel, Überschriften und Befehle, nie für Fließtext
+    expect((await ui.find({ type: 'Text', text: /^Zeigt den Vorschlag/ }))?.props.color).toBeUndefined()
+    expect((await ui.find({ type: 'Text', text: 'Vorschläge einschalten' }))?.props.color).toBeUndefined()
+    const texts = await ui.findAll({ type: 'Text' })
+    expect(texts.some((x: any) => x.children?.[0] === '● ' && x.props.color === 'success')).toBe(true)
+    expect(texts.some((x: any) => x.children?.[0] === '○ ' && x.props.color === 'inactive')).toBe(true)
+    // „● an“ ganz in success (Vorlage 3ad541e)
+    expect(texts.some((x: any) => x.children?.[0] === 'an' && x.props.color === 'success')).toBe(true)
+    expect(await ui.find({ type: 'Text', text: ' (Standard)' })).toBeDefined()
+    const footer =
+      surface === 'desktop'
+        ? 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure quick-replies'
+        : 'Einstellungen ändern: /plugin configure quick-replies · Mod abschalten: /plugin disable quick-replies'
+    expect(await ui.find({ type: 'Text', text: footer })).toBeDefined()
+    await ui.unmount()
+  })
+
+test('0.5.0 Hilfe UI: VS Code, mobil, Fehlerzeile, Status und unbekannte Kennung → Engine; Kennung hinter „quick-replies: “ wird gefunden', async ($, on) => {
+  world(on)
+  await boot($)
+  const text = await replies($, 'help')
+  for (const surface of ['vscode', 'mobile']) {
+    const ui = await mountHelp($, text, surface)
+    expect(await ui.find({ text: /^ENGINE:/ }), surface).toBeDefined()
+    await ui.unmount()
+  }
+  const errored = await mountHelp($, text, 'terminal', 100, true)
+  expect(await errored.find({ text: /^ENGINE:/ })).toBeDefined()
+  await errored.unmount()
+  const unknown = await mountHelp($, '**quick-replies · Help** · #zzzzzz', 'desktop')
+  expect(await unknown.find({ text: /^ENGINE:/ })).toBeDefined()
+  await unknown.unmount()
+  const status = await mountHelp($, await replies($, 'status'), 'terminal')
+  expect(await status.find({ text: /^ENGINE:/ })).toBeDefined()
+  await status.unmount()
+  const prefixed = await mountHelp($, `quick-replies: ${text}`, 'terminal')
+  expect(await prefixed.find({ type: 'Text', text: 'quick-replies · Help' })).toBeDefined()
+  await prefixed.unmount()
+  // Nur die Ausgabe von help bzw. ?: eine gültige Kennung bei anderen Argumenten zeichnet nichts (Review worklist, K2)
+  const tag = /#[0-9a-z]{5,}/.exec(text)![0]
+  // echter Fall: /replies #<Kennung> antwortet mit der Nutzungszeile, ohne Kennung
+  const real = await replies($, tag)
+  expect(real.startsWith('Usage:')).toBe(true)
+  const realUi = await mountHelp($, real, 'desktop', 120, false, tag)
+  expect(await realUi.find({ text: /^ENGINE:/ })).toBeDefined()
+  await realUi.unmount()
+  for (const args of [tag, 'status', 'help me', ''])
+    for (const surface of ['terminal', 'desktop']) {
+      const other = await mountHelp($, text, surface, 120, false, args)
+      expect(await other.find({ text: /^ENGINE:/ }), `${surface} „${args}“`).toBeDefined()
+      await other.unmount()
+    }
+  for (const args of ['?', ' HELP '])
+    for (const surface of ['terminal', 'desktop']) {
+      const alias = await mountHelp($, text, surface, 120, false, args)
+      expect(await alias.find({ type: 'Text', text: 'quick-replies · Help' }), `${surface} „${args}“`).toBeDefined()
+      await alias.unmount()
+    }
+})
+
+test('0.5.0 Hilfe: Zustand beim Aufruf: off → ○ mit /replies on, more on → ● mit /replies more off; Einstellungen aus userConfig', { options: { more: true, layout: 'grid' } }, async ($, on) => {
+  world(on)
+  await boot($)
+  await replies($, 'off')
+  await replies($, 'more on')
+  const text = await replies($, 'help')
+  const ui = await mountHelp($, text, 'terminal')
+  expect(await ui.find({ type: 'Text', text: '/replies on' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '/replies more off' })).toBeDefined()
+  // „an (pausiert)“: eigener Text in der normalen Schriftfarbe, nur der Punkt grün
+  expect((await ui.find({ type: 'Text', text: 'on (paused)' }))?.props.color).toBeUndefined()
+  await ui.unmount()
+  expect(text).toMatch(/Suggestions ○ off \(\/replies on\) · More via fork ● on \(paused\) \(\/replies more off\) · Layout grid \(setting\)/)
+  expect(text).toMatch(/\*\*SETTINGS \(\/plugin\):\*\* Language en \(default\) · More suggestions via fork on · Layout grid$/m)
+  // Status = Stand beim Aufruf: die alte Zeichnung bleibt, eine neue zeigt den neuen Stand
+  await replies($, 'on')
+  const old = await mountHelp($, text, 'desktop')
+  expect(await old.find({ text: /○/ })).toBeDefined()
+  await old.unmount()
+  expect(await replies($, 'help')).toMatch(/Suggestions ● on \(\/replies off\)/)
+})
+
+test('0.5.0 Hilfe: höchstens 10 Schnappschüsse, der älteste fällt heraus', async ($, on) => {
+  world(on)
+  await boot($)
+  const first = await replies($, 'help')
+  for (let i = 0; i < 10; i++) await replies($, 'help')
+  const gone = await mountHelp($, first, 'terminal')
+  expect(await gone.find({ text: /^ENGINE:/ })).toBeDefined()
+  await gone.unmount()
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  for (const columns of [30, 40, 59, 60, 100, 140, 200])
+    test(`0.5.0 Hilfe UI ${surface} bei ${columns} Spalten: nichts zu breit, Desktop nur ganzzahlige Prozent`, DE, async ($, on) => {
+      world(on)
+      await boot($)
+      const ui = await mountHelp($, await replies($, 'help'), surface, columns)
+      const inner = Math.max(30, Math.min(140, columns)) - 4
+      const boxes = await ui.findAll({ type: 'Box' })
+      const widths = boxes.map((b: any) => b.props.width).filter((x: unknown) => x !== undefined)
+      if (surface === 'desktop') expect(widths.filter((x: unknown) => !(typeof x === 'string' && /^\d+%$/.test(x)))).toEqual([])
+      else expect(widths.filter((x: unknown) => typeof x === 'number' && x > inner)).toEqual([])
+      // Prozent-Spalten einer Zeile ergeben zusammen genau 100
+      for (const r of boxes.filter((b: any) => b.props.flexDirection === 'row' && b.children?.length && b.children.every((c: any) => typeof c === 'object' && /^\d+%$/.test(String(c.props?.width)))))
+        expect((r as any).children.reduce((a: number, c: any) => a + parseInt(c.props.width, 10), 0)).toBe(100)
+      // Feste Spalten einer Zeile passen in die Zeile
+      for (const r of boxes.filter((b: any) => b.props.flexDirection === 'row'))
+        expect((r as any).children.reduce((a: number, c: any) => a + (typeof c === 'object' && typeof c.props?.width === 'number' ? c.props.width : 0), 0) <= inner).toBe(true)
+      // Unter 60 Spalten stehen die Spalten untereinander: keine Zeile mit festen Spalten
+      if (columns < 60) expect(boxes.some((b: any) => b.props.flexDirection === 'row' && b.children?.some((c: any) => typeof c === 'object' && c.props?.width !== undefined))).toBe(false)
+      expect(await ui.find({ type: 'Text', text: '/replies more off' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'Mehr Vorschläge per Fork' })).toBeDefined()
+      await ui.unmount()
+    })
+
+test('0.5.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht in der Hilfe (HELP-SPEC §6 Punkt 5)', () => {
+  for (const lang of ['en', 'de'] as const) {
+    const d = repliesHelp({ lang, enabled: true, more: false, config: { more: false, layout: 'auto' } })
+    const cmds = d.commands.map((c) => c.cmd)
+    // ganze Wörter, keine Teilstrings: sonst steckt „on“ in „configure“ (templates/help/README.md, Tests)
+    const words = (s: string) => s.split(/[^\p{L}\p{N}?]+/u).filter(Boolean)
+    const help = new Set([...d.commands.flatMap((c) => [c.cmd, c.does]), ...(d.notes ?? [])].flatMap(words))
+    for (const word of [...STATUS_WORDS, ...TOGGLE_WORDS, MORE_WORD, ...HELP_WORDS]) expect(help.has(word), `${lang}: ${word}`).toBe(true)
+    for (const word of STATUS_WORDS) expect(cmds, `${lang}: ${word}`).toContain(`/replies ${word}`)
+    expect(cmds, lang).toContain(`/replies ${HELP_WORDS[0]}`)
+    // Aliase der Hilfe stehen als eigenes Wort in ihrer Zeile
+    const helpRow = d.commands.find((c) => c.cmd === `/replies ${HELP_WORDS[0]}`)!.does
+    for (const word of HELP_WORDS.slice(1)) expect(words(helpRow), `${lang}: ${word}`).toContain(word)
+    for (const word of TOGGLE_WORDS) {
+      expect(cmds, `${lang}: ${word}`).toContain(`/replies ${word}`)
+      expect(cmds, `${lang}: more ${word}`).toContain(`/replies ${MORE_WORD} ${word}`)
+    }
+    expect(d.controls?.length).toBe(3)
+    expect(d.settings.map((s) => s.value)).toEqual([lang, lang === 'en' ? 'off' : 'aus', 'auto'])
+  }
 })

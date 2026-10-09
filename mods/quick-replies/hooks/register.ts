@@ -12,12 +12,17 @@ import { addCall, NO_COST } from './cost.ts'
 import type { ForkCost } from './cost.ts'
 import { forkCostText, forkStateText, langOf, T } from './i18n.ts'
 import type { ForkState, Lang, Position } from './i18n.ts'
-import { forkPrompt, heldDigit, MIN_ANSWER, merge, parseFork } from './logic.ts'
+import { helpMarkdown, helpTree } from './help.ts'
+import type { HelpData } from './help.ts'
+import { forkPrompt, heldDigit, HELP_WORDS, MIN_ANSWER, merge, MORE_WORD, parseFork, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from './logic.ts'
 import type { Reply } from './logic.ts'
 import { chooseLayout, GAP, label } from './view.ts'
 import type { Layout, LayoutPref } from './view.ts'
 
 const CMD = 'replies'
+const ARG_HINT = '[status|on|off|more on|more off|help]'
+// Akzent der Hilfe: Theme-Key, passt sich hell und dunkel an (docs/HELP-SPEC.md §4, Violett; types@2.1.295:12590)
+const ACCENT = 'autoAccept'
 // Rahmen (2) und Innenabstand (2) der eigenen Pille (nur Desktop)
 const FRAME = 4
 // Keine Neubelegung so lange nach einer Eingabe (SPEC → Stabilität)
@@ -74,6 +79,19 @@ let engineSeen = 0
 // Im Terminal wird das Band nur bei Änderungen gezeichnet, dort jedes Mal.
 const SID_EVERY = 10
 let sidCheck = SID_EVERY
+
+// /replies help: Schnappschüsse unter einer Kennung `#…`, höchstens 10 (docs/HELP-SPEC.md §3). Die Kennung ohne $.clock.now,
+// das wäre ein neuer Call: Zähler plus Zufall, damit eine neu geladene Session keine alte Kennung trifft.
+const drawn = new Map<string, HelpData>()
+let helpNo = 0
+
+function remember(data: HelpData): string {
+  helpNo += 1
+  const tag = `#${helpNo.toString(36)}${Math.random().toString(36).slice(2, 7).padEnd(5, '0')}`
+  drawn.set(tag, data)
+  while (drawn.size > 10) drawn.delete(drawn.keys().next().value as string)
+  return tag
+}
 
 /** Einstellungen aus dem Store; ohne Store oder ohne Eintrag gilt der Standard aus userConfig. */
 async function load($: EngineInterface) {
@@ -260,7 +278,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     forkCost = NO_COST
     // Commands zuletzt und in try/catch: ein belegter Name wirft (docs/raw/en/api.md:45)
     try {
-      await $.command.register({ name: CMD, description: T[lang].description, argumentHint: '[status|on|off|more on|more off]' })
+      await $.command.register({ name: CMD, description: T[lang].description, argumentHint: ARG_HINT })
     } catch (err) {
       $.ui.log(`/${CMD} not registered: ${String(err)}`, { to: 'debug' })
     }
@@ -411,7 +429,12 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       $.ui.invalidate('ui.render')
     }
     const t = T[lang]
-    if (args.length === 0 || args[0] === 'status') {
+    // Hilfe nur als einziges Wort (docs/HELP-SPEC.md §2); Zustand beim Aufruf, die Zeichnung schreibt sich nicht um
+    if (args.length === 1 && HELP_WORDS.includes(args[0]!)) {
+      const data = repliesHelp({ lang, enabled: settings.enabled, more: settings.more, config: { more: defaults.more, layout: layoutPref } })
+      return { text: helpMarkdown(data, remember(data)) }
+    }
+    if (args.length === 0 || (args.length === 1 && STATUS_WORDS.includes(args[0]!))) {
       // Direkt nach /clear: Vorschläge und Fork-Kosten gehören noch zum alten Chat
       try {
         const now = await $.session.id()
@@ -421,15 +444,27 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       }
       return { text: status() }
     }
-    if (args.length === 1 && (args[0] === 'on' || args[0] === 'off')) {
+    if (args.length === 1 && TOGGLE_WORDS.includes(args[0]!)) {
       await change({ enabled: args[0] === 'on' })
       return { text: `quick-replies ${settings.enabled ? t.on : t.off}` }
     }
-    if (args.length === 2 && args[0] === 'more' && (args[1] === 'on' || args[1] === 'off')) {
+    if (args.length === 2 && args[0] === MORE_WORD && TOGGLE_WORDS.includes(args[1]!)) {
       await change({ more: args[1] === 'on' })
       return { text: settings.more ? t.moreOn : t.moreOff }
     }
     return { text: t.usage }
+  })
+
+  // /replies help gezeichnet an der Stelle der Befehlsausgabe (types@2.1.295:10025-10068). Die Kennung steht in der ersten Zeile,
+  // aber nicht am Anfang: Claude Code setzt „quick-replies: “ davor (templates/help/README.md). Sonst die Engine-Fassung.
+  on('ui.render', { component: 'CommandOutput', props: { command: CMD } }, async ($, e, next) => {
+    if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
+    // Nur die Ausgabe von /replies help (Absicherung wie templates/help und worklist K2; bei quick-replies wiederholt keine
+    // andere Antwort das Argument, eine Kennung kann also nur aus help stammen)
+    if (!HELP_WORDS.includes(e.props.args.trim().toLowerCase())) return next(e)
+    const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
+    const data = tag ? drawn.get(tag) : undefined
+    return data ? helpTree(data, e.viewport?.columns ?? 100, e.surface, ACCENT) : next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
