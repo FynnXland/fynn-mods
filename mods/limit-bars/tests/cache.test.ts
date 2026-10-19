@@ -240,7 +240,7 @@ test('turn.step: Hauptschleife zählt, Subagent wird ignoriert; Ring ohne Limits
   expect(await ringAlt(ui)).toContain('5-Stunden-Limit noch unbekannt')
 })
 
-test('Restzeit läuft mit der Uhr ohne Turn weiter (10-s-Takt), wird gelb und kalt', DE, async ($, on) => {
+test('Restzeit läuft mit der Uhr ohne Turn weiter (Takt), wird gelb und kalt', DE, async ($, on) => {
   const w = world(on)
   await w.step($, usage(300000, 5000))
   const ui = await $.ui.mount(band('desktop'))

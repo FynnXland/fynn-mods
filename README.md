@@ -135,6 +135,9 @@ An optional third ring shows how full a drive is, split by file type (programs, 
 `showCache` and `showStorage` in `/config`. Hiding the cache ring keeps the cold-send question; turn that off with
 `/cache warn off`.
 
+Every open chat on the same computer shares the newest limit reading and checks it every 2 s, so the bars follow along
+without flicker.
+
 - **Commands:** `/cache` (overview and settings), `/handoff [continue|show]` (write a handoff and continue in a fresh
   chat), `/keepwarm [hours|off]`, `/disk [refresh]`, `/bars [show <part> on|off | reset]`, `/bars help`
 - **Rights in short:** reads limits, context size and cache statistics; can hold a message back to ask you first; runs
@@ -233,13 +236,15 @@ After every answer cost-ledger books what the chat has cost so far (the same fig
 and the model calls made by other mods. `/ledger` shows today, 7 and 30 days and the total, a history split by model,
 your projects and the most expensive chats, drawn in Claude Code's own style. On a subscription, `/ledger limits` shows
 how much API value went into the current 5-hour and weekly window and into your subscription month; set your plan once
-with `/ledger plan`.
+with `/ledger plan`. It also estimates how much of each window you used outside the ledger (claude.ai, the mobile app, chats without the mod).
+
+**Several computers:** run `/ledger sync <folder>` on each one with the same folder that your cloud drive keeps in sync, and `/ledger` shows all devices together. Only numbers go into the folder, no paths, project names or chat titles. Off by default.
 
 - **Commands:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,
-  `/ledger plan <plan> <day|today> [price]`, `/ledger reset`, `/ledger help`
+  `/ledger plan <plan> <day|today> [price]`, `/ledger sync [<folder>|name <name>|off]`, `/ledger reset`, `/ledger help`
 - **Rights in short:** reads the session's cost, usage and limit windows; observes other mods' model calls and passes
   them on unchanged; stores the project name, the git remote as `host/owner/repo`, the first 50 characters of a chat's
-  first message and your plan setting in its local plugin store. Makes no model calls; no files, processes or network.
+  first message and your plan setting in its local plugin store. Makes no model calls, processes or network access. Files only for the optional sync (`$.fs`, limited to the folder you set and to its own `cost-ledger-<id>.json` files).
 - **Details:** [mods/cost-ledger](mods/cost-ledger/README.md)
 
 ## How they work together
@@ -263,7 +268,7 @@ with `/ledger plan`.
 A mod is code that runs inside Claude Code with your permissions. Every mod here declares what it hooks into and which
 API calls it makes; `claude plugin validate mods/<mod>` prints the exact list, and each README explains in plain
 language what they are for. None of these mods reads or stores login data or tokens, none has network access of its own, and
-none writes anywhere but its own plugin store. The only mod that looks at your drive is limit-bars, and only with its
+none writes anywhere but its own plugin store, with one exception: cost-ledger writes its own file into the folder you choose, but only if you turn on `/ledger sync`. The only mod that looks at your drive is limit-bars, and only with its
 optional storage ring: it reads sizes, never file contents. Found a security problem? See [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting

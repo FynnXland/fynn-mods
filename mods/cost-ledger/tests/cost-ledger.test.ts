@@ -29,10 +29,16 @@ import {
   RANGE_WORDS,
   TODAY_WORDS,
   VIEW_WORDS,
+  NAME_WORD,
+  SYNC_WORD,
+  DEVICE_PROJECT,
+  outsideText,
   cleanSettings,
   ledgerHelp,
   planWords,
 } from '../hooks/logic.ts'
+import { buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, shareRec, validDir } from '../hooks/sync.ts'
+import type { SyncFile } from '../hooks/sync.ts'
 import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from '../hooks/i18n.ts'
 import { modelColors, stackedBar } from '../hooks/view.ts'
 import { helpMarkdown, helpTree, stateText } from '../hooks/help.ts'
@@ -51,6 +57,7 @@ type W = {
   repoName?: string | null
   remote?: string
   answer?: string | null // Antwort auf $.ui.ask; null: Dialog abgelehnt (wie in -p)
+  files?: Map<string, string> // Dateisystem für den Geräte-Sync (0.7.0): Pfad → Inhalt
 }
 
 /** Argumente des letzten `/ledger`-Aufrufs; `mountLedger` gibt sie wie die echte Zeile als `props.args` mit. */
@@ -70,7 +77,31 @@ function world(on: On, o: W = {}) {
     usageCalls: 0,
     sets: 0,
     keysFail: false,
+    fs: [] as [string, string][], // jeder $.fs-Aufruf: [op, Pfad]
+    listFails: false,
+    writeFails: false,
   }
+  // Dateisystem im Speicher; ein Ordner „gibt es“, sobald eine Datei darin liegt (wie nach $.fs.write)
+  const files = o.files ?? new Map<string, string>()
+  const parent = (p: string) => p.slice(0, Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')))
+  on('fs.list', ($, e) => {
+    st.fs.push(['list', e.path])
+    const inside = [...files.entries()].filter(([p]) => parent(p) === e.path)
+    if (st.listFails || !inside.length) throw new Error(`ENOENT ${e.path}`)
+    return { value: inside.map(([p, t]) => ({ name: p.slice(e.path.length + 1), kind: 'file', size: t.length, mtimeMs: 0, isLink: false })) as never }
+  })
+  on('fs.read', ($, e) => {
+    st.fs.push(['read', e.path])
+    const t = files.get(e.path)
+    if (t === undefined) throw new Error(`ENOENT ${e.path}`)
+    return { value: t }
+  })
+  on('fs.write', ($, e) => {
+    st.fs.push(['write', e.path])
+    if (st.writeFails) throw new Error('EACCES')
+    files.set(e.path, e.text)
+    return { value: undefined }
+  })
   on('session.usage', () => {
     st.usageCalls++
     return {
@@ -119,6 +150,7 @@ function world(on: On, o: W = {}) {
     clock,
     saved,
     st,
+    files,
     rec: (id = 'S1') => saved.get(`s:${id}`) as Rec | undefined,
     sum: (id = 'S1') => Object.values((saved.get(`s:${id}`) as Rec | undefined)?.days ?? {}).reduce((a, b) => a + b, 0),
     /** Prozessstart: classic.SessionStart kommt vor session.start (Probe Phase 0). */
@@ -1454,7 +1486,7 @@ test('0.5.0 UI: Leerzustand ohne Limits und ohne Plan; ohne Limits mit Plan; ohn
   w.st.rl = RL(T5, 2)
   await w.turn($, 0.1)
   const noPlan = await w.ledger($, 'limits')
-  expect(noPlan).toMatch(/^5 Stunden: 2 % · 0,10 \$ · Reset 15:00 \(in 3 h 0 min\) · Hochrechnung ab 5 %$/m)
+  expect(noPlan).toMatch(/^5 Stunden: 2 % · 0,10 \$ · Reset 15:00 \(in 3 h 0 min\) · Hochrechnung ab 5 % · außerhalb des Ledgers: Schätzung ab dem ersten vollständigen Fenster ≥ 20 %$/m)
   expect(noPlan).toMatch(/Woche: noch kein Messwert/)
   expect(noPlan).toMatch(/Abo nicht eingestellt/)
   expect(noPlan).toMatch(/Ø 100 %: noch kein vollständig erfasstes, abgeschlossenes Fenster mit ≥ 20 %/)
@@ -1502,10 +1534,12 @@ test('0.5.0: Text für Claude ≤ 10 Zeilen für limits und die Übersicht, auch
   for (const args of ['', 'limits', 'weeks']) expect((await w.ledger($, args)).split('\n').length <= 10, args).toBe(true)
   const limits = await w.ledger($, 'limits')
   expect(limits.split('\n')[0]).toMatch(/^\*\*Kostenbuch · Limits\*\* · Stand 06\.10\. 12:00 · #[0-9a-z]{5,}$/)
-  expect(limits).toMatch(/^5 Stunden: 30 % · 1,20 \$ · Reset 15:00 \(in 3 h 0 min\) · 100 % ≈ 4,00 \$ \(Schätzung\)$/m)
+  expect(limits).toMatch(
+    /^5 Stunden: 30 % · 1,20 \$ · Reset 15:00 \(in 3 h 0 min\) · 100 % ≈ 4,00 \$ \(Schätzung\) · außerhalb des Ledgers ≈ 6 % von 30 % \(Schätzung: claude\.ai, Handy, Chats ohne cost-ledger\)$/m,
+  )
   expect(limits).toMatch(/^Woche: 50 % · 1,20 \$ · Reset Sa 10\.10\. 12:00 \(in 4 T 0 h\) · Hochrechnung ab dem nächsten Fenster · ab 06\.10\.$/m)
   expect(limits).toMatch(/^Abo-Monat: Max 20x · seit 08\.09\. · erneuert 08\.10\. \(in 2 Tagen\) · 5,20 \$ API-Wert für 207,00 \$ Abo = 0,0× \(ab 06\.10\.\)$/m)
-  expect(limits).toMatch(/^Letzte 5-Stunden-Fenster: 06\.10\. 10–15 1,20 \$ 30 % läuft · 06\.10\. 05–10 4,00 \$ 80 %$/m)
+  expect(limits).toMatch(/^Letzte 5-Stunden-Fenster: 06\.10\. 10–15 1,20 \$ 30 % \(außen 6 %\) läuft · 06\.10\. 05–10 4,00 \$ 80 % \(außen 0 %\)$/m)
   // Mit allen Hinweisen (Speicher voll, unlesbar, ohne Kosten, Schreibfehler) bleibt es bei 10 Zeilen
   const r = aggregate([{ id: 'A', rec: recOf('P', { [TODAY]: 1 }) }], NOW, {
     hasCost: false,
@@ -1549,7 +1583,7 @@ test('0.5.0 Englisch (Standard): /ledger limits, plan und die Limit-Zeile', asyn
   await w.turn($, 1.2)
   const text = await w.ledger($, 'limits')
   expect(text).toMatch(/^\*\*Cost ledger · limits\*\* · as of Oct 6 12:00 · #/)
-  expect(text).toMatch(/^5 hours: 30 % · \$1\.20 · reset 15:00 \(in 3 h 0 min\) · 100 % ≈ \$4\.00 \(estimate\)$/m)
+  expect(text).toMatch(/^5 hours: 30 % · \$1\.20 · reset 15:00 \(in 3 h 0 min\) · 100 % ≈ \$4\.00 \(estimate\) · outside the ledger: estimate from the first complete window ≥ 20 %$/m)
   expect(text).toMatch(/^Week: 50 % · \$1\.20 · reset Sat Oct 10 12:00 \(in 4 d 0 h\) · projection from the next window · from Oct 6$/m)
   expect(text).toMatch(/^Subscription month: Max 20x · since Sep 8 · renews Oct 8 \(in 2 days\) · \$1\.20 API value for a \$207\.00 plan = 0\.0×/m)
   expect(text).toMatch(/% applies to the whole account \(incl\. claude\.ai\)/)
@@ -1640,7 +1674,7 @@ test('0.5.0 Review: ein später gesetztes meta:limSince macht ältere Fenster an
   expect(w.saved.get('meta:limSince')).toBe(NOW)
   const text = await w.ledger($, 'limits')
   expect(text).toMatch(/^Ø 100 % ≈ 10,00 \$ aus 1 Fenster \(≥ 20 %, Schätzung\)$/m)
-  expect(text).toMatch(/06\.10\. 05–10 5,00 \$ 50 %$/m)
+  expect(text).toMatch(/06\.10\. 05–10 5,00 \$ 50 % \(außen 0 %\)$/m)
 })
 
 test('0.5.0 Review: /ledger plan constructor, __proto__ … sind ungültig und lassen den Plan stehen', DE, async ($, on) => {
@@ -1788,7 +1822,7 @@ test('0.6.0 Hilfe (de): Markdown mit Befehlen, Funktionen, Einstellungen und Ter
   expect(lines).toContain('- `/ledger`: Übersicht: heute, 7 und 30 Tage, gesamt, letzte 14 Tage, Projekte, teuerste Chats, Mods')
   expect(lines).toContain('- `/ledger plan off`: Abo-Einstellung löschen')
   expect(lines).toContain('Deutsche Wörter gehen auch: hilfe, alle, heute, aus.')
-  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Abo ○ kein Abo \(\/ledger plan max20 14\) · Speicher belegt 0 % von 4 MiB \(nur Info\) · Erfasst seit 06\.10\.2026 \(nur Info\)$/m)
+  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Abo ○ kein Abo \(\/ledger plan max20 14\) · Sync zwischen Geräten ○ aus \(\/ledger sync <ordner>\) · Speicher belegt 0 % von 4 MiB \(nur Info\) · Erfasst seit 06\.10\.2026 \(nur Info\)$/m)
   expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Aufbewahrung \(Tage\) 30 · Tagesbetrag gelb ab \(\$\) 3 \(Standard\) · Tagesbetrag rot ab \(\$\) 8 \(Standard\)$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure cost-ledger · Mod abschalten: /plugin disable cost-ledger')
 })
@@ -1942,7 +1976,7 @@ test('0.6.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht al
     const notes = tokens((d.notes ?? []).join(' '))
     const row = (cmd: string) => d.commands.find((c) => c.cmd === cmd)!
     // Erstes Wort: Ansichten, plan, reset, help stehen als Befehl; '?' und deutsche Aliase in Wirkung bzw. Notiz
-    for (const w of [...VIEW_WORDS, 'plan', 'reset', 'help']) expect(cmds.has(w), `${lang}: ${w}`).toBe(true)
+    for (const w of [...VIEW_WORDS, 'plan', 'reset', 'help', SYNC_WORD, NAME_WORD]) expect(cmds.has(w), `${lang}: ${w}`).toBe(true)
     expect(row('/ledger help').does.includes('?'), lang).toBe(true)
     // Englische Wörter im Befehl, deutsche Aliase in der Notiz
     const english = (list: readonly string[]) => list.filter((w) => /^[a-z]+$/.test(w) && !notes.has(w))
@@ -1963,11 +1997,11 @@ test('0.6.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht al
 test('0.6.0 Hilfe: Werte, Standard und Zustandstexte (stateText, ledgerHelp)', () => {
   const de = ledgerHelp(cleanSettings({ language: 'de', dayYellow: 2.5, dayRed: 9 }), { plan: { v: 1, plan: 'team', day: 3, at: NOW }, storeBytes: 1024 * 1024, since: NOW })
   expect(de.features[0]).toEqual({ name: 'Abo', state: { kind: 'on', text: 'Team · Tag 3 · ohne Preis' }, toggle: '/ledger plan off' })
-  expect(de.features[1]!.state).toEqual({ kind: 'value', text: '25 % von 4 MiB' })
+  expect(de.features[2]!.state).toEqual({ kind: 'value', text: '25 % von 4 MiB' })
   expect(de.settings.map((s) => [s.value, s.isDefault])).toEqual([['de', false], ['365', true], ['2,5', false], ['9', false]])
   const en = ledgerHelp(cleanSettings({}), { plan: null, storeBytes: 0, since: null })
   expect(en.settings[0]).toEqual({ title: 'Language', value: 'en', isDefault: true })
-  expect(en.features[2]!.state).toEqual({ kind: 'value', text: '–' })
+  expect(en.features[3]!.state).toEqual({ kind: 'value', text: '–' })
   expect(stateText({ kind: 'on' }, 'de')).toBe('● an')
   expect(stateText({ kind: 'off' }, 'en')).toBe('○ off')
   expect(stateText({ kind: 'value', text: '365', isDefault: true }, 'en')).toBe('365 (default)')
@@ -2012,4 +2046,418 @@ test('0.6.0 Hilfe-Modul allgemein: BEDIENUNG nur mit Einträgen, leere Abschnitt
   const holder = nodes.find((n) => n.type === 'Text' && n.children?.some((c: any) => typeof c === 'object' && c.children?.[0] === ' · /demo off'))
   expect(holder).toBeDefined()
   expect(nodes.some((n) => n.type === 'Box' && n.props?.flexDirection === 'row' && n.children?.some((c: any) => c === holder))).toBe(false)
+})
+
+// ---------- 0.7.0: Geräte-Sync und Anteil außerhalb des Ledgers (SPEC Nachtrag 0.7.0) ----------
+
+const SYNC = 'E:\\Sync\\cost-ledger'
+const peerRec = (o: Partial<Rec> = {}): Rec => ({
+  ...newRec({ project: 'Geheim', root: 'D:\\Home\\other\\geheim', title: 'Fremder Titel', kind: 'terminal', remote: 'github.com/x/geheim' }, NOW - DAY, 0),
+  days: { [TODAY]: 2 },
+  ...o,
+})
+const peerFile = (id: string, name: string, recs: Record<string, Rec>, at = NOW - H, since: number | null = NOW - 30 * DAY) =>
+  buildFile({ id, name }, since, Object.entries(recs).map(([sid, rec]) => ({ id: sid, rec })), at)
+const ownDevice = (w: { saved: Map<string, unknown> }) => w.saved.get('meta:device') as { id: string; name: string }
+const ownPath = (w: { saved: Map<string, unknown> }) => inDir(SYNC, fileName(ownDevice(w).id))
+
+test('0.7.0 sync.ts: Ordner prüfen, Dateinamen, Geräte-ID und -Name, gespeicherte Einstellungen', () => {
+  expect(validDir('E:\\Mein Sync\\cost-ledger\\')).toBe('E:\\Mein Sync\\cost-ledger')
+  expect(validDir(' "E:\\Mein Sync" ')).toBe('E:\\Mein Sync')
+  expect(validDir('/home/x/sync/')).toBe('/home/x/sync')
+  expect(validDir('/home/x/sync', true)).toBeNull() // unter Windows hinge /… vom aktuellen Laufwerk ab (Review S4)
+  expect(validDir('E:/Sync/cost-ledger', true)).toBe('E:/Sync/cost-ledger')
+  for (const bad of ['', '/', 'C:\\', 'C:/', '\\\\?\\C:\\x', 'sync\\x', '.\\x', 'x:', '\\\\server\\share', '//server/share', 'E:\\a\\..\\b']) expect(validDir(bad), bad).toBeNull()
+  expect(idFromName('cost-ledger-ab12cd34.json')).toBe('ab12cd34')
+  for (const n of ['cost-ledger-ab12cd34-PC.json', 'cost-ledger-AB12CD34.json', 'cost-ledger-ab12cd3.json', 'notes.txt']) expect(idFromName(n), n).toBeNull()
+  expect(inDir('E:\\S', 'f.json')).toBe('E:\\S\\f.json')
+  expect(inDir('C:\\', 'f.json')).toBe('C:\\f.json')
+  expect(inDir('/s', 'f.json')).toBe('/s/f.json')
+  const seq = [0, 0.99, 0.5, 0.1, 0.2, 0.3, 0.4, 0.6]
+  let i = 0
+  expect(newDeviceId(() => seq[i++]!)).toBe('0f813469')
+  expect(newDeviceId()).toMatch(/^[0-9a-f]{8}$/)
+  const fb = (id: string) => `Gerät ${id.slice(0, 4)}`
+  expect(cleanDeviceName('  Lap\u0007top   PC ', 'ab12cd34', fb)).toBe('Laptop PC')
+  expect(cleanDeviceName('', 'ab12cd34', fb)).toBe('Gerät ab12')
+  expect(cleanDeviceName('x'.repeat(40), 'ab12cd34', fb).length).toBe(30)
+  expect(cleanSync({ v: 1, dir: 'E:\\S\\', at: 5 })).toEqual({ dir: 'E:\\S', at: 5 })
+  expect(cleanSync({ v: 1, dir: '\\\\srv\\s', at: 5 })).toBeNull()
+  expect(cleanSync(undefined)).toBeNull()
+  expect(cleanDevice({ id: 'ab12cd34', name: '' }, fb)).toEqual({ id: 'ab12cd34', name: 'Gerät ab12' })
+  expect(cleanDevice({ id: '../x', name: 'a' }, fb)).toBeNull()
+})
+
+test('0.7.0 Datenschutz: Die Sync-Datei enthält keine Pfade, kein host/owner/repo, keinen Windows-Benutzernamen, keine Titel', DE, async ($, on) => {
+  const USER = 'alex'
+  const home = `D:\\Home\\${USER}\\Projekte\\geheim-projekt`
+  const w = world(on, { root: home, repoName: 'geheim-projekt', remote: `https://${USER}:tok123@github.com/FynnXland/geheim-projekt.git` })
+  await w.start($, 'S1', 'startup', 'Vertraulicher Chattitel')
+  w.st.rl = RL(T5, 30, TW, 50)
+  await w.turn($, 1.5, { usage: U('claude-opus-5-5', 1000, 2000) })
+  expect(await w.ledger($, `sync ${SYNC}`)).toMatch(/^Sync an: E:\\Sync\\cost-ledger · dieses Gerät: Gerät [0-9a-f]{4} · 0 andere Geräte gefunden\./)
+  // Gegenprobe: lokal steht alles drin, in der Datei nichts davon
+  expect(w.rec()).toMatchObject({ root: home, title: 'Vertraulicher Chattitel', remote: 'github.com/FynnXland/geheim-projekt', project: 'geheim-projekt' })
+  const text = w.files.get(ownPath(w))!
+  for (const bad of [USER, 'Users', 'Projekte', 'geheim', 'github', 'FynnXland', 'tok123', 'Vertraulich', 'Chattitel', 'Sync', ROOT])
+    expect(text.includes(bad), bad).toBe(false)
+  expect(text).not.toMatch(/[A-Za-z]:[\\/]/) // kein Laufwerkspfad
+  expect(text.includes('\\')).toBe(false) // kein Backslash, also kein Windows-Pfad
+  expect(text).not.toMatch(/[\w-]+\.[a-z]{2,}\/[\w.-]+\/[\w.-]+/i) // kein host/owner/repo
+  const f = JSON.parse(text) as SyncFile
+  expect(Object.keys(f).sort()).toEqual(['at', 'device', 'kind', 'recs', 'since', 'v'])
+  const r = Object.values(f.recs)[0]!
+  expect([r.project, r.root, r.title, r.remote, r.act, r.hours]).toEqual(['', '', '', '', {}, {}])
+  // Genau diese Felder, keins mehr (ein neues Feld in Rec käme sonst ungefragt mit, Review S2)
+  expect(Object.keys(r).sort()).toEqual(['act', 'c', 'days', 'firstAt', 'hours', 'kind', 'lastAt', 'lim', 'mods', 'modModels', 'models', 'project', 'remote', 'rl', 'root', 'title', 'v'].sort())
+  expect(r.firstAt % H).toBe(0) // erste Buchung nur auf die Stunde
+  // Beträge, Tage, Fenster und Modelle sind drin
+  near(r.days[TODAY]!, 1.5)
+  expect(Object.keys(r.models)).toEqual(['opus-5-5'])
+  expect(Object.keys(r.lim)).toContain('five_hour')
+  // Auch über shareRec/parseFile kommt nichts Lokales zurück
+  expect(shareRec(w.rec()!)).toMatchObject({ project: '', root: '', title: '', remote: '' })
+  const back = parseFile(peerFile('ab12cd34', 'Laptop', { X: peerRec() }), 'ab12cd34')!
+  expect(back.recs.X).toMatchObject({ project: '', root: '', title: '', remote: '' })
+})
+
+test('0.7.0 Datenschutz: Mod-Namen, eigene Modell-IDs, fremde Felder und Session-Schlüssel kommen nicht in die Datei (Review S2)', () => {
+  const day = { usd: 0.5, calls: 2, in: 10, out: 5, cr: 0, cw: 0 }
+  const md = { in: 10, out: 5, cr: 0, cw: 0, usd: 0.5, n: 1 }
+  const rec = {
+    ...peerRec(),
+    mods: { 'privater-mod': { days: { [TODAY]: day } }, sidekick: { days: { [TODAY]: { usd: 0.25, calls: 1 } } } },
+    models: { 'opus-5-5': { days: { [TODAY]: md } }, 'arn:aws:bedrock:eu-central-1:123456789012:inference-profile/mein-deployment': { days: { [TODAY]: md } } },
+    modModels: { 'Mein Gateway\nZeile 2': { days: { [TODAY]: md } } },
+    rl: { [TODAY]: { five_hour: 40, 'geheim\nkind': 3 } },
+    branch: 'feature/geheim',
+  } as unknown as Rec
+  const text = buildFile({ id: 'ab12cd34', name: 'Laptop' }, null, [{ id: 'S1', rec }, { id: 'D:\\Home\\alex', rec }], NOW)
+  for (const bad of ['privater-mod', 'sidekick', 'arn:', '123456789012', 'mein-deployment', 'Gateway', 'geheim', 'feature', 'alex', '\\n'])
+    expect(text.includes(bad), bad).toBe(false)
+  const f = JSON.parse(text) as SyncFile
+  expect(Object.keys(f.recs)).toEqual(['S1'])
+  const r = f.recs.S1!
+  expect(Object.keys(r.mods)).toEqual(['mods'])
+  expect(r.mods.mods!.days[TODAY]).toEqual({ usd: 0.75, calls: 3, in: 10, out: 5, cr: 0, cw: 0 })
+  expect(Object.keys(r.models).sort()).toEqual(['opus-5-5', 'other'])
+  expect(Object.keys(r.modModels)).toEqual(['other'])
+  expect(r.rl).toEqual({ [TODAY]: { five_hour: 40 } })
+  // Beim Lesen: Mod-Aufrufe des Geräts stehen unter dem Gerät
+  const merged = mergeRecs([], [parseFile(text, 'ab12cd34')!])
+  expect(Object.keys(merged[0]!.rec.mods)).toEqual([`${DEVICE_PROJECT}Laptop`])
+  const sum = summaryText(aggregate(merged, NOW, {}), 'overview', 30, '#t', 'de')
+  expect(sum).toMatch(/^Mods \(30 Tage\): Laptop \(anderes Gerät\) 0,75 \$ \(3×\)$/m)
+})
+
+test('0.7.0 Fehlerpfade im Turn, bei reset und sync name: Ordner weg oder nicht beschreibbar → nichts angelegt, Turn unverändert (Review S5)', { ...DE }, async ($, on) => {
+  const w = world(on, { answer: 'Löschen' })
+  await w.start($)
+  await w.turn($, 1)
+  await w.ledger($, `sync ${SYNC}`)
+  const writes = () => w.st.fs.filter(([op]) => op === 'write').length
+  const n0 = writes()
+  // Laufwerk getrennt: der Turn läuft durch, nichts wird geschrieben, der Grund steht im Debug-Log
+  w.st.listFails = true
+  await w.clock.advance(16 * 60_000)
+  expect(await w.turn($, 1.2)).toEqual({ text: 'ENGINE' })
+  expect(writes()).toBe(n0)
+  expect(w.st.logs.some((l) => /cost-ledger: Sync schreiben:/.test(l))).toBe(true)
+  near(w.sum(), 1.2) // das lokale Kostenbuch bucht weiter
+  // Ordner da, aber nicht beschreibbar
+  w.st.listFails = false
+  w.st.writeFails = true
+  await w.clock.advance(16 * 60_000)
+  expect(await w.turn($, 1.3)).toEqual({ text: 'ENGINE' })
+  expect(w.st.logs.filter((l) => /cost-ledger: Sync schreiben:/.test(l)).length).toBe(2)
+  // sync name und reset bei getrenntem Laufwerk: Hinweis, Name bzw. Löschen gilt trotzdem, nichts angelegt
+  w.st.writeFails = false
+  w.st.listFails = true
+  expect(await w.ledger($, 'sync name Büro')).toMatch(/^Gerätename: Büro\.\n\nSync gescheitert: /)
+  expect(ownDevice(w).name).toBe('Büro')
+  expect(await w.ledger($, 'reset')).toMatch(/^Kostenbuch geleert \(1 Eintrag\)\.\n\nSync gescheitert: /)
+  expect(w.rec()).toBeUndefined()
+  expect(writes()).toBe(n0 + 1) // nur der gescheiterte Versuch in den vorhandenen, schreibgeschützten Ordner
+})
+
+test('0.7.0 /ledger sync: Pfad mit Leerzeichen, ungültige Pfade, Stand, Name, aus, nicht beschreibbar', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  expect(await w.ledger($, 'sync')).toMatch(/^Sync ist aus\. Einschalten mit \/ledger sync <ordner>/)
+  // `/Sync` hinge unter Windows vom aktuellen Laufwerk ab (Session-Root D:\…, Review S4)
+  for (const bad of ['sync\\rel', '\\\\server\\share\\x', 'E:\\a\\..\\b', '/Sync', 'E:\\'])
+    expect(await w.ledger($, `sync ${bad}`)).toBe(
+      `Nicht gespeichert: „${bad}“ ist kein absoluter lokaler Ordner (unter Windows mit Laufwerk; kein Netzwerkpfad, kein „..“, nicht die Wurzel).`,
+    )
+  expect(w.saved.has('meta:sync')).toBe(false)
+  expect(w.st.fs).toEqual([]) // ungültige Pfade werden nie angefasst
+  const dir = 'E:\\Mein Sync\\cost-ledger'
+  expect(await w.ledger($, `sync ${dir}`)).toMatch(/^Sync an: E:\\Mein Sync\\cost-ledger · dieses Gerät: /)
+  expect(w.saved.get('meta:sync')).toEqual({ v: 1, dir, at: NOW })
+  const dev = ownDevice(w)
+  expect(dev.id).toMatch(/^[0-9a-f]{8}$/)
+  const mine = `${dir}\\cost-ledger-${dev.id}.json`
+  expect(w.files.has(mine)).toBe(true)
+  await w.ledger($, `sync ${dir}`)
+  expect(ownDevice(w).id).toBe(dev.id) // die ID bleibt
+  expect(await w.ledger($, 'sync name  Laptop Büro ')).toBe('Gerätename: Laptop Büro.')
+  expect(ownDevice(w)).toEqual({ id: dev.id, name: 'Laptop Büro' })
+  expect((JSON.parse(w.files.get(mine)!) as SyncFile).device.name).toBe('Laptop Büro')
+  expect(await w.ledger($, 'sync name')).toBe('Aufruf: /ledger sync name <name> (bis 30 Zeichen).')
+  const state = await w.ledger($, 'sync')
+  expect(state.includes(`Sync an: ${dir} · dieses Gerät: Laptop Büro (ID ${dev.id})`)).toBe(true)
+  expect(state).toMatch(/Noch kein anderes Gerät/)
+  expect(state).toMatch(/keine Pfade, Projekt- oder Mod-Namen, Repositories, Chat-Titel oder Nachrichten\.$/)
+  expect(await w.ledger($, 'sync aus')).toBe('Sync aus. Die Datei dieses Geräts bleibt im Ordner; gelöscht wurde nichts.')
+  expect(w.saved.has('meta:sync')).toBe(false)
+  expect(w.saved.get('meta:device')).toEqual({ id: dev.id, name: 'Laptop Büro' })
+  expect([...w.files.keys()]).toEqual([mine])
+  w.st.writeFails = true
+  expect(await w.ledger($, 'sync F:\\Weg')).toMatch(/^Nicht gespeichert: In den Ordner lässt sich nicht schreiben/)
+  expect(w.saved.has('meta:sync')).toBe(false)
+})
+
+test('0.7.0 /ledger mit zwei anderen Geräten: Summen, Geräte im Kopf, fremde Chats unter dem Gerät, fremde Namen ignoriert', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.turn($, 1)
+  await w.ledger($, `sync ${SYNC}`)
+  w.files.set(inDir(SYNC, fileName('ab12cd34')), peerFile('ab12cd34', 'Laptop', { L1: peerRec() }))
+  // Büro: ein Skript-Lauf von gestern, erfasst seit 60 Tagen
+  w.files.set(inDir(SYNC, fileName('ef56ab78')), peerFile('ef56ab78', 'Büro', { B1: peerRec({ kind: 'script', days: { [dayBefore(NOW, 1)]: 4 } }) }, NOW - H, NOW - 60 * DAY))
+  w.files.set(inDir(SYNC, 'notes.txt'), 'egal')
+  w.files.set(inDir(SYNC, 'cost-ledger-ab12cd34-PC.json'), peerFile('ab12cd34', 'Konflikt', { K: peerRec({ days: { [TODAY]: 100 } }) }))
+  const text = await w.ledger($)
+  expect(text.split('\n')[0]).toMatch(/ · 3 Geräte$/)
+  expect(text).toMatch(/^Chats: heute 3,00 \$ \(2\) · 7 Tage 7,00 \$ · 30 Tage 7,00 \$ · gesamt 7,00 \$$/m)
+  expect(text).toMatch(/Büro \(anderes Gerät\) 4,00 \$ · Laptop \(anderes Gerät\) 2,00 \$ · ClaudeMods 1,00 \$/)
+  expect(text).not.toMatch(/Geheim|Fremder Titel|Konflikt|Skript-Läufe/)
+  expect(w.st.fs.some(([op, p]) => op === 'read' && (p.endsWith('notes.txt') || p.endsWith('-PC.json')))).toBe(false)
+  // „seit“ ist das Minimum über alle Geräte
+  const ui = await mountLedger($, text, 'terminal')
+  expect(await ui.find({ text: /seit 07\.08\.2026 · 3 Geräte · Stand 06\.10\. 12:00/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Laptop (anderes Gerät)' })).toBeDefined()
+  await ui.unmount()
+  const projects = await w.ledger($, 'projects')
+  expect(projects).toMatch(/Laptop \(anderes Gerät\) 2,00 \$ \(1 Chat\)/)
+})
+
+test('0.7.0 Zusammenführen: gleiche Session-ID zählt einmal mit dem jüngsten Stand; zurückgespielte Datei zählt nicht doppelt; alte fremde Datensätze fallen weg', () => {
+  const own = [{ id: 'S1', rec: { ...recOf('P', { [TODAY]: 3 }), lastAt: NOW } }]
+  const older = parseFile(peerFile('ab12cd34', 'Alt', { S1: { ...recOf('X', { [TODAY]: 1 }), lastAt: NOW - H } }), 'ab12cd34')!
+  const newer = parseFile(peerFile('ef56ab78', 'Neu', { S1: { ...recOf('X', { [TODAY]: 4 }), lastAt: NOW + 1 }, S2: { ...recOf('X', { [TODAY]: 5 }), lastAt: NOW } }), 'ef56ab78')!
+  const m1 = mergeRecs(own, [older])
+  expect(m1.length).toBe(1)
+  near(m1[0]!.rec.days[TODAY]!, 3)
+  expect(m1[0]!.rec.project).toBe('P')
+  const m2 = mergeRecs(own, [older, newer])
+  expect(m2.map((x) => x.id).sort()).toEqual(['S1', 'S2'])
+  near(m2.find((x) => x.id === 'S1')!.rec.days[TODAY]!, 4)
+  expect(m2.find((x) => x.id === 'S1')!.rec.project).toBe(`${DEVICE_PROJECT}Neu`)
+  near(aggregate(m2, NOW, {}).windows.today.usd, 9)
+  const ancient = parseFile(peerFile('ab12cd34', 'A', { O: { ...recOf('X', { [dayBefore(NOW, 400)]: 1 }), lastAt: NOW - 400 * DAY } }), 'ab12cd34')!
+  expect(mergeRecs([], [ancient], NOW - 365 * DAY)).toEqual([])
+  // parseFile: halbe Datei, fremde ID, andere Version, kaputter Datensatz
+  const good = peerFile('ab12cd34', 'L', { A: peerRec(), B: peerRec() })
+  expect(parseFile(good.slice(0, 40), 'ab12cd34')).toBeNull()
+  expect(parseFile(good, 'ef56ab78')).toBeNull()
+  expect(parseFile(good.replace('"v":1', '"v":2'), 'ab12cd34')).toBeNull()
+  const broken = JSON.parse(good)
+  broken.recs.B = { v: 1, days: 'x' }
+  expect(Object.keys(parseFile(JSON.stringify(broken), 'ab12cd34')!.recs)).toEqual(['A'])
+})
+
+test('0.7.0 Fremde Datei halb geschrieben: letzter guter Stand, sonst Hinweis; Ordner weg: Hinweis, lokal unverändert, kein Schreiben', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.turn($, 1)
+  await w.ledger($, `sync ${SYNC}`)
+  const lap = inDir(SYNC, fileName('ab12cd34'))
+  w.files.set(lap, peerFile('ab12cd34', 'Laptop', { L1: peerRec() }))
+  expect(await w.ledger($)).toMatch(/gesamt 3,00 \$/)
+  w.files.set(lap, w.files.get(lap)!.slice(0, 40))
+  const half = await w.ledger($)
+  expect(half).toMatch(/gesamt 3,00 \$/) // letzter guter Stand aus diesem Prozess
+  expect(half).not.toMatch(/nicht lesbar/)
+  w.files.set(inDir(SYNC, fileName('ef56ab78')), '{"v":2}')
+  const bad = await w.ledger($)
+  expect(bad).toMatch(/^1 Gerät gerade nicht lesbar\.$/m)
+  expect(bad.split('\n')[0]).toMatch(/ · 2 Geräte$/)
+  w.st.listFails = true
+  const writes = w.st.fs.filter(([op]) => op === 'write').length
+  const gone = await w.ledger($)
+  expect(gone).toMatch(/^Sync gescheitert: .+ \(das lokale Kostenbuch ist unverändert\)\.$/m)
+  expect(gone).toMatch(/gesamt 1,00 \$/)
+  expect(gone.split('\n')[0]).not.toMatch(/Geräte/)
+  expect(w.st.fs.filter(([op]) => op === 'write').length).toBe(writes)
+})
+
+test('0.7.0 Schreiben nach Turns höchstens alle 15 Minuten, nie in session.end und bei Mod-Aufrufen; alle Pfade im Ordner', { plugins: [sidekick], ...DE }, async ($, on) => {
+  const w = world(on)
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_IN } as never }))
+  await w.start($)
+  const writes = () => w.st.fs.filter(([op]) => op === 'write').length
+  await w.turn($, 0.2)
+  expect(w.st.fs).toEqual([]) // Sync aus: kein $.fs
+  await w.ledger($, `sync ${SYNC}`)
+  const n0 = writes()
+  await w.turn($, 0.5)
+  await w.clock.advance(14 * 60_000)
+  await w.turn($, 0.6)
+  expect(writes()).toBe(n0)
+  await w.clock.advance(2 * 60_000)
+  await w.turn($, 0.7)
+  expect(writes()).toBe(n0 + 1)
+  near(Object.values((JSON.parse(w.files.get(ownPath(w))!) as SyncFile).recs)[0]!.days[TODAY]!, 0.7)
+  await w.clock.advance(20 * 60_000)
+  expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:OK')
+  w.st.cost = 0.8
+  await $.session.end({ reason: 'other' } as never)
+  expect(writes()).toBe(n0 + 1)
+  // Pfadgrenze: list nur auf den Ordner, read/write nur auf cost-ledger-<id>.json darin, write nur die eigene Datei
+  expect(w.st.fs.length > 0).toBe(true)
+  for (const [op, p] of w.st.fs) {
+    if (op === 'list') expect(p).toBe(SYNC)
+    else {
+      expect(p.startsWith(`${SYNC}\\`), p).toBe(true)
+      expect(idFromName(p.slice(SYNC.length + 1)), p).not.toBeNull()
+    }
+    if (op === 'write') expect(p).toBe(ownPath(w))
+  }
+  await w.ledger($, 'sync off')
+  await w.clock.advance(20 * 60_000)
+  await w.turn($, 0.9)
+  expect(writes()).toBe(n0 + 1)
+})
+
+test('0.7.0 /ledger reset mit Sync: nur dieses Gerät, eigene Datei leer neu, fremde unverändert, Sync bleibt an', { ...DE }, async ($, on) => {
+  const w = world(on, { answer: 'Löschen' })
+  await w.start($)
+  await w.turn($, 1)
+  await w.ledger($, `sync ${SYNC}`)
+  const lap = inDir(SYNC, fileName('ab12cd34'))
+  const lapText = peerFile('ab12cd34', 'Laptop', { L1: peerRec() })
+  w.files.set(lap, lapText)
+  expect(await w.ledger($, 'reset')).toBe('Kostenbuch geleert (1 Eintrag).')
+  expect((JSON.parse(w.files.get(ownPath(w))!) as SyncFile).recs).toEqual({})
+  expect(w.files.get(lap)).toBe(lapText)
+  expect(w.saved.has('meta:sync')).toBe(true)
+  expect(w.saved.has('meta:device')).toBe(true)
+  const after = await w.ledger($)
+  expect(after).toMatch(/gesamt 2,00 \$/)
+  expect(after.split('\n')[0]).toMatch(/ · 2 Geräte$/)
+})
+
+test('0.7.0 Doppelte Geräte-ID (Speicher kopiert): dieses Gerät nimmt eine neue ID, die alte Datei bleibt dem anderen', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.turn($, 1)
+  await w.ledger($, `sync ${SYNC}`)
+  const old = ownDevice(w)
+  // Die Kopie schreibt später unter derselben ID
+  // Ein anderer Chat desselben Geräts, der gleichzeitig schrieb (Datei 30 s jünger als die Marke): kein Konflikt (Review S1)
+  const mine = w.files.get(ownPath(w))!
+  w.files.set(ownPath(w), mine.replace(`"at":${NOW},`, `"at":${NOW + 30_000},`))
+  expect(await w.ledger($)).not.toMatch(/neuen ID/)
+  expect(ownDevice(w).id).toBe(old.id)
+  const copy = peerFile(old.id, old.name, { C1: peerRec({ days: { [TODAY]: 5 } }) }, NOW + 5 * 60_000)
+  w.files.set(ownPath(w), copy)
+  await w.clock.advance(6 * 60_000)
+  const text = await w.ledger($)
+  expect(text).toMatch(/^Ein anderes Gerät schrieb mit dieser Geräte-ID \(Speicher kopiert\?\): Dieses Gerät schreibt ab jetzt unter einer neuen ID\.$/m)
+  const now = ownDevice(w)
+  expect(now.id).not.toBe(old.id)
+  expect(now.name).toBe(old.name)
+  expect(w.files.get(inDir(SYNC, fileName(old.id)))).toBe(copy)
+  expect(w.files.has(inDir(SYNC, fileName(now.id)))).toBe(true)
+  expect(text).toMatch(/gesamt 6,00 \$/)
+  const again = await w.ledger($)
+  expect(again).not.toMatch(/neuen ID/)
+  expect(again.split('\n')[0]).toMatch(/ · 2 Geräte$/)
+  // Eigene Schreibvorgänge desselben Geräts sind kein Konflikt
+  await w.clock.advance(20 * 60_000)
+  await w.turn($, 1.1)
+  expect(await w.ledger($)).not.toMatch(/neuen ID/)
+})
+
+test('0.7.0 Anteil außerhalb des Ledgers: Kalibrierung aus dem besten vollständigen Fenster, nie negativ, ohne Kalibrierung Hinweis', () => {
+  const win = (end: number, usd: number, pct: number) => [String(end), limW({ chat: usd, pct, first: end - 4 * H, last: end - H })] as const
+  const rec = recOf('P', { [TODAY]: 1 }, {
+    rl: { [TODAY]: { five_hour: 50 } },
+    lim: {
+      five_hour: Object.fromEntries([
+        win(NOW - 25 * H, 20, 90), // das früheste Fenster begann vor der ersten Buchung: unvollständig, zählt nicht
+        win(NOW - 20 * H, 3, 10),
+        win(NOW - 15 * H, 1, 10),
+        win(NOW - 10 * H, 4, 40),
+        win(NOW - 5 * H, 2, 50),
+        win(NOW + 3 * H, 0.5, 30),
+      ]),
+    },
+  })
+  const l = limitsReport([{ rec }], NOW, {}) // Beginn der Fenster-Daten = früheste Buchung (NOW − 29 h)
+  near(l.calib.five!, 0.1) // 4 $ ÷ 40 %; 2 $ ÷ 50 % ist kleiner, Fenster unter 20 % und unvollständige zählen nicht
+  expect(l.calib.week).toBeNull()
+  const at = (end: number) => l.history.find((x) => x.resetsAt === end)!
+  near(at(NOW + 3 * H).outside!, 25) // 30 − 0,5 ÷ 0,1
+  near(at(NOW - 5 * H).outside!, 30) // 50 − 2 ÷ 0,1
+  near(at(NOW - 10 * H).outside!, 0)
+  expect(at(NOW - 20 * H).partial).toBe(false)
+  expect(at(NOW - 20 * H).outside).toBe(0) // 10 − 30 → nie negativ
+  expect(at(NOW - 25 * H).partial).toBe(true)
+  expect(at(NOW - 25 * H).outside).toBeNull()
+  expect(outsideText(l.five!, l.calib.five, 'de')).toBe('außerhalb des Ledgers ≈ 25 % von 30 % (Schätzung: claude.ai, Handy, Chats ohne cost-ledger)')
+  expect(outsideText(l.five!, l.calib.five, 'en')).toBe('outside the ledger ≈ 25 % of 30 % (estimate: claude.ai, phone, chats without cost-ledger)')
+  // Ohne vollständiges Fenster ab 20 %: keine Kalibrierung, kein Anteil, nur der Hinweis
+  const early = recOf('P', { [TODAY]: 1 }, { rl: { [TODAY]: { five_hour: 50 } }, lim: { five_hour: Object.fromEntries([win(NOW - 5 * H, 2, 50), win(NOW + 3 * H, 0.5, 30)]) } })
+  const p = limitsReport([{ rec: early }], NOW, {})
+  expect(p.calib.five).toBeNull()
+  expect(p.five!.outside).toBeNull()
+  expect(outsideText(p.five!, null, 'de')).toBe('außerhalb des Ledgers: Schätzung ab dem ersten vollständigen Fenster ≥ 20 %')
+  expect(outsideText(p.history.find((x) => x.partial)!, null, 'de')).toBe('')
+  // Text für Claude: eine Zeile je Fenster, höchstens 10 Zeilen, beide Sprachen
+  for (const lang of ['de', 'en'] as const) {
+    const r = aggregate([{ id: 'A', rec }], NOW, { sync: { on: true, devices: 2, unreadable: 1, error: 'x', dupId: true } })
+    const s = summaryText(r, 'limits', 30, '#t', lang)
+    expect(s.split('\n').length <= 10, s).toBe(true)
+    expect(s).toMatch(lang === 'de' ? /außerhalb des Ledgers ≈ 25 % von 30 %/ : /outside the ledger ≈ 25 % of 30 %/)
+    expect(s).toMatch(lang === 'de' ? /\(außen 25 %\) läuft/ : /\(outside 25 %\) running/)
+    expect(s.split('\n')[0]).toMatch(lang === 'de' ? / · 2 Geräte$/ : / · 2 devices$/)
+  }
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`0.7.0 UI ${surface}: /ledger limits mit Anteil außerhalb, Verlauf „außen“, Geräte im Kopf; 40 Spalten passen`, DE, async ($, on) => {
+    const w = await limitsWorld($, on)
+    await w.ledger($, `sync ${SYNC}`)
+    w.files.set(inDir(SYNC, fileName('ab12cd34')), peerFile('ab12cd34', 'Laptop', { L1: peerRec() }))
+    const text = await w.ledger($, 'limits')
+    const ui = await mountLedger($, text, surface)
+    expect(await ui.find({ type: 'Text', text: 'außerhalb des Ledgers ≈ 6 % von 30 % (Schätzung: claude.ai, Handy, Chats ohne cost-ledger)' })).toBeDefined() // k = 4 $ ÷ 80 %
+    expect(await ui.find({ type: 'Text', text: '  außen 0 %' })).toBeDefined()
+    expect(await ui.find({ text: /Max 20x · 2 Geräte · Stand 06\.10\. 12:00/ })).toBeDefined()
+    await ui.unmount()
+    const narrow = await mountLedger($, text, surface, 40)
+    const boxes = await narrow.findAll({ type: 'Box' })
+    for (const r of boxes.filter((b: any) => b.props.flexDirection === 'row' && !b.props.flexWrap)) {
+      const sum = (r as any).children.reduce((a: number, c: any) => a + (typeof c === 'object' && typeof c.props?.width === 'number' ? c.props.width : 0), 0)
+      expect(sum <= 36, `${sum}`).toBe(true)
+    }
+    const pcts = boxes.map((b: any) => b.props.width).filter((x: unknown) => typeof x === 'string')
+    expect(pcts.every((x: string) => /^\d+%$/.test(x)), `${pcts}`).toBe(true)
+    await narrow.unmount()
+  })
+
+test('0.7.0 Hilfe: Sync-Zeile mit Gerätename statt Ordner; Zustand beim Aufruf', DE, async ($, on) => {
+  const de = ledgerHelp(cleanSettings({ language: 'de' }), { plan: null, storeBytes: 0, since: null, syncDevice: 'Laptop' })
+  expect(de.features[1]).toEqual({ name: 'Sync zwischen Geräten', state: { kind: 'on', text: 'dieses Gerät: Laptop' }, toggle: '/ledger sync off' })
+  const en = ledgerHelp(cleanSettings({}), { plan: null, storeBytes: 0, since: null })
+  expect(en.features[1]).toEqual({ name: 'Sync between devices', state: { kind: 'off', text: 'off' }, toggle: '/ledger sync <folder>' })
+  const w = world(on)
+  await w.start($)
+  await w.ledger($, `sync ${SYNC}`)
+  await w.ledger($, 'sync name Laptop')
+  const help = await w.ledger($, 'help')
+  expect(help).toMatch(/Sync zwischen Geräten ● dieses Gerät: Laptop \(\/ledger sync off\)/)
+  expect(help.includes('Sync\\cost-ledger')).toBe(false)
 })

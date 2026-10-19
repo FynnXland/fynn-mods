@@ -8,7 +8,22 @@
 import type { RenderElement, RenderNode } from 'claude-code'
 import { T, dateTime, duration, factor, fullDate, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
 import type { Lang } from './i18n.ts'
-import { MOD_PART, UNKNOWN_MODEL, chatLabel, isoWeek, modelName, notesOf, partLabel, partialLabel, planLabel, planLine, projectLabel, projectionText } from './logic.ts'
+import {
+  MOD_PART,
+  UNKNOWN_MODEL,
+  chatLabel,
+  devicesLabel,
+  isoWeek,
+  modelName,
+  notesOf,
+  outsideText,
+  partLabel,
+  partialLabel,
+  planLabel,
+  planLine,
+  projectLabel,
+  projectionText,
+} from './logic.ts'
 import type { Bucket, LimWindow, LimitsReport, Report, Settings, ViewName } from './logic.ts'
 
 export type View = { report: Report; view: ViewName; range: number }
@@ -190,7 +205,8 @@ function modelsBlock(r: Report, title: string, sf: Surface, inner: number, lang:
 
 function modsBlock(r: Report, title: string, lang: Lang): RenderElement {
   const t = T[lang]
-  const line = r.mods.length ? r.mods.map((m) => `${m.name} ${usd(m.usd, lang)} (${m.calls}×)`).join(' · ') : t.noModCalls
+  // Mod-Aufrufe anderer Geräte stehen ohne Mod-Namen unter dem Gerät (Sync, Nachtrag 0.7.0)
+  const line = r.mods.length ? r.mods.map((m) => `${projectLabel(m.name, lang)} ${usd(m.usd, lang)} (${m.calls}×)`).join(' · ') : t.noModCalls
   return col({}, [heading(title), text(line, r.mods.length ? {} : { dimColor: true }), dim(t.modsExtra)])
 }
 
@@ -207,7 +223,17 @@ function limColor(p: number): string {
  * Ein Limit-Fenster (5 Stunden oder Woche): Überschrift mit Reset und Countdown (Stand beim Aufruf), rechts „ab …“, falls
  * das Fenster vor der ersten Fenster-Buchung begann; darunter Balken = % genutzt, %, API-Wert und die Hochrechnung.
  */
-function windowBlock(w: LimWindow | null, seen: boolean, title: string, l: LimitsReport, now: number, sf: Surface, inner: number, lang: Lang): RenderNode[] {
+function windowBlock(
+  w: LimWindow | null,
+  seen: boolean,
+  title: string,
+  k: number | null,
+  l: LimitsReport,
+  now: number,
+  sf: Surface,
+  inner: number,
+  lang: Lang,
+): RenderNode[] {
   const t = T[lang]
   if (!w) return [heading(title), dim(seen ? t.resetPassed : t.noWindowYet)]
   const from = partialLabel(w, l.limSince, lang)
@@ -223,7 +249,9 @@ function windowBlock(w: LimWindow | null, seen: boolean, title: string, l: Limit
     cell(12, text(usd(w.usd, lang), { bold: true }), true),
     el('Box', { paddingLeft: 3 }, [dim(projectionText(w, lang))]),
   ])
-  return [head, line]
+  // Geschätzter Anteil außerhalb des Ledgers (SPEC Nachtrag 0.7.0, Verhalten 4)
+  const outside = outsideText(w, k, lang)
+  return [head, line, ...(outside ? [dim(outside)] : [])]
 }
 
 function planBlock(l: LimitsReport, lang: Lang): RenderNode[] {
@@ -238,17 +266,21 @@ function windowsHistory(l: LimitsReport, sf: Surface, inner: number, lang: Lang)
   const t = T[lang]
   const max = Math.max(0, ...l.history.map((w) => w.usd))
   const labelW = 19
-  // Beschriftung 19, Betrag 10, % 7, Marke 12 → der Rest ist Balken. Reicht die Breite nicht, brechen die Zellen um:
-  // Der kleinste Balken braucht im Terminal 5 Zellen, im Desktop minWidth 6 + marginRight 1 (stackedBar)
-  const cells = Math.max(4, Math.min(24, inner - labelW - 10 - 7 - 12 - 1))
-  const narrow = inner < labelW + (sf === 'desktop' ? 7 : cells + 1) + 10 + 7 + 12
+  // Beschriftung 19, Betrag 10, % 7, Marke 15 („  outside 100 %“) → der Rest ist Balken. Reicht die Breite nicht, brechen
+  // die Zellen um: Der kleinste Balken braucht im Terminal 5 Zellen, im Desktop minWidth 6 + marginRight 1 (stackedBar)
+  const markW = 15
+  const cells = Math.max(4, Math.min(24, inner - labelW - 10 - 7 - markW - 1))
+  const narrow = inner < labelW + (sf === 'desktop' ? 7 : cells + 1) + 10 + 7 + markW
+  // Marke: läuft, unvollständig ab …, sonst der geschätzte Anteil außerhalb des Ledgers
+  const mark = (w: LimWindow) =>
+    w.running ? `  ${t.running}` : w.partial ? `  ${partialLabel(w, l.limSince, lang)}` : w.outside !== null ? `  ${t.outsideShort(pct(w.outside))}` : ''
   const rows = l.history.map((w) =>
     row(narrow ? { flexWrap: 'wrap' } : {}, [
       cell(labelW, dim(span(w.start, w.resetsAt, lang))),
       bar(sf, max > 0 ? w.usd / max : 0, cells, limColor(w.pct)),
       cell(10, text(usd(w.usd, lang)), true),
       cell(7, dim(pct(w.pct)), true),
-      cell(12, dim(w.running ? `  ${t.running}` : w.partial ? `  ${partialLabel(w, l.limSince, lang)}` : '')),
+      cell(markW, dim(mark(w))),
     ]),
   )
   return [
@@ -265,8 +297,8 @@ function limitsBlocks(r: Report, sf: Surface, inner: number, lang: Lang): Render
   if (!l.seenFive && !l.seenWeek)
     return [el('Box', { marginTop: 1 }, [text(t.noLimitData)]), ...(l.plan ? planBlock(l, lang) : [dim(t.planNotSet)])]
   return [
-    ...windowBlock(l.five, l.seenFive, t.fiveHours, l, r.now, sf, inner, lang),
-    ...windowBlock(l.week, l.seenWeek, t.week, l, r.now, sf, inner, lang),
+    ...windowBlock(l.five, l.seenFive, t.fiveHours, l.calib.five, l, r.now, sf, inner, lang),
+    ...windowBlock(l.week, l.seenWeek, t.week, l.calib.week, l, r.now, sf, inner, lang),
     ...planBlock(l, lang),
     ...windowsHistory(l, sf, inner, lang),
   ]
@@ -306,7 +338,8 @@ export function ledgerTree(v: View, s: Settings, columns: number, surface: Surfa
   const limits = v.view === 'limits'
   // Ohne Knopf (er bräuchte neue Rechte): oben rechts Stand und wie man neu lädt; bei den Limits statt „seit“ der Plan
   const first = limits ? (r.limits.plan ? `${planLabel(r.limits.plan.plan)} · ` : '') : r.since ? `${t.since(fullDate(r.since, lang))} · ` : ''
-  const stand = `${first}${t.asOf(dateTime(r.now, lang))} · ${t.reload(reloadCommand(v))}`
+  const dev = devicesLabel(r, lang)
+  const stand = `${first}${dev ? `${dev} · ` : ''}${t.asOf(dateTime(r.now, lang))} · ${t.reload(reloadCommand(v))}`
   const head = row({ justifyContent: 'space-between', flexWrap: 'wrap' }, [text(limits ? t.limitsHead : 'cost-ledger', { color: ORANGE, bold: true }), dim(stand)])
   const notes: RenderNode[] = notesOf(r, lang).map((n) => text(n, { color: YELLOW }))
   const foot = el('Box', { marginTop: 1 }, [dim(limits ? t.limitsFoot : t.foot)])

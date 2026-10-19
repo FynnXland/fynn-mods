@@ -1,6 +1,7 @@
 // limit-bars: Hooks-Modul. Im Band über dem Prompt (AbovePrompt, docs/raw/en/interface.md:207-213) zwei schmale Balken für das
 // 5-Stunden- und das Wochenlimit und rechts daneben ein Ring, wie lange der Prompt-Cache dieser Session noch warm ist.
-// Limits: `$.session.usage()` beim Start und bei jedem Tick, dazu `session.measure` (types@2.1.288:10410-10436).
+// Limits: `$.session.usage()` beim Start und bei jedem Tick, dazu `session.measure` (types@2.1.288:10410-10436); der neueste Stand
+// aller Chats auf dem Rechner liegt in `$.store` unter `limits` (docs/raw/en/reference.md:221).
 // Cache: `turn.step` der Hauptschleife (usage mit cache_read/cache_creation, types@2.1.289:12837-12869), gespeichert in `$.store`.
 // Dazu die Cache-Wache nach Nate Herks Cache Keeper (docs/vorlagen/nateherk-cache-keeper, MIT): Rückfrage vor kaltem Senden,
 // Hinweis kurz vor Ablauf, /cache, /handoff mit Skill „uebergabe“, /keepwarm (Standard aus).
@@ -65,14 +66,14 @@ import {
 } from './storage.ts'
 import type { Drive, Scan, StorageReport } from './storage.ts'
 import { desktopSvg } from './svg.ts'
-import { EMPTY, ORANGE, filled, layoutTerminal, pickWindows, placeholderWindows, shownWindows } from './view.ts'
-import type { Opts, ResetStyle, Shown, Win } from './view.ts'
+import { EMPTY, ORANGE, cleanShared, filled, layoutTerminal, mergeWins, pickWindows, placeholderWindows, shownWindows } from './view.ts'
+import type { Opts, ResetStyle, Shared, Shown, Win } from './view.ts'
 
 // Optionen aus userConfig, in register() gesetzt
 let lang: Lang = 'en'
 let opts: Opts = { resetStyle: 'mixed', highlightAt: 90, onlyFiveHour: false, lang }
 // Welche Teile zu sehen sind (display.ts): userConfig, darüber die `/bars`-Werte aus `$.store` (`display`), die jeder Takt
-// neu liest, damit ein `/bars` in einem anderen Chat hier binnen 10 s wirkt
+// neu liest, damit ein `/bars` in einem anderen Chat hier binnen 2 s wirkt
 let baseDisplay: Display = displayFromOptions({})
 let overrides: Overrides = {}
 const shownParts = () => effectiveDisplay(baseDisplay, overrides)
@@ -81,17 +82,21 @@ let displayPinned = false // /bars konnte nicht speichern: der lokale Wert gilt,
 // Limits: flüchtig (Kontingent gehört zum Konto und kommt mit jeder Messung neu)
 let wins: Win[] = []
 let usageAsked = false
-// 10-s-Takt, nur solange das Band gezeichnet wird (Timer mit cancel(), types@2.1.288:11912-11917; eine abgelehnte Periode beendet ihn,
+// Gemeinsamer Stand (Ausbau 0.8.0): `usage()` kennt nur die letzte API-Antwort DIESES Chats (types@2.1.295:11722). Ändert sich die
+// eigene Messung, kam eine neue Antwort: dann `{at, wins}` nach `$.store` `limits`. Jeder Tick übernimmt von dort, was neuer ist.
+let winsAt = 0 // wann der angezeigte Stand gemessen wurde (eigene Antwort oder ein anderer Chat)
+let ownKey = '' // die zuletzt gesehene eigene Messung
+// Takt, nur solange das Band gezeichnet wird (Timer mit cancel(), types@2.1.288:11912-11917; eine abgelehnte Periode beendet ihn,
 // types@2.1.288:3251). Jeder Tick holt `$.session.usage()`: Das sind die Werte der letzten API-Antwort (types@2.1.288:11033-11034), also
 // auch mitten in einem langen Turn, während `session.measure` erst am Turn-Ende kommt (Fynn, 2026-10-05: "aktualisiert viel zu selten").
 // Der Takt läuft auch ohne Daten. Neu gezeichnet wird nur, wenn sich etwas Sichtbares ändert (Fynn, 2026-10-05: Jedes
 // Invalidate zeichnet das ganze Band neu, auch die Knöpfe anderer Mods, die dann beim Darüberfahren flackerten).
-const TICK = 10000
+// 2 s statt 10 s seit 0.8.0 (Fynn, 2026-10-19: Änderungen am Kontingent sofort sehen); gezeichnet wird weiter nur bei Änderung.
+const TICK = 2000
 let timer: Timer | null = null
 let drawnKey = '' // was zuletzt gezeichnet wurde (Texte, Farben, Füllstufen)
 let awaitingRender = false // ein Neuzeichnen ist angefordert, aber noch nicht gekommen
-let timerSince = 0 // Uhrzeit beim Start des Takts
-let ticks = 0 // Ticks seit dem Start
+let lastTick = 0 // Uhrzeit des letzten Ticks (bzw. des Starts)
 // Lehnt eine Claude-Code-Version das Umschreiben von bodyColumns ab, stapelt limit-bars danach über dem Rest (SPEC.md, Phase 0)
 let noRewrite = false
 
@@ -122,7 +127,9 @@ let disk: { d?: Drive; scan?: Scan } = {}
 let diskLoaded = false
 let diskStarted = false // startDisk angestoßen (von session.start oder, falls das die Oberfläche nicht nannte, vom ersten Zeichnen)
 let scanRun: Promise<void> | null = null
-const PROBE_EVERY = 60 // Ticks: alle 10 min
+// Gesamt/frei alle 10 min, nach Uhrzeit statt nach Tick-Zahl: ein Neustart des Takts setzt sie nicht zurück (Review 0.8.0, K3)
+const PROBE_MS = 10 * 60000
+let probedAt = 0 // Start der letzten Probe; 0 = der Start des Rings hat noch nicht geprobt
 const SCAN_MAX_AGE = 60 * 60000 // /disk scannt neu, wenn der letzte Scan älter ist
 const SCAN_LOCK = 5 * 60000 // ein Scan, der in einer anderen Sitzung gerade läuft, gilt so lange als laufend
 const SCAN_PAUSE = 24 * 60 * 60000 // nach einem gescheiterten Scan keine automatischen Scans (/disk refresh geht immer)
@@ -166,9 +173,104 @@ function later($: EngineInterface, ms: number, fn: () => void) {
 async function loadWindows($: EngineInterface): Promise<void> {
   usageAsked = true
   try {
-    wins = pickWindows((await $.session.usage()).rateLimits)
+    const now = await $.clock.now()
+    const fresh = pickWindows((await $.session.usage()).rateLimits)
+    if (fresh.length > 0 && !ownKey) await takeBaseline($, fresh, now)
   } catch {
-    // kein Anfangsstand
+    // kein eigener Anfangsstand
+  }
+  // Vor der ersten eigenen Antwort: der Stand eines anderen Chats
+  await readShared($)
+}
+
+/**
+ * Erste eigene Messung nach dem Laden des Moduls (Start oder `/reload-plugins`, das die Modulvariablen leert,
+ * docs/raw/en/interface.md:736): Ihr Alter ist unbekannt, nach einem Reload kann die letzte Antwort Stunden alt sein
+ * (Review 0.8.0, S1). Deshalb je Fenster mit dem gemeinsamen Stand abgleichen; abgelegt wird nur, was sie Neueres bringt.
+ */
+async function takeBaseline($: EngineInterface, fresh: Win[], now: number): Promise<void> {
+  ownKey = JSON.stringify(fresh)
+  let s: Shared | undefined
+  try {
+    s = cleanShared(await $.store.get('limits'))
+  } catch {
+    // ohne gemeinsamen Stand gilt die eigene Messung
+  }
+  const merged = s ? mergeWins(s.wins, fresh) : fresh
+  if (s && JSON.stringify(merged) === JSON.stringify(s.wins)) {
+    wins = s.wins
+    winsAt = s.at
+  } else {
+    wins = merged
+    winsAt = now
+    $.store.set('limits', { at: now, wins: merged }).catch(() => {})
+  }
+  refresh($, now)
+}
+
+/**
+ * Eigene Messung übernehmen, wenn sie sich geändert hat (neue API-Antwort dieses Chats), und für die anderen Chats ablegen.
+ * Unverändert bleibt der Stand, den ein anderer Chat inzwischen neuer gemeldet hat. Leer: Fenster verschwinden, nichts abgelegt;
+ * leer vor der ersten eigenen Messung heißt nur „noch keine Antwort“, dann bleibt der Stand eines anderen Chats.
+ */
+function takeOwn($: EngineInterface, fresh: Win[], now: number): void {
+  const k = JSON.stringify(fresh)
+  if (k === ownKey || (fresh.length === 0 && !ownKey)) return
+  // Erste eigene Messung, auch wenn der Anfangsstand abgelehnt wurde: Alter unbekannt, also abgleichen (Review 0.8.0, K6)
+  if (!ownKey) {
+    takeBaseline($, fresh, now).catch(() => {})
+    return
+  }
+  ownKey = k
+  wins = fresh
+  winsAt = now
+  if (fresh.length === 0) return
+  // Erst neu lesen, dann schreiben: Hat ein anderer Chat gerade neuer geschrieben, bleibt das stehen
+  // (get + set sind nicht atomar, docs/raw/en/interface.md:848-855)
+  $.store
+    .get('limits')
+    .then((v) => ((cleanShared(v)?.at ?? 0) > now ? undefined : $.store.set('limits', { at: now, wins: fresh })))
+    .catch(() => {})
+}
+
+/** Den gemeinsamen Stand übernehmen, wenn ein anderer Chat neuer gemessen hat; abgelehnt: es bleibt beim eigenen. */
+async function readShared($: EngineInterface): Promise<void> {
+  try {
+    const s = cleanShared(await $.store.get('limits'))
+    if (s && s.at > winsAt) {
+      wins = s.wins
+      winsAt = s.at
+    }
+  } catch {
+    // eigener Stand
+  }
+}
+
+/** Ein Tick: Session, /bars-Werte, eigene Messung, gemeinsamer Stand; neu gezeichnet wird nur bei sichtbarer Änderung. */
+async function pollStep($: EngineInterface): Promise<void> {
+  const now = await $.clock.now()
+  lastTick = now
+  await bindSession($)
+  await readDisplay($)
+  maybeStartDisk($)
+  try {
+    // Kostenlos ohne `breakdown`; leer heißt "noch keine Antwort", dann bleibt der bisherige Stand
+    const u = await $.session.usage()
+    const fresh = pickWindows(u.rateLimits)
+    if (fresh.length > 0) takeOwn($, fresh, now)
+    // Kontext zwischen den Turns (types@2.1.289:10406-10411); fehlt nach /clear und /compact bis zur nächsten Antwort
+    if (mem.lastActivity && typeof u.context.tokens === 'number') mem = { ...mem, ctx: u.context.tokens }
+    if (u.cost) sessionUsd = u.cost.usd
+  } catch {
+    // abgelehnt: es bleibt beim letzten eigenen Stand
+  }
+  await readShared($)
+  alertStep($, now)
+  refresh($, now)
+  // Speicher-Ring: Gesamt/frei alle 10 min (nur solange gezeichnet wird, wie der ganze Takt)
+  if (probedAt > 0 && now - probedAt >= PROBE_MS && driveOf(storagePath) && shownParts().storage) {
+    probedAt = now
+    probeDisk($).catch(() => {})
   }
 }
 
@@ -460,6 +562,7 @@ async function runPs($: EngineInterface, script: string, timeoutMs: number): Pro
 
 /** Gesamt und frei holen (0,2 s); scheitert es, bleibt der letzte Stand. */
 async function probeDisk($: EngineInterface): Promise<void> {
+  probedAt = await $.clock.now()
   // Auch wenn session.start die Oberfläche nicht nannte: erst den Store lesen, sonst ginge der gespeicherte Scan verloren
   if (!diskLoaded) await readDisk($)
   const d = parseProbe(await runPs($, PROBE_SCRIPT, 30000))
@@ -984,8 +1087,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('session.measure', async ($, e, next) => {
     // Bei jeder Messung übernehmen, nicht nur wenn `changed` `rateLimits` nennt; ein fehlendes Fenster verschwindet
     try {
-      wins = pickWindows(e.rateLimits)
-      refresh($, await $.clock.now())
+      const now = await $.clock.now()
+      takeOwn($, pickWindows(e.rateLimits), now)
+      refresh($, now)
     } catch {
       // Beiwerk: die Messung selbst bleibt unberührt
     }
@@ -1017,16 +1121,15 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       maybeStartDisk($)
       const now = await $.clock.now()
       awaitingRender = false
-      // Eine abgelehnte Periode beendet das Intervall still: bleiben zwei Ticks aus, wird der Takt neu gestartet
-      if (timer && now - timerSince >= (ticks + 2) * TICK) {
+      // Eine abgelehnte Periode beendet das Intervall still: bleiben zwei Ticks aus, wird der Takt neu gestartet. Gemessen ab dem
+      // letzten Tick, nicht ab dem Start: Jede Periode dauert etwas länger als TICK, über Stunden summierte sich das sonst auf.
+      if (timer && now - lastTick >= 2 * TICK) {
         timer.cancel()
         timer = null
       }
       if (!timer) {
-        timerSince = now
-        ticks = 0
+        lastTick = now
         timer = $.clock.every(TICK, () => {
-          ticks += 1
           // Neuzeichnen angefordert, aber keins gekommen (Band eingeklappt, Sitzung verdeckt): Takt beenden; das nächste Zeichnen
           // startet ihn neu. Ohne Änderung wird nichts angefordert, dann läuft er still weiter (usage() ist kostenlos).
           if (awaitingRender) {
@@ -1034,28 +1137,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
             timer = null
             return
           }
-          // Kostenlos ohne `breakdown`; leer heißt "noch keine Antwort", dann bleibt der bisherige Stand
-          bindSession($)
-            .then(() => readDisplay($))
-            .then(() => maybeStartDisk($))
-            .then(() => $.session.usage())
-            .then((u) => {
-              const fresh = pickWindows(u.rateLimits)
-              if (fresh.length > 0) wins = fresh
-              // Kontext zwischen den Turns (types@2.1.289:10406-10411); fehlt nach /clear und /compact bis zur nächsten Antwort
-              if (mem.lastActivity && typeof u.context.tokens === 'number') mem = { ...mem, ctx: u.context.tokens }
-              if (u.cost) sessionUsd = u.cost.usd
-              return $.clock.now()
-            })
-            .then((t) => {
-              alertStep($, t)
-              refresh($, t)
-            })
-            .catch(() => {
-              // abgelehnt: es bleibt beim letzten Stand
-            })
-          // Speicher-Ring: Gesamt/frei alle 10 min (nur solange gezeichnet wird, wie der ganze Takt)
-          if (ticks % PROBE_EVERY === 0 && driveOf(storagePath) && shownParts().storage) probeDisk($).catch(() => {})
+          pollStep($).catch(() => {
+            // Uhr abgelehnt: es bleibt beim letzten Stand
+          })
         })
       }
       // Eine Umfrage hält das Band; ein Hook weicht ihr (types@2.1.288:9580)

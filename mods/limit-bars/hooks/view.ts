@@ -42,6 +42,48 @@ export function pickWindows(rateLimits: readonly { kind: string; percentUsed: nu
   return out
 }
 
+/** Stand, den sich alle Chats auf dem Rechner teilen (`$.store` unter `limits`): wann gemessen, welche Fenster. */
+export type Shared = { at: number; wins: Win[] }
+
+/** `limits` aus dem Store prüfen: nur `five_hour`/`seven_day` mit Zahlen, sonst undefined (fremde oder alte Form). */
+export function cleanShared(v: unknown): Shared | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const { at, wins } = v as { at?: unknown; wins?: unknown }
+  if (typeof at !== 'number' || !Number.isFinite(at) || !Array.isArray(wins)) return undefined
+  const out: Win[] = []
+  for (const kind of KINDS) {
+    const w = wins.find((x) => !!x && typeof x === 'object' && (x as { kind?: unknown }).kind === kind) as { percentUsed?: unknown; resetsAt?: unknown } | undefined
+    if (!w || typeof w.percentUsed !== 'number' || !Number.isFinite(w.percentUsed)) continue
+    out.push({ kind, percentUsed: w.percentUsed, resetsAt: typeof w.resetsAt === 'number' && Number.isFinite(w.resetsAt) ? w.resetsAt : undefined })
+  }
+  return out.length > 0 ? { at, wins: out } : undefined
+}
+
+// Resets, die näher beieinander liegen, gelten als dasselbe Fenster (zwei 5-h-Fenster liegen mindestens 5 h auseinander)
+const SAME_WINDOW = 10 * 60000
+
+/**
+ * Je Fenster das neuere aus `a` und `b`, ohne Zeitstempel: ein späteres Reset (also ein neueres Fenster) gewinnt, im selben
+ * Fenster der höhere Verbrauch; bei Gleichstand `a`. Für eine Messung unbekannten Alters (SPEC.md, Ausbau 0.8.0, Review S1).
+ */
+export function mergeWins(a: readonly Win[], b: readonly Win[]): Win[] {
+  const out: Win[] = []
+  for (const kind of KINDS) {
+    const x = a.find((w) => w.kind === kind)
+    const y = b.find((w) => w.kind === kind)
+    if (!x || !y) {
+      const one = x ?? y
+      if (one) out.push(one)
+      continue
+    }
+    const rx = x.resetsAt
+    const ry = y.resetsAt
+    if (rx !== undefined && ry !== undefined && Math.abs(rx - ry) > SAME_WINDOW) out.push(ry > rx ? y : x)
+    else out.push(y.percentUsed > x.percentUsed ? y : x)
+  }
+  return out
+}
+
 /** Uhrzeit des Resets in lokaler Zeit: am selben Tag `14:30`, sonst en `Mon 09:00` / de `Mo 09:00` (kurz `Mon9:00`). */
 export function clockText(at: number, now: number, lang: Lang): { long: string; short: string } {
   const d = new Date(at)

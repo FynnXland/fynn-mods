@@ -128,7 +128,7 @@ for (const surface of ['desktop', 'terminal'] as const)
     expect(await svg(ui)).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^5h$/ })).toBeUndefined()
     expect(w.seen.cols).toBe(120)
-    // Der Takt läuft weiter: ein /bars aus einem anderen Chat kommt binnen 10 s an
+    // Der Takt läuft weiter: ein /bars aus einem anderen Chat kommt binnen 2 s an
     w.saved.set('display', { fiveHour: true })
     await w.clock.advance(10000)
     await ui.redraw()

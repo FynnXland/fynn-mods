@@ -2,15 +2,17 @@
 // dazu die Modellaufrufe anderer Mods, und zeigt per /ledger eine Übersicht (Sprache aus userConfig `language`).
 // Fail-open: Jeder Erfassungs-Hook gibt das Ergebnis von `next` unverändert zurück, Fehler gehen nur ins Debug-Log; kein `.catch`.
 // Ein $.store-Schlüssel pro Session (`s:<sessionId>`), den nur diese Session schreibt: $.store ist nicht atomar (CHEATSHEET).
-import type { EngineInterface, On } from 'claude-code'
+import type { EngineInterface, FsEntry, On } from 'claude-code'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import { T, dateTime, shortDate, usd } from './i18n.ts'
 import {
   HELP_WORDS,
+  NAME_WORD,
   NO_FOLDER,
   OFF_WORDS,
   PLANS,
+  SYNC_WORD,
   VIEW_WORDS,
   ledgerHelp,
   aggregate,
@@ -42,7 +44,9 @@ import {
   titleFromPrompt,
   tokensOf,
 } from './logic.ts'
-import type { Carry, HelpInfo, Kind, Limit, Plan, Rec, Settings, TurnInfo, Usage } from './logic.ts'
+import type { Carry, HelpInfo, Kind, Limit, Plan, Rec, Settings, SyncInfo, TurnInfo, Usage } from './logic.ts'
+import { FILE_LIMIT, buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, utf8Bytes, validDir } from './sync.ts'
+import type { Device, SyncFile } from './sync.ts'
 import { ledgerTree } from './view.ts'
 import type { View } from './view.ts'
 
@@ -88,6 +92,12 @@ let carryAt = 0 // seit wann `carry` Beträge hält; ein späterer Reset (auch a
 let limSinceChecked = false // `meta:limSince` in diesem Prozess schon geprüft
 let pendingGap = 0 // Nachbuchung beim Start (Resume): gehört ins Fenster der letzten Buchung, nicht ins laufende
 let gapAt: number | undefined // Zeitpunkt der letzten Buchung beim Start; spätere Mod-Aufrufe verschieben ihn nicht
+// Geräte-Sync (SPEC Nachtrag 0.7.0): letzter guter Stand je fremdem Gerät, falls dessen Datei gerade halb geschrieben ist
+const peerCache = new Map<string, SyncFile>()
+const SYNC_EVERY = 15 * 60 * 1000 // nach Turns höchstens so oft schreiben (Verhalten 1)
+const CONFLICT_SLACK = 60 * 1000 // doppelte Geräte-ID erst ab einer Minute Vorsprung der Datei (Review S1)
+let nextSyncCheck = 0 // vorher fragt syncAfterTurn den Store nicht
+type SyncCfg = { dir: string; device: Device }
 
 /** `carryAt` nach einer Fenster-Buchung nachführen. */
 function noteCarry(now: number) {
@@ -290,14 +300,19 @@ async function collect($: EngineInterface, now: number) {
  */
 async function helpCommand($: EngineInterface, args: string): Promise<string> {
   const now = await $.clock.now()
-  const info: HelpInfo = { plan: null, storeBytes: 0, since: null }
+  const info: HelpInfo = { plan: null, storeBytes: 0, since: null, syncDevice: null }
   try {
+    let on = false
+    let device: Device | null = null
     for (const key of await $.store.keys()) {
       const value = await $.store.get(key)
       info.storeBytes += key.length + (JSON.stringify(value ?? null)?.length ?? 0)
       if (key === 'meta:plan') info.plan = cleanPlan(value)
       if (key === 'meta:since' && typeof value === 'number') info.since = value
+      if (key === 'meta:sync') on = cleanSync(value) !== null
+      if (key === 'meta:device') device = cleanDevice(value, deviceDefault)
     }
+    info.syncDevice = on && device ? device.name : null
   } catch (err) {
     log($, `/ledger help: ${msg(err)}`)
   }
@@ -333,12 +348,226 @@ async function planCommand($: EngineInterface, args: string[]): Promise<string> 
   return t.planSaved(planLabel(p.plan), p.day, price(p), shortDate(m.start, lang), shortDate(m.next, lang))
 }
 
+// ---------- Geräte-Sync (SPEC Nachtrag 0.7.0) ----------
+// `$.fs` nur im per `/ledger sync` gesetzten, absoluten Ordner: gelesen werden nur `cost-ledger-<id>.json`, geschrieben nur
+// die eigene Datei. Die Rechte-Zeile kennt keine Pfade (en/reference.md:181), deshalb setzt das der Code durch.
+
+const deviceDefault = (id: string) => T[settings.lang].deviceDefault(id)
+
+/** Sync-Einstellung dieses Geräts aus `$.store`; `null` = Sync aus. */
+async function syncConfig($: EngineInterface): Promise<SyncCfg | null> {
+  const s = cleanSync(await $.store.get('meta:sync'))
+  if (!s) return null
+  const device = cleanDevice(await $.store.get('meta:device'), deviceDefault)
+  return device ? { dir: s.dir, device } : null
+}
+
+/** Alle Datensätze dieses Geräts, nur lesend (das Aufräumen bleibt bei `/ledger`). */
+async function ownRecs($: EngineInterface): Promise<{ recs: { id: string; rec: Rec }[]; since: number | null }> {
+  const recs: { id: string; rec: Rec }[] = []
+  for (const key of await $.store.keys()) {
+    if (!key.startsWith('s:')) continue
+    const id = key.slice(2)
+    const r = id === sessionId && rec ? rec : cleanRec(await $.store.get(key))
+    if (r) recs.push({ id, rec: r })
+  }
+  const since = await $.store.get('meta:since')
+  return { recs, since: typeof since === 'number' ? since : null }
+}
+
+/**
+ * Eigene Gerätedatei schreiben. Die Uhr erst unmittelbar davor lesen, dann `meta:syncAt` (für alle Chats des Geräts), dann
+ * die Datei mit demselben Zeitpunkt: So ist `at` in der Datei nicht jünger als `meta:syncAt`, solange nur dieses Gerät
+ * schreibt; bis auf die Millisekunden zwischen zwei gleichzeitigen Chats (dafür der Spielraum in `ownConflict`, Review S1).
+ */
+async function writeOwn($: EngineInterface, cfg: SyncCfg, recs: { id: string; rec: Rec }[], since: number | null) {
+  const at = await $.clock.now()
+  const text = buildFile(cfg.device, since, recs, at)
+  if (utf8Bytes(text) > FILE_LIMIT) throw new Error(T[settings.lang].syncTooBig)
+  await $.store.set('meta:syncAt', at)
+  await $.fs.write(inDir(cfg.dir, fileName(cfg.device.id)), text)
+}
+
+/**
+ * Schreibt ein anderes Gerät mit derselben ID (Speicher kopiert)? Dann ist die eigene Datei deutlich jünger als die letzte
+ * eigene Schreibmarke `meta:syncAt`. Erst die Datei lesen, dann die Marke: Ein anderer Chat dieses Geräts setzt die Marke
+ * vor der Datei. Spielraum eine Minute: Zwei Chats dieses Geräts, die gleichzeitig schreiben, liegen weit darunter.
+ */
+async function ownConflict($: EngineInterface, cfg: SyncCfg, entries: readonly FsEntry[]): Promise<boolean> {
+  const name = fileName(cfg.device.id)
+  if (!entries.some((x) => x.kind === 'file' && x.name === name)) return false
+  const f = parseFile(await $.fs.read(inDir(cfg.dir, name)), cfg.device.id)
+  const at = await $.store.get('meta:syncAt')
+  return !!f && f.at > (typeof at === 'number' ? at : 0) + CONFLICT_SLACK
+}
+
+/** Fremde Gerätedateien lesen; halb geschriebene oder kaputte → letzter gute Stand aus diesem Prozess, sonst „nicht lesbar“. */
+async function readPeers($: EngineInterface, cfg: SyncCfg, entries: readonly FsEntry[]): Promise<{ peers: SyncFile[]; unreadable: number }> {
+  const peers: SyncFile[] = []
+  let unreadable = 0
+  for (const x of entries) {
+    const id = x.kind === 'file' ? idFromName(x.name) : null
+    if (!id || id === cfg.device.id) continue
+    let f: SyncFile | null = null
+    if (x.size <= FILE_LIMIT)
+      try {
+        f = parseFile(await $.fs.read(inDir(cfg.dir, x.name)), id)
+      } catch (err) {
+        log($, `Sync lesen ${x.name}: ${msg(err)}`)
+      }
+    if (f) peerCache.set(id, f)
+    else f = peerCache.get(id) ?? null
+    if (f) peers.push(f)
+    else unreadable++
+  }
+  return { peers, unreadable }
+}
+
+/**
+ * Eine Sync-Runde für `/ledger`: Ordner lesen, eigene Datei schreiben, fremde lesen, zusammenführen. Fehlt der Ordner, wird
+ * weder gelesen noch geschrieben (nicht neu anlegen); das lokale Ergebnis bleibt, der Fehler steht als Hinweis da.
+ */
+async function syncRound($: EngineInterface, cfg: SyncCfg, own: { id: string; rec: Rec }[], since: number | null, now: number) {
+  const info: SyncInfo = { on: true, devices: 1, unreadable: 0, error: '', dupId: false }
+  let entries: FsEntry[]
+  try {
+    entries = await $.fs.list(cfg.dir)
+  } catch (err) {
+    info.error = msg(err)
+    return { recs: own, since, info }
+  }
+  // Doppelte Geräte-ID: Dieses Gerät nimmt eine neue und schreibt ab jetzt dorthin; die alte Datei gehört dem anderen
+  try {
+    if (await ownConflict($, cfg, entries)) {
+      cfg = { dir: cfg.dir, device: { id: newDeviceId(), name: cfg.device.name } }
+      await $.store.set('meta:device', cfg.device)
+      info.dupId = true
+    }
+  } catch (err) {
+    log($, `Sync eigene Datei: ${msg(err)}`)
+  }
+  try {
+    await writeOwn($, cfg, own, since)
+  } catch (err) {
+    info.error = msg(err)
+  }
+  const p = await readPeers($, cfg, entries)
+  info.unreadable = p.unreadable
+  info.devices = 1 + p.peers.length
+  const starts = [since, ...p.peers.map((f) => f.since)].filter((x): x is number => typeof x === 'number')
+  return { recs: mergeRecs(own, p.peers, now - settings.keepDays * DAY), since: starts.length ? Math.min(...starts) : null, info }
+}
+
+/**
+ * Nach einem Turn: eigene Datei höchstens alle 15 Minuten (Marke `meta:syncAt` gilt für alle Chats des Geräts). Den Store
+ * fragt der Prozess erst wieder, wenn ein Schreiben fällig sein kann (Review K2); ein Sync, den ein anderer Chat einschaltet,
+ * greift hier so spätestens nach 15 Minuten.
+ */
+async function syncAfterTurn($: EngineInterface) {
+  const now = await $.clock.now()
+  if (now < nextSyncCheck && nextSyncCheck - now <= SYNC_EVERY) return // rückwärts springende Uhr: neu prüfen
+  nextSyncCheck = now + SYNC_EVERY
+  const cfg = await syncConfig($)
+  if (!cfg) return
+  const at = await $.store.get('meta:syncAt')
+  if (typeof at === 'number' && now >= at && now - at < SYNC_EVERY) {
+    nextSyncCheck = at + SYNC_EVERY
+    return
+  }
+  // Ordner weg (Laufwerk getrennt): nicht neu anlegen, nur beim nächsten /ledger melden
+  await $.fs.list(cfg.dir)
+  const own = await ownRecs($)
+  await writeOwn($, cfg, own.recs, own.since)
+}
+
+/** `/ledger sync …` (SPEC Nachtrag 0.7.0, Bedienung). `rest`: der Rest der Zeile in Originalschreibung (Pfad, Name). */
+async function syncCommand($: EngineInterface, rest: string): Promise<string> {
+  const t = T[settings.lang]
+  const lang = settings.lang
+  const words = rest.split(/\s+/).filter(Boolean)
+  const first = (words[0] ?? '').toLowerCase()
+  if (!first) {
+    const cfg = await syncConfig($)
+    if (!cfg) return t.syncOffState
+    const lines = [t.syncState(cfg.dir, cfg.device.name, cfg.device.id)]
+    try {
+      const p = await readPeers($, cfg, await $.fs.list(cfg.dir))
+      for (const f of p.peers) lines.push(t.syncPeer(f.device.name, dateTime(f.at, lang), Object.keys(f.recs).length))
+      if (p.unreadable) lines.push(t.syncUnreadable(p.unreadable))
+      if (!p.peers.length && !p.unreadable) lines.push(t.syncNoPeers)
+    } catch (err) {
+      lines.push(t.syncFailed(msg(err)))
+    }
+    lines.push(t.syncPrivacy)
+    return lines.join('\n\n')
+  }
+  if (OFF_WORDS.includes(first) && words.length === 1) {
+    await $.store.delete('meta:sync')
+    return t.syncOffDone
+  }
+  const now = await $.clock.now()
+  if (first === NAME_WORD) {
+    const raw = rest.slice(rest.indexOf(words[0]!) + words[0]!.length).trim()
+    if (!raw) return t.syncNameMissing
+    const old = cleanDevice(await $.store.get('meta:device'), deviceDefault)
+    const id = old?.id ?? newDeviceId()
+    const device = { id, name: cleanDeviceName(raw, id, deviceDefault) }
+    await $.store.set('meta:device', device)
+    const cfg = await syncConfig($)
+    if (cfg)
+      try {
+        await $.fs.list(cfg.dir)
+        const own = await ownRecs($)
+        await writeOwn($, cfg, own.recs, own.since)
+      } catch (err) {
+        return `${t.syncNamed(device.name)}\n\n${t.syncFailed(msg(err))}`
+      }
+    return t.syncNamed(device.name)
+  }
+  const dir = validDir(rest, /^[A-Za-z]:/.test(await $.session.root()))
+  if (!dir) return t.syncInvalid(rest.trim())
+  let device = cleanDevice(await $.store.get('meta:device'), deviceDefault) ?? { id: newDeviceId(), name: '' }
+  if (!device.name) device = { id: device.id, name: deviceDefault(device.id) }
+  let entries: FsEntry[] = []
+  try {
+    entries = await $.fs.list(dir)
+  } catch {
+    // Ordner gibt es noch nicht: `$.fs.write` legt ihn an (types:3243-3248)
+  }
+  let renewed = false
+  try {
+    if (await ownConflict($, { dir, device }, entries)) {
+      device = { id: newDeviceId(), name: device.name }
+      renewed = true
+    }
+  } catch (err) {
+    log($, `Sync eigene Datei: ${msg(err)}`)
+  }
+  // Erst schreiben, dann speichern: Lässt sich der Ordner nicht beschreiben, bleibt der Sync aus
+  const own = await ownRecs($)
+  try {
+    await writeOwn($, { dir, device }, own.recs, own.since)
+  } catch (err) {
+    return t.syncUnreachable(msg(err))
+  }
+  await $.store.set('meta:device', device)
+  await $.store.set('meta:sync', { v: 1, dir, at: now })
+  let n = 0
+  try {
+    n = (await readPeers($, { dir, device }, await $.fs.list(dir))).peers.length
+  } catch (err) {
+    log($, `Sync lesen: ${msg(err)}`)
+  }
+  return `${t.syncOn(dir, device.name, n, renewed)}\n\n${t.syncPrivacy}`
+}
+
 async function reset($: EngineInterface): Promise<string> {
   const t = T[settings.lang]
+  const cfg = await syncConfig($)
   let answer: string
   try {
     // Empfohlene Antwort auf Platz 1 (Fynns Regel für Rückfragen); in -p wird ask abgelehnt (API-DETAILS.md:149-154)
-    answer = await $.ui.ask(t.askQuestion, [t.askCancel, t.askDelete])
+    answer = await $.ui.ask(cfg ? t.askQuestionSync : t.askQuestion, [t.askCancel, t.askDelete])
   } catch {
     return t.notDeletedNoAsk
   }
@@ -357,11 +586,12 @@ async function reset($: EngineInterface): Promise<string> {
     reports.clear()
   })
   // Löschen außerhalb der Kette: Mod-Aufrufe warten nur auf das eigene Schreiben (SPEC Verhalten 5).
-  // `meta:plan` bleibt: eine Einstellung, keine Buchung (SPEC Nachtrag 0.5.0, Verhalten 5)
+  // `meta:plan` bleibt: eine Einstellung, keine Buchung (SPEC Nachtrag 0.5.0, Verhalten 5); ebenso Sync und Gerät (0.7.0)
+  const keep = ['meta:resetAt', 'meta:plan', 'meta:sync', 'meta:device', 'meta:syncAt']
   let n = 0
   let hadLimits = false
   for (const key of await $.store.keys()) {
-    if (key === 'meta:resetAt' || key === 'meta:plan' || (!key.startsWith('s:') && !key.startsWith('meta:'))) continue
+    if (keep.includes(key) || (!key.startsWith('s:') && !key.startsWith('meta:'))) continue
     if (key === 'meta:limSince') hadLimits = true
     await $.store.delete(key)
     if (key.startsWith('s:')) n++
@@ -370,6 +600,14 @@ async function reset($: EngineInterface): Promise<string> {
   // Die Fenster-Daten beginnen mit dem Reset neu. Gleich setzen statt löschen: Sonst setzte der nächste Prozess, der ein
   // Fenster bucht, einen späteren Beginn, und Fenster anderer Chats seit dem Reset gälten als unvollständig (Review 0.5.0)
   if (hadLimits) await $.store.set('meta:limSince', now)
+  // Nur dieses Gerät: seine Datei leer neu schreiben, andere Geräte behalten ihre (SPEC Nachtrag 0.7.0, Verhalten 6)
+  if (cfg)
+    try {
+      await $.fs.list(cfg.dir)
+      await writeOwn($, cfg, [], now)
+    } catch (err) {
+      return `${t.cleared(n)}\n\n${t.syncFailed(msg(err))}`
+    }
   return t.cleared(n)
 }
 
@@ -404,7 +642,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       await $.command.register({
         name: 'ledger',
         description: T[settings.lang].commandDescription,
-        argumentHint: '[weeks|chats|projects|models|limits|plan|reset|help]',
+        argumentHint: '[weeks|chats|projects|models|limits|plan|sync|reset|help]',
       })
     } catch (err) {
       log($, `/ledger nicht registriert: ${msg(err)}`)
@@ -466,6 +704,11 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } catch (err) {
       log($, `Buchen: ${msg(err)}`)
     }
+    try {
+      await syncAfterTurn($) // außerhalb der Kette: Mod-Aufrufe und session.end warten nicht auf den Ordner (Review K1)
+    } catch (err) {
+      log($, `Sync schreiben: ${msg(err)}`)
+    }
     return r
   })
 
@@ -521,8 +764,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // Hilfe: nur das erste Wort, ohne weitere Wörter (docs/HELP-SPEC.md §2)
     if (HELP_WORDS.includes(what)) return { text: rest.length ? t.unknownArg(e.args.trim()) : await helpCommand($, e.args) }
     // Speicher voll o. Ä.: ein lesbarer Hinweis statt einer Fehlerzeile (Review 0.5.0 K1)
-    if (what === 'reset' || what === 'plan') {
+    if (what === 'reset' || what === 'plan' || what === SYNC_WORD) {
       try {
+        if (what === SYNC_WORD) return { text: await syncCommand($, e.args.trim().slice(sub.length).trim()) }
         return { text: what === 'reset' ? await reset($) : await planCommand($, rest) }
       } catch (err) {
         log($, `/ledger ${what}: ${msg(err)}`)
@@ -540,11 +784,22 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const range = view === 'overview' || view === 'weeks' || view === 'limits' ? 30 : parseRange(arg)
     const now = await $.clock.now()
     const data = await collect($, now)
-    const report = aggregate(data.recs, now, {
+    // Andere Geräte dazu; ohne Sync oder bei Fehlern bleibt es beim lokalen Kostenbuch
+    let recs = data.recs
+    let since = data.since
+    let sync: SyncInfo | undefined
+    try {
+      const cfg = await syncConfig($)
+      if (cfg) ({ recs, since, info: sync } = await syncRound($, cfg, data.recs, data.since, now))
+    } catch (err) {
+      log($, `Sync: ${msg(err)}`)
+    }
+    const report = aggregate(recs, now, {
       range,
       unreadable: data.unreadable,
       hasCost,
-      since: data.since,
+      since,
+      sync,
       storeBytes: data.bytes,
       writeError,
       plan: data.plan,

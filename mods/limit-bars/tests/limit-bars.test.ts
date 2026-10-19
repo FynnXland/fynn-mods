@@ -7,6 +7,7 @@ const MIN = 60000
 const FIVE_RESET = NOW + (2 * 60 + 14) * MIN + 30000 // "in 2 h 14 min"
 const WEEK_RESET = new Date(2026, 9, 5, 9, 0, 0).getTime() // Montag 09:00
 const iso = (ms: number) => new Date(ms).toISOString()
+const TICK = 2000 // Takt seit 0.8.0
 
 // Die bisherigen Tests prüfen die deutschen Texte (Fynns Einstellung); Englisch: tests/i18n.test.ts
 const DE = { options: { language: 'de' } } as const
@@ -300,7 +301,7 @@ test('Hervorhebung ab highlightAt', { options: { language: 'de', highlightAt: 70
   expect((await ui.find({ type: 'Text', text: '5h' }))?.props.bold).toBe(true)
 })
 
-test('Takt (10 s): fragt ab, zeichnet aber nur bei sichtbarer Änderung neu; ohne Zeichnen Ende, neues Zeichnen startet ihn', DE, async ($, on) => {
+test('Takt (2 s): fragt ab, zeichnet aber nur bei sichtbarer Änderung neu; ohne Zeichnen Ende, neues Zeichnen startet ihn', DE, async ($, on) => {
   // Fynn, 2026-10-05: jedes Invalidate zeichnet das ganze Band neu und ließ Knöpfe anderer Mods flackern
   const clock = mock.clock(on, { now: NOW })
   let invalidates = 0
@@ -319,31 +320,31 @@ test('Takt (10 s): fragt ab, zeichnet aber nur bei sichtbarer Änderung neu; ohn
   const p0 = polls
   const i0 = invalidates
   // Zwei Ticks ohne Änderung (Countdown bleibt „in 2 h 14 min“): abgefragt, nicht neu gezeichnet
-  await clock.advance(10000)
-  await clock.advance(10000)
+  await clock.advance(TICK)
+  await clock.advance(TICK)
   expect(polls - p0).toBe(2)
   expect(invalidates - i0).toBe(0)
   // Die Minute springt um: ein Neuzeichnen
-  await clock.advance(20000)
+  await clock.advance(40000 - 2 * TICK)
   expect(invalidates - i0).toBe(1)
   expect(await ui.find({ type: 'Text', text: ' · in 2 h 13 min' })).toBeDefined()
   // Neuer Prozentwert: ein Neuzeichnen
   rateLimits = limits(25, 20)
-  await clock.advance(10000)
+  await clock.advance(TICK)
   expect(invalidates - i0).toBe(2)
   expect(await ui.find({ type: 'Text', text: /^25 ?%$/ })).toBeDefined()
   await ui.unmount()
 
   // Nicht mehr gezeichnet: Die nächste Änderung fordert ein Neuzeichnen an, es kommt keins, der folgende Tick beendet den Takt
   rateLimits = limits(30, 20)
-  await clock.advance(20000)
+  await clock.advance(2 * TICK)
   const stopped = polls
-  await clock.advance(5 * 10000)
+  await clock.advance(5 * TICK)
   expect(polls).toBe(stopped)
 
   // Erneutes Zeichnen startet ihn wieder
   const again = await $.ui.mount(band('terminal'))
-  await clock.advance(10000)
+  await clock.advance(TICK)
   expect(polls).toBe(stopped + 1)
   await again.unmount()
 })
@@ -358,15 +359,15 @@ test('Takt holt $.session.usage ab: Werte erscheinen und ändern sich ohne sessi
   expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toContain('5-Stunden-Limit noch unbekannt')
   // Die erste Antwort kommt (z. B. mitten im ersten Turn): der nächste Tick zeigt sie
   rateLimits = limits(41, 7)
-  await clock.advance(10000)
+  await clock.advance(TICK)
   expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toContain('5-Stunden-Limit 41 %')
   // Der Verbrauch steigt weiter, ohne dass eine Messung kommt
   rateLimits = limits(44, 7)
-  await clock.advance(10000)
+  await clock.advance(TICK)
   expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toContain('5-Stunden-Limit 44 %')
   // Eine leere Antwort löscht den Stand nicht
   rateLimits = []
-  await clock.advance(10000)
+  await clock.advance(TICK)
   expect(String((await ui.find({ type: 'Svg' }))?.props.alt)).toContain('5-Stunden-Limit 44 %')
   await ui.unmount()
 })
@@ -389,11 +390,11 @@ test('Takt: eine abgelehnte Periode beendet ihn still; zwei ausgebliebene Ticks 
   const first = periods
   expect(first >= 1).toBe(true)
   // Weniger als zwei Takte: kein Neustart
-  now += 10000
+  now += TICK
   await ui.redraw()
   expect(periods).toBe(first)
   // Zwei Takte ohne Tick: neuer Takt
-  now += 10000
+  now += TICK
   await ui.redraw()
   expect(periods).toBe(first + 1)
 })

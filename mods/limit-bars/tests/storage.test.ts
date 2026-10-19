@@ -315,7 +315,7 @@ test('Gespeicherter Stand eines anderen Pfads wird ignoriert', DE, async ($, on)
   await ui.unmount()
 })
 
-test('Takt: alle 60 Ticks (10 min) eine Probe, solange gezeichnet wird', DE, async ($, on) => {
+test('Takt: alle 10 min eine Probe, solange gezeichnet wird', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
   const ui = await $.ui.mount(band('desktop'))

@@ -4,7 +4,7 @@ Two slim bars on the left of the band above the prompt show live how much of the
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.7.2**
+Tested with Claude Code **v2.1.295** · Plugin version **0.8.0**
 
 ## Display
 
@@ -17,7 +17,8 @@ Tested with Claude Code **v2.1.295** · Plugin version **0.7.2**
 - **From `highlightAt`** (default 90 %) the tag and percentage turn bold. From 100 % it reads `full` and the bar is all red.
 - **After a reset**, until a new measurement arrives: `0% · fresh`, dimmed, with an empty bar.
 - **Before Claude Code knows the limits** (new chat, before the first reply), the desktop app shows empty, dimmed bars with `5h –` and `7d –`, and the ring shows `–`. In the terminal the bars only appear once there are values.
-- **Data source:** `$.session.usage()` at start and every 10 s, plus every measurement (`session.measure`, after each turn). `usage()` returns the values of the latest API response, so it updates even in the middle of a long turn. The 10 s tick polls but only redraws when a displayed number or color changes (otherwise buttons of other mods in the band flicker); it stops when the band is no longer drawn.
+- **Data source:** `$.session.usage()` at start and every 2 s, plus every measurement (`session.measure`, after each turn). `usage()` returns the values of the latest API response, so it updates even in the middle of a long turn. The 2 s tick polls but only redraws when a displayed number or color changes (otherwise buttons of other mods in the band flicker); it stops when the band is no longer drawn.
+- **Shared between chats:** `usage()` only knows this chat's latest API response. When it changes, the chat stores the reading with its time in `$.store` under `limits`; every chat on this computer takes the newest reading on its next tick. Usage in one Claude Code chat therefore shows up in all open chats within about 2 s. Usage on claude.ai or another device shows up only with this chat's next response.
 
 Runs in: the desktop app's Code tab and the terminal. In `claude -p`, the Agent SDK, VS Code and mobile it draws nothing and starts no tick.
 
@@ -28,7 +29,7 @@ Every message sends the whole conversation. Served from the prompt cache that is
 - **Ring:** 28 segments; the filled part is the remaining cache time, emptying clockwise from 12 o'clock. In the middle the remaining time (`42m`), below it the context size (`412k`): grey below 80k, orange from 80k, red from "big" (`/cache big`, default 150k). The ring itself only shows the cache state.
 - **Colors:** green = warm · yellow = last 5 min (with a 5-minute cache, the last minute) · cold is grey, from "big" (default 150k) all red · `–` before the first request · a small dot in the middle = being kept warm.
 - **Cache duration:** default 60 min (measured on a subscription: after a 6.8 min pause the cache was read, not rewritten). The mod re-checks: a cache hit after a pause of more than 5.5 min confirms 60, a rewrite after 5.5 to 60 min indicates 5. Override with `/cache ttl 5|60|auto`.
-- **Data source:** every request of the main loop (`turn.step`; subagents don't count), and between turns `$.session.usage()` on the 10 s tick. The state is kept in `$.store` under `cache:<session ID>`, so the ring knows how warm the cache is after a restart. Entries older than 7 days are deleted at start.
+- **Data source:** every request of the main loop (`turn.step`; subagents don't count), and between turns `$.session.usage()` on the 2 s tick. The state is kept in `$.store` under `cache:<session ID>`, so the ring knows how warm the cache is after a restart. Entries older than 7 days are deleted at start.
 
 ## Storage ring
 
@@ -52,7 +53,7 @@ Every part of the display can be shown or hidden on its own. **The storage ring 
 | Storage ring | `showStorage` (and `storagePath`) | `/bars show storage on\|off` | off (no `storagePath`) |
 
 - **Two ways, one rule:** a value set with `/bars` wins over the setting. `/bars reset` drops all command values, so the settings apply again. `/bars` alone shows what is on and where each value comes from.
-- **`/bars` applies to all open chats** (stored in `$.store`, picked up within 10 s). **Settings** are read when the plugin loads. After changing them under `/plugin` → Configure options, Claude Code runs `/reload-plugins` when you close the panel (if that would invalidate the prompt cache, it asks first and leaves the change pending; `/reload-plugins --force` applies it). After `claude plugin configure`, restart Claude Code. Other open chats keep the old values until they reload.
+- **`/bars` applies to all open chats** (stored in `$.store`, picked up within 2 s). **Settings** are read when the plugin loads. After changing them under `/plugin` → Configure options, Claude Code runs `/reload-plugins` when you close the panel (if that would invalidate the prompt cache, it asks first and leaves the change pending; `/reload-plugins --force` applies it). After `claude plugin configure`, restart Claude Code. Other open chats keep the old values until they reload.
 - **Hiding the cache ring only hides the ring.** The question before a cold send, the notice before expiry, `/cache`, `/handoff` and `/keepwarm` keep working; turn them off with `/cache warn off` and `/cache hints off`.
 - **Hiding the storage ring** stops the background queries and scans (no PowerShell). `/disk` still scans when you call it and `storagePath` is set. `/bars show storage on` without `storagePath` tells you where to set it.
 - **Everything hidden:** limit-bars draws nothing and keeps no space free in the band; other mods (clawd-buddy, quick-replies) use the full width.
@@ -133,10 +134,10 @@ In plain language:
 - `$.prompt.submit`: the handoff as the first message in the cleared chat, or the held-back message after compacting
 - `$.session.compact`: **Compact first** in the question
 - `$.model.fork`: only with `/keepwarm` on, the keep-warm ping
-- `$.session.id`, `$.store.*`: per-chat state, settings, `/bars` values, last 3 handoffs; cleanup after 7 days
+- `$.session.id`, `$.store.*`: per-chat state, settings, `/bars` values, last 3 handoffs, the newest limit reading shared between chats; cleanup after 7 days
 - `$.ui.ask`, `$.ui.toast`: questions and notices
 - `$.ui.invalidate`, `$.ui.resolve`: redraw; components `Box`, `Text`, `Svg`
-- `$.clock.now`, `$.clock.every`: time of day; 10 s tick while the band is drawn; 30 s tick only while keeping warm; one-shot timers to start commands outside a hook
+- `$.clock.now`, `$.clock.every`: time of day; 2 s tick while the band is drawn; 30 s tick only while keeping warm; one-shot timers to start commands outside a hook
 
 ## Installation
 
@@ -168,11 +169,11 @@ Both mods draw into the same band above the prompt. Claude Code does not define 
 
 ## Known limitations
 
-- **Before the first API response** Claude Code knows no limits; the bars appear with the first response (at most 10 s later). The CLI queries at startup by itself, the desktop app apparently only with the first message.
+- **Before the first API response** Claude Code knows no limits; the bars appear with the first response (at most 2 s later), or right away with the newest reading of another chat on this computer. The CLI queries at startup by itself, the desktop app apparently only with the first message.
 - **Clawd on the left** (clawd-buddy `side: left`): the bars and Clawd can both end up on the left. There is no separate option for this.
 - **Countdown in both windows** (`resetStyle: countdown`): the long forms need up to 46 columns. The terminal then shows the short forms (`2h14`, `2d23h`), the desktop app always the long forms.
 - **Commands from hooks:** Claude Code rejects `$.command.run`, `$.prompt.submit` and `$.session.compact` from inside a running hook. `/handoff`, "clear and continue" and **Compact first** therefore run a moment later via a one-shot timer.
-- **Notice shortly before expiry** only appears while this chat's band is being drawn (10 s tick). Keep-warm has its own tick and also runs without the band.
+- **Notice shortly before expiry** only appears while this chat's band is being drawn (2 s tick). Keep-warm has its own tick and also runs without the band.
 - **Cache estimate:** the ring counts from the start of the last main-loop request. If something else reads the same cache, it does not see that.
 - **Fixed colors in the desktop image:** the Svg is an image and does not follow the theme. The grey `#9A9A9A` and the level colors are chosen for the dark theme; legibility in the light theme has not been checked yet.
 - **Exactly 100 %?** It is not documented whether an exhausted 5-hour or weekly window reports exactly 100. `full` applies from ≥ 100; 99.6 % shows `99%`.

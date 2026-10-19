@@ -143,6 +143,9 @@ ausblenden, mit `/bars show cache off` (wirkt sofort in allen offenen Chats) ode
 `showWeekly`, `showCache` und `showStorage` in `/config`. Ohne Cache-Ring bleibt die Rückfrage vor kaltem Senden an;
 die schaltest du mit `/cache warn off` ab.
 
+Alle offenen Chats auf demselben Rechner teilen sich den neuesten Limit-Stand und prüfen ihn alle 2 s, die Balken laufen also
+ohne Flackern mit.
+
 - **Befehle:** `/cache` (Überblick und Einstellungen), `/handoff [continue|show]` (Übergabe schreiben und in einem
   frischen Chat weitermachen), `/keepwarm [stunden|off]`, `/disk [refresh]`, `/bars [show <teil> on|off | reset]`, `/bars help`
 - **Rechte kurz:** liest Limits, Kontextgröße und Cache-Werte; kann eine Nachricht für eine Rückfrage anhalten; führt
@@ -245,14 +248,16 @@ Nach jeder Antwort bucht cost-ledger, was der Chat bisher gekostet hat (derselbe
 Modell und die Modellaufrufe anderer Mods. `/ledger` zeigt heute, 7 und 30 Tage und gesamt, einen Verlauf nach Modell,
 deine Projekte und die teuersten Chats, gezeichnet im Stil von Claude Code. Im Abo zeigt `/ledger limits`, wie viel
 API-Wert ins aktuelle 5-Stunden- und Wochenfenster und in deinen Abo-Monat geflossen ist; dein Abo trägst du einmal mit
-`/ledger plan` ein.
+`/ledger plan` ein. Dazu schätzt es, wie viel von jedem Fenster außerhalb des Ledgers verbraucht wurde (claude.ai, Handy-App, Chats ohne den Mod).
+
+**Mehrere Rechner:** `/ledger sync <ordner>` auf jedem Rechner mit demselben Ordner, den dein Cloud-Laufwerk synchron hält, und `/ledger` zeigt alle Geräte zusammen. In den Ordner kommen nur Zahlen, keine Pfade, Projektnamen oder Chat-Titel. Standardmäßig aus.
 
 - **Befehle:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,
-  `/ledger plan <abo> <tag|today> [preis]`, `/ledger reset`, `/ledger help`
+  `/ledger plan <abo> <tag|today> [preis]`, `/ledger sync [<ordner>|name <name>|off]`, `/ledger reset`, `/ledger help`
 - **Rechte kurz:** liest Kosten, Verbrauch und Limitfenster der Session; beobachtet die Modellaufrufe anderer Mods und
   gibt sie unverändert weiter; speichert Projektname, Git-Remote als `host/owner/repo`, die ersten 50 Zeichen der ersten
-  Nachricht eines Chats und deine Abo-Angabe im lokalen Plugin-Speicher. Keine Modellaufrufe, keine Dateien, Prozesse,
-  kein Netzwerk.
+  Nachricht eines Chats und deine Abo-Angabe im lokalen Plugin-Speicher. Keine Modellaufrufe, Prozesse oder
+  Netzwerkzugriffe. Dateien nur für den optionalen Sync (`$.fs`, begrenzt auf den gewählten Ordner und die eigene Datei `cost-ledger-<id>.json`).
 - **Details:** [mods/cost-ledger](mods/cost-ledger/README.md) (englisch)
 
 ## Zusammenspiel
@@ -279,7 +284,7 @@ API-Wert ins aktuelle 5-Stunden- und Wochenfenster und in deinen Abo-Monat geflo
 Ein Mod ist Code, der in Claude Code mit deinen Rechten läuft. Jeder Mod hier legt offen, an welche Ereignisse er sich
 hängt und welche API-Aufrufe er macht; `claude plugin validate mods/<mod>` zeigt die genaue Liste, und jede README
 erklärt in Klartext, wofür sie da sind. Keiner dieser Mods liest oder speichert Anmeldedaten oder Tokens, keiner hat einen
-eigenen Netzwerkzugang, und keiner schreibt irgendwohin außer in seinen eigenen Plugin-Speicher. Nur limit-bars schaut
+eigenen Netzwerkzugang, und keiner schreibt irgendwohin außer in seinen eigenen Plugin-Speicher; einzige Ausnahme: cost-ledger schreibt seine eigene Datei in den Ordner, den du wählst, aber nur, wenn du `/ledger sync` einschaltest. Nur limit-bars schaut
 auf dein Laufwerk, und nur mit dem optionalen Speicher-Ring: Er liest Größen, nie Dateiinhalte. Sicherheitsproblem
 gefunden? Siehe [SECURITY.md](SECURITY.md) (englisch).
 

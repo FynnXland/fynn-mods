@@ -1,10 +1,10 @@
 # cost-ledger
 
-A cost ledger across all your chats. After every answer, cost-ledger records what the chat has cost so far (the same value as `/cost`), plus the model calls made by other mods (sidekick, quick-replies …). `/ledger` shows today, 7 days, 30 days and all time, the history of the last 14 days, your projects and your most expensive chats in an overview styled like Claude Code (theme colors). The history shows 14 days or 14 weeks, each bar split by model; model calls by other mods appear as their own parts (e.g. “Sonnet 5.5 · mods”). On a subscription, `/ledger limits` shows how much API value went into the current 5-hour and weekly window and into your subscription month. It is a pure observer: no budget, no intervention, no model calls of its own.
+A cost ledger across all your chats. After every answer, cost-ledger records what the chat has cost so far (the same value as `/cost`), plus the model calls made by other mods (sidekick, quick-replies …). `/ledger` shows today, 7 days, 30 days and all time, the history of the last 14 days, your projects and your most expensive chats in an overview styled like Claude Code (theme colors). The history shows 14 days or 14 weeks, each bar split by model; model calls by other mods appear as their own parts (e.g. “Sonnet 5.5 · mods”). On a subscription, `/ledger limits` shows how much API value went into the current 5-hour and weekly window and into your subscription month, and estimates how much of the window you used outside the ledger (claude.ai, the mobile app, chats without cost-ledger). With `/ledger sync <folder>` on each of your computers, `/ledger` shows all of them together through a folder they share, such as one in a cloud drive. It is a pure observer: no budget, no intervention, no model calls of its own.
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.6.0** · Requires Claude Code v2.1.271 or later (setting options)
+Tested with Claude Code **v2.1.295** · Plugin version **0.7.0** · Requires Claude Code v2.1.271 or later (setting options)
 
 ## Usage
 
@@ -15,11 +15,15 @@ Tested with Claude Code **v2.1.295** · Plugin version **0.6.0** · Requires Cla
 | `/ledger chats [7\|30\|all]` | The 20 most expensive chats in the period (default 30 days; any number of days from 1 to 3650 works) |
 | `/ledger projects [7\|30\|all]` | All projects in the period |
 | `/ledger models [7\|30\|all]` | Models: share of the estimated API value, answers, input, output and cache tokens (including subagents and mod calls) |
-| `/ledger limits` | Subscription limits: the current 5-hour and weekly window (% used, API value, reset time with countdown, projection “100 % ≈ $X”), your subscription month (API value against the plan price, factor, next renewal) and the last 10 five-hour windows with their average |
+| `/ledger limits` | Subscription limits: the current 5-hour and weekly window (% used, API value, reset time with countdown, projection “100 % ≈ $X”), your subscription month (API value against the plan price, factor, next renewal) and the last 10 five-hour windows with their average. Each window also shows the estimated share used outside the ledger (see below) |
 | `/ledger plan <plan> <day\|today> [price]` | Set your plan and billing day: `pro`, `max5` (`5x`), `max20` (`20x`), `team` or `enterprise`; day 1–31, or `today` if your plan renewed today; monthly price in $ (comma or dot). Without a price, the list price is used: Pro $20, Max 5x $100, Max 20x $200; Team and Enterprise have none. Example: `/ledger plan max20 14` |
 | `/ledger plan` | Show the plan setting and the syntax; `/ledger plan off` deletes it |
-| `/ledger reset` | Delete everything, after a confirmation (**Cancel** is recommended and listed first). The plan setting stays |
-| `/ledger help` | Help as a table: all commands, the current state (plan, storage used, recording since) and your settings with their values, plus how to change them and how to turn the mod off. Also `/ledger ?` |
+| `/ledger sync <folder>` | Turn on sync between your computers through a shared folder (absolute path, spaces allowed), e.g. `/ledger sync <your cloud folder>/cost-ledger`. Run it on every computer with the same folder |
+| `/ledger sync` | Sync state: folder, this device's name and ID, the other devices with the time of their last update |
+| `/ledger sync name <name>` | Name this device (up to 30 characters); the other devices show its chats under this name. Default: “Device 1a2b” from a random ID |
+| `/ledger sync off` | Turn sync off. This device's file stays in the folder; cost-ledger never deletes files |
+| `/ledger reset` | Delete everything on this device, after a confirmation (**Cancel** is recommended and listed first). The plan and sync settings stay; other devices keep their entries |
+| `/ledger help` | Help as a table: all commands, the current state (plan, sync, storage used, recording since) and your settings with their values, plus how to change them and how to turn the mod off. Also `/ledger ?` |
 
 Older German arguments still work as aliases: `hilfe` for `help`, `alle` for `all`, `heute` for `today`, `aus` for `off`. An unknown command word (the first word after `/ledger`) answers with a pointer to `/ledger help`. `/ledger days` is gone; it only showed the overview.
 
@@ -43,7 +47,26 @@ On a subscription, `/ledger` also shows a compact line at the top: `5 h 62 % · 
 
 All amounts are API values. On a subscription they count toward your usage limits, not toward a bill.
 
-**Runs in:** terminal and the desktop Code tab (its own rendering at the command line, colors from the theme). Terminal verified with 0.3.x; desktop verified with 0.3.1 on 2026-10-06 (0.3.0 fell back to the Markdown summary there, fixed in 0.3.1). The 0.5.0 views (`/ledger limits`, the limit line) are covered by rendering tests for both surfaces; a visual check is pending. The help table (0.6.0) was checked in the terminal. In `claude -p` and other surfaces you get the Markdown summary. Claude only reads that summary (at most 10 lines for the views, about 15 for the help), not the rendering.
+## Sync between devices
+
+The plugin store lives on one computer. To see your PC and your laptop together, give both the same folder that your cloud drive (OneDrive, Dropbox, Syncthing …) keeps in sync:
+
+```text
+/ledger sync <your cloud folder>/cost-ledger
+```
+
+- **One file per device:** each computer writes only its own file `cost-ledger-<id>.json` into that folder and reads the others. It writes when you run `/ledger …` and after answers at most every 15 minutes; it reads the other files only when you run `/ledger …`.
+- **What the file contains:** amounts per day, limit windows, models and tokens, the total of all mod calls per day (without mod names), and what merging needs: each chat's session ID, the time of its last booking and the hour of its first, the times of the first and last booking in each limit window, and whether it ran in the desktop app, the terminal or a script; plus the device's name and ID. **No paths, no project, folder or mod names, no Git remote, no chat titles or messages.** Model IDs that are not plain names (a Bedrock ARN, a custom deployment name) are written as “other”. The breakdown by project therefore stays local: chats and mod calls from another device appear as one group, “Laptop (other device)”, and chats without a title (“Chat from …”).
+- **No double counting:** chats are merged by their session ID; if the same chat appears twice (for example from a restored backup), only the newest version counts.
+- **Nothing gets lost:** if the folder is missing (drive disconnected) or a file is half-synced, `/ledger` shows your local ledger with a note and uses the last good copy of the other device. cost-ledger never deletes a file and only writes its own.
+- **Local folders only:** a network path (`\\server\…`) is rejected; use a folder your sync client keeps on disk. On Windows the folder needs a drive letter (`D:\…`), and a drive root is not accepted.
+- **Per device:** `/ledger reset` clears only this device and rewrites its (now empty) file. The plan setting from `/ledger plan` also stays per device.
+
+## Usage outside the ledger
+
+`% used` covers your whole account, while the dollar amounts only come from chats with cost-ledger. `/ledger limits` estimates the gap: cost-ledger takes the completed, fully recorded window with at least 20 % where the most API value per percent went through the ledger, as “how much one percent costs”. For every window it then shows “outside the ledger ≈ 12 % of 40 %” (a percentage-point estimate) and marks past windows with “outside 12 %”. Until there is such a window, it says when the estimate starts.
+
+**Runs in:** terminal and the desktop Code tab (its own rendering at the command line, colors from the theme). Terminal verified with 0.3.x; desktop verified with 0.3.1 on 2026-10-06 (0.3.0 fell back to the Markdown summary there, fixed in 0.3.1). The 0.5.0 views (`/ledger limits`, the limit line) are covered by rendering tests for both surfaces; a visual check is pending. The help table (0.6.0) was checked in the terminal. Sync (0.7.0) was verified with `claude -p` in a real session; its views are covered by rendering tests for both surfaces. In `claude -p` and other surfaces you get the Markdown summary. Claude only reads that summary (at most 10 lines for the views, about 15 for the help), not the rendering.
 
 ## Configuration
 
@@ -66,7 +89,7 @@ All amounts are API values. On a subscription they count toward your usage limit
 
 ```text
 hooks: session.start, classic.SessionStart, classic.UserPromptSubmit, turn.complete, model.complete, model.fork, model.classify, session.end, command.run{command=ledger}, ui.render{component=CommandOutput, props has {command=ledger}}
-calls: $.clock.now, $.command.register, $.session.repo, $.session.root, $.session.surfaces, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.log
+calls: $.clock.now, $.command.register, $.fs.list, $.fs.read, $.fs.write, $.session.repo, $.session.root, $.session.surfaces, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.log
 ```
 
 In plain language, the hooks:
@@ -90,8 +113,9 @@ And the calls:
 - `$.ui.ask`: confirmation before `/ledger reset`.
 - `$.ui.log`: errors go to the debug log (`{to:'debug'}`), never into the transcript.
 - `$.clock.now`: current date and timestamps.
+- `$.fs.list`, `$.fs.read`, `$.fs.write`: sync between devices (since 0.7.0). Only inside the folder you set with `/ledger sync <folder>`, and only files named `cost-ledger-<id>.json`: it lists that folder, reads the other devices' files and writes its own. Nothing happens with these rights until you turn sync on. Claude Code cannot restrict these rights to a folder, so cost-ledger enforces it itself, and tests check every path.
 
-The `model.*` hooks only read the result of a call (usage, origin) and pass it on unchanged. No model calls, no files, processes or network targets.
+The `model.*` hooks only read the result of a call (usage, origin) and pass it on unchanged. No model calls, no processes or network targets; files only for sync, as above.
 
 ## Installation
 
@@ -142,4 +166,9 @@ claude --plugin-dir <path-to-clone>/mods/cost-ledger
 - **Mod calls count toward the windows** on the assumption that they use the same login and therefore the same limits. This is not documented.
 - **The limits only update with an answer.** Claude Code reports the windows with each API response. After a reset, `/ledger limits` shows “reset passed” until the next answer. Countdowns are as of the moment you ran the command; the view does not refresh by itself.
 - **Waiting amounts live in memory.** An amount that waits for the next window (the window had reset, no answer had reported the new one yet) is kept only while the chat runs. If the chat ends first, it is missing from the windows; the daily totals still have it.
+- **“Outside the ledger” is a rough estimate and can be off either way.** It assumes one percent costs about the same in every window; a different model mix (Haiku vs. Opus) shifts it. Even the best window contains some usage outside the ledger (the estimate comes out low), while a single unusually cheap-looking window or mod calls booked between two readings of `% used` push it up. Chats from a computer that is not synced count as “outside”.
+- **Sync is as fresh as your cloud drive.** The other device's numbers are as of its last write (at most 15 minutes after its last answer, or its last `/ledger`) plus your sync client's delay. `/ledger sync` shows the time of each device's last update.
+- **Sync in the desktop app** uses the same file access as the terminal; it is verified in the terminal (`claude -p`) with 0.7.0, a check in the desktop app is pending. Cloud sessions were not tested.
+- **Copied plugin store:** if you copy the plugin store from one computer to another, both start with the same device ID. The device that notices it switches to a new ID; the old file then belongs to the other device. In rare cases a leftover file of this device stays in the folder: it adds to the device count, its chats are not counted twice, but after `/ledger reset` they show up again. Delete such a file by hand (`/ledger sync` lists each device with its last update); cost-ledger never deletes files.
+- **Mapped network drives:** whether Claude Code treats a drive letter that points to a network share as a network location is not documented. Use a folder your sync client keeps on a local disk.
 - **Plan and price are what you set.** cost-ledger does not know your real plan or price; list prices are from Anthropic's pricing pages as of 2026-10-08. Mobile app subscriptions can cost more.

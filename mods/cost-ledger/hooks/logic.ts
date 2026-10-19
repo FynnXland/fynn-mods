@@ -58,6 +58,9 @@ export const VIEW_WORDS: readonly string[] = ['weeks', 'chats', 'projects', 'mod
 export const RANGE_WORDS: readonly string[] = ['all', 'alle']
 export const TODAY_WORDS: readonly string[] = ['today', 'heute']
 export const OFF_WORDS: readonly string[] = ['off', 'aus']
+/** `/ledger sync …` und `/ledger sync name …` (SPEC Nachtrag 0.7.0, Bedienung) */
+export const SYNC_WORD = 'sync'
+export const NAME_WORD = 'name'
 
 function num(v: unknown, def: number, min: number): number {
   const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN
@@ -596,6 +599,11 @@ export type LimWindow = {
   partial: boolean
   /** Hochrechnung `usd ÷ pct × 100`, erst ab 5 % und nur für vollständige Fenster */
   proj: number | null
+  /**
+   * Geschätzter Anteil außerhalb des Ledgers in Prozentpunkten (claude.ai, Handy, Chats ohne cost-ledger): `pct − usd ÷ k`,
+   * nie negativ; `null` ohne Kalibrierung `k` (SPEC Nachtrag 0.7.0, Verhalten 4).
+   */
+  outside: number | null
 }
 export type PlanReport = {
   plan: string
@@ -623,6 +631,19 @@ export type LimitsReport = {
   avg: { usd: number; n: number } | null
   plan: PlanReport | null
   limSince: number | null
+  /** Kalibrierung `k` ($ je Prozentpunkt) je Fensterart für den Anteil außerhalb; `null` ohne vollständiges Fenster ≥ 20 % */
+  calib: { five: number | null; week: number | null }
+}
+
+/**
+ * Anteil außerhalb des Ledgers schätzen: Kalibrierung `k` = höchstes `usd ÷ pct` über abgeschlossene, vollständige Fenster
+ * ab 20 % mit Betrag (das Fenster, in dem am meisten über den Ledger lief, kommt „nur Ledger“ am nächsten). Je Fenster
+ * außerhalb ≈ `max(0, pct − usd ÷ k)`. Eher zu niedrig, weil auch das beste Fenster etwas Fremdes enthält.
+ */
+function withOutside(list: LimWindow[], keep: number): { list: LimWindow[]; k: number | null } {
+  const base = list.slice(-keep).filter((w) => !w.running && !w.partial && w.pct >= 20 && w.usd > 0)
+  const k = base.length ? Math.max(...base.map((w) => w.usd / w.pct)) : null
+  return { k, list: list.map((w) => ({ ...w, outside: k && w.pct > 0 && !w.partial ? Math.max(0, w.pct - w.usd / k) : null })) }
 }
 
 /** Hat der Datensatz je Abo-Limits gesehen? Läufe mit API-Schlüssel (ohne Limits) zählen nicht zum Abo-Monat. */
@@ -684,11 +705,13 @@ export function limitsReport(
     return merged.map((w) => {
       const start = w.resetsAt - spec.span
       const partial = limSince === null || start < limSince
-      return { kind, ...w, start, running: w.resetsAt > now, partial, proj: w.pct >= 5 && w.usd > 0 && !partial ? (w.usd / w.pct) * 100 : null }
+      return { kind, ...w, start, running: w.resetsAt > now, partial, proj: w.pct >= 5 && w.usd > 0 && !partial ? (w.usd / w.pct) * 100 : null, outside: null }
     })
   }
-  const five = windows('five_hour')
-  const week = windows('seven_day')
+  const fiveOut = withOutside(windows('five_hour'), LIM.five_hour!.keep)
+  const weekOut = withOutside(windows('seven_day'), LIM.seven_day!.keep)
+  const five = fiveOut.list
+  const week = weekOut.list
   // Ø nur über die neuesten 60 Fenster: Ein Datensatz behält höchstens 60 (`bookLim`); in älteren Fenstern fehlte sonst
   // der gekürzte Betrag eines langen Chats, während andere Chats das volle `pct` liefern (Review 0.5.0)
   // Fenster ohne gebuchten Betrag (Host ohne Kostenbuch) zählen nicht
@@ -728,6 +751,7 @@ export function limitsReport(
     avg: pctSum > 0 ? { usd: (done.reduce((a, w) => a + w.usd, 0) / pctSum) * 100, n: done.length } : null,
     plan,
     limSince,
+    calib: { five: fiveOut.k, week: weekOut.k },
   }
 }
 
@@ -735,6 +759,15 @@ export function limitsReport(
 
 /** Gruppen-Schlüssel der Skript-Läufe in Projekten (Anzeige übersetzt). */
 export const SCRIPT_PROJECT = ':script'
+/**
+ * Gruppen-Schlüssel der Chats eines anderen Geräts: `:device:<Gerätename>`. Die Sync-Datei enthält keine Projektnamen
+ * (Bedingung Fynn 2026-10-19), deshalb stehen fremde Chats in Projekten unter ihrem Gerät.
+ */
+export const DEVICE_PROJECT = ':device:'
+
+/** Stand des Geräte-Syncs für die Anzeige: Anzahl Geräte (mit diesem), nicht lesbare Geräte, letzter Fehler, doppelte ID. */
+export type SyncInfo = { on: boolean; devices: number; unreadable: number; error: string; dupId: boolean }
+const NO_SYNC: SyncInfo = { on: false, devices: 1, unreadable: 0, error: '', dupId: false }
 
 export type Window = { usd: number; chats: number; mods: number }
 /** `title` leer = kein Name bekannt; die Anzeige nimmt dann „Chat vom …“ mit `firstAt`. */
@@ -761,6 +794,7 @@ export type Report = {
   storeBytes: number
   writeError: string
   limits: LimitsReport
+  sync: SyncInfo
 }
 
 export const STORE_LIMIT = 4 * 1024 * 1024
@@ -779,6 +813,7 @@ export function aggregate(
     plan?: Plan | null
     limSince?: number | null
     live?: readonly Limit[]
+    sync?: SyncInfo
   },
 ): Report {
   const today = dayKey(now)
@@ -823,7 +858,8 @@ export function aggregate(
         if (d > lastDay) lastDay = d
       }
     if (mine > 0) {
-      const name = rec.kind === 'script' ? SCRIPT_PROJECT : rec.project
+      // Fremde Geräte bleiben unter ihrem Gerät, auch ihre Skript-Läufe
+      const name = rec.project.startsWith(DEVICE_PROJECT) ? rec.project : rec.kind === 'script' ? SCRIPT_PROJECT : rec.project
       const p = proj.get(name) ?? { name, usd: 0, chats: 0 }
       p.usd += mine
       p.chats++
@@ -854,6 +890,7 @@ export function aggregate(
     storeBytes: opts.storeBytes ?? 0,
     writeError: opts.writeError ?? '',
     limits: limitsReport(recs, now, { plan: opts.plan, limSince: opts.limSince, since: opts.since, live: opts.live }),
+    sync: opts.sync ?? NO_SYNC,
   }
 }
 
@@ -950,6 +987,7 @@ export function parseRange(a: string | undefined): number {
 export function projectLabel(name: string, lang: Lang): string {
   if (name === SCRIPT_PROJECT) return T[lang].scriptRuns
   if (name === NO_FOLDER) return T[lang].noFolder
+  if (name.startsWith(DEVICE_PROJECT)) return T[lang].otherDevice(name.slice(DEVICE_PROJECT.length))
   return name
 }
 
@@ -966,7 +1004,22 @@ export function notesOf(r: Report, lang: Lang): string[] {
   if (r.unreadable) out.push(t.unreadable(r.unreadable))
   if (r.storeBytes >= STORE_LIMIT * 0.75) out.push(t.storeFull(Math.round((r.storeBytes / STORE_LIMIT) * 100)))
   if (r.writeError) out.push(t.writeFailed(r.writeError))
+  if (r.sync.error) out.push(t.syncFailed(r.sync.error))
+  if (r.sync.unreadable) out.push(t.syncUnreadable(r.sync.unreadable))
+  if (r.sync.dupId) out.push(t.syncDupId)
   return out
+}
+
+/** „2 Geräte“ für Kopfzeile und Titel, erst ab zwei Geräten. */
+export function devicesLabel(r: Report, lang: Lang): string {
+  return r.sync.devices > 1 ? T[lang].devices(r.sync.devices) : ''
+}
+
+/** Anteil außerhalb des Ledgers als Text; ohne Kalibrierung, wann es eine gibt; `''` bei unvollständigem Fenster. */
+export function outsideText(w: LimWindow, k: number | null, lang: Lang): string {
+  const t = T[lang]
+  if (w.outside !== null) return t.outside(pct(w.outside), pct(w.pct))
+  return k === null && !w.partial ? t.outsideLater : ''
 }
 
 export type ViewName = 'overview' | 'chats' | 'projects' | 'models' | 'weeks' | 'limits'
@@ -1013,7 +1066,7 @@ function limitsLines(l: LimitsReport, now: number, lang: Lang): string[] {
   const hasLim = l.seenFive || l.seenWeek
   if (!hasLim) out.push(t.noLimitData)
   else
-    for (const [w, seen, label] of [[l.five, l.seenFive, t.fiveHours], [l.week, l.seenWeek, t.week]] as const) {
+    for (const [w, seen, label, k] of [[l.five, l.seenFive, t.fiveHours, l.calib.five], [l.week, l.seenWeek, t.week, l.calib.week]] as const) {
       if (!w) {
         out.push(`${label}: ${seen ? t.resetPassed : t.noWindowYet}`)
         continue
@@ -1022,6 +1075,8 @@ function limitsLines(l: LimitsReport, now: number, lang: Lang): string[] {
       bits.push(projectionText(w, lang))
       const from = partialLabel(w, l.limSince, lang)
       if (from) bits.push(from)
+      const outside = outsideText(w, k, lang)
+      if (outside) bits.push(outside)
       out.push(bits.join(' · '))
     }
   if (l.plan) {
@@ -1031,7 +1086,8 @@ function limitsLines(l: LimitsReport, now: number, lang: Lang): string[] {
   if (hasLim) {
     const rows = l.history.slice(0, 4).map((w) => {
       const from = partialLabel(w, l.limSince, lang)
-      return `${span(w.start, w.resetsAt, lang)} ${money(w.usd)} ${pct(w.pct)}${w.running ? ` ${t.running}` : ''}${from ? ` ${from}` : ''}`
+      const out = w.outside !== null ? ` (${t.outsideShort(pct(w.outside))})` : ''
+      return `${span(w.start, w.resetsAt, lang)} ${money(w.usd)} ${pct(w.pct)}${out}${w.running ? ` ${t.running}` : ''}${from ? ` ${from}` : ''}`
     })
     if (rows.length) out.push(`${t.lastWindows}: ${rows.join(' · ')}${l.history.length > 4 ? ` · ${t.more(l.history.length - 4)}` : ''}`)
     out.push(l.avg ? t.avg(money(l.avg.usd), l.avg.n) : t.avgNone)
@@ -1057,8 +1113,10 @@ export function summaryText(r: Report, view: ViewName, range: number, tag: strin
     return [...lines.slice(0, 10 - tail.length), ...tail].slice(0, 10).join('\n')
   }
   // Limits gibt es auch ohne Buchung (Plan eingestellt, Messung dieses Prozesses)
-  if (view === 'limits') return capped([t.sumLimitsTitle(dateTime(r.now, lang), tag), ...limitsLines(r.limits, r.now, lang)], t.sumLimitsFoot)
-  const lines = [t.sumTitle(dateTime(r.now, lang), tag)]
+  const dev = devicesLabel(r, lang)
+  const titled = (s: string) => (dev ? `${s} · ${dev}` : s)
+  if (view === 'limits') return capped([titled(t.sumLimitsTitle(dateTime(r.now, lang), tag)), ...limitsLines(r.limits, r.now, lang)], t.sumLimitsFoot)
+  const lines = [titled(t.sumTitle(dateTime(r.now, lang), tag))]
   // Die Limit-Zeile auch im Leerzustand (z. B. direkt nach /ledger reset: Plan und Messung sind noch da)
   const lim = view === 'overview' || view === 'weeks' ? limitsLineParts(r.limits, r.now, lang) : []
   if (lim.length) lines.push(t.sumLimitsLine(lim.join(' | ')))
@@ -1069,7 +1127,7 @@ export function summaryText(r: Report, view: ViewName, range: number, tag: strin
     lines.push(t.sumMods(money(w.today.mods), money(w.d30.mods), money(w.all.mods)))
     if (r.projects.length) lines.push(t.sumProjects(join(r.projects, (p) => `${projectLabel(p.name, lang)} ${money(p.usd)}`, 5)))
     if (r.chats.length) lines.push(t.sumTopChats(join(r.chats, (c) => `${chatLabel(c, lang)} ${money(c.usd)}`, 3)))
-    if (r.mods.length) lines.push(t.sumModsList(join(r.mods, (m) => `${m.name} ${money(m.usd)} (${m.calls}×)`, 4)))
+    if (r.mods.length) lines.push(t.sumModsList(join(r.mods, (m) => `${projectLabel(m.name, lang)} ${money(m.usd)} (${m.calls}×)`, 4)))
     if (view === 'weeks') lines.push(t.sumWeeks(r.series.weeks.slice(0, 6).map((b) => `${weekLabel(isoWeek(b.key), lang)} ${money(b.usd)}`).join(' · ')))
   } else if (view === 'chats') {
     const rows = r.chats.slice(0, 20)
@@ -1099,7 +1157,13 @@ export function summaryText(r: Report, view: ViewName, range: number, tag: strin
 // ---------- /ledger help (docs/HELP-SPEC.md §5 „cost-ledger 0.6.0“) ----------
 
 /** Was die Hilfe außer den Einstellungen braucht: Plan, Belegung des Speichers, Beginn der Erfassung. */
-export type HelpInfo = { plan: Plan | null; storeBytes: number; since: number | null }
+export type HelpInfo = {
+  plan: Plan | null
+  storeBytes: number
+  since: number | null
+  /** Gerätename bei eingeschaltetem Sync, sonst `null` (der Ordner steht nicht in der Hilfe) */
+  syncDevice?: string | null
+}
 
 /** Zahl einer Einstellung in der Sprache: en `2.5`, de `2,5`. */
 const settingNum = (v: number, lang: Lang) => (lang === 'de' ? String(v).replace('.', ',') : String(v))
@@ -1128,6 +1192,10 @@ export function ledgerHelp(s: Settings, info: HelpInfo): HelpData {
       { cmd: '/ledger plan', does: t.helpPlanShow },
       { cmd: '/ledger plan <plan> <day|today> [price]', does: t.helpPlanSet },
       { cmd: '/ledger plan off', does: t.helpPlanOff },
+      { cmd: '/ledger sync', does: t.helpSyncShow },
+      { cmd: t.helpSyncSetCmd, does: t.helpSyncSet },
+      { cmd: t.helpSyncNameCmd, does: t.helpSyncName },
+      { cmd: '/ledger sync off', does: t.helpSyncOff },
       { cmd: '/ledger reset', does: t.helpReset },
       { cmd: '/ledger help', does: t.helpHelp },
     ],
@@ -1136,6 +1204,9 @@ export function ledgerHelp(s: Settings, info: HelpInfo): HelpData {
       p
         ? { name: t.helpPlanName, state: { kind: 'on', text: `${planLabel(p.plan)} · ${t.helpDay(p.day)} · ${priceText}` }, toggle: '/ledger plan off' }
         : { name: t.helpPlanName, state: { kind: 'off', text: t.helpNoPlan }, toggle: '/ledger plan max20 14' },
+      info.syncDevice
+        ? { name: t.helpSyncFeature, state: { kind: 'on', text: t.helpSyncThis(info.syncDevice) }, toggle: '/ledger sync off' }
+        : { name: t.helpSyncFeature, state: { kind: 'off', text: t.helpSyncOffState }, toggle: t.helpSyncSetCmd },
       { name: t.helpStorageName, state: { kind: 'value', text: t.helpStorage(pctUsed) }, toggle: t.helpInfo },
       { name: t.helpSinceName, state: { kind: 'value', text: info.since === null ? '–' : fullDate(info.since, lang) }, toggle: t.helpInfo },
     ],
