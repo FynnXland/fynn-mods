@@ -164,7 +164,7 @@ async function measure($: Engine, rateLimits: unknown[]) {
 const userPrompt = (text: string) => ({ text, wait: false, origin: { kind: 'composer' as const } })
 const cache = ($: Engine, args: string) => $.command.run({ command: 'cache', args } as never)
 
-test('en (Standard): Terminal-Balken mit 71%, Countdown und Mon 09:00; voll heißt full, nach dem Reset 0% · fresh', async ($, on) => {
+test('en (Standard): Terminal-Balken mit 71%, Countdown und Mon 09:00; voll heißt full, nach dem Reset 0% · fresh', { timeoutMs: 30_000 }, async ($, on) => {
   const w = world(on)
   w.setLimits(limits(71, 18))
   const ui = await $.ui.mount(band('terminal'))

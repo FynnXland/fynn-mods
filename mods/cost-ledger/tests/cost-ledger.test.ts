@@ -48,6 +48,9 @@ const NOW = new Date(2026, 9, 6, 12, 0).getTime() // 06.10.2026 12:00 lokal
 const DAY = 24 * 60 * 60 * 1000
 const TODAY = dayKey(NOW)
 const ROOT = 'D:\\Dev\\ClaudeMods'
+// Unter Linux/macOS (CI) sind `D:\…`-Pfade relativ: Session und Sync-Ordner heißen dort POSIX
+const WIN = /^file:\/\/\/?[A-Za-z]:/.test(import.meta.url) // kein `process` im Test; unter Windows steht ein Laufwerk in der URL
+const SESSION_ROOT = WIN ? ROOT : '/dev/ClaudeMods'
 
 type W = {
   saved?: Map<string, unknown>
@@ -109,7 +112,7 @@ function world(on: On, o: W = {}) {
     }
   })
   on('session.surfaces', () => ({ value: (o.surfaces ?? ['terminal']) as never }))
-  on('session.root', () => ({ value: o.root ?? ROOT }))
+  on('session.root', () => ({ value: o.root ?? SESSION_ROOT }))
   on('session.repo', () => ({ value: (o.repoName || o.remote ? { root: ROOT, remote: o.remote ?? null, internal: false, name: o.repoName ?? null } : null) as never }))
   on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
@@ -2050,7 +2053,8 @@ test('0.6.0 Hilfe-Modul allgemein: BEDIENUNG nur mit Einträgen, leere Abschnitt
 
 // ---------- 0.7.0: Geräte-Sync und Anteil außerhalb des Ledgers (SPEC Nachtrag 0.7.0) ----------
 
-const SYNC = 'E:\\Sync\\cost-ledger'
+const SYNC = WIN ? 'E:\\Sync\\cost-ledger' : '/sync/cost-ledger'
+const reEsc = (x: string) => x.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
 const peerRec = (o: Partial<Rec> = {}): Rec => ({
   ...newRec({ project: 'Geheim', root: 'D:\\Home\\other\\geheim', title: 'Fremder Titel', kind: 'terminal', remote: 'github.com/x/geheim' }, NOW - DAY, 0),
   days: { [TODAY]: 2 },
@@ -2090,12 +2094,12 @@ test('0.7.0 sync.ts: Ordner prüfen, Dateinamen, Geräte-ID und -Name, gespeiche
 
 test('0.7.0 Datenschutz: Die Sync-Datei enthält keine Pfade, kein host/owner/repo, keinen Windows-Benutzernamen, keine Titel', DE, async ($, on) => {
   const USER = 'alex'
-  const home = `D:\\Home\\${USER}\\Projekte\\geheim-projekt`
+  const home = WIN ? `D:\\Home\\${USER}\\Projekte\\geheim-projekt` : `/home/${USER}/Projekte/geheim-projekt`
   const w = world(on, { root: home, repoName: 'geheim-projekt', remote: `https://${USER}:tok123@github.com/FynnXland/geheim-projekt.git` })
   await w.start($, 'S1', 'startup', 'Vertraulicher Chattitel')
   w.st.rl = RL(T5, 30, TW, 50)
   await w.turn($, 1.5, { usage: U('claude-opus-5-5', 1000, 2000) })
-  expect(await w.ledger($, `sync ${SYNC}`)).toMatch(/^Sync an: E:\\Sync\\cost-ledger · dieses Gerät: Gerät [0-9a-f]{4} · 0 andere Geräte gefunden\./)
+  expect(await w.ledger($, `sync ${SYNC}`)).toMatch(new RegExp(`^Sync an: ${reEsc(SYNC)} · dieses Gerät: Gerät [0-9a-f]{4} · 0 andere Geräte gefunden\\.`))
   // Gegenprobe: lokal steht alles drin, in der Datei nichts davon
   expect(w.rec()).toMatchObject({ root: home, title: 'Vertraulicher Chattitel', remote: 'github.com/FynnXland/geheim-projekt', project: 'geheim-projekt' })
   const text = w.files.get(ownPath(w))!
@@ -2185,18 +2189,18 @@ test('0.7.0 /ledger sync: Pfad mit Leerzeichen, ungültige Pfade, Stand, Name, a
   await w.start($)
   expect(await w.ledger($, 'sync')).toMatch(/^Sync ist aus\. Einschalten mit \/ledger sync <ordner>/)
   // `/Sync` hinge unter Windows vom aktuellen Laufwerk ab (Session-Root D:\…, Review S4)
-  for (const bad of ['sync\\rel', '\\\\server\\share\\x', 'E:\\a\\..\\b', '/Sync', 'E:\\'])
+  for (const bad of WIN ? ['sync\\rel', '\\\\server\\share\\x', 'E:\\a\\..\\b', '/Sync', 'E:\\'] : ['sync/rel', '\\\\server\\share\\x', '/a/../b', '/'])
     expect(await w.ledger($, `sync ${bad}`)).toBe(
       `Nicht gespeichert: „${bad}“ ist kein absoluter lokaler Ordner (unter Windows mit Laufwerk; kein Netzwerkpfad, kein „..“, nicht die Wurzel).`,
     )
   expect(w.saved.has('meta:sync')).toBe(false)
   expect(w.st.fs).toEqual([]) // ungültige Pfade werden nie angefasst
-  const dir = 'E:\\Mein Sync\\cost-ledger'
-  expect(await w.ledger($, `sync ${dir}`)).toMatch(/^Sync an: E:\\Mein Sync\\cost-ledger · dieses Gerät: /)
+  const dir = WIN ? 'E:\\Mein Sync\\cost-ledger' : '/Mein Sync/cost-ledger'
+  expect(await w.ledger($, `sync ${dir}`)).toMatch(new RegExp(`^Sync an: ${reEsc(dir)} · dieses Gerät: `))
   expect(w.saved.get('meta:sync')).toEqual({ v: 1, dir, at: NOW })
   const dev = ownDevice(w)
   expect(dev.id).toMatch(/^[0-9a-f]{8}$/)
-  const mine = `${dir}\\cost-ledger-${dev.id}.json`
+  const mine = inDir(dir, `cost-ledger-${dev.id}.json`)
   expect(w.files.has(mine)).toBe(true)
   await w.ledger($, `sync ${dir}`)
   expect(ownDevice(w).id).toBe(dev.id) // die ID bleibt
@@ -2213,7 +2217,7 @@ test('0.7.0 /ledger sync: Pfad mit Leerzeichen, ungültige Pfade, Stand, Name, a
   expect(w.saved.get('meta:device')).toEqual({ id: dev.id, name: 'Laptop Büro' })
   expect([...w.files.keys()]).toEqual([mine])
   w.st.writeFails = true
-  expect(await w.ledger($, 'sync F:\\Weg')).toMatch(/^Nicht gespeichert: In den Ordner lässt sich nicht schreiben/)
+  expect(await w.ledger($, WIN ? 'sync F:\\Weg' : 'sync /weg')).toMatch(/^Nicht gespeichert: In den Ordner lässt sich nicht schreiben/)
   expect(w.saved.has('meta:sync')).toBe(false)
 })
 
@@ -2319,7 +2323,7 @@ test('0.7.0 Schreiben nach Turns höchstens alle 15 Minuten, nie in session.end 
   for (const [op, p] of w.st.fs) {
     if (op === 'list') expect(p).toBe(SYNC)
     else {
-      expect(p.startsWith(`${SYNC}\\`), p).toBe(true)
+      expect(p.startsWith(inDir(SYNC, '')), p).toBe(true)
       expect(idFromName(p.slice(SYNC.length + 1)), p).not.toBeNull()
     }
     if (op === 'write') expect(p).toBe(ownPath(w))
@@ -2459,5 +2463,5 @@ test('0.7.0 Hilfe: Sync-Zeile mit Gerätename statt Ordner; Zustand beim Aufruf'
   await w.ledger($, 'sync name Laptop')
   const help = await w.ledger($, 'help')
   expect(help).toMatch(/Sync zwischen Geräten ● dieses Gerät: Laptop \(\/ledger sync off\)/)
-  expect(help.includes('Sync\\cost-ledger')).toBe(false)
+  expect(help.includes(SYNC)).toBe(false)
 })
