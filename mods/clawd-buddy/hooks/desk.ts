@@ -65,7 +65,7 @@ export type Desk = {
   remaining: (now: number) => number
 }
 
-const NAP_TICKS = 3000 // 5 Minuten
+const NAP_TICKS = 4000 // ~5 Minuten (wie buddy.ts; bis 0.8.0 3000 = 3,75 min)
 export const PLAN_TICKS = 400 // höchstens 30 s je Animation
 export const PLAN_CHARS = 85_000 // Bilder je Animation; Rest für Zeitlisten und Rahmen
 export const SOURCE_MAX = 131_072 // Svg.source höchstens (types:11939)
@@ -111,7 +111,7 @@ export function createDesk(o: DeskOpts): Desk {
       D.seenBack = back
       if (back && now - back < WELCOME_WINDOW_MS) engine.welcome()
     }
-    engine.set({ agents: activeAgents(facts, now) })
+    engine.set({ agents: activeAgents(facts, now), music: !!facts.music })
     const m = deriveMood(facts, now)
     if (m !== D.mood) {
       D.mood = m
@@ -168,8 +168,11 @@ export function createDesk(o: DeskOpts): Desk {
     rnd.a = snap.a
   }
 
-  /** Die nächsten Takte nach dem Zeitplan als animiertes SVG; der Stand selbst bleibt, wie er ist. */
-  function simulate(scale: number): Plan {
+  /**
+   * Die nächsten Takte nach dem Zeitplan als animiertes SVG; der Stand selbst bleibt, wie er ist. `lag`: so viele ms liegt die
+   * Uhrzeit des Zeichnens schon hinter dem Stand (Rest unter einem Takt); die Animation beginnt um diese Zeit vorgerückt.
+   */
+  function simulate(scale: number, lag = 0): Plan {
     const snap = save()
     const ids = Array.from({ length: TILES }, () => new Map<string, number>()) // Kachelbild → Nummer
     const bodies: string[][] = Array.from({ length: TILES }, () => [])
@@ -199,10 +202,10 @@ export function createDesk(o: DeskOpts): Desk {
     }
     load(snap)
     // Zu lang (viele Wechsel verlängern die Zeitlisten): die Animation halbieren, bis sie passt; ein einzelnes Bild passt immer
-    let p = build(bodies, shown, Math.max(ticks, 1), scale)
+    let p = build(bodies, shown, Math.max(ticks, 1), scale, lag)
     while (p.source.length > SOURCE_MAX && p.ticks > 1) {
       const half = Math.floor(p.ticks / 2)
-      p = build(bodies, shown.map((s) => s.filter((x) => x.from < half)), half, scale)
+      p = build(bodies, shown.map((s) => s.filter((x) => x.from < half)), half, scale, lag)
     }
     return p
   }
@@ -226,10 +229,13 @@ export function createDesk(o: DeskOpts): Desk {
     segs = [{ until: Infinity, facts, strain }]
     acts = queued.map((act) => ({ at: n, act }))
     queued = []
-    const p = simulate(scale)
+    // Der Stand steht auf dem letzten ganzen Takt; den Rest bis `now` rückt die Animation selbst vor (SMIL `begin`). Sonst fiele jede
+    // Zeichnung bis zu einem Takt zurück, und seit jede Zeichnung neu rechnet (0.8.1), zeichnen fremde Mods bis zu 1-mal je Sekunde.
+    const lag = Math.max(0, Math.min(TICK - 1, now - D.at))
+    const p = simulate(scale, lag)
     for (const x of acts) if (x.at === n) apply(x.act)
     acts = acts.filter((x) => x.at > n)
-    drawn = { facts, strain, at: now, ticks: p.ticks }
+    drawn = { facts, strain, at: now - lag, ticks: p.ticks }
     return p
   }
 
@@ -248,6 +254,8 @@ export function createDesk(o: DeskOpts): Desk {
       if (!drawn || (facts.backAt ?? 0) !== (drawn.facts.backAt ?? 0)) return 0
       // Die Laune (Gewichte der Clips) ist mit den Fakten gezeichnet; hat sie sich geändert, gleich neu (Review 2, K1)
       if (strainNow !== drawn.strain) return 0
+      // Musik an oder aus (spotify.playing, 0.9.0): die Stimmung bleibt, die Auswahl aber nicht
+      if ((facts.music ?? false) !== (drawn.facts.music ?? false)) return 0
       const end = drawn.at + drawn.ticks * TICK
       for (let t = now; t <= end; t += TICK) {
         if (deriveMood(facts, t) !== deriveMood(drawn.facts, t) || activeAgents(facts, t) !== activeAgents(drawn.facts, t)) return t - now
@@ -320,8 +328,10 @@ export function stillSource(scale: number, flip: boolean, digit: number, nonce: 
 }
 
 /** SVG mit SMIL aus den Abfolgen je Kachel (Takt 0 bis `ticks`); nur die darin gezeigten, nicht leeren Kachelbilder kommen hinein. */
-function build(bodies: readonly string[][], shown: readonly Shown[][], ticks: number, scale: number): Plan {
+function build(bodies: readonly string[][], shown: readonly Shown[][], ticks: number, scale: number, lag = 0): Plan {
   const dur = `${((ticks * TICK) / 1000).toFixed(3)}s`
+  // Negativer Beginn: die Zeitliste läuft beim Laden des Bilds schon `lag` ms (SMIL-Zeitpunkt mit Vorzeichen)
+  const begin = lag > 0 ? ` begin="-${(lag / 1000).toFixed(3)}s"` : ''
   const kt = (i: number) => String(+(i / ticks).toFixed(5))
   let groups = ''
   let frames = 0
@@ -339,7 +349,7 @@ function build(bodies: readonly string[][], shown: readonly Shown[][], ticks: nu
         if (!keys.length || keys[keys.length - 1][1] !== vis) keys.push([s.from, vis])
       }
       const anim = keys.length > 1
-        ? `<animate attributeName="visibility" calcMode="discrete" dur="${dur}" fill="freeze" values="${keys.map((k) => k[1]).join(';')}" keyTimes="${keys.map((k) => kt(k[0])).join(';')}"/>`
+        ? `<animate attributeName="visibility" calcMode="discrete"${begin} dur="${dur}" fill="freeze" values="${keys.map((k) => k[1]).join(';')}" keyTimes="${keys.map((k) => kt(k[0])).join(';')}"/>`
         : ''
       groups += `<g visibility="${keys[0][1]}">${anim}${bodies[t][id]}</g>`
     }

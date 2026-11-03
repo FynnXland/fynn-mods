@@ -90,6 +90,8 @@ export type EngineState = {
   nightEnd: number
   idleLimit: number
   reduced: boolean
+  /** Spielt gerade Musik (spotify.playing, 0.9.0)? */
+  music: boolean
   lastClipName: string
   lastPose: Pose | null
   /** Kanonische Pose, in der die Figur gerade steht bzw. nach dem laufenden Clip steht. */
@@ -163,6 +165,10 @@ const HOLD_PLAY = 107 // ~8 s
 const ASK = new Set(['waitUser', 'waitUserLong'])
 const COOLDOWN = 280 // ~21 s: ein eben gespielter Clip wird so lange deutlich seltener gewählt
 const NIGHT_PLAY = 3 // nachts: so viele Leerlaufzeiten Zeitvertreib, bevor er einschläft
+/** Stimmungen, in denen er bei Musik mitwippt (0.9.0, Fynn: „wenn er Zeit hat“): Leerlauf, du tippst, langes Warten. */
+const MUSIC_MOODS = new Set(['idle', 'watching', 'wait10', 'wait60'])
+/** Im Leerlauf mit Musik: so oft ein Musik-Clip statt Grundpose oder Zeitvertreib. */
+const MUSIC_SHARE = 0.8
 const LOOP_STAY = 330 // ~25 s: so lange bleibt eine Schleife ohne Stimmungswechsel bei sich, dann darf eine Variante kommen
 const CLICK_TICKS = 5 // höchstens ~400 ms zwischen down und up = Klick
 const HOLD_TICKS = 9 // ~0,7 s; so lange muss man ihn festhalten, bevor er sich hochheben lässt (Fynn: "es soll ein bisschen dauern")
@@ -181,7 +187,7 @@ export function createEngine(opts: EngineOpts) {
     blinkAt: 40, blinkUntil: -1, hover: null, drag: null, gallery: null, galleryLoop: false, hour: opts.hour ?? 12,
     nightStart: opts.nightStart ?? 23, nightEnd: opts.nightEnd ?? 6, idleLimit: ((opts.idleSeconds ?? 45) * 1000) / TICK,
     reduced: opts.reduced ?? false, lastClipName: '', lastPose: null, landing: 'stand', carry: null, pendingClick: false,
-    temper: 0, tired: 0, moodWant: null, clipStart: 0, playedAt: {}, realStart: -1, shortRun: 0, holdUntil: 0, askCutAt: -1e9, agents: 0, mates: [], special: '', welcome: false,
+    temper: 0, tired: 0, moodWant: null, clipStart: 0, playedAt: {}, realStart: -1, shortRun: 0, holdUntil: 0, askCutAt: -1e9, agents: 0, mates: [], special: '', welcome: false, music: false,
   }
 
   // ---- Begleiter (Subagenten): je laufendem Subagenten (max. 12, ab 7 in zweiter Reihe) steht ein kleiner Helfer auf seinem Platz. Er steigt einmal von
@@ -238,7 +244,12 @@ export function createEngine(opts: EngineOpts) {
     (c.when === 'night' ? isNight() : c.when === 'day' ? !isNight() : true) && (!c.special || c.special === S.special)
   /** Tageszeit-Abschnitt für `daypart`: 0 Morgen (5–11), 1 Mittag (11–17), 2 Abend (17 bis Nachtbeginn), 3 Nacht. */
   const daypartIndex = (): number => (isNight() ? 3 : S.hour >= 5 && S.hour < 11 ? 0 : S.hour >= 11 && S.hour < 17 ? 1 : 2)
-  const poolOf = (mood: string): ClipDef[] => clips.filter((c) => c.cat === mood && when(c))
+  /**
+   * Musik (0.9.0, Fynn: mitwippen, „wenn er Zeit hat“): Spielt spotify, kommen die Clips der Gruppe `music` in den Leerlauf, zum Mitlesen
+   * beim Tippen und zum langen Warten dazu; bei Arbeit bleibt er bei seiner Arbeit.
+   */
+  const musicIn = (mood: string): boolean => S.music && MUSIC_MOODS.has(mood)
+  const poolOf = (mood: string): ClipDef[] => clips.filter((c) => (c.cat === mood || (c.cat === 'music' && musicIn(mood))) && when(c))
   /**
    * Gewicht nach Laune: Frust-Clips erst ab etwas Frust und mit ihm immer häufiger, bis sie die Gruppe dominieren; Clips für gute
    * Laune bzw. Müdigkeit entsprechend. Neutrale Clips werden bei starker Laune etwas seltener.
@@ -264,8 +275,13 @@ export function createEngine(opts: EngineOpts) {
   /** Gewichtet zufällig, nie dasselbe zweimal hintereinander (pro Schlüssel). */
   function pick(pool: readonly ClipDef[], key: string): string {
     const items = pool.filter((c) => c.name !== S.lastPick[key] && weightOf(c) > 0)
-    const list = items.length ? items : pool.filter((c) => !c.temper).length ? pool.filter((c) => !c.temper) : pool
-    let r = rng() * list.reduce((a, c) => a + weightOf(c), 0)
+    // Rückfall: lieber ein eben gespielter Clip mit Gewicht als einer, der gar nicht passt; haben alle Gewicht 0 (z. B. „fertig“ mit
+    // Helfern, alle Clips brauchen die freie Seite), gleich verteilt statt immer der letzte der Liste (Review 0.8.1)
+    const weighted = pool.filter((c) => weightOf(c) > 0)
+    const list = items.length ? items : weighted.length ? weighted : pool.filter((c) => !c.temper).length ? pool.filter((c) => !c.temper) : pool
+    const total = list.reduce((a, c) => a + weightOf(c), 0)
+    if (total <= 0) return list[Math.floor(rng() * list.length)].name
+    let r = rng() * total
     let chosen = list[list.length - 1]
     for (const c of list) {
       r -= weightOf(c)
@@ -274,7 +290,7 @@ export function createEngine(opts: EngineOpts) {
         break
       }
     }
-    S.lastPick[key] = chosen.name
+    // „Zuletzt“ merkt sich erst startClip: eine vorgemerkte Wahl, die ein Klick verwirft, zählt nicht (Review 0.8.1)
     return chosen.name
   }
 
@@ -288,8 +304,15 @@ export function createEngine(opts: EngineOpts) {
       return loops.length ? pick(loops, m) : 'idle_breathe'
     }
     if (m === 'idle') {
+      // Die Nacht (oder /clawd nap) ist vorbei, während er schlief und niemand etwas tat: aufwachen wie bei Aktivität. Sonst bliebe er
+      // „im Schlaf“ (Maus, Sperre, Entprellung wie beim Schlafen) und schliefe in der nächsten Nacht ohne Gähnen sofort ein (Review 0.8.1)
+      if (S.sleepStage > 0 && !isNight()) {
+        S.sleepStage = 0
+        return 'rub_eyes'
+      }
       // Nachts erst eine Weile ruhiger Zeitvertreib, eingeschlafen wird nach dem Dreifachen der Leerlaufzeit (oder wenn es schon begann)
-      if (isNight() && (S.sleepStage > 0 || S.idleTicks > S.idleLimit * NIGHT_PLAY)) {
+      // Läuft Musik, schläft er nicht ein (Fynn: nachts ruhig wippen); schläft er schon, weckt sie ihn nicht
+      if (isNight() && (S.sleepStage > 0 || (S.idleTicks > S.idleLimit * NIGHT_PLAY && !S.music))) {
         if (S.sleepStage === 0) {
           S.sleepStage = 1
           return 'yawn'
@@ -302,6 +325,12 @@ export function createEngine(opts: EngineOpts) {
         return 'sleep'
       }
       // Nur Zeitvertreib, der zur Tageszeit passt (nachts z. B. nur die ruhigen); sonst Grundpose
+      // Musik: meist wippt er mit (nachts nur die ruhige Variante, when: 'night')
+      if (musicIn('idle')) {
+        const mus = poolOf('idle').filter((c) => c.cat === 'music' && weightOf(c) > 0)
+        // (Weniger Bewegung: im Leerlauf kein Mitwippen, wie kein Zeitvertreib; Review 0.9.0 S2)
+        if (mus.length && !S.reduced && rng() < MUSIC_SHARE) return pick(mus, 'music')
+      }
       const fun = poolOf('fun').filter((c) => weightOf(c) > 0 || c.name === S.lastClipName)
       const lastWasFun = fun.some((c) => c.name === S.lastClipName)
       if (!fun.some((c) => weightOf(c) > 0)) return rng() < 0.22 && S.lastClipName !== 'idle_look' ? 'idle_look' : 'idle_breathe'
@@ -312,7 +341,8 @@ export function createEngine(opts: EngineOpts) {
     if (m === 'watching' && !S.reduced && rng() < 0.35 && !['idle_look', 'idle_breathe'].includes(S.lastClipName)) return 'idle_breathe'
     const pool = poolOf(m)
     if (!pool.length) return 'idle_breathe'
-    if (S.reduced && !ONE_SHOT.has(m)) return pool[0].name
+    // Weniger Bewegung: eine Schleife, die gerade passt (sonst winkte er bei Subagenten mit `wave_helper` pausenlos, Review 0.8.1)
+    if (S.reduced && !ONE_SHOT.has(m)) return (pool.find((c) => c.loop && weightOf(c) > 0) ?? pool[0]).name
     return pick(pool, m)
   }
 
@@ -388,6 +418,8 @@ export function createEngine(opts: EngineOpts) {
 
   function startClip(item: string | ClipDef, skipIntro = false) {
     const c = typeof item === 'string' ? byName[item] : item
+    // Schlüssel wie in pick: die Gruppe, Maus-Reaktionen unter 'click'
+    if (!isDyn(c)) S.lastPick[c.cat === 'mouse' ? 'click' : c.cat] = c.name
     let intro: Resolved[] = []
     let body: Resolved[]
     let outro: Resolved[] = []
@@ -673,6 +705,8 @@ export function createEngine(opts: EngineOpts) {
         // Ein Ersatz-Clip aus einer anderen Gruppe (z. B. atmen, während du tippst) bleibt nur einen Durchgang (Review 2, K4)
         if (!S.pending && !S.queue.length && S.mood !== 'idle' && pl.clip.cat === S.mood && (S.ticks - S.clipStart < LOOP_STAY || S.gallery)) return
         if (!S.pending && !S.queue.length && S.gallery) return
+        // Musik-Schleifen bleiben, solange die Musik läuft und er Zeit hat (sonst holte er z. B. die Kopfhörer an jeder Schleifengrenze neu)
+        if (!S.pending && !S.queue.length && pl.clip.cat === 'music' && musicIn(S.mood) && when(pl.clip) && S.ticks - S.clipStart < LOOP_STAY) return
         const want = S.queue.length ? null : chooseForMood()
         if (!S.pending && want === pl.clip.name) return
         return leaveClip(want)
@@ -998,15 +1032,20 @@ export function createEngine(opts: EngineOpts) {
     isNight,
     isMorning,
     poolOf,
-    set(o: { hour?: number; nightStart?: number; nightEnd?: number; idleSeconds?: number; reduced?: boolean; temper?: number; tired?: number; agents?: number; special?: '' | 'birthday' | 'newyear' }) {
+    set(o: { hour?: number; nightStart?: number; nightEnd?: number; idleSeconds?: number; reduced?: boolean; temper?: number; tired?: number; agents?: number; special?: '' | 'birthday' | 'newyear'; music?: boolean }) {
       if (o.agents !== undefined) S.agents = Math.max(0, o.agents)
+      if (o.music !== undefined) S.music = o.music
       if (o.special !== undefined) S.special = o.special
       if (o.temper !== undefined) S.temper = Math.max(-1, Math.min(1, o.temper))
       if (o.tired !== undefined) S.tired = Math.max(0, Math.min(1, o.tired))
+      const wasNight = isNight()
       if (o.hour !== undefined) S.hour = o.hour
       if (o.nightStart !== undefined) S.nightStart = o.nightStart
       if (o.nightEnd !== undefined) S.nightEnd = o.nightEnd
       if (o.idleSeconds !== undefined) S.idleLimit = (o.idleSeconds * 1000) / TICK
+      // Die Nacht beginnt nach langem Leerlauf: erst ruhiger Nacht-Zeitvertreib, dann Schlaf (sonst schliefe er sofort ein, Review 0.8.1)
+      // (nicht bei /clawd nap: das setzt die Leerlaufzeit mit und soll gleich einschlafen)
+      if (!wasNight && isNight() && S.sleepStage === 0 && o.idleSeconds === undefined) S.idleTicks = Math.min(S.idleTicks, S.idleLimit + 1)
       if (o.reduced !== undefined) S.reduced = o.reduced
     },
     wakeUp() {

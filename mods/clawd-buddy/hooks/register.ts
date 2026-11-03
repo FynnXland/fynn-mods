@@ -6,9 +6,9 @@
 // daraus auf seiner eigenen Uhr ab (mood.ts); `$.ui.invalidate` läuft darum nur bei echten Ereignissen, nie im Bildtakt (Desktop: desk.ts).
 // Zeichnet ins Band über dem Prompt (docs/raw/en/interface.md:207-213) und lässt fremden Inhalt stehen (`await next(e)` als Kind).
 import type { EngineInterface, On, Timer } from 'claude-code'
-import { joinBand, nameOf, splitBand } from './band.ts'
+import { joinBand, nameOf, slot, SLOTS, splitBand } from './band.ts'
 import { ALL_CLIPS } from './library.ts'
-import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
+import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, musicValue, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
 import type { Strain } from './mood.ts'
 import { createDesk, DESK_TICK, stillSource } from './desk.ts'
 import { T, clipLabel, langOf, num as fmt } from './i18n.ts'
@@ -29,6 +29,19 @@ let helpNo = 0
 
 // Flüchtiger Zustand dieses Moduls (wird aus Events neu abgeleitet; Reload setzt zurück)
 let enabled = true
+// Breite des Platzes im Desktop für spotify: `$.state` `clawd-buddy.band` (types/index.d.ts, docs/BAND.md „Platzbreite“). `undefined` =
+// noch nicht geschrieben; nie im Zeichnen, dort darf `$.state` nicht geschrieben werden.
+let isDesktop = false
+let publishedWidth: number | null | undefined = undefined
+let publishChain: Promise<unknown> = Promise.resolve()
+let sessionStarted = false // erst nach session.start kennt der Mod die Oberfläche (isDesktop)
+function publishBand($: EngineInterface) {
+  const width = enabled && isDesktop ? DESK_WIDTH : null
+  if (width === publishedWidth) return
+  publishedWidth = width
+  // Schreibvorgänge nacheinander; Beiwerk: ein Fehler ändert nichts an Clawd
+  publishChain = publishChain.then(() => $.state.set({ plugin: 'clawd-buddy', key: 'band' }, width === null ? null : { width })).catch(() => {})
+}
 let annoy = 0
 let napN = 0
 let boopN = 0
@@ -58,6 +71,7 @@ let seenPerf = -1e9
 // der Buddy an ist: `/clawd off` bricht ihn ab, und zeichnet die App auf die Bitte hin 2 s lang nicht, bricht er sich selbst ab; das
 // nächste Zeichnen startet ihn neu. Gezählt wird in Wächter-Runden, nicht in Echtzeit (im Test-Kit läuft nur die Uhr der Mods-API).
 const DESK_SCALE = 4 // CSS-Pixel je Figurpixel: Figur 68 × 40 px, Bühne 400 × 56 px
+const DESK_WIDTH = W * DESK_SCALE // Breite des Platzes im Desktop, wie sie an spotify gemeldet wird
 const DESK_CHECK = 250 // ms je Wächter-Runde
 const DESK_LEAD = 1000 // so lange vor dem Ende der Animation um die nächste bitten
 const DESK_IDLE_CHECKS = 8 // ~2 s ohne Antwort auf die Bitte: Wächter beenden
@@ -74,8 +88,9 @@ let deskBeatsSeen = 0 // Stand von deskBeats beim letzten Zeichnen, das eine neu
 let deskBeatsSeenAt = 0 // Uhrzeit dieses Zeichnens
 // Flackern (Fynn, 2026-10-06: „Es darf nicht flackern“): Ein neues `source` lud bis 0.6.5 den Rahmen neu, die Figur blinkte dabei kurz.
 // Das Band wird auch für andere Mods neu gezeichnet (limit-bars, sidekick, quick-replies); Ereignisse, die an der laufenden Animation
-// nichts ändern, bitten seit 0.6.9 gar nicht erst darum (factsChanged). Zeichnet die App trotzdem, geht dasselbe Svg noch einmal hinaus; neu gerechnet wird erst kurz bevor die neuen Fakten etwas anderes
-// zeigen (desk.divergence) oder die Animation endet. Eingriffe (`/clawd demo|nap|boop|on`) erzwingen eine neue Zeichnung.
+// nichts ändern, bitten seit 0.6.9 gar nicht erst darum (factsChanged); Clawd selbst bittet erst kurz bevor die neuen Fakten etwas anderes
+// zeigen (desk.divergence) oder die Animation endet. Zeichnet die App trotzdem (für einen anderen Mod), rechnet Clawd ab dem gezeigten Bild neu
+// (0.8.1, „Springen“ unten). Eingriffe (`/clawd demo|nap|boop|on`) erzwingen eine neue Zeichnung.
 // Bild statt Rahmen (0.6.6): Bis 0.6.5 lief das Svg mit `isInteractive` in einem Rahmen, der bei jedem neuen `source` neu lud und dabei kurz
 // leer war. `/clawd flicker` zeigte (Fynn, 2026-10-07: blinkt in allen drei Abschnitten), dass die App beim Wechsel auch einen unveränderten
 // Rahmen neu lädt; die Staffelübergabe mit zwei Rahmen (0.6.3) war wirkungslos. Jetzt ein einziges Svg als Bild (ohne `isInteractive`,
@@ -92,32 +107,32 @@ const DIAG_MS = 20_000
 const DIAG_STEP = 2000
 let deskDiag = -1
 let deskDiagRounds = 0 // Wächter-Runden im Test; zeichnet die App nicht mehr (verdeckt), endet er danach von selbst
-// Springen (Fynn, 2026-10-06: „springt von jetzt auf gleich zu einer ganz anderen Sache“): Baute der Desktop den Rahmen trotz gleichem `source` neu
-// auf (bis 0.6.5; ob ein neu eingehängtes Bild SMIL ebenso von vorn beginnt, ist [UNKLAR], im Browser tut es das), beginnt die Animation wieder bei ihrem Anfang, also Sekunden zurück, und bei der nächsten echten Zeichnung springt sie nach vorn. Das passiert
-// sicher, wenn sich der Aufbau des Bands ändert (eine Ebene von quick-replies oder sidekick kommt oder geht, andere Breite), und vermutlich auch nach
-// dem Wiederanzeigen der Sitzung [UNKLAR]. Deshalb: bei geändertem Aufbau immer neu zeichnen, und ein Svg höchstens DESK_REUSE_MS lang weitergeben;
-// ein unerkannter Neustart springt so höchstens um diese Zeit zurück.
-const DESK_REUSE_MS = 5000
+// Springen (Fynn, 2026-10-06 und 2026-11-03: „springt immer wieder ein Stück zurück und wiederholt seine Animation“): Zeichnet die App das Band
+// neu, beginnt SMIL im Bild wieder bei 0, auch bei byte-gleichem `source` (Messung 0.8.1, SPEC). Bis 0.8.0 ging bei einer Zeichnung ohne neue
+// Fakten dasselbe Svg bis 5 s lang wieder hinaus; Clawd fiel damit bei jeder fremden Zeichnung an den Anfang dieses Svg zurück. Seit spotify
+// beim Abspielen jede Sekunde neu zeichnen lässt, geschah das ständig. Jetzt rechnet jede Zeichnung ab dem Bild, das gerade zu sehen ist,
+// neu (~5 ms); ein Neustart zeigt so genau das Bild, das ohnehin dran war. Der Rest unter einem Takt geht als SMIL-`begin` mit (desk.ts).
+// Ob eine Zeichnung neue Fakten zeigen muss (factsChanged, divergence), entscheidet weiter, ob Clawd selbst um eine Zeichnung bittet.
 let deskShape = ''
 // Messung für `/clawd status` (Fynn, 2026-10-05: Clawd wirkt bei mehreren Agenten verzögert). Zählt seit dem letzten `/clawd status`,
 // mit performance.now() (synchron, kein `$`-Aufruf): Zeichnungen, Länge und Bildwechsel der Animationen, Rechen- und Zeichendauer.
 // Dazu (0.6.5): wie oft wegen eines geänderten Aufbaus des Bands bzw. nach Wiederanzeigen oder Einschalten neu gezeichnet wurde.
 type DeskMeter = {
-  since: number; draws: number; reused: number; planSecs: number; changes: number; chars: number; calcSum: number; calcMax: number; drawSum: number; drawMax: number; othersSum: number
+  since: number; draws: number; foreign: number; planSecs: number; changes: number; chars: number; calcSum: number; calcMax: number; drawSum: number; drawMax: number; othersSum: number
   freshShape: number; freshShown: number; skipped: number
 }
 const newMeter = (): DeskMeter => ({
-  since: performance.now(), draws: 0, reused: 0, planSecs: 0, changes: 0, chars: 0, calcSum: 0, calcMax: 0, drawSum: 0, drawMax: 0, othersSum: 0,
+  since: performance.now(), draws: 0, foreign: 0, planSecs: 0, changes: 0, chars: 0, calcSum: 0, calcMax: 0, drawSum: 0, drawMax: 0, othersSum: 0,
   freshShape: 0, freshShown: 0, skipped: 0,
 })
 let meter = newMeter()
 function meterText(lang: Lang, m: DeskMeter, at: number): string {
   const s = (at - m.since) / 1000
-  if (m.draws + m.reused === 0) return T[lang].deskNone
+  if (m.draws === 0) return T[lang].deskNone
   const avg = (sum: number) => fmt(lang, m.draws ? sum / m.draws : 0)
-  const avgAll = (sum: number) => fmt(lang, sum / (m.draws + m.reused))
+  const avgAll = (sum: number) => fmt(lang, sum / m.draws)
   return T[lang].desk({
-    secs: s.toFixed(0), draws: m.draws, reused: m.reused, perMin: fmt(lang, s > 0 ? (m.draws * 60) / s : 0), planSecs: avg(m.planSecs), changes: avg(m.changes),
+    secs: s.toFixed(0), draws: m.draws, foreign: m.foreign, perMin: fmt(lang, s > 0 ? (m.draws * 60) / s : 0), planSecs: avg(m.planSecs), changes: avg(m.changes),
     kb: fmt(lang, m.draws ? m.chars / m.draws / 1000 : 0), calcAvg: avg(m.calcSum), calcMax: fmt(lang, m.calcMax), drawAvg: avgAll(m.drawSum),
     drawMax: fmt(lang, m.drawMax), others: avgAll(m.othersSum),
   }) + T[lang].deskFresh({ shape: m.freshShape, shown: m.freshShown, skipped: m.skipped })
@@ -191,7 +206,22 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   const lang = langOf(options.language)
   const tx = T[lang]
 
+  // /clear, /resume und /branch setzen $.state zurück, ohne dass session.start erneut feuert (docs/raw/en/troubleshoot.md:260-264):
+  // die Platzbreite für spotify sofort wieder melden (docs/raw/en/interface.md:818-846; Review 0.8.1 S1, Fynn 2026-11-03)
+  // Bei --resume ist die Reihenfolge zu session.start nicht dokumentiert [UNKLAR]: vorher nichts schreiben (isDesktop stünde noch auf false);
+  // geschrieben wird in derselben Kette wie sonst, also in Aufrufreihenfolge (Review 0.9.1 K4)
+  on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
+    if (sessionStarted) {
+      publishedWidth = undefined
+      publishBand($)
+    }
+    return next(e)
+  })
+
   on('session.start', async ($, e, next) => {
+    isDesktop = e.surface === 'desktop'
+    publishedWidth = undefined
+    sessionStarted = true
     try {
       const s = ((await $.store.get('buddy')) ?? {}) as Stored
       if (typeof s.enabled === 'boolean') enabled = s.enabled
@@ -201,6 +231,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } catch (err) {
       $.ui.log(`clawd-buddy: store not read: ${String(err)}`, { to: 'debug' })
     }
+    publishBand($)
     try {
       await $.command.register({ name: 'clawd', description: tx.description, argumentHint: 'on | off | list | demo <animation> | nap | boop | status | flicker | help' })
     } catch (err) {
@@ -230,6 +261,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       if (typeof pct === 'number' && Number.isFinite(pct)) {
         const lvl = ctxLevel(pct)
         if (lvl > ctxWarned) ctxPending = true
+        // Wieder gefallen (im Turn komprimiert): die vorgemerkte Warnung gilt nicht mehr (Review 0.8.1)
+        else if (lvl < ctxWarned) ctxPending = false
         ctxWarned = lvl
         if (ctxPending && !facts.turnActive) {
           const at = await $.clock.now()
@@ -477,6 +510,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const ensureOn = async () => {
       if (enabled) return
       enabled = true
+      publishBand($)
       try {
         await save($)
       } catch (err) {
@@ -486,6 +520,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     if (sub === 'on' || sub === 'off') {
       const was = enabled
       enabled = sub === 'on'
+      publishBand($)
       if (!enabled) {
         deskTimer?.cancel()
         deskTimer = null
@@ -588,7 +623,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       if (e.surface !== 'terminal' && e.surface !== 'desktop') return theirs
       // Ebenen anderer Mods (Quick-Replies, sidekick) bleiben über dem Grund, nie neben Clawd, egal wer in der Kette außen liegt
       // (band.ts, docs/BAND.md). Clawd kommt nur neben den Grund (z. B. die Limit-Balken).
-      const { layers, base } = splitBand(theirs)
+      const { layers, slots, base } = splitBand(theirs)
       const now = await $.clock.now()
       // Schnittstelle zu sidekick: dessen `$.state`-Wert lesen. Das Lesen beim Zeichnen abonniert ihn, ein Schreiben von sidekick
       // zeichnet das Band neu (types:3308-3313). Ohne sidekick bleibt er leer.
@@ -598,6 +633,14 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         if (JSON.stringify(v) !== JSON.stringify(facts.sidekick ?? null)) facts = { ...facts, sidekick: v }
       } catch (err) {
         $.ui.log(`clawd-buddy: sidekick state not read: ${String(err)}`, { to: 'debug' })
+      }
+      // Schnittstelle zu spotify (0.9.0): spielt gerade Musik? Nur das Flag, kein Titel. Ohne spotify bleibt es aus.
+      try {
+        const sp = await $.state.get({ plugin: 'spotify', key: 'playing' })
+        const m = musicValue(sp.value)
+        if (m !== (facts.music ?? false)) facts = { ...facts, music: m }
+      } catch (err) {
+        $.ui.log(`clawd-buddy: spotify state not read: ${String(err)}`, { to: 'debug' })
       }
       // Client-Props dürfen kein `undefined` enthalten (die Engine lehnt sie ab): leere Felder weglassen
       const f: Facts = JSON.parse(JSON.stringify(facts)) as Facts
@@ -683,13 +726,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           })
         }
         const { Svg } = $.ui.resolve(e)
-        const deskBand = (source: string, frame?: true) => joinBand(layers, Box({
-          flexDirection: flip ? 'row-reverse' : 'row',
-          alignItems: 'flex-end',
-          // Jede Seite drückt ihren Inhalt selbst nach unten (Spalte, justifyContent flex-end): die Desktop-App setzt alignItems der
-          // Zeile nicht immer um, und je nach Reihenfolge der Mods saßen fremde Balken sonst oben statt auf Höhe von Clawds Füßen.
-          children: [
-            Box({ flexGrow: 1, flexDirection: 'column', justifyContent: 'flex-end', children: [base] }),
+        // Clawd ist Platz 30 der Grund-Zeile (rechts; `side: left` setzt ihn links, aber weiter hinter Spotify), die Zeile baut band.ts
+        const deskBand = (source: string, frame?: true) => joinBand(layers, base, [...slots, slot(SLOTS.clawdBuddy, 'clawd-buddy',
             Box({
               key: 'buddy',
               flexDirection: 'column',
@@ -700,9 +738,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
               // Als Bild (ohne isInteractive): SMIL läuft, und beim Wechsel bleibt das alte stehen, bis das neue fertig ist. Den Rahmen
               // (`frame`) gibt es nur noch im Flacker-Test zum Vergleich.
               children: [Svg({ source, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, ...(frame ? { isInteractive: frame } : {}) })],
-            }),
-          ],
-        }))
+            }), flip ? 'left' : 'right')])
         if (deskDiag !== -1) {
           if (deskDiag === -2) deskDiag = now
           const t = now - deskDiag
@@ -717,54 +753,42 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         }
         const calcStart = performance.now()
         const fNow = deskFacts(now)
-        // Ändern die neuen Fakten an der gezeigten Animation (vorerst) nichts, bleibt das Svg dasselbe: kein Neuladen, kein Flackern
         const shape = `${layers.map((l) => nameOf(l)).join(',')}|${e.props.bodyColumns}|${e.props.maxRows}`
         const fresh = deskFresh || deskSvg === '' || shape !== deskShape
-        const keep = !fresh && !deskForce && deskAsked === 0 && now - deskDrawnAt < DESK_REUSE_MS
-        const div = keep ? desk.divergence(now, fNow, strain) : 0
-        const left = keep ? desk.remaining(now) : 0
-        if (keep && div > DESK_LEAD && left > DESK_LEAD) {
-          // Der Wächter bittet kurz vor der Abweichung bzw. dem Ende um die nächste Zeichnung (Runden zählen ab der letzten echten)
-          deskPlanMs = now - deskDrawnAt + Math.min(div, left)
-          meter.reused += 1
-        } else {
-          // Stand so auf jetzt nachziehen, wie die gezeigte Animation lief, dann ab jetzt mit den neuen Fakten vorausrechnen
-          const plan = desk.draw(now, fNow, strain, DESK_SCALE)
-          if (fresh) {
-            if (!deskFresh && shape !== deskShape && deskSvg !== '') meter.freshShape += 1
-            else meter.freshShown += 1
-          }
-          deskSvg = plan.source
-          deskDrawnAt = now
-          deskShape = shape
-          deskForce = false
-          deskFresh = false
-          deskPlanMs = plan.ticks * DESK_TICK
-          deskChecks = 0
-          deskAsked = 0
-          const calc = performance.now() - calcStart
-          meter.draws += 1
-          meter.planSecs += deskPlanMs / 1000
-          meter.changes += plan.changes
-          meter.chars += plan.source.length
-          meter.calcSum += calc
-          meter.calcMax = Math.max(meter.calcMax, calc)
+        // Zeichnung nur für andere Mods (ohne eigenen Anlass): wird gezählt, aber nicht mehr mit dem alten Svg beantwortet (0.8.1, siehe oben)
+        if (!fresh && !deskForce && deskAsked === 0 && desk.divergence(now, fNow, strain) > DESK_LEAD && desk.remaining(now) > DESK_LEAD) {
+          meter.foreign += 1
         }
+        // Stand so auf jetzt nachziehen, wie die gezeigte Animation lief, dann ab jetzt mit den neuen Fakten vorausrechnen
+        const plan = desk.draw(now, fNow, strain, DESK_SCALE)
+        if (fresh) {
+          if (!deskFresh && shape !== deskShape && deskSvg !== '') meter.freshShape += 1
+          else meter.freshShown += 1
+        }
+        deskSvg = plan.source
+        deskDrawnAt = now
+        deskShape = shape
+        deskForce = false
+        deskFresh = false
+        deskPlanMs = plan.ticks * DESK_TICK
+        deskChecks = 0
+        deskAsked = 0
+        const calc = performance.now() - calcStart
+        meter.draws += 1
+        meter.planSecs += deskPlanMs / 1000
+        meter.changes += plan.changes
+        meter.chars += plan.source.length
+        meter.calcSum += calc
+        meter.calcMax = Math.max(meter.calcMax, calc)
         const drawMs = performance.now() - drawStart
         meter.drawSum += drawMs
         meter.drawMax = Math.max(meter.drawMax, drawMs)
         meter.othersSum += othersMs
         return deskBand(deskSvg)
       }
-      // Eine Zeile: was andere Mods ins Band zeichnen (z. B. Limit-Balken), steht links und füllt den Platz; Clawd unten rechts daneben
-      return joinBand(layers, Box({
-        flexDirection: flip ? 'row-reverse' : 'row',
-        alignItems: 'flex-end',
-        children: [
-          Box({ flexGrow: 1, flexDirection: 'column', justifyContent: 'flex-end', children: [base] }),
-          Box({ flexDirection: 'column', justifyContent: 'flex-end', children: [Client({ key: 'buddy', module: './buddy.ts', props: buddyProps })] }),
-        ],
-      }))
+      // Eine Zeile: Clawd ist ein Platz (30) neben den anderen Plätzen; was sonst im Band steht, füllt die Mitte
+      return joinBand(layers, base, [...slots, slot(SLOTS.clawdBuddy, 'clawd-buddy',
+        Box({ flexDirection: 'column', justifyContent: 'flex-end', children: [Client({ key: 'buddy', module: './buddy.ts', props: buddyProps })] }), flip ? 'left' : 'right')])
     } catch (err) {
       $.ui.log(`clawd-buddy ui.render: ${String(err)}`, { to: 'debug' })
       return theirs

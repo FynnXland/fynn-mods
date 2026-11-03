@@ -15,8 +15,9 @@ import * as transitions from './clips/transitions.ts'
 import * as sidekick from './clips/sidekick.ts'
 import * as extra from './clips/extra.ts'
 import * as hints from './clips/hints.ts'
+import * as music from './clips/music.ts'
 
-const groups = [idle, fun, work, agent, wait, done, night, mouse, transitions, sidekick, extra, hints]
+const groups = [idle, fun, work, agent, wait, done, night, mouse, transitions, sidekick, extra, hints, music]
 
 export const ALL_CLIPS: readonly ClipDef[] = groups.flatMap((g) => g.CLIPS)
 /**
@@ -36,5 +37,5 @@ export const CAT_LABEL: Readonly<Record<string, string>> = {
   wait10: 'Warten (> 10 s)', wait60: 'Warten (> 60 s)', waitUser: 'Wartet auf dich', watching: 'Du tippst',
   sk_check: 'sidekick prüft deine Nachricht', sk_stop: 'sidekick hält deine Nachricht an', sk_handoff: 'sidekick baut einen neuen Chat', sk_fresh: 'Neuer Chat ist da',
   compact: 'Komprimiert den Verlauf', skill: 'Skill startet', ctx_full: 'Kontext fast voll', done_long: 'Langer Turn geschafft',
-  done: 'Fertig', oops: 'Fehler', night: 'Nacht', morning: 'Morgen', mouse: 'Maus', transition: 'Übergänge',
+  music: 'Musik (spotify spielt)', done: 'Fertig', oops: 'Fehler', night: 'Nacht', morning: 'Morgen', mouse: 'Maus', transition: 'Übergänge',
 }

@@ -6,7 +6,8 @@ import { planPath } from '../hooks/clipdef.ts'
 import { ARMS, CROSS_L, EYES, EYES_ONE, FRONT, FX, FY, H, LEGS, MOUTH, PAL, POSES, W, compose, propSprite } from '../hooks/stage.ts'
 import type { Pose } from '../hooks/stage.ts'
 import { resolveClip } from '../hooks/clipdef.ts'
-import { captureClip, newEngine } from '../hooks/capture.ts'
+import { captureClip, mulberry32, newEngine } from '../hooks/capture.ts'
+import { createEngine } from '../hooks/engine.ts'
 import { lintFrames } from '../hooks/lint.ts'
 import { PLAN_TICKS, SOURCE_MAX, createDesk } from '../hooks/desk.ts'
 import { NO_FACTS, NO_STRAIN } from '../hooks/mood.ts'
@@ -999,4 +1000,190 @@ test('Desktop: ein Eingriff wirkt ab der Zeichnung sofort (keine Übergabe mehr,
   d.request('boop')
   d.draw(t1 + 5000, calm, NO_STRAIN, 4)
   expect(d.engine.S.annoy).toBe(before + 1)
+})
+
+// ---- 0.8.1: Logik-Review (Stimmung, Laune, Auswahl)
+
+test('0.8.1: Endet die Nacht, während er schläft und niemand etwas tut, wacht er auf (Augen reiben), statt „im Schlaf“ zu bleiben', { timeoutMs: 60000 }, () => {
+  const e = newEngine(LIB, 4, { hour: 2, idleSeconds: 6 })
+  e.start()
+  for (let t = 0; t < 4000 && e.S.sleepStage < 3; t++) e.tick()
+  expect(e.S.sleepStage, 'nachts eingeschlafen').toBe(3)
+  e.set({ hour: 8 })
+  const seen: string[] = []
+  for (let t = 0; t < 2000 && e.S.sleepStage > 0; t++) {
+    e.tick()
+    const n = e.S.play?.clip.name ?? ''
+    if (seen[seen.length - 1] !== n) seen.push(n)
+  }
+  expect(e.S.sleepStage, `aufgewacht (${seen.join(' > ')})`).toBe(0)
+  for (let t = 0; t < 400; t++) {
+    e.tick()
+    const n = e.S.play?.clip.name ?? ''
+    if (seen[seen.length - 1] !== n) seen.push(n)
+  }
+  expect(seen, seen.join(' > ')).toContain('rub_eyes')
+})
+
+test('0.8.1: Beginnt die Nacht nach langem Leerlauf, kommt erst ruhiger Nacht-Zeitvertreib oder Gähnen, nicht sofort der Schlaf', { timeoutMs: 60000 }, () => {
+  const e = newEngine(LIB, 2, { hour: 22.9, idleSeconds: 6 })
+  e.start()
+  for (let t = 0; t < 3000; t++) e.tick() // abends lange untätig
+  e.set({ hour: 23.1 })
+  expect(e.S.idleTicks).toBeLessThanOrEqual(e.S.idleLimit + 1)
+  // /clawd nap setzt die Leerlaufzeit mit und schläft weiter gleich ein
+  const n = newEngine(LIB, 2, { hour: 12, idleSeconds: 6 })
+  n.start()
+  for (let t = 0; t < 3000; t++) n.tick()
+  const before = n.S.idleTicks
+  n.set({ hour: 23.5, nightStart: 22, nightEnd: 7, idleSeconds: 1 })
+  expect(n.S.idleTicks).toBe(before)
+})
+
+test('0.8.1: Mit einem Helfer bleibt „fertig“ abwechslungsreich (vorher immer derselbe Clip); weniger Bewegung winkt dem Helfer nicht pausenlos', { timeoutMs: 120000 }, () => {
+  const done = new Set<string>()
+  for (let seed = 1; seed <= 30; seed++) {
+    const e = newEngine(LIB, seed)
+    e.start()
+    e.set({ agents: 1 })
+    for (let t = 0; t < 120; t++) e.tick()
+    e.setMood('done')
+    for (let t = 0; t < 200; t++) {
+      e.tick()
+      const c = e.S.play?.clip
+      if (c && c.cat === 'done') {
+        done.add(c.name)
+        break
+      }
+    }
+  }
+  expect(done.size, [...done].join(', ')).toBeGreaterThan(1)
+  const r = createEngine({ clips: LIB.clips, props: LIB.props, rng: mulberry32(3), hour: 12, reduced: true })
+  r.start()
+  r.set({ agents: 1 })
+  r.setMood('work_agent')
+  const starts: string[] = []
+  let prev = ''
+  for (let t = 0; t < 4000; t++) {
+    r.tick()
+    const n = r.S.play?.clip.name ?? ''
+    if (n !== prev) starts.push(n)
+    prev = n
+  }
+  expect(starts.filter((n) => n === 'wave_helper').length, starts.slice(0, 12).join(' > ')).toBeLessThanOrEqual(1)
+})
+
+// ---- 0.9.0: Mitwippen zur Musik (spotify.playing)
+
+/** Welche Clips laufen in `ticks` Takten (Namen in Startreihenfolge). */
+function clipsOver(e: ReturnType<typeof newEngine>, ticks: number): string[] {
+  const seen: string[] = []
+  let prev = ''
+  for (let t = 0; t < ticks; t++) {
+    e.tick()
+    const n = e.S.play?.clip.name ?? ''
+    if (n !== prev) seen.push(n)
+    prev = n
+  }
+  return seen
+}
+const MUSIC = new Set(['music_bob', 'music_phones', 'music_airguitar', 'music_nod_night'])
+
+test('0.9.0: Musik im Leerlauf: meist Musik-Clips, ohne Musik nie; bei Arbeit nie; beim Tippen und langen Warten mit dabei', { timeoutMs: 120000 }, () => {
+  const count = (music: boolean, mood: string, seed: number) => {
+    const e = newEngine(LIB, seed, { hour: 15, idleSeconds: 6 })
+    e.start()
+    e.set({ music })
+    if (mood !== 'idle') e.setMood(mood)
+    const seen = clipsOver(e, 4000)
+    return { seen, n: seen.filter((n) => MUSIC.has(n)).length }
+  }
+  let idleMusic = 0
+  let idleAll = 0
+  for (const seed of [1, 2, 3]) {
+    const on = count(true, 'idle', seed)
+    idleMusic += on.n
+    idleAll += on.seen.filter((n) => !n.includes('_outro') && !n.includes('ausklang')).length
+    expect(count(false, 'idle', seed).n, 'ohne Musik').toBe(0)
+    expect(count(true, 'work_write', seed).n, 'bei Arbeit').toBe(0)
+  }
+  expect(idleMusic, 'im Leerlauf mit Musik').toBeGreaterThan(idleAll * 0.4)
+  expect([1, 2, 3, 4].some((s) => count(true, 'watching', s).n > 0), 'beim Tippen').toBe(true)
+  expect([1, 2, 3, 4].some((s) => count(true, 'wait10', s).n > 0), 'beim langen Warten').toBe(true)
+})
+
+test('0.9.0: Musik nachts: nur leises Nicken, er schläft nicht ein, solange sie läuft; danach schon', { timeoutMs: 120000 }, () => {
+  const e = newEngine(LIB, 5, { hour: 1, idleSeconds: 6 })
+  e.start()
+  e.set({ music: true })
+  const seen = clipsOver(e, 6000)
+  expect(seen.filter((n) => MUSIC.has(n)).every((n) => n === 'music_nod_night'), seen.join(' > ')).toBe(true)
+  expect(seen).toContain('music_nod_night')
+  expect(e.S.sleepStage, 'wach, solange Musik läuft').toBe(0)
+  e.set({ music: false })
+  for (let t = 0; t < 4000 && e.S.sleepStage < 3; t++) e.tick()
+  expect(e.S.sleepStage, 'nach der Musik eingeschlafen').toBe(3)
+})
+
+test('0.9.0: Kopfhörer bleiben auf, solange die Musik läuft; hört sie auf, nimmt er sie ab und packt sie ein', { timeoutMs: 60000 }, () => {
+  const e = newEngine(LIB, 1, { hour: 15, idleSeconds: 6 })
+  e.start()
+  e.set({ music: true })
+  e.play('music_phones')
+  for (let t = 0; t < 60; t++) e.tick() // Intro: aufsetzen
+  e.S.gallery = null // wie nach einer Demo: ab jetzt wählt die Engine selbst
+  // 15 s Musik: dieselbe Schleife, kein erneutes Aufsetzen
+  const during = clipsOver(e, 200)
+  expect(during, 'dieselbe Schleife, kein neuer Clip').toEqual(['music_phones'])
+  expect(e.S.play?.clip.name).toBe('music_phones')
+  // Musik aus: binnen ~5 s abgesetzt (Ausklang), danach keine Kopfhörer mehr im Bild
+  e.set({ music: false })
+  let off = -1
+  for (let t = 0; t < 200 && off < 0; t++) {
+    e.tick()
+    if (e.S.play?.clip.name !== 'music_phones') off = t
+  }
+  expect(off, 'verlässt die Kopfhörer-Schleife').toBeGreaterThanOrEqual(0)
+  for (let t = 0; t < 120; t++) e.tick()
+  expect(e.pose().props.some((p) => p[0].startsWith('music_phones')), 'Kopfhörer weggepackt').toBe(false)
+})
+
+test('0.9.0: Musik-Clips: Lint ohne Befund (nichts taucht auf, alles geräumt), Luftgitarre nur bei guter Laune, der erste ist der ruhigste', { timeoutMs: 120000 }, () => {
+  for (const name of MUSIC) {
+    for (const seed of [1, 2]) expect(lintFrames(captureClip(LIB, name, { seed, hour: name === 'music_nod_night' ? 1 : 15 }), ALL_PROPS), `${name} Seed ${seed}`).toEqual([])
+  }
+  const music = ALL_CLIPS.filter((c) => c.cat === 'music')
+  expect(music[0].name).toBe('music_bob')
+  expect(music.find((c) => c.name === 'music_airguitar')?.temper).toBe('good')
+  expect(music.filter((c) => c.when === 'night').map((c) => c.name)).toEqual(['music_nod_night'])
+})
+
+test('0.9.0: Desktop: ein Wechsel der Musik zählt sofort als Abweichung (gleiche Fakten sonst nicht), und die neue Animation zeigt Musik-Clips', { timeoutMs: 60000 }, () => {
+  const t0 = new Date('2026-11-03T15:00:00').getTime()
+  const calm = { ...NO_FACTS }
+  const d = createDesk({ seed: 3, nightStart: 23, nightEnd: 6, idleSeconds: 6, reduced: false, flip: false })
+  d.draw(t0, calm, NO_STRAIN, 4)
+  expect(d.divergence(t0 + 750, calm, NO_STRAIN), 'gleiche Fakten').toBeGreaterThan(1000)
+  expect(d.divergence(t0 + 750, { ...calm, music: true }, NO_STRAIN), 'Musik an').toBe(0)
+  // Mit Musik gezeichnet: binnen 20 s (nach der Schleifengrenze des Atmens) läuft ein Musik-Clip; ohne Musik keiner
+  const musicSeen = (music: boolean) => {
+    const x = createDesk({ seed: 3, nightStart: 23, nightEnd: 6, idleSeconds: 6, reduced: false, flip: false })
+    x.draw(t0, calm, NO_STRAIN, 4)
+    x.draw(t0 + 750, { ...calm, music }, NO_STRAIN, 4)
+    let seen = false
+    for (let t = 1000; t <= 20_000 && !seen; t += 250) {
+      x.catchUp(t0 + t)
+      if (x.engine.S.play?.clip.cat === 'music') seen = true
+    }
+    return seen
+  }
+  expect(musicSeen(true)).toBe(true)
+  expect(musicSeen(false)).toBe(false)
+})
+
+test('0.9.0: Weniger Bewegung: im Leerlauf kein Mitwippen (wie kein Zeitvertreib)', { timeoutMs: 60000 }, () => {
+  const e = createEngine({ clips: LIB.clips, props: LIB.props, rng: mulberry32(3), hour: 15, idleSeconds: 6, reduced: true })
+  e.start()
+  e.set({ music: true })
+  expect(clipsOver(e, 4000).filter((n) => MUSIC.has(n))).toEqual([])
 })

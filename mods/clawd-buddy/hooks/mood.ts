@@ -62,6 +62,8 @@ export type Facts = {
   compactSince?: number
   /** Zeitpunkt (ms), an dem zuletzt ein Skill startete (skill.prompt): kurz `skill`. */
   skillAt?: number
+  /** Spielt spotify gerade Musik? Aus dessen `$.state`-Wert `spotify.playing` (types/index.d.ts, 0.9.0). Ohne spotify leer. */
+  music?: boolean
   /**
    * Zeitpunkt (ms), an dem er zeigt, dass das Kontextfenster voll wird (eine Stufe aus CTX_WARN überschritten; gezeigt am Turn-Ende,
    * nie mitten in der Arbeit): kurz `ctx_full`. Nur die Prozentzahl aus `session.measure` zählt (types:10771), nie der Verlauf.
@@ -232,6 +234,11 @@ export const SK_FRESH_MS = 6_000
  * höchstens (ms). Die Prüfung dauert sonst 1–6 s, der Dialog wartet auf Fynn, die Übergabe braucht bis ~45 s.
  */
 export const SK_MAX_MS = { check: 30_000, stop: 10 * 60_000, handoff: 3 * 60_000, fresh: SK_FRESH_MS } as const
+/** Wert `spotify.playing` prüfen (ein fremder Mod könnte ihn umschreiben): nur `{ playing: true }` heißt Musik. */
+export function musicValue(v: unknown): boolean {
+  return !!v && typeof v === 'object' && (v as { playing?: unknown }).playing === true
+}
+
 /** Nur gültige Werte von sidekick übernehmen (ein dritter Mod könnte ihn umschreiben, Review K2), sonst `null`. */
 export function sidekickValue(v: unknown): Facts['sidekick'] {
   if (!v || typeof v !== 'object') return null
@@ -260,7 +267,6 @@ export const COMPACT_MAX_MS = 5 * 60_000
 
 /** Ein Subagent ohne Aktivität so lange gilt als beendet (falls sein Ende nicht gemeldet wurde). */
 export const AGENT_STALE_MS = 600_000 // 10 min: Subagenten denken im Hintergrund auch mal länger ohne Tool-Aufruf
-/** Ab so vielen gleichzeitig laufenden Subagenten: Schwarm (Fynn: "ganz, ganz viele, ein bisschen übertrieben"). */
 /** So lange nach dem Ende eines Subagenten gilt `agent_done` (ms). */
 export const AGENT_DONE_MS = 4_000
 /** So lange ohne Eingabe in dieser Sitzung gilt als „weg“; danach begrüßt er dich mit einer Aufsteh-Animation (statt nach Uhrzeit). */

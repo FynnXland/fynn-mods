@@ -125,7 +125,7 @@ function tick(surface: ClientSurface<State>) {
     const t = deriveTemper(c.props.strain, now)
     st.engine.set({ temper: t.temper, tired: t.tired })
   }
-  st.engine.set({ agents: activeAgents(c.props.facts, now) })
+  st.engine.set({ agents: activeAgents(c.props.facts, now), music: !!c.props.facts.music })
   const m = deriveMood(c.props.facts, now)
   if (m !== c.mood) {
     c.mood = m

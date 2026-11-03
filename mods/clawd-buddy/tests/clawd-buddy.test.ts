@@ -1,6 +1,6 @@
 // clawd-buddy: Tests des Mods (Hooks-Modul + Client-Modul) nach SPEC.md → Tests. Animationsdaten und Engine testet anim.test.ts.
 import { expect, mock, test } from 'claude-code/testing'
-import { LONG_TURN_MS, NO_FACTS, NO_STRAIN, SETBACK, addHit, ctxLevel, deriveMood, deriveTemper, shellKind, sidekickValue, specialDay, strainTurnEnd, strainTurnStart, toolKind } from '../hooks/mood.ts'
+import { LONG_TURN_MS, NO_FACTS, NO_STRAIN, SETBACK, addHit, ctxLevel, deriveMood, deriveTemper, shellKind, musicValue, sidekickValue, specialDay, strainTurnEnd, strainTurnStart, toolKind } from '../hooks/mood.ts'
 import { ALL_CLIPS } from '../hooks/library.ts'
 import { CLIP_EN, T, clipLabel, langOf, num } from '../hooks/i18n.ts'
 import type { Facts, Strain } from '../hooks/mood.ts'
@@ -57,10 +57,14 @@ test('Band: Terminal zeigt die Figur in Halbblock-Auflösung (Client), fremder I
   await ui.unmount()
 })
 
-/** Das Bild, das ein Svg aus desk.ts zur Zeit `ms` nach Beginn zeigt: alle sichtbaren Kachelbilder (SMIL: visibility, diskrete keyTimes). */
+/**
+ * Das Bild, das ein Svg aus desk.ts zur Zeit `ms` nach dem Laden zeigt: alle sichtbaren Kachelbilder (SMIL: visibility, diskrete keyTimes).
+ * Ein negativer Beginn (`begin="-0.040s"`, seit 0.8.1) heißt: die Zeitliste läuft beim Laden schon so lange.
+ */
 function frameAt(svg: string, ms: number): string {
   const dur = Number(/dur="([\d.]+)s"/.exec(svg)?.[1] ?? 1) * 1000
-  const at = Math.min(1, ms / dur)
+  const lag = Number(/begin="-([\d.]+)s"/.exec(svg)?.[1] ?? 0) * 1000
+  const at = Math.min(1, (ms + lag) / dur)
   let out = ''
   for (const g of svg.match(/<g visibility="\w+">.*?<\/g>/g) ?? []) {
     const body = g.replace(/<g[^>]*>|<animate[^>]*\/>|<\/g>/g, '')
@@ -164,36 +168,38 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
   on('turn.complete', () => ({ text: '' }))
   on('session.measure', ($: unknown, e: any) => ({ changed: e.changed }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  for (const [i, ms] of [2025, 1275, 3075].entries()) { // ganze Takte: ein Rest unter 75 ms verschöbe die Erwartung um ein Bild; unter DESK_REUSE_MS
+  for (const [i, ms] of [2025, 1275, 3075].entries()) { // ganze Takte
     const before = await svgOf(ui)
     await clock.advance(ms)
-    // Neu zeichnen ohne neue Fakten (z. B. für einen anderen Mod): dasselbe Svg, kein Neuladen
+    // Neu zeichnen ohne neue Fakten (z. B. für einen anderen Mod): neu gerechnet ab dem Bild, das gerade zu sehen ist (0.8.1). Startet
+    // die App SMIL beim Neuzeichnen neu, zeigt sie so genau das Bild, das dran war, statt an den Anfang des alten Svg zurückzufallen
     await ui.redraw()
-    expect(await svgOf(ui)).toBe(before)
+    const again = await svgOf(ui)
+    expect(frameAt(again, 0), `Durchgang ${i}: fremde Zeichnung setzt fort`).toBe(frameAt(before, ms))
     // Neue Fakten, die am Bild nichts ändern (Limit-Stand weit unter voll): keine Bitte ums Neuzeichnen (jede ließe die App auch die
     // Zeilen anderer Mods neu anfordern, deren Hover-Leiste flackert), und auch beim Zeichnen für andere dasselbe Svg
     const k0 = invalidates
     await ($ as any).session.measure({ context: { window: 200000 }, rateLimits: [{ kind: 'five_hour', percentUsed: 10 + i, resetsAt: '2030-01-01T10:00:00Z' }], changed: ['rateLimits'] })
     expect(invalidates, `Durchgang ${i}: Limit-Stand ohne Neuzeichnung`).toBe(k0)
+    // Zur selben Uhrzeit noch einmal gezeichnet: byte-gleich (kein Zufall verbraucht, nichts vorgerückt)
     await ui.redraw()
-    expect(await svgOf(ui)).toBe(before)
+    expect(await svgOf(ui)).toBe(again)
     // Ein Ereignis, das etwas ändert: neues Svg, das mit dem Bild beginnt, das das vorige zu dieser Zeit zeigte
     if (i % 2 === 0) await $.turn.start({ text: 'los', turnId: 't' + i })
     else await $.turn.complete({ answer: 'ok', durationMs: 10, isAborted: false, reason: 'answer', turnId: 't' + (i - 1) } as any)
     expect(invalidates, `Durchgang ${i}: Ereignis zeichnet neu`).toBeGreaterThan(k0)
     await ui.redraw()
     const after = await svgOf(ui)
-    expect(after).not.toBe(before)
-    // Der Stand rückt in ganzen Takten (75 ms) vor
+    expect(after, `Durchgang ${i}: Ereignis ändert das Bild`).not.toBe(again)
     expect(frameAt(after, 0)).toMatch(/#D77757/i)
-    expect(frameAt(after, 0), `Durchgang ${i}`).toBe(frameAt(before, Math.floor(ms / 75) * 75))
+    expect(frameAt(after, 0), `Durchgang ${i}`).toBe(frameAt(before, ms))
   }
   // Eingriffe setzen ebenso lückenlos fort: nach /clawd boop bzw. demo beginnt die nächste Animation mit dem Bild, das die vorige zeigte
   for (const args of ['boop', 'demo wave_question']) {
     await $.command.run({ command: 'clawd', args })
     await ui.redraw()
     const prev = await svgOf(ui)
-    // Älter als DESK_REUSE_MS: neu gezeichnet, nach dem Zeitplan der gezeigten Animation nachgezogen (ganze Takte)
+    // Später neu gezeichnet: nach dem Zeitplan der gezeigten Animation nachgezogen
     await clock.advance(6000)
     await ui.redraw()
     const next = await svgOf(ui)
@@ -203,7 +209,7 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
   // /clawd on, obwohl er an ist: neu gezeichnet, weiter ein einziges Bild
   {
     const before = await svgOf(ui)
-    // 1,5 s später (ohne den Eingriff gäbe es in dieser Zeit dasselbe Svg weiter)
+    // 1,5 s später
     await clock.advance(1500)
     await $.command.run({ command: 'clawd', args: 'on' })
     await ui.redraw()
@@ -217,7 +223,7 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
     await ui.redraw()
     expect(await svgOf(ui)).not.toBe(before)
   }
-  // Älter als 5 s: nicht mehr weitergeben, neu zeichnen (ein unerkannter Neustart des Bilds spränge sonst weit zurück)
+  // Später neu gezeichnet: anderes Svg
   {
     const before = await svgOf(ui)
     await clock.advance(6000)
@@ -226,7 +232,7 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
   }
   // /clawd status nennt die Messwerte der Desktop-Zeichnung und beginnt danach neu
   const st = await $.command.run({ command: 'clawd', args: 'status' })
-  expect(st.text).toMatch(/draws \(.*\/min\), \d+ times kept unchanged \(no reload\), animations avg .* s with .* frame changes/)
+  expect(st.text).toMatch(/draws \(.*\/min\), \d+ of them only for other mods \(recomputed from the frame on screen\), animations avg .* s with .* frame changes/)
   expect(st.text).toMatch(/; [1-9]\d* events without redraw \(picture unchanged\)/)
   // Tippen: das erste Zeichen zeichnet neu, danach höchstens alle 3 s (vorher je Sekunde)
   const k = invalidates
@@ -299,11 +305,11 @@ test('Band: Desktop: eine abgelehnte Periode beendet den Wächter still; ein Zei
   now += 1000
   await ui.redraw()
   expect(periods).toBe(first)
-  // ~2 s ohne Runde: Wächter neu gestartet, dasselbe Bild (kein erzwungenes Neuzeichnen, das flackern könnte)
+  // ~2 s ohne Runde: Wächter neu gestartet, das Bild setzt nahtlos fort (nicht als „wieder angezeigt“ gezählt, keine Begrüßung)
   now += 1000
   await ui.redraw()
   expect(periods).toBe(first + 1)
-  expect(await svgOf(ui)).toBe(svg)
+  expect(frameAt(await svgOf(ui), 0)).toBe(frameAt(svg, 2000))
   expect(logs.some((l) => /watcher stalled/.test(l))).toBe(true)
   await ui.unmount()
 })
@@ -1061,5 +1067,215 @@ test('Kontext im Mod: neue Stufe zeigt er am Turn-Ende, jede Stufe einmal; nach 
   await ui.redraw()
   p = await clientProps(ui)
   expect(deriveMood(p.facts, p.now)).toBe('ctx_full')
+  // 0.8.1: Im Turn erreicht, im selben Turn komprimiert (Stufe fällt): am Turn-Ende kein Karton, sondern „fertig“
+  await clock.advance(10_000)
+  await measure(20)
+  await clock.advance(10_000)
+  await $.turn.start({ text: 'los', turnId: 't9' })
+  await measure(72)
+  await clock.advance(500)
+  await measure(15)
+  await $.turn.complete({ answer: 'ok', durationMs: 1000, isAborted: false, reason: 'answer', turnId: 't9' })
+  await ui.redraw()
+  p = await clientProps(ui)
+  // (der fünfte Erfolg in Folge zeigt den Pokal; vor 0.8.1 kam hier ctx_full)
+  expect(['done', 'streak'], 'im Turn komprimiert').toContain(deriveMood(p.facts, p.now))
   await ui.unmount()
+})
+
+// ---- 0.8.0: Platz 30 der Grund-Zeile und Breitenmeldung für spotify (docs/BAND.md)
+
+test('0.8.0: Clawd ist Platz 30 (rechts) neben den anderen Plätzen; fremde Plätze und Ebenen bleiben', async ($, on) => {
+  mock.clock(on)
+  const store = new Map<string, unknown>()
+  on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
+  on('store.set', ($: unknown, e: any) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('ui.log', () => ({ value: undefined }))
+  // Weiter innen: limit-bars (Platz 10) und spotify (Platz 20)
+  const slot = (key: string) => ({ type: 'Box', props: { key, flexShrink: 0 }, children: [key] })
+  on('ui.render', () => ({ type: 'Box', props: { key: 'band-row', flexDirection: 'row' }, children: [slot('slot:20:spotify'), slot('slot:10:limit-bars'), { type: 'Box', props: { key: 'band-rest', flexGrow: 1 }, children: [{ type: 'engine', ref: 0 }] }] }))
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    const tree = (await ui.drawn()) as any
+    expect(tree.props.key).toBe('band-row')
+    const keys = tree.children.map((c: any) => c.props.key)
+    expect(keys).toEqual(['slot:10:limit-bars', 'slot:20:spotify', 'band-rest', 'slot:30:clawd-buddy:right'])
+    await ui.unmount()
+  }
+})
+
+test('0.8.0: die Platzbreite geht als $.state clawd-buddy.band an spotify: 400 px im Desktop, null im Terminal und wenn Clawd aus ist', async ($, on) => {
+  mock.clock(on)
+  const store = new Map<string, unknown>()
+  const writes: unknown[] = []
+  on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
+  on('store.set', ($: unknown, e: any) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('ui.log', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  on('state.set', ($: unknown, e: any) => {
+    writes.push(e.value)
+    return { value: undefined } as never
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  expect(writes.at(-1)).toEqual({ width: 400 })
+  await $.command.run({ command: 'clawd', args: 'off' } as never)
+  expect(writes.at(-1)).toBeNull()
+  await $.command.run({ command: 'clawd', args: 'on' } as never)
+  expect(writes.at(-1)).toEqual({ width: 400 })
+})
+
+// ---- 0.8.1: Zurückspringen im Desktop, wenn ein anderer Band-Mod neu zeichnet (Fynn, 2026-11-03)
+
+test('0.8.1: spotify zeichnet jede Sekunde neu (ohne neuen Clip): Clawd setzt jedes Mal am gezeigten Bild fort, Platz und key bleiben, keine eigene Bitte', async ($, on) => {
+  const clock = mock.clock(on)
+  const store = new Map<string, unknown>()
+  on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
+  on('store.set', ($: unknown, e: any) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('ui.log', () => ({ value: undefined }))
+  let invalidates = 0
+  on('ui.invalidate', () => {
+    invalidates++
+    return { value: undefined }
+  })
+  // Weiter innen: spotify spielt, sein Platz 20 zeigt die laufende Zeit (jede Zeichnung ein anderer Text), limit-bars Platz 10
+  let secs = 0
+  const box = (key: string, kids: unknown[]) => ({ type: 'Box', props: { key, flexShrink: 0 }, children: kids })
+  on('ui.render', () => ({
+    type: 'Box', props: { key: 'band-row', flexDirection: 'row' },
+    children: [box('slot:10:limit-bars', ['5h 40 %']), box('slot:20:spotify', [`Titel 0:${String(secs).padStart(2, '0')}`])],
+  }))
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  // Er schlendert nach links und zurück (wie in Fynns Meldung, „läuft von links nach rechts“)
+  await $.command.run({ command: 'clawd', args: 'demo stroll' })
+  await ui.redraw()
+  let prev = await svgOf(ui)
+  const k = invalidates
+  let wouldJump = 0
+  for (let i = 0; i < 20; i++) {
+    // 1 s ist kein ganzer Takt (75 ms): der Rest geht als SMIL-Beginn mit
+    await clock.advance(1000)
+    secs += 1
+    await ui.redraw()
+    const tree = (await ui.drawn()) as any
+    expect(tree.children.map((c: any) => c.props.key), `Sekunde ${i + 1}: Plätze`).toEqual(['slot:10:limit-bars', 'slot:20:spotify', 'band-rest', 'slot:30:clawd-buddy:right'])
+    expect((await ui.find({ type: 'Box', key: 'buddy' }))?.props.flexShrink).toBe(0)
+    const next = await svgOf(ui)
+    // Was die App zeigt, wenn sie SMIL beim Neuzeichnen neu startet: den Anfang des neuen Svg. Das muss das Bild sein, das das vorige
+    // gerade zeigte. Mit dem alten Svg (bis 0.8.0) wäre es dessen Anfang gewesen, Sekunden zurück.
+    expect(frameAt(next, 0), `Sekunde ${i + 1}`).toBe(frameAt(prev, 1000))
+    if (frameAt(prev, 0) !== frameAt(prev, 1000)) wouldJump += 1
+    prev = next
+  }
+  // Gegenprobe: in dieser Zeit hat er sich bewegt, ein Weitergeben des alten Svg wäre sichtbar zurückgesprungen
+  expect(wouldJump).toBeGreaterThan(5)
+  expect(prev).toMatch(/<animate [^>]*begin="-0\.\d{3}s"/)
+  // Clawd selbst bittet in den 20 s um keine Zeichnung (das tat nur spotify)
+  expect(invalidates - k).toBe(0)
+  const st = await $.command.run({ command: 'clawd', args: 'status' })
+  expect(st.text).toMatch(/\b\d+ of them only for other mods/)
+  await ui.unmount()
+})
+
+// ---- 0.9.0: Mitwippen zur Musik (spotify.playing)
+
+test('0.9.0: Clawd liest spotify.playing beim Zeichnen: nur { playing: true } zählt; im Desktop rechnet ein Wechsel sofort neu; ohne spotify bleibt es aus', async ($, on) => {
+  const clock = mock.clock(on)
+  const { logs } = stubs(on)
+  let sp: unknown = { playing: true }
+  let refuse = false
+  on('state.get', ($: unknown, e: any) => {
+    if (e.plugin === 'spotify' && refuse) return { deny: 'nicht lesbar' } as never
+    return { value: e.plugin === 'spotify' && e.key === 'playing' ? { value: sp, version: 1 } : { value: undefined, version: 0 } }
+  })
+  const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await clientProps(term)).facts.music, logs.join(' | ')).toBe(true)
+  sp = { playing: false }
+  await term.redraw()
+  expect((await clientProps(term)).facts.music).toBe(false)
+  await term.unmount()
+  // Desktop: Musik geht an, ohne dass sich die Stimmung ändert; das nächste Zeichnen (spotify schreibt, die App zeichnet) rechnet neu
+  const desk = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const quiet = await svgOf(desk)
+  await clock.advance(750)
+  sp = { playing: true }
+  await desk.redraw()
+  const playing = await svgOf(desk)
+  expect(playing).not.toBe(quiet)
+  // Fehler beim Lesen: das Band bleibt, die Musik gilt weiter wie zuletzt gelesen, ein Debug-Eintrag
+  refuse = true
+  await clock.advance(750)
+  await desk.redraw()
+  expect((await desk.findAll({ type: 'Svg' })).length).toBe(1)
+  expect(logs.some((l) => /spotify state not read/.test(l))).toBe(true)
+  await desk.unmount()
+})
+
+test('0.9.0: musicValue: nur { playing: true } heißt Musik', () => {
+  expect(musicValue({ playing: true })).toBe(true)
+  for (const v of [null, undefined, {}, { playing: false }, { playing: 'yes' }, { playing: 1 }, 'playing', true]) expect(musicValue(v), JSON.stringify(v)).toBe(false)
+})
+
+test('0.9.1: nach /clear, /resume und /branch meldet Clawd die Platzbreite sofort wieder (classic.SessionStart), nicht nach Start oder Komprimieren', async ($, on) => {
+  mock.clock(on)
+  const store = new Map<string, unknown>()
+  const writes: unknown[] = []
+  on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
+  on('store.set', ($: unknown, e: any) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('ui.log', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  on('state.set', ($: unknown, e: any) => {
+    writes.push(e.value)
+    return { value: undefined } as never
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('classic.SessionStart', () => ({}))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  expect(writes).toEqual([{ width: 400 }])
+  for (const source of ['clear', 'resume', 'fork'] as const) {
+    await $.classic.SessionStart({ source })
+    expect(writes.at(-1), source).toEqual({ width: 400 })
+  }
+  expect(writes.length).toBe(4)
+  // Start und Komprimieren setzen $.state nicht zurück: kein Schreiben
+  for (const source of ['startup', 'compact'] as const) await $.classic.SessionStart({ source })
+  expect(writes.length).toBe(4)
+})
+
+test('0.9.1: /clear mit abgelehntem state.set: der Hook geht durch, nichts wirft; vor session.start schreibt er nichts', async ($, on) => {
+  mock.clock(on)
+  const store = new Map<string, unknown>()
+  let tries = 0
+  on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
+  on('store.set', ($: unknown, e: any) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('ui.log', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  on('state.set', () => {
+    tries += 1
+    return { deny: 'abgelehnt' } as never
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('classic.SessionStart', () => ({ value: 'durch' }) as never)
+  // vor session.start (z. B. --resume): nichts
+  await $.classic.SessionStart({ source: 'resume' })
+  expect(tries).toBe(0)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  const before = tries
+  await $.classic.SessionStart({ source: 'clear' })
+  expect(tries).toBe(before + 1)
 })

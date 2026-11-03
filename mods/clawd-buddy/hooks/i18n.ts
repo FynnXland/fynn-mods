@@ -26,7 +26,7 @@ type Texts = {
   status: (o: { on: boolean; mood: string; temper: string; tired: number; annoy: number; desk: string }) => string
   mood: { veryGrumpy: string; grumpy: string; great: string; good: string; even: string }
   deskNone: string
-  desk: (o: { secs: string; draws: number; reused: number; perMin: string; planSecs: string; changes: string; kb: string; calcAvg: string; calcMax: string; drawAvg: string; drawMax: string; others: string }) => string
+  desk: (o: { secs: string; draws: number; foreign: number; perMin: string; planSecs: string; changes: string; kb: string; calcAvg: string; calcMax: string; drawAvg: string; drawMax: string; others: string }) => string
   deskFresh: (o: { shape: number; shown: number; skipped: number }) => string
   flicker: string
   flickerNone: string
@@ -76,7 +76,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     mood: { veryGrumpy: 'very grumpy', grumpy: 'grumpy', great: 'in a great mood', good: 'in a good mood', even: 'calm' },
     deskNone: 'Desktop drawing: no data (only runs in the desktop app while the band is drawn)',
     desk: (o) =>
-      `Desktop drawing, last ${o.secs} s: ${o.draws} draws (${o.perMin}/min), ${o.reused} times kept unchanged (no reload), animations avg ${o.planSecs} s with ${o.changes} frame changes, ` +
+      `Desktop drawing, last ${o.secs} s: ${o.draws} draws (${o.perMin}/min), ${o.foreign} of them only for other mods (recomputed from the frame on screen), animations avg ${o.planSecs} s with ${o.changes} frame changes, ` +
       `${o.kb} kB; compute avg ${o.calcAvg} / max ${o.calcMax} ms, draw avg ${o.drawAvg} / max ${o.drawMax} ms (other mods avg ${o.others} ms)`,
     deskFresh: (o) =>
       `; redrawn: band layout changed ${o.shape}×, shown again or switched on ${o.shown}×; ${o.skipped} events without redraw (picture unchanged)`,
@@ -139,7 +139,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     mood: { veryGrumpy: 'sehr gereizt', grumpy: 'gereizt', great: 'bester Laune', good: 'gut gelaunt', even: 'ausgeglichen' },
     deskNone: 'Desktop-Zeichnung: keine Daten (läuft nur im Desktop, während das Band gezeichnet wird)',
     desk: (o) =>
-      `Desktop-Zeichnung, letzte ${o.secs} s: ${o.draws} Zeichnungen (${o.perMin}/min), ${o.reused}-mal unverändert weitergegeben (kein Neuladen), Animationen Ø ${o.planSecs} s mit ${o.changes} Bildwechseln, ` +
+      `Desktop-Zeichnung, letzte ${o.secs} s: ${o.draws} Zeichnungen (${o.perMin}/min), davon ${o.foreign} nur für andere Mods (ab dem gezeigten Bild neu gerechnet), Animationen Ø ${o.planSecs} s mit ${o.changes} Bildwechseln, ` +
       `${o.kb} kB; Rechnen Ø ${o.calcAvg} / max ${o.calcMax} ms, Zeichnen Ø ${o.drawAvg} / max ${o.drawMax} ms (davon andere Mods Ø ${o.others} ms)`,
     deskFresh: (o) =>
       `; neu gezeichnet: Aufbau des Bands geändert ${o.shape}×, wieder angezeigt oder eingeschaltet ${o.shown}×; ${o.skipped} Ereignisse ohne Neuzeichnung (Bild unverändert)`,
@@ -212,6 +212,10 @@ export const CLIP_EN: Readonly<Record<string, string>> = {
   night_stars: 'Stargazing',
   bday_cake: 'Birthday cake',
   bday_party: 'Birthday party',
+  music_bob: 'Bobs to the music',
+  music_phones: 'Listens with headphones',
+  music_airguitar: 'Plays air guitar',
+  music_nod_night: 'Nods quietly to the music at night',
   ny_fireworks: 'Fireworks',
   ny_sparkler: 'Sparkler',
   type_laptop: 'Types on the laptop',

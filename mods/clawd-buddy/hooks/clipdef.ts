@@ -36,7 +36,7 @@ export type ClipDef = {
    */
   companion?: boolean
   /**
-   * Gewichtsfaktoren nach Tageszeit: [Morgen 5–11 Uhr, Mittag 11–17, Abend 17–22, Nacht (Nachtfenster)]. Ohne Angabe überall 1.
+   * Gewichtsfaktoren nach Tageszeit: [Morgen 5–11 Uhr, Mittag 11–17, Abend 17 bis Nachtbeginn, Nacht (Nachtfenster)]. Ohne Angabe überall 1.
    * Nachts sind nur Clips mit Faktor > 0 als Zeitvertreib wählbar (Fynn: Zeitvertreib verändert sich über den Tag).
    */
   daypart?: readonly [number, number, number, number]
