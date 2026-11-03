@@ -6,7 +6,7 @@
 // als eine Zelle. Spalten sind deshalb Boxen mit fester Breite; im Desktop sind Balken Boxen mit Hintergrundfarbe und
 // ganzzahliger Prozentbreite (Kommaprozente verwirft er), im Terminal dünne `▄`. Der leere Teil zeigt den Hintergrund.
 import type { RenderElement, RenderNode } from 'claude-code'
-import { T, dateTime, duration, factor, fullDate, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
+import { T, dateTime, duration, fullDate, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
 import type { Lang } from './i18n.ts'
 import {
   MOD_PART,
@@ -17,6 +17,7 @@ import {
   modelName,
   notesOf,
   outsideText,
+  overviewLimits,
   partLabel,
   partialLabel,
   planLabel,
@@ -26,7 +27,8 @@ import {
 } from './logic.ts'
 import type { Bucket, LimWindow, LimitsReport, Report, Settings, ViewName } from './logic.ts'
 
-export type View = { report: Report; view: ViewName; range: number }
+/** `here`: die Zeile „Hier: …“ unten in der Übersicht (ab 0.8.0), fertig formatiert. */
+export type View = { report: Report; view: ViewName; range: number; here?: string }
 type Surface = 'terminal' | 'desktop'
 
 // Theme-Keys statt fester Hex-Werte: Sie folgen dem Theme des Nutzers, hell wie dunkel (types Color/ThemeKey).
@@ -118,9 +120,9 @@ function cut(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, Math.max(1, n - 1))}…`
 }
 
-/** Eine Kennzahl: Überschrift gedimmt, Betrag fett, darunter Chats und Mods. */
-function figure(label: string, w: { usd: number; chats: number; mods: number }, width: string, lang: Lang): RenderElement {
-  return col({ width, paddingRight: 2 }, [dim(label), text(usd(w.usd, lang), { bold: true }), dim(`${T[lang].chats(w.chats)} · Mods ${usd(w.mods, lang)}`)])
+/** Eine Kennzahl: Zeitraum gedimmt, API-Wert (Chats samt Mod-Aufrufen) fett, darunter die Anzahl der Chats. */
+function figure(label: string, w: { usd: number; chats: number }, width: string, lang: Lang): RenderElement {
+  return col({ width, paddingRight: 2 }, [dim(label), text(usd(w.usd, lang), { bold: true }), dim(T[lang].chats(w.chats))])
 }
 
 /**
@@ -132,7 +134,8 @@ function historyBlock(r: Report, s: Settings, sf: Surface, inner: number, weeks:
   const lang = s.lang
   const t = T[lang]
   const buckets = weeks ? r.series.weeks : r.series.days
-  const colors = modelColors(buckets)
+  // Übersicht einfarbig; die Aufteilung nach Modell zeigen /ledger weeks und /ledger models (ab 0.8.0)
+  const colors = weeks ? modelColors(buckets) : new Map<string, string>()
   const max = Math.max(0, ...buckets.map((b) => b.usd))
   const top = buckets.find((b) => b.usd === max && max > 0)?.key
   const labelW = 7
@@ -141,7 +144,9 @@ function historyBlock(r: Report, s: Settings, sf: Surface, inner: number, weeks:
   const rows = buckets.map((b) =>
     row({}, [
       cell(labelW, dim(weeks ? weekLabel(isoWeek(b.key), lang) : shortDate(b.key, lang))),
-      stackedBar(sf, max > 0 ? b.usd / max : 0, cells, b.parts.map((p) => ({ color: colors.get(p.key) ?? UNKNOWN_COLOR, share: b.usd > 0 ? p.usd / b.usd : 0 }))),
+      weeks
+        ? stackedBar(sf, max > 0 ? b.usd / max : 0, cells, b.parts.map((p) => ({ color: colors.get(p.key) ?? UNKNOWN_COLOR, share: b.usd > 0 ? p.usd / b.usd : 0 })))
+        : bar(sf, max > 0 ? b.usd / max : 0, cells, ORANGE),
       cell(10, b.usd > 0 ? text(usd(b.usd, lang), weeks ? {} : ampel(b.usd, s)) : dim('–'), true),
       cell(12, b.key === top ? dim(`  ${t.highest}`) : ''),
     ]),
@@ -174,7 +179,7 @@ function chatsBlock(r: Report, title: string, width: number, limit: number, basi
           el('Box', { flexGrow: 1, minWidth: 8 }, [text(cut(chatLabel(c, lang), nameW), { wrap: 'truncate-end' })]),
           cell(10, text(usd(c.usd, lang)), true),
         ]),
-        row({}, [cell(3, ''), dim(`${projectLabel(c.project, lang)} · ${shortDate(c.lastDay, lang)}`)]),
+        row({}, [cell(3, ''), dim(`${projectLabel(c.project, lang)}${c.device ? ` (${c.device})` : ''} · ${shortDate(c.lastDay, lang)}`)]),
       ])
     : [dim(T[lang].noCosts)]
   return col({ width: basis }, [heading(title), ...kids])
@@ -201,13 +206,6 @@ function modelsBlock(r: Report, title: string, sf: Surface, inner: number, lang:
     : [dim(t.noTokens)]
   kids.push(el('Box', { marginTop: 1 }, [dim(t.modelsNote)]))
   return col({}, [heading(title), ...kids])
-}
-
-function modsBlock(r: Report, title: string, lang: Lang): RenderElement {
-  const t = T[lang]
-  // Mod-Aufrufe anderer Geräte stehen ohne Mod-Namen unter dem Gerät (Sync, Nachtrag 0.7.0)
-  const line = r.mods.length ? r.mods.map((m) => `${projectLabel(m.name, lang)} ${usd(m.usd, lang)} (${m.calls}×)`).join(' · ') : t.noModCalls
-  return col({}, [heading(title), text(line, r.mods.length ? {} : { dimColor: true }), dim(t.modsExtra)])
 }
 
 /**
@@ -304,21 +302,21 @@ function limitsBlocks(r: Report, sf: Surface, inner: number, lang: Lang): Render
   ]
 }
 
-/** Kompakte Limit-Zeile oben in der Übersicht; bricht bei schmaler Breite um. Entfällt ohne Fenster und ohne Plan. */
+/** Abo und Limits oben in der Übersicht, je eine Zeile in Klartext (`overviewLimits`). Entfällt ohne Fenster und ohne Plan. */
 function limitsLine(r: Report, lang: Lang): RenderElement | null {
+  const lines = overviewLimits(r.limits, lang)
+  if (!lines.length) return null
+  const piece = (p: { text: string; dim?: boolean; pct?: number }) =>
+    p.pct !== undefined ? text(p.text, { color: limColor(p.pct) }) : p.dim ? dim(p.text) : text(p.text)
+  return col({ marginTop: 1 }, lines.map((l) => el('Text', {}, l.map(piece))))
+}
+
+/** Mod-Aufrufe in der Übersicht: eine gedimmte Zeile, denn sie stecken schon in den Beträgen. */
+function modsLine(r: Report, lang: Lang): RenderElement | null {
   const t = T[lang]
-  const l = r.limits
-  const money = (v: number) => usd(v, lang)
-  const parts: RenderNode[][] = []
-  if (l.five)
-    parts.push([text(`${t.fiveShort} `), text(pct(l.five.pct), { color: limColor(l.five.pct) }), dim(' · '), text(money(l.five.usd)), dim(` · ${t.resetAt(resetTime(l.five.resetsAt, r.now, lang))}`)])
-  else if (l.seenFive) parts.push([dim(`${t.fiveShort}: ${t.resetPassedShort}`)])
-  if (l.week) parts.push([text(`${t.weekShort} `), text(pct(l.week.pct), { color: limColor(l.week.pct) }), dim(' · '), text(money(l.week.usd))])
-  if (l.plan) parts.push([text(`${t.planShort} ${money(l.plan.usd)}`), ...(l.plan.factor !== null ? [dim(' = '), text(`${factor(l.plan.factor, lang)}×`)] : [])])
-  if (!parts.length) return null
-  const kids: RenderNode[] = parts.map((p, i) => el('Box', { marginRight: 1 }, [el('Text', {}, [...(i ? [dim('│ ')] : []), ...p])]))
-  kids.push(dim('· /ledger limits'))
-  return row({ flexWrap: 'wrap', marginTop: 1 }, kids)
+  if (!r.mods.length) return null
+  const list = r.mods.slice(0, 4).map((m) => `${projectLabel(m.name, lang)} ${usd(m.usd, lang)} (${m.calls}×)`).join(' · ')
+  return el('Box', { marginTop: 1 }, [dim(`${t.ovModsOf(list)}${r.mods.length > 4 ? ` · ${t.more(r.mods.length - 4)}` : ''} · ${t.modsExtra}`)])
 }
 
 /** Der Befehl, der dieselbe Ansicht mit frischen Zahlen zeichnet (samt Zeitraum). */
@@ -336,14 +334,17 @@ export function ledgerTree(v: View, s: Settings, columns: number, surface: Surfa
   const cols = Math.max(30, Math.min(columns || 100, 140))
   const inner = cols - 4 // Rahmen und paddingX
   const limits = v.view === 'limits'
+  // Übersicht und Wochen (ab 0.8.0): oben ein Satz, was „API-Wert“ heißt; unten statt der Fußzeile die anderen Ansichten
+  const over = v.view === 'overview' || v.view === 'weeks'
   // Ohne Knopf (er bräuchte neue Rechte): oben rechts Stand und wie man neu lädt; bei den Limits statt „seit“ der Plan
   const first = limits ? (r.limits.plan ? `${planLabel(r.limits.plan.plan)} · ` : '') : r.since ? `${t.since(fullDate(r.since, lang))} · ` : ''
   const dev = devicesLabel(r, lang)
-  const stand = `${first}${dev ? `${dev} · ` : ''}${t.asOf(dateTime(r.now, lang))} · ${t.reload(reloadCommand(v))}`
+  const stand = `${first}${dev ? `${dev} · ` : ''}${t.asOf(dateTime(r.now, lang))}${over ? '' : ` · ${t.reload(reloadCommand(v))}`}`
   const head = row({ justifyContent: 'space-between', flexWrap: 'wrap' }, [text(limits ? t.limitsHead : 'cost-ledger', { color: ORANGE, bold: true }), dim(stand)])
   const notes: RenderNode[] = notesOf(r, lang).map((n) => text(n, { color: YELLOW }))
-  const foot = el('Box', { marginTop: 1 }, [dim(limits ? t.limitsFoot : t.foot)])
-  const frame = (kids: RenderNode[]) => col({ borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%' }, [head, ...notes, ...kids, foot])
+  const explain: RenderNode[] = over ? [dim(t.ovExplain)] : []
+  const foot = el('Box', { marginTop: 1 }, [dim(limits ? t.limitsFoot : over ? t.ovMore : t.foot)])
+  const frame = (kids: RenderNode[]) => col({ borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%' }, [head, ...explain, ...notes, ...kids, foot])
 
   // Limits gibt es auch ohne Buchung (Plan eingestellt, Messung dieses Prozesses)
   if (limits) return frame(limitsBlocks(r, surface, inner, lang))
@@ -361,19 +362,23 @@ export function ledgerTree(v: View, s: Settings, columns: number, surface: Surfa
   const side = inner >= 90
   const half = side ? Math.floor(inner / 2) - 2 : inner
   const fw = inner >= 80 ? '25%' : inner >= 40 ? '50%' : '100%'
+  // Reihenfolge: wie viel (Kennzahlen), was das im Abo heißt (Abo, Limits), wann (Verlauf), wofür (Projekte, Chats, Mods),
+  // und dieser Chat (Hier). Fynn 2026-11-03, Bau 0.8.0
+  const mods = modsLine(r, lang)
   return frame([
-    ...(lim ? [lim] : []),
     row({ flexWrap: 'wrap', marginTop: 1 }, [
       figure(t.today, w.today, fw, lang),
       figure(t.days7, w.d7, fw, lang),
       figure(t.days30, w.d30, fw, lang),
       figure(t.allTime, w.all, fw, lang),
     ]),
+    ...(lim ? [lim] : []),
     ...historyBlock(r, s, surface, inner, v.view === 'weeks'),
     row({ flexWrap: 'wrap' }, [
       projectsBlock(r, t.projectsIn(d30), surface, half, 8, side ? '50%' : '100%', lang),
       chatsBlock(r, t.chatsIn(d30), half, 5, side ? '50%' : '100%', lang),
     ]),
-    modsBlock(r, t.modsIn(d30), lang),
+    ...(mods ? [mods] : []),
+    ...(v.here ? [el('Box', { marginTop: 1 }, [el('Text', {}, [text(v.here), dim(' (/ledger here)')])])] : []),
   ])
 }

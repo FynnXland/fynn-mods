@@ -8,8 +8,11 @@ import type { HelpData } from './help.ts'
 import { T, dateTime, shortDate, usd } from './i18n.ts'
 import {
   HELP_WORDS,
+  HERE_WORDS,
   NAME_WORD,
   NO_FOLDER,
+  NO_SYNC,
+  notesOf,
   OFF_WORDS,
   PLANS,
   SYNC_WORD,
@@ -45,8 +48,10 @@ import {
   tokensOf,
 } from './logic.ts'
 import type { Carry, HelpInfo, Kind, Limit, Plan, Rec, Settings, SyncInfo, TurnInfo, Usage } from './logic.ts'
-import { FILE_LIMIT, buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, utf8Bytes, validDir } from './sync.ts'
+import { FILE_LIMIT, buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, usersIn, utf8Bytes, validDir } from './sync.ts'
 import type { Device, SyncFile } from './sync.ts'
+import { hereLine, hereOf, hereText, hereTree } from './here.ts'
+import type { Here } from './here.ts'
 import { ledgerTree } from './view.ts'
 import type { View } from './view.ts'
 
@@ -67,7 +72,7 @@ const meta: { project: string; root: string; kind: Kind; remote: string } = { pr
 // Kennung im Text → Daten der Zeichnung, höchstens 10: eine Ansicht von /ledger oder die Hilfe, dazu die Argumente des
 // Aufrufs. Der Render-Hook zeichnet nur, wenn die Zeile dieselben Argumente hat: `/ledger #<kennung>` gibt „Unbekannt: …“
 // mit der Kennung in der ersten Zeile zurück und darf trotzdem nicht als Tabelle erscheinen (Review worklist 0.7.0, K2).
-type Drawn = ({ kind: 'ledger'; view: View } | { kind: 'help'; data: HelpData }) & { args: string }
+type Drawn = ({ kind: 'ledger'; view: View } | { kind: 'help'; data: HelpData } | { kind: 'here'; here: Here }) & { args: string }
 const reports = new Map<string, Drawn>()
 let reportNo = 0
 // Akzent der Hilfe als Theme-Key: passt sich hell und dunkel an (docs/HELP-SPEC.md §4, Fynn 2026-10-09)
@@ -382,7 +387,9 @@ async function ownRecs($: EngineInterface): Promise<{ recs: { id: string; rec: R
  */
 async function writeOwn($: EngineInterface, cfg: SyncCfg, recs: { id: string; rec: Rec }[], since: number | null) {
   const at = await $.clock.now()
-  const text = buildFile(cfg.device, since, recs, at)
+  // Benutzernamen aus bekannten Pfaden: ein Ordnername mit ihnen bleibt leer (SPEC Nachtrag 0.8.0, Schutz)
+  const users = usersIn([cfg.dir, meta.root, ...recs.map((x) => x.rec.root)])
+  const text = buildFile(cfg.device, since, recs, at, users)
   if (utf8Bytes(text) > FILE_LIMIT) throw new Error(T[settings.lang].syncTooBig)
   await $.store.set('meta:syncAt', at)
   await $.fs.write(inDir(cfg.dir, fileName(cfg.device.id)), text)
@@ -428,7 +435,7 @@ async function readPeers($: EngineInterface, cfg: SyncCfg, entries: readonly FsE
  * weder gelesen noch geschrieben (nicht neu anlegen); das lokale Ergebnis bleibt, der Fehler steht als Hinweis da.
  */
 async function syncRound($: EngineInterface, cfg: SyncCfg, own: { id: string; rec: Rec }[], since: number | null, now: number) {
-  const info: SyncInfo = { on: true, devices: 1, unreadable: 0, error: '', dupId: false }
+  const info: SyncInfo = { on: true, devices: 1, unreadable: 0, error: '', dupId: false, names: [cfg.device.name] }
   let entries: FsEntry[]
   try {
     entries = await $.fs.list(cfg.dir)
@@ -454,8 +461,9 @@ async function syncRound($: EngineInterface, cfg: SyncCfg, own: { id: string; re
   const p = await readPeers($, cfg, entries)
   info.unreadable = p.unreadable
   info.devices = 1 + p.peers.length
+  info.names = [cfg.device.name, ...p.peers.map((f) => f.device.name)]
   const starts = [since, ...p.peers.map((f) => f.since)].filter((x): x is number => typeof x === 'number')
-  return { recs: mergeRecs(own, p.peers, now - settings.keepDays * DAY), since: starts.length ? Math.min(...starts) : null, info }
+  return { recs: mergeRecs(own, p.peers, now - settings.keepDays * DAY, { root: meta.root, project: meta.project }), since: starts.length ? Math.min(...starts) : null, info }
 }
 
 /**
@@ -642,7 +650,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       await $.command.register({
         name: 'ledger',
         description: T[settings.lang].commandDescription,
-        argumentHint: '[weeks|chats|projects|models|limits|plan|sync|reset|help]',
+        argumentHint: '[here|weeks|chats|projects|models|limits|plan|sync|reset|help]',
       })
     } catch (err) {
       log($, `/ledger nicht registriert: ${msg(err)}`)
@@ -773,7 +781,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         return { text: t.writeFailed(msg(err)) }
       }
     }
-    if (what && !VIEW_WORDS.includes(what)) return { text: t.unknownArg(sub) }
+    const here = HERE_WORDS.includes(what)
+    if (what && !here && !VIEW_WORDS.includes(what)) return { text: t.unknownArg(sub) }
+    // `/ledger here` nimmt nur einen Zeitraum an; sonst gälte `/ledger here foo` still als „gesamt“
+    if (here && (rest.length > 1 || (arg !== undefined && parseRange(arg) === 30 && arg !== '30'))) return { text: t.unknownArg(e.args.trim()) }
     try {
       await serial(() => measure($)) // den laufenden Chat mitzählen
     } catch (err) {
@@ -781,11 +792,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
     const views: Record<string, View['view']> = { chats: 'chats', projects: 'projects', models: 'models', weeks: 'weeks', limits: 'limits' }
     const view = views[what] ?? 'overview'
-    const range = view === 'overview' || view === 'weeks' || view === 'limits' ? 30 : parseRange(arg)
     const now = await $.clock.now()
     const data = await collect($, now)
     // Andere Geräte dazu; ohne Sync oder bei Fehlern bleibt es beim lokalen Kostenbuch
-    let recs = data.recs
+    let recs: { id: string; rec: Rec; device?: string }[] = data.recs
     let since = data.since
     let sync: SyncInfo | undefined
     try {
@@ -794,6 +804,24 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } catch (err) {
       log($, `Sync: ${msg(err)}`)
     }
+    // Dieses Projekt und dieser Chat (SPEC Nachtrag 0.8.0); Standard ist „gesamt“, nicht 30 Tage
+    const hereFor = (range: number) =>
+      hereOf(recs, {
+        now,
+        range,
+        sessionId,
+        project: meta.project,
+        kind: meta.kind,
+        since,
+        devices: sync ? (sync.names ?? []) : null,
+        notes: notesOf({ hasCost, unreadable: data.unreadable, storeBytes: data.bytes, writeError, sync: sync ?? NO_SYNC }, settings.lang),
+      })
+    if (here) {
+      const h = hereFor(arg === undefined ? 0 : parseRange(arg))
+      const tag = remember(now, { kind: 'here', here: h, args: normArgs(e.args) })
+      return { text: hereText(h, settings.lang, tag) }
+    }
+    const range = view === 'overview' || view === 'weeks' || view === 'limits' ? 30 : parseRange(arg)
     const report = aggregate(recs, now, {
       range,
       unreadable: data.unreadable,
@@ -807,8 +835,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       live: limits,
     })
     // Eindeutige Kennung im Text: ui.render findet darüber die Daten der Zeichnung (SPEC Verhalten 7)
-    const tag = remember(now, { kind: 'ledger', view: { report, view, range }, args: normArgs(e.args) })
-    return { text: summaryText(report, view, range, tag, settings.lang) }
+    // Übersicht und Wochen enden mit „Hier: …“ (ab 0.8.0)
+    const line = view === 'overview' || view === 'weeks' ? hereLine(hereFor(0), settings.lang) : ''
+    const tag = remember(now, { kind: 'ledger', view: { report, view, range, ...(line ? { here: line } : {}) }, args: normArgs(e.args) })
+    return { text: summaryText(report, view, range, tag, settings.lang, line) }
   })
 
   // Die Übersicht und die Hilfe: ein eigener Baum statt der Markdown-Zeile; „a hook's own tree draws in the row's place“
@@ -821,6 +851,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // Unbekannt (nach Neustart, alte Zeile, reset, plan): die Engine zeichnet den Markdown-Text
     if (!d || d.args !== normArgs(e.props.args)) return next(e)
     const columns = e.viewport?.columns ?? 100
+    if (d.kind === 'here') return hereTree(d.here, settings.lang, columns, e.surface)
     return d.kind === 'help' ? helpTree(d.data, columns, e.surface, ACCENT) : ledgerTree(d.view, settings, columns, e.surface)
   })
 }

@@ -44,6 +44,11 @@ export type Rec = {
   lim: Record<string, Record<string, LimWin>>
   /** Git-Remote des Projekts als `host/owner/repo`, ohne Zugangsdaten. */
   remote: string
+  /**
+   * Nur in der Sync-Datei (ab 0.8.0): letzter Ordnername der Projektwurzel, z. B. `ClaudeMods` (SPEC Nachtrag 0.8.0,
+   * Entscheidung 3). Lokale Datensätze haben es nicht; `cleanRec` verwirft es, `parseFile` liest es eigens.
+   */
+  proj?: string
 }
 /** Ein Limit-Fenster im Datensatz: API-Wert aus Chat und Mods, höchster `percentUsed`, erste und letzte Buchung. */
 export type LimWin = { chat: number; mod: number; pct: number; first: number; last: number }
@@ -58,6 +63,11 @@ export const VIEW_WORDS: readonly string[] = ['weeks', 'chats', 'projects', 'mod
 export const RANGE_WORDS: readonly string[] = ['all', 'alle']
 export const TODAY_WORDS: readonly string[] = ['today', 'heute']
 export const OFF_WORDS: readonly string[] = ['off', 'aus']
+/**
+ * `/ledger here` (SPEC Nachtrag 0.8.0). Nicht `chat`, `project`, `projekt`: zu nah an `chats` und `projects`, ein Tippfehler
+ * zeigte still eine andere Ansicht. Kein `this`: ein Alias mehr, ohne Nutzen.
+ */
+export const HERE_WORDS: readonly string[] = ['here', 'hier']
 /** `/ledger sync …` und `/ledger sync name …` (SPEC Nachtrag 0.7.0, Bedienung) */
 export const SYNC_WORD = 'sync'
 export const NAME_WORD = 'name'
@@ -223,12 +233,16 @@ export function cleanRemote(url: string | null | undefined): string {
 /** Gespeicherter Projektname, wenn es weder Repo noch Ordner gibt (bleibt aus Kompatibilität deutsch, Anzeige übersetzt). */
 export const NO_FOLDER = '(ohne Ordner)'
 
-/** Projektname: Repo-Name, sonst letzter Ordner; Worktrees unter `.claude/worktrees/` zählen zum Hauptordner. */
-export function projectOf(repoName: string | null | undefined, root: string): string {
+/** Letzter Ordnername der Projektwurzel; Worktrees unter `.claude/worktrees/` zählen zum Hauptordner. Ohne Ordner `''`. */
+export function folderOf(root: string): string {
   const parts = String(root || '').split(/[\\/]+/).filter(Boolean)
   const wt = parts.findIndex((p, i) => p === '.claude' && parts[i + 1] === 'worktrees')
-  const folder = wt > 0 ? parts[wt - 1] : parts[parts.length - 1]
-  return (repoName && repoName.trim()) || folder || NO_FOLDER
+  return (wt > 0 ? parts[wt - 1] : parts[parts.length - 1]) ?? ''
+}
+
+/** Projektname: Repo-Name, sonst letzter Ordner (`folderOf`). */
+export function projectOf(repoName: string | null | undefined, root: string): string {
+  return (repoName && repoName.trim()) || folderOf(root) || NO_FOLDER
 }
 
 /**
@@ -525,10 +539,23 @@ export const PLANS: Record<string, { label: string; price?: number }> = {
   pro: { label: 'Pro', price: 20 },
   max5: { label: 'Max 5x', price: 100 },
   max20: { label: 'Max 20x', price: 200 },
+  // Ultra ohne Listenpreis: Fynn kennt ihn nicht (Bau 0.8.0, 2026-11-03), der Preis kommt per `/ledger plan ultra <tag> <preis>`
+  ultra: { label: 'Ultra' },
   team: { label: 'Team' },
   enterprise: { label: 'Enterprise' },
 }
-const PLAN_ALIASES: Record<string, string> = { pro: 'pro', max5: 'max5', max5x: 'max5', '5x': 'max5', max20: 'max20', max20x: 'max20', '20x': 'max20', team: 'team', enterprise: 'enterprise' }
+const PLAN_ALIASES: Record<string, string> = {
+  pro: 'pro',
+  max5: 'max5',
+  max5x: 'max5',
+  '5x': 'max5',
+  max20: 'max20',
+  max20x: 'max20',
+  '20x': 'max20',
+  ultra: 'ultra',
+  team: 'team',
+  enterprise: 'enterprise',
+}
 /** Nur eigene Schlüssel: `constructor` oder `__proto__` sind kein Plan. */
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
 
@@ -766,12 +793,16 @@ export const SCRIPT_PROJECT = ':script'
 export const DEVICE_PROJECT = ':device:'
 
 /** Stand des Geräte-Syncs für die Anzeige: Anzahl Geräte (mit diesem), nicht lesbare Geräte, letzter Fehler, doppelte ID. */
-export type SyncInfo = { on: boolean; devices: number; unreadable: number; error: string; dupId: boolean }
-const NO_SYNC: SyncInfo = { on: false, devices: 1, unreadable: 0, error: '', dupId: false }
+export type SyncInfo = { on: boolean; devices: number; unreadable: number; error: string; dupId: boolean; names?: string[] }
+export const NO_SYNC: SyncInfo = { on: false, devices: 1, unreadable: 0, error: '', dupId: false }
 
+/** Ab 0.8.0 ist `usd` der ganze API-Wert (Chat und Mod-Aufrufe), `mods` der Anteil der Mod-Aufrufe darin. */
 export type Window = { usd: number; chats: number; mods: number }
-/** `title` leer = kein Name bekannt; die Anzeige nimmt dann „Chat vom …“ mit `firstAt`. */
-export type ChatRow = { id: string; title: string; firstAt: number; project: string; usd: number; lastDay: string; kind: Kind }
+/**
+ * `title` leer = kein Name bekannt; die Anzeige nimmt dann „Chat vom …“ mit `firstAt`. `device`: Name des anderen Geräts,
+ * wenn der Chat dort lief und über den Ordnernamen beim Projekt steht (ab 0.8.0).
+ */
+export type ChatRow = { id: string; title: string; firstAt: number; project: string; usd: number; lastDay: string; kind: Kind; device?: string }
 export type ProjectRow = { name: string; usd: number; chats: number }
 export type ModRow = { name: string; usd: number; calls: number }
 export type ModelRow = { key: string; in: number; out: number; cr: number; cw: number; usd: number; n: number }
@@ -801,7 +832,7 @@ export const STORE_LIMIT = 4 * 1024 * 1024
 
 /** `range`: Anzahl Tage einschließlich heute, oder `0` = alles. */
 export function aggregate(
-  recs: { id: string; rec: Rec }[],
+  recs: { id: string; rec: Rec; device?: string }[],
   now: number,
   opts: {
     range?: number
@@ -826,7 +857,12 @@ export function aggregate(
     for (const { rec } of recs) {
       let mine = 0
       for (const [d, v] of Object.entries(rec.days)) if (inRange(d, n)) mine += v
-      for (const m of Object.values(rec.mods)) for (const [d, v] of Object.entries(m.days)) if (inRange(d, n)) mods += v.usd
+      for (const m of Object.values(rec.mods))
+        for (const [d, v] of Object.entries(m.days))
+          if (inRange(d, n)) {
+            mods += v.usd
+            mine += v.usd
+          }
       sum += mine
       if (mine > 0) chats++
     }
@@ -837,7 +873,7 @@ export function aggregate(
   const chats: ChatRow[] = []
   const mods = new Map<string, ModRow>()
   const models = new Map<string, ModelRow>()
-  for (const { id, rec } of recs) {
+  for (const { id, rec, device } of recs) {
     for (const [key, m] of [...Object.entries(rec.models), ...Object.entries(rec.modModels)])
       for (const [d, v] of Object.entries(m.days))
         if (inRange(d, range)) {
@@ -850,13 +886,16 @@ export function aggregate(
           row.n += v.n
           models.set(key, row)
         }
+    // Ein Betrag je Chat: Chat-Kosten und die Mod-Aufrufe darin (ab 0.8.0, wie /ledger here und der Verlauf)
     let mine = 0
     let lastDay = ''
-    for (const [d, v] of Object.entries(rec.days))
-      if (inRange(d, range) && v > 0) {
-        mine += v
-        if (d > lastDay) lastDay = d
-      }
+    const add = (d: string, v: number) => {
+      if (!inRange(d, range) || !(v > 0)) return
+      mine += v
+      if (d > lastDay) lastDay = d
+    }
+    for (const [d, v] of Object.entries(rec.days)) add(d, v)
+    for (const m of Object.values(rec.mods)) for (const [d, v] of Object.entries(m.days)) add(d, v.usd)
     if (mine > 0) {
       // Fremde Geräte bleiben unter ihrem Gerät, auch ihre Skript-Läufe
       const name = rec.project.startsWith(DEVICE_PROJECT) ? rec.project : rec.kind === 'script' ? SCRIPT_PROJECT : rec.project
@@ -864,7 +903,7 @@ export function aggregate(
       p.usd += mine
       p.chats++
       proj.set(name, p)
-      chats.push({ id, title: rec.title.trim(), firstAt: rec.firstAt, project: name, usd: mine, lastDay, kind: rec.kind })
+      chats.push({ id, title: rec.title.trim(), firstAt: rec.firstAt, project: name, usd: mine, lastDay, kind: rec.kind, ...(device ? { device } : {}) })
     }
     for (const [name, m] of Object.entries(rec.mods))
       for (const [d, v] of Object.entries(m.days))
@@ -997,7 +1036,7 @@ export function chatLabel(c: { title: string; firstAt: number }, lang: Lang): st
 }
 
 /** Hinweise für Text und Zeichnung: Host ohne Kosten, unlesbare Einträge, Speicher fast voll, Schreibfehler. */
-export function notesOf(r: Report, lang: Lang): string[] {
+export function notesOf(r: Pick<Report, 'hasCost' | 'unreadable' | 'storeBytes' | 'writeError' | 'sync'>, lang: Lang): string[] {
   const t = T[lang]
   const out: string[] = []
   if (!r.hasCost) out.push(t.noCost)
@@ -1038,14 +1077,28 @@ export function projectionText(w: LimWindow, lang: Lang): string {
   return w.pct >= 5 ? t.projectionNone : t.projectionLater
 }
 
-/** Teile der kompakten Limit-Zeile (Übersicht); leer, wenn es weder ein Fenster noch einen Plan gibt. */
-export function limitsLineParts(l: LimitsReport, now: number, lang: Lang): string[] {
+/** Ein Stück einer Zeile, mit Farbe für die Zeichnung (`dim`: gedimmt, `pct`: Limit-Ampel). */
+export type Piece = { text: string; dim?: boolean; pct?: number }
+
+/**
+ * Abo und Limits oben in der Übersicht (ab 0.8.0), in Klartext statt Kürzeln: eine Zeile zum Abo-Monat, eine zu den
+ * Fenstern gerade jetzt. Jede entfällt ohne Daten.
+ */
+export function overviewLimits(l: LimitsReport, lang: Lang): Piece[][] {
   const t = T[lang]
-  const out: string[] = []
-  if (l.five) out.push(`${t.fiveShort} ${pct(l.five.pct)} · ${usd(l.five.usd, lang)} · ${t.resetAt(resetTime(l.five.resetsAt, now, lang))}`)
-  else if (l.seenFive) out.push(`${t.fiveShort}: ${t.resetPassedShort}`)
-  if (l.week) out.push(`${t.weekShort} ${pct(l.week.pct)} · ${usd(l.week.usd, lang)}`)
-  if (l.plan) out.push(`${t.planShort} ${usd(l.plan.usd, lang)}${l.plan.factor !== null ? ` = ${factor(l.plan.factor, lang)}×` : ''}`)
+  const money = (v: number) => usd(v, lang)
+  const out: Piece[][] = []
+  if (l.plan) {
+    const p = l.plan
+    const head = t.ovPlan(planLabel(p.plan), shortDate(p.from ?? p.start, lang))
+    const value = p.price !== null && p.factor !== null ? t.ovPlanValue(money(p.usd), factor(p.factor, lang), money(p.price)) : t.ovPlanNoPrice(money(p.usd))
+    out.push([{ text: `${head} ` }, { text: value }])
+  }
+  const now: Piece[] = []
+  if (l.five) now.push({ text: `${t.fiveShort} ` }, { text: pct(l.five.pct), pct: l.five.pct })
+  if (l.week) now.push(...(now.length ? [{ text: ' · ', dim: true }] : []), { text: `${t.weekShort} ` }, { text: pct(l.week.pct), pct: l.week.pct })
+  if (now.length) out.push([{ text: `${t.ovLimitsNow} ` }, ...now, { text: ' (/ledger limits)', dim: true }])
+  else if (l.seenFive || l.seenWeek) out.push([{ text: `${t.ovLimitsNow} ` }, { text: t.resetPassedShort, dim: true }, { text: ' (/ledger limits)', dim: true }])
   return out
 }
 
@@ -1099,7 +1152,7 @@ function limitsLines(l: LimitsReport, now: number, lang: Lang): string[] {
  * Kurze Markdown-Fassung für Claude und für `-p` (höchstens 10 Zeilen, SPEC Verhalten 7). `tag` macht den Text eindeutig,
  * damit `ui.render` die passende Zeichnung findet.
  */
-export function summaryText(r: Report, view: ViewName, range: number, tag: string, lang: Lang): string {
+export function summaryText(r: Report, view: ViewName, range: number, tag: string, lang: Lang, hereLine = ''): string {
   const t = T[lang]
   const money = (v: number) => usd(v, lang)
   const join = <X>(rows: X[], fmt: (x: X) => string, max: number) => {
@@ -1117,23 +1170,22 @@ export function summaryText(r: Report, view: ViewName, range: number, tag: strin
   const titled = (s: string) => (dev ? `${s} · ${dev}` : s)
   if (view === 'limits') return capped([titled(t.sumLimitsTitle(dateTime(r.now, lang), tag)), ...limitsLines(r.limits, r.now, lang)], t.sumLimitsFoot)
   const lines = [titled(t.sumTitle(dateTime(r.now, lang), tag))]
-  // Die Limit-Zeile auch im Leerzustand (z. B. direkt nach /ledger reset: Plan und Messung sind noch da)
-  const lim = view === 'overview' || view === 'weeks' ? limitsLineParts(r.limits, r.now, lang) : []
-  if (lim.length) lines.push(t.sumLimitsLine(lim.join(' | ')))
+  // Abo und Limits auch im Leerzustand (z. B. direkt nach /ledger reset: Plan und Messung sind noch da)
+  if (view === 'overview' || view === 'weeks') lines.push(...overviewLimits(r.limits, lang).map((x) => x.map((p) => p.text).join('')))
   if (r.total === 0) return [...lines, ...notes, t.empty].join('\n')
   const w = r.windows
   if (view === 'overview' || view === 'weeks') {
-    lines.push(t.sumChats(money(w.today.usd), w.today.chats, money(w.d7.usd), money(w.d30.usd), money(w.all.usd)))
-    lines.push(t.sumMods(money(w.today.mods), money(w.d30.mods), money(w.all.mods)))
+    lines.push(t.sumTotals(money(w.today.usd), w.today.chats, money(w.d7.usd), money(w.d30.usd), money(w.all.usd)))
     if (r.projects.length) lines.push(t.sumProjects(join(r.projects, (p) => `${projectLabel(p.name, lang)} ${money(p.usd)}`, 5)))
     if (r.chats.length) lines.push(t.sumTopChats(join(r.chats, (c) => `${chatLabel(c, lang)} ${money(c.usd)}`, 3)))
     if (r.mods.length) lines.push(t.sumModsList(join(r.mods, (m) => `${projectLabel(m.name, lang)} ${money(m.usd)} (${m.calls}×)`, 4)))
     if (view === 'weeks') lines.push(t.sumWeeks(r.series.weeks.slice(0, 6).map((b) => `${weekLabel(isoWeek(b.key), lang)} ${money(b.usd)}`).join(' · ')))
+    if (hereLine) lines.push(hereLine)
   } else if (view === 'chats') {
     const rows = r.chats.slice(0, 20)
     lines.push(t.sumChatsHead(rangeLabel(range, lang), rows.length, r.chats.length))
     for (let i = 0; i < rows.length; i += 5)
-      lines.push(rows.slice(i, i + 5).map((c, j) => `${i + j + 1}. ${chatLabel(c, lang)} (${projectLabel(c.project, lang)}) ${money(c.usd)}`).join(' · '))
+      lines.push(rows.slice(i, i + 5).map((c, j) => `${i + j + 1}. ${chatLabel(c, lang)} (${projectLabel(c.project, lang)}${c.device ? `, ${c.device}` : ''}) ${money(c.usd)}`).join(' · '))
   } else if (view === 'models') {
     const sum = r.models.reduce((a, m) => a + m.usd, 0)
     lines.push(t.sumModelsHead(rangeLabel(range, lang)))
@@ -1184,10 +1236,12 @@ export function ledgerHelp(s: Settings, info: HelpInfo): HelpData {
     mod: 'cost-ledger',
     lang,
     intro: t.helpIntro,
+    // Nach Zweck (Fynn 2026-11-03): ansehen, einstellen, verwalten
     commands: [
       { cmd: '/ledger', does: t.helpOverview },
-      { cmd: '/ledger weeks', does: t.helpWeeks },
+      { cmd: '/ledger here [7|30|all]', does: t.helpHere },
       { cmd: '/ledger chats|projects|models [7|30|all]', does: t.helpLists },
+      { cmd: '/ledger weeks', does: t.helpWeeks },
       { cmd: '/ledger limits', does: t.helpLimits },
       { cmd: '/ledger plan', does: t.helpPlanShow },
       { cmd: '/ledger plan <plan> <day|today> [price]', does: t.helpPlanSet },

@@ -223,7 +223,7 @@ API-Wert ins aktuelle 5-Stunden- und Wochenfenster und in deinen Abo-Monat geflo
 4. Prüfen: `/ledger sync` listet das andere Gerät, `/ledger` zeigt oben „2 Geräte“.
 
 Der Pfad muss absolut sein, unter Windows mit Laufwerksbuchstaben (z. B. `D:\OneDrive\cost-ledger`; im Explorer per Rechtsklick → **Als Pfad kopieren**);
-Netzwerkpfade gehen nicht. In den Ordner kommen nur Zahlen, keine Pfade, Projektnamen oder Chat-Titel. Ausführliche
+Netzwerkpfade gehen nicht. In den Ordner kommen nur Zahlen und je Projekt der Ordnername, keine Pfade oder Chat-Titel. Ausführliche
 Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost-ledger/README.md#sync-between-devices) (englisch).
 
 - **Befehle:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,

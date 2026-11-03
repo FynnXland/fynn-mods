@@ -213,7 +213,7 @@ with `/ledger plan`. It also estimates how much of each window you used outside 
 4. Check: `/ledger sync` lists the other device, and `/ledger` shows “2 devices” at the top.
 
 The path must be absolute, on Windows with a drive letter (e.g. `D:\OneDrive\cost-ledger`; in File Explorer, right-click → **Copy as path**); network
-paths do not work. Only numbers go into the folder, no paths, project names or chat titles. Full guide with paths per system and
+paths do not work. Only numbers and each project’s folder name go into the folder, no paths or chat titles. Full guide with paths per system and
 troubleshooting: [Sync between devices](mods/cost-ledger/README.md#sync-between-devices).
 
 - **Commands:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,

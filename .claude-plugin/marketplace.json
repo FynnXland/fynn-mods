@@ -28,7 +28,7 @@
     {
       "name": "cost-ledger",
       "source": "./mods/cost-ledger",
-      "description": "Cost ledger across all chats: after every answer it records the chat cost (as /cost), tokens per model and model calls made by other mods. /ledger shows today, 7 and 30 days, total, history by model (days or weeks), projects and the most expensive chats; /ledger limits shows the API value in the current 5-hour and weekly window and in your subscription month, plus an estimate of the usage outside the ledger (claude.ai, phone); /ledger sync <folder> merges your devices through a shared folder (amounts only: no paths, projects or chat titles); /ledger help lists all commands, the current state and your settings. Observer only, no model calls."
+      "description": "Cost ledger across all chats: after every answer it records the chat cost (as /cost), tokens per model and model calls made by other mods. /ledger shows totals for today, 7 and 30 days and all time (chats incl. their mod calls), the last 14 days, projects and the most expensive chats; /ledger here shows what this project and this chat cost, with the chat share as a ring; /ledger limits shows the API value in the current 5-hour and weekly window and in your subscription month, plus an estimate of the usage outside the ledger (claude.ai, phone); /ledger sync <folder> merges your devices through a shared folder (amounts and the project folder name only: no paths or chat titles); /ledger help lists all commands, the current state and your settings. Observer only, no model calls."
     }
   ]
 }

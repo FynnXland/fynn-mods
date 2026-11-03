@@ -25,6 +25,7 @@ import {
   titleFromPrompt,
   weekStart,
   HELP_WORDS,
+  HERE_WORDS,
   OFF_WORDS,
   RANGE_WORDS,
   TODAY_WORDS,
@@ -37,10 +38,11 @@ import {
   ledgerHelp,
   planWords,
 } from '../hooks/logic.ts'
-import { buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, shareRec, validDir } from '../hooks/sync.ts'
+import { buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, safeProj, shareRec, usersIn, validDir } from '../hooks/sync.ts'
 import type { SyncFile } from '../hooks/sync.ts'
 import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from '../hooks/i18n.ts'
 import { modelColors, stackedBar } from '../hooks/view.ts'
+import { arcPath, bigUsd, hereBar, hereSvg, hereText, shareOf, shareText } from '../hooks/here.ts'
 import { helpMarkdown, helpTree, stateText } from '../hooks/help.ts'
 import type { Rec } from '../hooks/logic.ts'
 
@@ -630,7 +632,8 @@ test('/ledger weeks: Übersicht mit 14 Wochen und Legende', DE, async ($, on) =>
   expect(await ui.find({ type: 'Text', text: 'Letzte 14 Wochen' })).toBeDefined()
   expect(await ui.findAll({ type: 'Text', text: /^KW \d+$/ })).toHaveLength(14)
   expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
-  expect(await ui.find({ text: /neu laden: \/ledger weeks/ })).toBeDefined()
+  // Ab 0.8.0 wie die Übersicht: unten die anderen Ansichten statt „neu laden“
+  expect(await ui.find({ text: /^Mehr: \/ledger here/ })).toBeDefined()
   await ui.unmount()
   // Desktop: gestapelte Prozent-Boxen, Summe 100 %
   const d = await mountLedger($, text, 'desktop')
@@ -699,22 +702,24 @@ test('Aggregation: 3 Sessions in 2 Projekten über 20 Tage', () => {
     { id: 'C', rec: recOf('Handy', { [d(10)]: 3 }, { title: 'Handy-App' }) },
   ]
   const r = aggregate(recs, NOW, {})
-  near(r.windows.today.usd, 1)
-  expect(r.windows.today.chats).toBe(1)
+  // Ab 0.8.0: Beträge samt Mod-Aufrufen des Chats; `mods` ist der Anteil darin
+  near(r.windows.today.usd, 1.2)
+  expect(r.windows.today.chats).toBe(2)
   near(r.windows.today.mods, 0.2)
-  near(r.windows.d7.usd, 3.5)
-  near(r.windows.d30.usd, 10.5)
-  near(r.windows.all.usd, 10.5)
+  near(r.windows.d7.usd, 3.7)
+  near(r.windows.d30.usd, 10.7)
+  near(r.windows.all.usd, 11.7)
   near(r.windows.all.mods, 1.2)
   expect(r.projects.map((p) => p.name)).toEqual(['ClaudeMods', 'Handy'])
-  near(r.projects[0]!.usd, 7.5)
+  near(r.projects[0]!.usd, 7.7)
   expect(r.chats.map((c) => c.title)).toEqual(['Orchestrator', 'Handy-App', 'Worklist'])
+  near(r.chats[2]!.usd, 0.7)
   expect(r.series.days).toHaveLength(14)
   near(r.series.days[5]!.usd, 2)
   expect(r.mods).toEqual([{ name: 'sidekick', usd: 0.2, calls: 3 }])
   const text = summaryText(r, 'overview', 30, '#abc12', 'de')
   expect(text.split('\n').length <= 10).toBe(true)
-  expect(text).toMatch(/30 Tage 10,50 \$/)
+  expect(text).toMatch(/30 Tage 10,70 \$/)
 })
 
 test('Text für Claude bleibt bei vielen Chats und Projekten bei höchstens 10 Zeilen', () => {
@@ -880,7 +885,8 @@ for (const surface of ['terminal', 'desktop'] as const)
     const ui = await mountLedger($, await w.ledger($), surface)
     for (const label of ['Heute', '7 Tage', '30 Tage', 'Gesamt']) expect(await ui.find({ type: 'Text', text: label }), label).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '4,82 $' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '13,82 $' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '13,89 $' })).toBeDefined() // samt 0,07 $ Mod-Aufrufen (ab 0.8.0)
+    expect(await ui.find({ text: /^API-Wert: was Chats und Mod-Aufrufe/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Letzte 14 Tage' })).toBeDefined()
     expect(await ui.findAll({ type: 'Text', text: /^\d\d\.\d\d\.$/ })).toHaveLength(14)
     expect(await ui.find({ text: /← höchster/ })).toBeDefined()
@@ -888,19 +894,19 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect(await ui.find({ type: 'Text', text: 'Teuerste Chats · 30 Tage' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /fynn-orchestrator v1\.0/ })).toBeDefined()
     expect(await ui.find({ text: /^ENGINE:/ })).toBeUndefined()
-    // Ampel färbt den Betrag: 9 $ ≥ 8 $ → rot. Balken nach Modell; der alte Tag ohne Modell-Daten ist „ohne Angabe“
+    // Ampel färbt den Betrag: 9 $ ≥ 8 $ → rot. Ab 0.8.0 ist der Verlauf der Übersicht einfarbig, ohne Legende (die
+    // Aufteilung nach Modell zeigen /ledger weeks und /ledger models)
     expect((await ui.find({ type: 'Text', text: '9,00 $' }))?.props.color).toBe('error')
-    expect(await ui.find({ type: 'Text', text: 'ohne Angabe' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'Sonnet 5.5 · Mods' })).toBeDefined() // Mod-Aufruf aus dem Verlauf, getrennt vom Chat
-    expect(await ui.find({ type: 'Text', text: 'Mods ohne Angabe' })).toBeDefined() // Mod-Kosten vor 0.3.0 ohne Modell
+    for (const legend of ['ohne Angabe', 'Opus 5.5', 'Sonnet 5.5 · Mods', 'Mods ohne Angabe']) expect(await ui.find({ type: 'Text', text: legend }), legend).toBeUndefined()
+    expect(await ui.find({ text: /^Davon Mod-Aufrufe: sidekick 0,07 \$ \(3×\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Hier: ClaudeMods 4,82 \$ insgesamt, dieser Chat 100 %$/ })).toBeDefined()
     if (surface === 'terminal') {
       const bars = await ui.findAll({ type: 'Text', text: /▄/ })
-      expect(bars.some((t: any) => t.props.color === 'inactive')).toBe(true)
-      expect(bars.some((t: any) => t.props.color === 'claude')).toBe(true)
+      expect(bars.length > 0 && bars.every((t: any) => t.props.color === undefined || t.props.color === 'claude') && bars.some((t: any) => t.props.color === 'claude')).toBe(true)
     } else {
-      const segs = (await ui.findAll({ type: 'Box' })).filter((b: any) => b.props.backgroundColor === 'inactive')
+      const segs = (await ui.findAll({ type: 'Box' })).filter((b: any) => b.props.backgroundColor === 'claude')
       expect(segs.length > 0).toBe(true)
+      expect((await ui.findAll({ type: 'Box' })).some((b: any) => b.props.backgroundColor === 'inactive')).toBe(false)
       expect(await ui.find({ type: 'Text', text: /^▄+$/ })).toBeUndefined() // keine Zeichen-Balken im Desktop
     }
     // Leere Balkenteile ohne eigene Farbe (Hintergrund des Themes, Fynn 2026-10-06)
@@ -1034,9 +1040,10 @@ test('Englisch (Standard): Kurzfassung für Claude, Skript-Läufe, Chat-Name ohn
   await w.turn($, 1.25)
   const text = await w.ledger($)
   expect(text).toMatch(/^\*\*Cost ledger\*\* · as of Oct 6 12:00 · #/)
-  expect(text).toMatch(/Chats: today \$1\.25 \(1\) · 7 days \$1\.25 · 30 days \$1\.25 · all time \$1\.25/)
+  expect(text).toMatch(/API value \(chats incl\. their mod calls\): today \$1\.25 \(1 chat\) · 7 days \$1\.25 · 30 days \$1\.25 · all time \$1\.25/)
   expect(text).toMatch(/Projects \(30 days\): Script runs \$1\.25/)
   expect(text).toMatch(/Most expensive chats \(30 days\): Chat from Oct 6 12:00 \$1\.25/)
+  expect(text).toMatch(/^Here: this chat \$1\.25 \(no project\)$/m) // Skript-Lauf: kein Projekt
   expect(text).toMatch(/counts against your usage limits/)
   expect(text.split('\n').length <= 10).toBe(true)
   expect(await w.ledger($, 'weeks')).toMatch(/Weeks \(chat \+ mods\): W41 \$1\.25/)
@@ -1048,18 +1055,20 @@ for (const surface of ['terminal', 'desktop'] as const)
     await w.start($, 'S1', 'startup', 'Refactor payments')
     await w.turn($, 4.82, { usage: U('claude-opus-5-5', 1000, 20000) })
     const ui = await mountLedger($, await w.ledger($), surface)
-    for (const label of ['Today', '7 days', '30 days', 'All time', 'Last 14 days', 'Projects · 30 days', 'Most expensive chats · 30 days', 'Mods · 30 days'])
+    for (const label of ['Today', '7 days', '30 days', 'All time', 'Last 14 days', 'Projects · 30 days', 'Most expensive chats · 30 days'])
       expect(await ui.find({ type: 'Text', text: label }), label).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '$4.82' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Oct 6' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined()
-    expect(await ui.find({ text: /reload: \/ledger/ })).toBeDefined()
+    expect(await ui.find({ text: /^API value: what chats and mod calls would have cost/ })).toBeDefined()
+    expect(await ui.find({ text: /^More: \/ledger here · chats · projects · models · weeks · limits · help$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^Here: ClaudeMods \$4\.82 in total, this chat 100 %$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Refactor payments' })).toBeDefined()
     expect(await ui.find({ text: /Heute|Letzte|Teuerste/ })).toBeUndefined()
     await ui.unmount()
     const wk = await mountLedger($, await w.ledger($, 'weeks'), surface)
     expect(await wk.find({ type: 'Text', text: 'Last 14 weeks' })).toBeDefined()
     expect(await wk.findAll({ type: 'Text', text: /^W\d+$/ })).toHaveLength(14)
+    expect(await wk.find({ type: 'Text', text: 'Opus 5.5' })).toBeDefined() // Legende nach Modell nur in den Wochen
     await wk.unmount()
     const md = await mountLedger($, await w.ledger($, 'models'), surface)
     expect(await md.find({ type: 'Text', text: 'Models · 30 days' })).toBeDefined()
@@ -1504,19 +1513,19 @@ test('0.5.0: Reset vorbei, noch keine neue Antwort', DE, async ($, on) => {
   const text = await w.ledger($, 'limits')
   expect(text).toMatch(/5 Stunden: Reset vorbei, noch keine neue Antwort/)
   expect(text).toMatch(/Letzte 5-Stunden-Fenster: 06\.10\. 08–13 0,20 \$ 40 %/)
-  expect(await w.ledger($)).toMatch(/^Limits: 5 Std\.: Reset vorbei · \/ledger limits$/m)
+  expect(await w.ledger($)).toMatch(/^Limits jetzt: Reset vorbei \(\/ledger limits\)$/m)
 })
 
 for (const surface of ['terminal', 'desktop'] as const)
   test(`0.5.0 UI ${surface}: Übersicht mit Limit-Zeile, ohne Fenster und Plan ohne`, DE, async ($, on) => {
     const w = await limitsWorld($, on)
     const text = await w.ledger($)
-    expect(text.split('\n')[1]).toBe('Limits: 5 Std. 30 % · 1,20 $ · Reset 15:00 | Woche 50 % · 1,20 $ | Abo 5,20 $ = 0,0× · /ledger limits')
+    // Ab 0.8.0 in Klartext: eine Zeile zum Abo, eine zu den Limits gerade jetzt
+    expect(text.split('\n').slice(1, 3)).toEqual(['Abo Max 20x seit 06.10.: 5,20 $ API-Wert = 0,0× der 207,00 $', 'Limits jetzt: 5 Std. 30 % · Woche 50 % (/ledger limits)'])
     const ui = await mountLedger($, text, surface)
-    expect(await ui.find({ text: /^5 Std\. 30 % · 1,20 \$ · Reset 15:00$/ })).toBeDefined()
-    expect(await ui.find({ text: /^│ Woche 50 % · 1,20 \$$/ })).toBeDefined()
-    expect(await ui.find({ text: /^│ Abo 5,20 \$ = 0,0×$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: '· /ledger limits' })).toBeDefined()
+    expect(await ui.find({ text: /^Abo Max 20x seit 06\.10\.: 5,20 \$ API-Wert = 0,0× der 207,00 \$$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Limits jetzt: 5 Std\. 30 % · Woche 50 % \(\/ledger limits\)$/ })).toBeDefined()
+    expect((await ui.findAll({ type: 'Text', text: '50 %' })).some((t: any) => t.props.color === 'success')).toBe(true)
     expect(await ui.find({ type: 'Text', text: 'Heute' })).toBeDefined()
     await ui.unmount()
   })
@@ -1599,7 +1608,7 @@ test('0.5.0 Englisch (Standard): /ledger limits, plan und die Limit-Zeile', asyn
     expect(await ui.find({ text: /Stunden|Woche|Abo-Monat/ })).toBeUndefined()
     await ui.unmount()
   }
-  expect((await w.ledger($)).split('\n')[1]).toBe('Limits: 5 h 30 % · $1.20 · reset 15:00 | week 50 % · $1.20 | plan $1.20 = 0.0× · /ledger limits')
+  expect((await w.ledger($)).split('\n').slice(1, 3)).toEqual(['Plan Max 20x since Oct 6: $1.20 API value = 0.0× the $207.00', 'Limits now: 5 h 30 % · week 50 % (/ledger limits)'])
   expect(await w.ledger($, 'help')).toMatch(/^- `\/ledger limits`: .*\n- `\/ledger plan`: .*\n- `\/ledger plan <plan> <day\|today> \[price\]`: /m)
   expect(await w.ledger($, 'plan nope 3')).toMatch(/^Not saved: “nope 3” is not valid\.\n/)
 })
@@ -1698,11 +1707,11 @@ test('0.5.0 Review: Limit-Zeile auch im Leerzustand direkt nach /ledger reset', 
   await w.turn($, 1)
   await w.ledger($, 'reset')
   const text = await w.ledger($)
-  expect(text).toMatch(/^Limits: 5 Std\. 30 % · 0,00 \$ · Reset 15:00 \| Abo 0,00 \$ = 0,0× · \/ledger limits$/m)
+  expect(text).toMatch(/^Abo Max 20x seit 06\.10\.: 0,00 \$ API-Wert = 0,0× der 207,00 \$\nLimits jetzt: 5 Std\. 30 % \(\/ledger limits\)$/m)
   expect(text).toMatch(/Noch keine Einträge/)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await mountLedger($, text, surface)
-    expect(await ui.find({ text: /^5 Std\. 30 %/ })).toBeDefined()
+    expect(await ui.find({ text: /^Limits jetzt: 5 Std\. 30 %/ })).toBeDefined()
     expect(await ui.find({ text: /Noch keine Einträge/ })).toBeDefined()
     await ui.unmount()
   }
@@ -1808,7 +1817,7 @@ test('0.6.0 Hilfe: help, hilfe, ? und HELP liefern Markdown mit Kennung, en und 
   await w.start($)
   for (const word of ['help', 'hilfe', '?', 'HELP']) {
     const text = await w.ledger($, word)
-    expect(text, word).toMatch(/^\*\*cost-ledger · Help\*\* · #[0-9a-z]{5,}\n\nRecords what your chats and other mods cost/)
+    expect(text, word).toMatch(/^\*\*cost-ledger · Help\*\* · #[0-9a-z]{5,}\n\nAfter every answer, records what your chats and the model calls of other mods would have cost/)
     expect(text.length < 10_000, word).toBe(true)
   }
   expect(await w.ledger($, 'help me')).toBe('Unknown: “help me”. All commands: /ledger help')
@@ -1822,9 +1831,13 @@ test('0.6.0 Hilfe (de): Markdown mit Befehlen, Funktionen, Einstellungen und Ter
   const lines = text.split('\n')
   expect(lines[0]).toMatch(/^\*\*cost-ledger · Hilfe\*\* · #[0-9a-z]{5,}$/)
   expect(lines).toContain('**BEFEHLE**')
-  expect(lines).toContain('- `/ledger`: Übersicht: heute, 7 und 30 Tage, gesamt, letzte 14 Tage, Projekte, teuerste Chats, Mods')
+  expect(lines).toContain('- `/ledger`: Summen für heute, 7 Tage, 30 Tage und gesamt, die letzten 14 Tage, Projekte und die teuersten Chats')
   expect(lines).toContain('- `/ledger plan off`: Abo-Einstellung löschen')
-  expect(lines).toContain('Deutsche Wörter gehen auch: hilfe, alle, heute, aus.')
+  expect(lines).toContain('Deutsche Wörter gehen auch: hilfe, hier, alle, heute, aus.')
+  // Nach Zweck (ab 0.8.0): ansehen, einstellen, verwalten
+  const order = lines.filter((l) => l.startsWith('- `/ledger')).map((l) => /^- `([^`]+)`/.exec(l)![1])
+  expect(order.slice(0, 5)).toEqual(['/ledger', '/ledger here [7|30|all]', '/ledger chats|projects|models [7|30|all]', '/ledger weeks', '/ledger limits'])
+  expect(order.slice(-2)).toEqual(['/ledger reset', '/ledger help'])
   expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Abo ○ kein Abo \(\/ledger plan max20 14\) · Sync zwischen Geräten ○ aus \(\/ledger sync <ordner>\) · Speicher belegt 0 % von 4 MiB \(nur Info\) · Erfasst seit 06\.10\.2026 \(nur Info\)$/m)
   expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Aufbewahrung \(Tage\) 30 · Tagesbetrag gelb ab \(\$\) 3 \(Standard\) · Tagesbetrag rot ab \(\$\) 8 \(Standard\)$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure cost-ledger · Mod abschalten: /plugin disable cost-ledger')
@@ -1987,8 +2000,9 @@ test('0.6.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht al
     for (const w of english(RANGE_WORDS)) expect(lists, `${lang}: ${w}`).toContain(w)
     for (const w of english(TODAY_WORDS)) expect(cmds.has(w), `${lang}: ${w}`).toBe(true)
     for (const w of english(OFF_WORDS)) expect(cmds.has(w), `${lang}: ${w}`).toBe(true)
-    for (const w of [...HELP_WORDS, ...RANGE_WORDS, ...TODAY_WORDS, ...OFF_WORDS].filter((w) => w !== '?'))
+    for (const w of [...HELP_WORDS, ...RANGE_WORDS, ...TODAY_WORDS, ...OFF_WORDS, ...HERE_WORDS].filter((w) => w !== '?'))
       expect(cmds.has(w) || notes.has(w), `${lang}: ${w}`).toBe(true)
+    expect(/\[([^\]]+)\]/.exec(row('/ledger here [7|30|all]').cmd)![1]!.split('|')).toEqual(['7', '30', 'all'])
     // Plan-Namen samt Aliasen als ganze Wörter in der Plan-Zeile
     const planRow = tokens(row('/ledger plan <plan> <day|today> [price]').does)
     for (const w of planWords()) expect(planRow.has(w), `${lang}: ${w}`).toBe(true)
@@ -2056,7 +2070,8 @@ test('0.6.0 Hilfe-Modul allgemein: BEDIENUNG nur mit Einträgen, leere Abschnitt
 const SYNC = WIN ? 'E:\\Sync\\cost-ledger' : '/sync/cost-ledger'
 const reEsc = (x: string) => x.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
 const peerRec = (o: Partial<Rec> = {}): Rec => ({
-  ...newRec({ project: 'Geheim', root: 'D:\\Home\\other\\geheim', title: 'Fremder Titel', kind: 'terminal', remote: 'github.com/x/geheim' }, NOW - DAY, 0),
+  // Ohne Wurzel, also ohne `proj`: so schreibt ein Gerät mit 0.7.0. Projekt, Titel und Remote dürfen trotzdem nicht in die Datei
+  ...newRec({ project: 'Geheim', root: '', title: 'Fremder Titel', kind: 'terminal', remote: 'github.com/x/geheim' }, NOW - DAY, 0),
   days: { [TODAY]: 2 },
   ...o,
 })
@@ -2092,7 +2107,7 @@ test('0.7.0 sync.ts: Ordner prüfen, Dateinamen, Geräte-ID und -Name, gespeiche
   expect(cleanDevice({ id: '../x', name: 'a' }, fb)).toBeNull()
 })
 
-test('0.7.0 Datenschutz: Die Sync-Datei enthält keine Pfade, kein host/owner/repo, keinen Windows-Benutzernamen, keine Titel', DE, async ($, on) => {
+test('0.7.0/0.8.0 Datenschutz: Die Sync-Datei enthält keine Pfade, kein host/owner/repo, keinen Windows-Benutzernamen, keine Titel; nur den letzten Ordnernamen', DE, async ($, on) => {
   const USER = 'alex'
   const home = WIN ? `D:\\Home\\${USER}\\Projekte\\geheim-projekt` : `/home/${USER}/Projekte/geheim-projekt`
   const w = world(on, { root: home, repoName: 'geheim-projekt', remote: `https://${USER}:tok123@github.com/FynnXland/geheim-projekt.git` })
@@ -2103,8 +2118,11 @@ test('0.7.0 Datenschutz: Die Sync-Datei enthält keine Pfade, kein host/owner/re
   // Gegenprobe: lokal steht alles drin, in der Datei nichts davon
   expect(w.rec()).toMatchObject({ root: home, title: 'Vertraulicher Chattitel', remote: 'github.com/FynnXland/geheim-projekt', project: 'geheim-projekt' })
   const text = w.files.get(ownPath(w))!
-  for (const bad of [USER, 'Users', 'Projekte', 'geheim', 'github', 'FynnXland', 'tok123', 'Vertraulich', 'Chattitel', 'Sync', ROOT])
+  for (const bad of [USER, 'Users', 'Home', 'Projekte', 'github', 'FynnXland', 'tok123', 'Vertraulich', 'Chattitel', 'Sync', ROOT])
     expect(text.includes(bad), bad).toBe(false)
+  // Ab 0.8.0 (Entscheidung 3, ändert Bedingung 1a): nur der letzte Ordnername, genau einmal, als `proj`
+  expect(text.split('geheim-projekt').length - 1).toBe(1)
+  expect(text).toMatch(/"proj":"geheim-projekt"/)
   expect(text).not.toMatch(/[A-Za-z]:[\\/]/) // kein Laufwerkspfad
   expect(text.includes('\\')).toBe(false) // kein Backslash, also kein Windows-Pfad
   expect(text).not.toMatch(/[\w-]+\.[a-z]{2,}\/[\w.-]+\/[\w.-]+/i) // kein host/owner/repo
@@ -2113,7 +2131,7 @@ test('0.7.0 Datenschutz: Die Sync-Datei enthält keine Pfade, kein host/owner/re
   const r = Object.values(f.recs)[0]!
   expect([r.project, r.root, r.title, r.remote, r.act, r.hours]).toEqual(['', '', '', '', {}, {}])
   // Genau diese Felder, keins mehr (ein neues Feld in Rec käme sonst ungefragt mit, Review S2)
-  expect(Object.keys(r).sort()).toEqual(['act', 'c', 'days', 'firstAt', 'hours', 'kind', 'lastAt', 'lim', 'mods', 'modModels', 'models', 'project', 'remote', 'rl', 'root', 'title', 'v'].sort())
+  expect(Object.keys(r).sort()).toEqual(['act', 'c', 'days', 'firstAt', 'hours', 'kind', 'lastAt', 'lim', 'mods', 'modModels', 'models', 'proj', 'project', 'remote', 'rl', 'root', 'title', 'v'].sort())
   expect(r.firstAt % H).toBe(0) // erste Buchung nur auf die Stunde
   // Beträge, Tage, Fenster und Modelle sind drin
   near(r.days[TODAY]!, 1.5)
@@ -2123,6 +2141,17 @@ test('0.7.0 Datenschutz: Die Sync-Datei enthält keine Pfade, kein host/owner/re
   expect(shareRec(w.rec()!)).toMatchObject({ project: '', root: '', title: '', remote: '' })
   const back = parseFile(peerFile('ab12cd34', 'Laptop', { X: peerRec() }), 'ab12cd34')!
   expect(back.recs.X).toMatchObject({ project: '', root: '', title: '', remote: '' })
+  expect(back.recs.X!.proj).toBeUndefined() // 0.7.0-Gerät: kein Ordnername
+  // Ordner gleich dem Benutzernamen, mit ihm im Namen, Laufwerkswurzel, Trenner oder Doppelpunkt → leer
+  const users = usersIn([home])
+  expect(users).toEqual([USER])
+  for (const root of [`D:\\Home\\${USER}`, `D:\\Home\\${USER}\\${USER}-notizen`, `D:\\Daten\\Alex2026`, 'E:\\', '/'])
+    expect(shareRec({ ...w.rec()!, root }, users).proj, root).toBeUndefined()
+  expect(safeProj('a:b', [])).toBe('')
+  expect(safeProj('x'.repeat(65), [])).toBe('')
+  expect(safeProj('Zeile\n2', [])).toBe('')
+  // Worktree zählt zum Hauptordner
+  expect(shareRec({ ...w.rec()!, root: 'E:\\Dev\\ClaudeMods\\.claude\\worktrees\\brave-shaw' }, users).proj).toBe('ClaudeMods')
 })
 
 test('0.7.0 Datenschutz: Mod-Namen, eigene Modell-IDs, fremde Felder und Session-Schlüssel kommen nicht in die Datei (Review S2)', () => {
@@ -2151,7 +2180,7 @@ test('0.7.0 Datenschutz: Mod-Namen, eigene Modell-IDs, fremde Felder und Session
   const merged = mergeRecs([], [parseFile(text, 'ab12cd34')!])
   expect(Object.keys(merged[0]!.rec.mods)).toEqual([`${DEVICE_PROJECT}Laptop`])
   const sum = summaryText(aggregate(merged, NOW, {}), 'overview', 30, '#t', 'de')
-  expect(sum).toMatch(/^Mods \(30 Tage\): Laptop \(anderes Gerät\) 0,75 \$ \(3×\)$/m)
+  expect(sum).toMatch(/^Davon Mod-Aufrufe \(30 Tage\): Laptop \(anderes Gerät\) 0,75 \$ \(3×\)$/m)
 })
 
 test('0.7.0 Fehlerpfade im Turn, bei reset und sync name: Ordner weg oder nicht beschreibbar → nichts angelegt, Turn unverändert (Review S5)', { ...DE }, async ($, on) => {
@@ -2211,7 +2240,7 @@ test('0.7.0 /ledger sync: Pfad mit Leerzeichen, ungültige Pfade, Stand, Name, a
   const state = await w.ledger($, 'sync')
   expect(state.includes(`Sync an: ${dir} · dieses Gerät: Laptop Büro (ID ${dev.id})`)).toBe(true)
   expect(state).toMatch(/Noch kein anderes Gerät/)
-  expect(state).toMatch(/keine Pfade, Projekt- oder Mod-Namen, Repositories, Chat-Titel oder Nachrichten\.$/)
+  expect(state).toMatch(/je Projekt den letzten Ordnernamen: keine Pfade, Mod-Namen, Repositories, Chat-Titel oder Nachrichten\.$/)
   expect(await w.ledger($, 'sync aus')).toBe('Sync aus. Die Datei dieses Geräts bleibt im Ordner; gelöscht wurde nichts.')
   expect(w.saved.has('meta:sync')).toBe(false)
   expect(w.saved.get('meta:device')).toEqual({ id: dev.id, name: 'Laptop Büro' })
@@ -2233,7 +2262,7 @@ test('0.7.0 /ledger mit zwei anderen Geräten: Summen, Geräte im Kopf, fremde C
   w.files.set(inDir(SYNC, 'cost-ledger-ab12cd34-PC.json'), peerFile('ab12cd34', 'Konflikt', { K: peerRec({ days: { [TODAY]: 100 } }) }))
   const text = await w.ledger($)
   expect(text.split('\n')[0]).toMatch(/ · 3 Geräte$/)
-  expect(text).toMatch(/^Chats: heute 3,00 \$ \(2\) · 7 Tage 7,00 \$ · 30 Tage 7,00 \$ · gesamt 7,00 \$$/m)
+  expect(text).toMatch(/^API-Wert \(Chats samt ihren Mod-Aufrufen\): heute 3,00 \$ \(2 Chats\) · 7 Tage 7,00 \$ · 30 Tage 7,00 \$ · gesamt 7,00 \$$/m)
   expect(text).toMatch(/Büro \(anderes Gerät\) 4,00 \$ · Laptop \(anderes Gerät\) 2,00 \$ · ClaudeMods 1,00 \$/)
   expect(text).not.toMatch(/Geheim|Fremder Titel|Konflikt|Skript-Läufe/)
   expect(w.st.fs.some(([op, p]) => op === 'read' && (p.endsWith('notes.txt') || p.endsWith('-PC.json')))).toBe(false)
@@ -2464,4 +2493,223 @@ test('0.7.0 Hilfe: Sync-Zeile mit Gerätename statt Ordner; Zustand beim Aufruf'
   const help = await w.ledger($, 'help')
   expect(help).toMatch(/Sync zwischen Geräten ● dieses Gerät: Laptop \(\/ledger sync off\)/)
   expect(help.includes(SYNC)).toBe(false)
+})
+
+// ---------- 0.8.0: /ledger here, Ordnername über Geräte, Übersicht, Ultra ----------
+
+// Windows-Benutzerordner, zusammengesetzt: Die Export-Prüfung verbietet die Pfadform wörtlich im Quelltext
+const WIN_HOME = ['C:', 'Users'].join('\\')
+const WT_ROOT = WIN ? `${ROOT}\\.claude\\worktrees\\brave-shaw` : '/dev/ClaudeMods/.claude/worktrees/brave-shaw'
+
+/** Zwei ältere Chats im Projekt (einer mit Mod-Aufruf), einer in einem anderen Projekt, einer als Skript-Lauf. */
+const hereSaved = () =>
+  new Map<string, unknown>([
+    ['s:A', recOf('ClaudeMods', { [TODAY]: 10, [dayBefore(NOW, 40)]: 20 }, { mods: { sidekick: { days: { [TODAY]: { usd: 1, calls: 4 } } } } })],
+    ['s:B', recOf('ClaudeMods', { [dayBefore(NOW, 10)]: 3 })],
+    ['s:C', recOf('Fleech', { [TODAY]: 50 })],
+    ['s:D', recOf('ClaudeMods', { [TODAY]: 7 }, { kind: 'script' })],
+  ])
+
+test('0.8.0 /ledger here: Anteil des Chats am Projekt, Zeiträume all/30/7, Mod-Aufrufe zählen mit, Worktree zählt zum Hauptordner', DE, async ($, on) => {
+  const w = world(on, { saved: hereSaved(), root: WT_ROOT })
+  await w.start($)
+  await w.turn($, 5)
+  // gesamt: A 10 + 20 + 1 (Mod) + B 3 + dieser Chat 5 = 39; Fleech und der Skript-Lauf zählen nicht
+  const all = await w.ledger($, 'here')
+  expect(all).toMatch(/^\*\*Projekt ClaudeMods\*\*: 39,00 \$ API-Wert seit 06\.10\.2026 \(Aufzeichnung\), dieser Chat 5,00 \$ \(12,8 %\) · nur dieses Gerät · 06\.10\. 12:00 · #[0-9a-z]{5,}$/)
+  expect(all.split('\n')).toHaveLength(1)
+  expect(await w.ledger($, 'here all')).toMatch(/: 39,00 \$ API-Wert seit/)
+  expect(await w.ledger($, 'hier alle')).toMatch(/: 39,00 \$ API-Wert seit/)
+  // 30 Tage: ohne den Tag vor 40 Tagen
+  expect(await w.ledger($, 'here 30')).toMatch(/^\*\*Projekt ClaudeMods\*\*: 19,00 \$ API-Wert 30 Tage, dieser Chat 5,00 \$ \(26,3 %\)/)
+  // 7 Tage: ohne B
+  expect(await w.ledger($, 'here 7')).toMatch(/^\*\*Projekt ClaudeMods\*\*: 16,00 \$ API-Wert 7 Tage, dieser Chat 5,00 \$ \(31,3 %\)/)
+  // Nur ein Zeitraum; alles andere ist unbekannt
+  expect(await w.ledger($, 'here foo')).toBe('Unbekannt: „here foo“. Alle Befehle: /ledger help')
+  expect(await w.ledger($, 'here 7 30')).toMatch(/^Unbekannt: „here 7 30“/)
+  expect(await w.ledger($, 'this')).toMatch(/^Unbekannt: „this“/)
+})
+
+test('0.8.0 /ledger here: vor der ersten Buchung „noch nichts gebucht“; Skript-Lauf ohne Projekt; Englisch', async ($, on) => {
+  const w = world(on, { saved: hereSaved() })
+  await w.start($)
+  expect(await w.ledger($, 'here')).toMatch(/^\*\*Project ClaudeMods\*\*: \$34\.00 API value since Oct 6, 2026 \(recording\), this chat nothing booked yet \(0 %\) · this device only/)
+  const ui = await mountLedger($, await w.ledger($, 'here'), 'terminal')
+  expect(await ui.find({ type: 'Text', text: 'nothing booked yet' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('0.8.0 /ledger here: Skript-Lauf hat kein Projekt, die Zahl ist der Chat, kein Ring', DE, async ($, on) => {
+  const w = world(on, { saved: hereSaved(), surfaces: [] })
+  await w.start($)
+  await w.turn($, 2)
+  expect(await w.ledger($, 'here')).toMatch(/^\*\*Dieser Chat\*\* \(kein Projekt\): 2,00 \$ API-Wert seit 06\.10\.2026 \(Aufzeichnung\) · nur dieses Gerät/)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mountLedger($, await w.ledger($, 'here'), surface)
+    expect(await ui.find({ text: /^Kein Projekt \(Skript-Lauf oder Ordner unbekannt\)/ }), surface).toBeDefined()
+    if (surface === 'desktop') {
+      const svg = (await ui.findAll({ type: 'Svg' }))[0] as any
+      expect(svg.props.source.includes('<circle')).toBe(false)
+      expect(svg.props.source).toMatch(/>2,00 \$</)
+    } else expect(await ui.find({ type: 'Text', text: /[█░]/ })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`0.8.0 UI ${surface}: /ledger here zeichnet Ring bzw. Balken, große Zahl, Chat-Zeile und Fußzeile; 40 Spalten passen`, DE, async ($, on) => {
+    const w = world(on, { saved: hereSaved(), root: WT_ROOT })
+    await w.start($)
+    await w.turn($, 5)
+    for (const columns of [40, 120]) {
+      const ui = await mountLedger($, await w.ledger($, 'here'), surface, columns, 'here')
+      expect(await ui.find({ text: /^ENGINE:/ })).toBeUndefined()
+      expect(await ui.find({ text: /^seit 06\.10\.2026 \(Aufzeichnung\) · nur dieses Gerät \(Sync aus: \/ledger sync <Ordner>\)$/ })).toBeDefined()
+      expect(await ui.find({ text: /^API-Wert samt Mod-Aufrufen: Im Abo zählt er aufs Kontingent/ })).toBeDefined()
+      if (surface === 'desktop') {
+        const svgs = (await ui.findAll({ type: 'Svg' })) as any[]
+        expect(svgs).toHaveLength(1)
+        const p = svgs[0].props
+        expect(Number.isInteger(p.width) && Number.isInteger(p.height) && p.height === 104).toBe(true)
+        expect(p.source.length < 131072).toBe(true)
+        expect(p.source).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" width="\d+" height="104"/)
+        expect(p.source).toMatch(/>12,8 %</) // Anteil in der Mitte des Rings
+        expect(p.source).toMatch(/>39,00 \$</) // große Zahl ohne Cent erst ab 100 $
+        expect(p.source).toMatch(/ClaudeMods · 3 Chats · API-Wert gesamt/)
+        expect(p.source).toMatch(/dieser Chat 5,00 \$ · 1 Tag aktiv/)
+        expect(p.source).not.toMatch(/<script|on[a-z]+=/i)
+        expect(p.alt).toMatch(/^Projekt ClaudeMods: 39,00 \$/) // ohne Markdown (Review K3)
+        // Desktop: keine Zeichen-Balken, keine Kommaprozente
+        expect(await ui.find({ type: 'Text', text: /[█░]/ })).toBeUndefined()
+      } else {
+        expect((await ui.find({ type: 'Text', text: 'ClaudeMods · 3 Chats · API-Wert gesamt' }))?.props).toMatchObject({ color: 'claude', bold: true })
+        expect((await ui.find({ type: 'Text', text: '39,00 $' }))?.props.bold).toBe(true)
+        const on = (await ui.find({ type: 'Text', text: /^█+$/ })) as any
+        const off = (await ui.find({ type: 'Text', text: /^░+$/ })) as any
+        expect(on.props.color).toBe('claude')
+        expect(off.props.color).toBe('inactive')
+        const cells = on.children[0].length + off.children[0].length
+        expect(cells <= 40 && cells + ' 12,8 %'.length <= columns - 4).toBe(true) // Balken + „ 12,8 %“ passen in die Zeile
+        expect(on.children[0].length).toBe(Math.round(0.128 * cells))
+        expect(await ui.find({ type: 'Text', text: 'dieser Chat 5,00 $ · 1 Tag aktiv' })).toBeDefined()
+      }
+      await ui.unmount()
+    }
+  })
+
+test('0.8.0 here.ts: Mindestbogen unter 1 %, genaue Zahl, große Zahl ab 100 $ ohne Cent, Balken', () => {
+  const base = { now: NOW, range: 0, project: 'P', projectChats: 2, chatDays: 1, booked: true, since: NOW, devices: null }
+  const tiny = { ...base, projectUsd: 1000, chatUsd: 0.4 }
+  expect(shareText(shareOf(tiny), 'de')).toBe('< 0,1 %')
+  expect(shareText(0.016, 'de')).toBe('1,6 %')
+  expect(shareText(0.016, 'en')).toBe('1.6 %')
+  expect(shareText(0, 'de')).toBe('0 %')
+  expect(shareText(1, 'de')).toBe('100 %')
+  expect(shareText(null, 'de')).toBe('–')
+  // Mindestbogen: 1 % des Kreises (Endpunkt nicht auf dem Startpunkt), die Zahl bleibt genau
+  expect(arcPath(0.0004, 52, 52)).toBe(arcPath(0.01, 52, 52))
+  expect(arcPath(0.5, 52, 52)).not.toBe(arcPath(0.01, 52, 52))
+  const pic = hereSvg(tiny, 'de')
+  expect(pic.source).toMatch(/<path d="M52 12A40 40 0 0 1 /)
+  expect(bigUsd(887.4, 'de')).toBe('887 $')
+  expect(bigUsd(1204.5, 'en')).toBe('$1,205')
+  expect(bigUsd(12345.6, 'de')).toBe('12.346 $')
+  expect(bigUsd(39, 'de')).toBe('39,00 $')
+  expect(hereBar(0.0004, 40)).toEqual({ on: 1, off: 39 })
+  expect(hereBar(0, 40)).toEqual({ on: 0, off: 40 })
+  expect(hereBar(null, 40)).toEqual({ on: 0, off: 40 })
+  // Ganzer Ring bei 100 %: ein Kreis statt eines Bogens (ein Bogen auf seinen Startpunkt zeichnet nichts)
+  expect(hereSvg({ ...base, projectUsd: 5, chatUsd: 5 }, 'de').source).toMatch(/<circle cx="52" cy="52" r="40" fill="none" stroke="#D77757"/)
+  // Text in der Zeichnung ist maskiert
+  expect(hereSvg({ ...base, project: 'a<b>&"c', projectUsd: 5, chatUsd: 1 }, 'de').source).toMatch(/a&lt;b&gt;&amp;&quot;c/)
+})
+
+test('0.8.0 Sync: gleicher Ordnername auf zwei Geräten wird ein Projekt (ohne Groß/Klein), ohne Ordnernamen bleibt der Chat beim Gerät', DE, async ($, on) => {
+  const w = world(on, { root: WT_ROOT })
+  await w.start($)
+  await w.turn($, 1)
+  await w.ledger($, `sync ${SYNC}`)
+  const laptop = (sid: string, root: string, days: Record<string, number>) => ({ ...peerRec({ days }), root })
+  w.files.set(
+    inDir(SYNC, fileName('ab12cd34')),
+    buildFile({ id: 'ab12cd34', name: 'Laptop' }, NOW - 30 * DAY, [
+      { id: 'L1', rec: laptop('L1', `${WIN_HOME}\\bob\\Code\\claudemods`, { [TODAY]: 4 }) },
+      { id: 'L2', rec: laptop('L2', `${WIN_HOME}\\bob\\Code\\Anderes`, { [TODAY]: 2 }) },
+      { id: 'L3', rec: laptop('L3', `${WIN_HOME}\\bob`, { [TODAY]: 8 }) }, // Benutzerordner: kein Ordnername
+    ], NOW - H, usersIn([`${WIN_HOME}\\bob\\Code`])),
+  )
+  w.files.set(inDir(SYNC, fileName('ef56ab78')), peerFile('ef56ab78', 'Büro', { B1: peerRec({ days: { [TODAY]: 16 } }) })) // 0.7.0
+  const text = await w.ledger($, 'here')
+  expect(text).toMatch(/^\*\*Projekt ClaudeMods\*\*: 5,00 \$ API-Wert seit .*, dieser Chat 1,00 \$ \(20,0 %\) · Gerät [0-9a-f]{4} \+ Laptop \+ Büro/)
+  const projects = await w.ledger($, 'projects')
+  expect(projects).toMatch(/Büro \(anderes Gerät\) 16,00 \$ \(1 Chat\)/)
+  expect(projects).toMatch(/Laptop \(anderes Gerät\) 8,00 \$ \(1 Chat\)/)
+  expect(projects).toMatch(/ClaudeMods 5,00 \$ \(2 Chats\)/)
+  expect(projects).toMatch(/Anderes 2,00 \$ \(1 Chat\)/)
+  // Fremde Chats beim Projekt tragen ihr Gerät
+  expect(await w.ledger($, 'chats')).toMatch(/Chat vom 05\.10\. 12:00 \(ClaudeMods, Laptop\) 4,00 \$/)
+  const ui = await mountLedger($, await w.ledger($, 'chats'), 'terminal')
+  expect(await ui.find({ text: /^ClaudeMods \(Laptop\) · 06\.10\.$/ })).toBeDefined()
+  await ui.unmount()
+  // Die eigene Datei trägt den Ordnernamen des Hauptordners, nicht den des Worktrees
+  expect(JSON.parse(w.files.get(ownPath(w))!).recs.S1.proj).toBe('ClaudeMods')
+})
+
+test('0.8.0 Kompatibilität: Eine 0.8.0-Datei ist für 0.7.0 gültig (v bleibt 1, proj ist ein Zusatzfeld); 0.7.0-Datei wird gelesen', () => {
+  const rec = { ...peerRec(), root: 'D:\\Dev\\ClaudeMods' }
+  const text = buildFile({ id: 'ab12cd34', name: 'Laptop' }, null, [{ id: 'S1', rec }], NOW)
+  const raw = JSON.parse(text)
+  expect(raw.v).toBe(1)
+  expect(raw.kind).toBe('cost-ledger-device')
+  expect(raw.recs.S1.proj).toBe('ClaudeMods')
+  // 0.7.0 liest jeden Datensatz mit cleanRec: das neue Feld fällt weg, der Datensatz bleibt gültig
+  const asOld = cleanRec(raw.recs.S1)!
+  expect(asOld).not.toBeNull()
+  expect('proj' in asOld).toBe(false)
+  near(asOld.days[TODAY]!, 2)
+  // Umgekehrt: 0.7.0-Datei (ohne proj) → unter dem Gerät
+  const old = parseFile(peerFile('ef56ab78', 'Büro', { X: peerRec() }), 'ef56ab78')!
+  expect(mergeRecs([], [old])[0]!.rec.project).toBe(`${DEVICE_PROJECT}Büro`)
+})
+
+test('0.8.0 Ultra: /ledger plan ultra ohne Listenpreis, mit eigenem Preis Faktor', DE, async ($, on) => {
+  expect(parsePlan(['ultra', '14'], NOW)).toEqual({ v: 1, plan: 'ultra', day: 14, at: NOW })
+  expect(parsePlan(['Ultra', 'heute', '400'], NOW)).toEqual({ v: 1, plan: 'ultra', day: 6, price: 400, at: NOW })
+  const w = world(on)
+  await w.start($)
+  expect(await w.ledger($, 'plan ultra 14')).toMatch(/^Abo gespeichert: Ultra, Abrechnungstag 14, ohne Preis\./)
+  expect(await w.ledger($, 'plan ultra 14 400')).toMatch(/^Abo gespeichert: Ultra, Abrechnungstag 14, 400,00 \$ im Monat\./)
+})
+
+test('0.8.0 Review S3: /ledger here nennt Sync-Fehler und Schreibfehler wie /ledger, auf beiden Surfaces', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.turn($, 1)
+  await w.ledger($, `sync ${SYNC}`)
+  w.st.listFails = true // Laufwerk getrennt
+  const text = await w.ledger($, 'here')
+  expect(text.split('\n')[0]).toMatch(/^\*\*Projekt ClaudeMods\*\*: 1,00 \$/)
+  expect(text).toMatch(/^Sync gescheitert: .*\(das lokale Kostenbuch ist unverändert\)\.$/m)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await mountLedger($, text, surface, 120, 'here')
+    expect((await ui.find({ type: 'Text', text: /^Sync gescheitert: / }))?.props.color, surface).toBe('warning')
+    await ui.unmount()
+  }
+})
+
+test('0.8.0 Review K2/K3/K8: kein Ordnername für Skript-Läufe; alt ohne Markdown; ohne gebundene Session „noch nichts gebucht“', DE, async ($, on) => {
+  const script = shareRec({ ...peerRec(), kind: 'script', root: 'D:\\Dev\\ClaudeMods' })
+  expect(script.proj).toBeUndefined()
+  expect(shareRec({ ...peerRec(), root: 'D:\\Dev\\ClaudeMods' }).proj).toBe('ClaudeMods')
+  const h = { now: NOW, range: 0, project: 'ClaudeMods', projectUsd: 10, projectChats: 2, chatUsd: 1, chatDays: 1, booked: true, since: NOW, devices: null }
+  expect(hereSvg(h, 'de').alt).toMatch(/^Projekt ClaudeMods: 10,00 \$/)
+  expect(hereSvg(h, 'de').alt.includes('**')).toBe(false)
+  // Lange Projektnamen: die Überschrift im Bild wird gekürzt, das Bild bleibt schmal
+  expect(hereSvg({ ...h, project: 'x'.repeat(64) }, 'de').width < 520).toBe(true)
+  // Nach einem Modul-Reload feuert nur session.start; die Session ist erst mit dem nächsten Prompt gebunden
+  const w = world(on, { saved: hereSaved() })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  expect(await w.ledger($, 'here')).toMatch(/^\*\*Projekt ClaudeMods\*\*: 34,00 \$ API-Wert .*, dieser Chat noch nichts gebucht \(0 %\)/)
+  // Ohne Projekt und ohne Buchung ein lesbarer Satz
+  expect(hereText({ ...h, project: null, booked: false, chatUsd: 0 }, 'de')).toBe('**Dieser Chat** (kein Projekt): noch nichts gebucht · nur dieses Gerät')
 })
