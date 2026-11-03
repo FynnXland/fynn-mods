@@ -25,13 +25,12 @@ declares the events it hooks into and the API calls it makes, `claude plugin val
 each mod's README explains what they are for. These declarations and what the code does with them are the scope of this
 policy:
 
-- **Holding back or sending messages:** sidekick, limit-bars, worklist and quick-replies can hold a message back or
-  send one in your name, as their READMEs describe (for example only after your choice in a dialog, or after a to-do
-  check passes). A message sent or changed without that condition is a vulnerability.
-- **Model calls on your account:** sidekick, worklist, quick-replies (`/replies more on`) and limit-bars (`/keepwarm`).
+- **Holding back or sending messages:** sidekick, limit-bars and quick-replies can hold a message back or
+  send one in your name, as their READMEs describe (for example only after your choice in a dialog). A message sent or changed without that condition is a vulnerability.
+- **Model calls on your account:** sidekick, quick-replies (`/replies more on`) and limit-bars (`/keepwarm`).
   What they send is listed in each README; anything beyond that is in scope.
 - **Running commands:** sidekick and limit-bars run Claude Code commands only on your click or choice, from the set
-  described in their READMEs; worklist runs a to-do that starts with `/name` as that command.
+  described in their READMEs.
 - **Processes:** only limit-bars, only with `storagePath` set, starts Windows PowerShell with two fixed, read-only
   scripts. The drive path is passed as an environment variable, never as part of the script.
 - **Stored data:** each mod keeps its data in its own plugin store, a JSON file under `~/.claude/plugins/store/` on

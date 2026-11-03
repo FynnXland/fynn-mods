@@ -4,7 +4,7 @@ A cost ledger across all your chats. After every answer, cost-ledger records wha
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.7.0** · Requires Claude Code v2.1.271 or later (setting options)
+Tested with Claude Code **v2.1.295** · Plugin version **0.7.0** · Requires Claude Code v2.1.287 or later (mods)
 
 ## Usage
 
@@ -18,7 +18,7 @@ Tested with Claude Code **v2.1.295** · Plugin version **0.7.0** · Requires Cla
 | `/ledger limits` | Subscription limits: the current 5-hour and weekly window (% used, API value, reset time with countdown, projection “100 % ≈ $X”), your subscription month (API value against the plan price, factor, next renewal) and the last 10 five-hour windows with their average. Each window also shows the estimated share used outside the ledger (see below) |
 | `/ledger plan <plan> <day\|today> [price]` | Set your plan and billing day: `pro`, `max5` (`5x`), `max20` (`20x`), `team` or `enterprise`; day 1–31, or `today` if your plan renewed today; monthly price in $ (comma or dot). Without a price, the list price is used: Pro $20, Max 5x $100, Max 20x $200; Team and Enterprise have none. Example: `/ledger plan max20 14` |
 | `/ledger plan` | Show the plan setting and the syntax; `/ledger plan off` deletes it |
-| `/ledger sync <folder>` | Turn on sync between your computers through a shared folder (absolute path, spaces allowed), e.g. `/ledger sync <your cloud folder>/cost-ledger`. Run it on every computer with the same folder |
+| `/ledger sync <folder>` | Turn on sync between your computers through a shared folder (absolute path, spaces allowed), e.g. `/ledger sync <your cloud folder>/cost-ledger`. Run it on every computer with the same folder; step by step under [Sync between devices](#sync-between-devices) |
 | `/ledger sync` | Sync state: folder, this device's name and ID, the other devices with the time of their last update |
 | `/ledger sync name <name>` | Name this device (up to 30 characters); the other devices show its chats under this name. Default: “Device 1a2b” from a random ID |
 | `/ledger sync off` | Turn sync off. This device's file stays in the folder; cost-ledger never deletes files |
@@ -49,18 +49,109 @@ All amounts are API values. On a subscription they count toward your usage limit
 
 ## Sync between devices
 
-The plugin store lives on one computer. To see your PC and your laptop together, give both the same folder that your cloud drive (OneDrive, Dropbox, Syncthing …) keeps in sync:
+The ledger lives in the plugin store, and that store stays on one computer. If you use Claude Code on a PC and a laptop, each one only sees its own chats. Sync brings them together: every computer writes its own file into a folder that your cloud drive keeps in sync, and `/ledger` on any of them adds up all files. Sync is **off** until you turn it on; before that cost-ledger reads and writes no files at all.
+
+### What you need
+
+- **A folder that your cloud drive syncs**, present on every computer as a normal folder on a local disk: OneDrive, Dropbox, Google Drive for desktop, iCloud Drive, Syncthing or similar. A network share (`\\server\…`) does not work.
+- **cost-ledger 0.7.0 or later on every computer**, installed the same way (`cost-ledger@fynn-mods`; see Installation). To update: `claude plugin update cost-ledger@fynn-mods`.
+- If your cloud drive keeps files online-only (OneDrive “Files On-Demand”, Dropbox “online-only”), mark the sync folder as always available offline, so the other devices' files are really on disk.
+
+### Set it up, step by step
+
+The example uses two computers called “PC” and “Laptop”. For more computers, repeat steps 4–5 on each one.
+
+**1. Choose the folder.** Use a new, empty subfolder in your cloud drive, for example `cost-ledger`. You may create it yourself or let step 2 create it. You need its full path on each computer. The path may differ between computers (another drive letter, another user folder); what matters is that your cloud drive syncs it to the same place.
+
+- **Windows:** create the folder in File Explorer, right-click it and choose **Copy as path**. That gives you the full path with drive letter, for example `D:\OneDrive\cost-ledger` or, for OneDrive in your user folder, `C:\…\OneDrive\cost-ledger`. You can paste it with its quotes.
+- **macOS:** select the folder in Finder and press <kbd>Option</kbd>+<kbd>Cmd</kbd>+<kbd>C</kbd> (copy path), for example `/Users/<you>/Dropbox/cost-ledger`.
+- **Linux:** for example `/home/<you>/Sync/cost-ledger` (Syncthing).
+
+Rules for the path: absolute; on Windows with a drive letter (`D:\…` or `D:/…`); spaces are fine, quotes around the path are optional; no network path, no `..`, not the root of a drive.
+
+**2. Turn sync on, on the PC.** In any Claude Code session on the PC (terminal or desktop app), with the path from step 1:
 
 ```text
-/ledger sync <your cloud folder>/cost-ledger
+/ledger sync D:\OneDrive\cost-ledger
 ```
 
-- **One file per device:** each computer writes only its own file `cost-ledger-<id>.json` into that folder and reads the others. It writes when you run `/ledger …` and after answers at most every 15 minutes; it reads the other files only when you run `/ledger …`.
-- **What the file contains:** amounts per day, limit windows, models and tokens, the total of all mod calls per day (without mod names), and what merging needs: each chat's session ID, the time of its last booking and the hour of its first, the times of the first and last booking in each limit window, and whether it ran in the desktop app, the terminal or a script; plus the device's name and ID. **No paths, no project, folder or mod names, no Git remote, no chat titles or messages.** Model IDs that are not plain names (a Bedrock ARN, a custom deployment name) are written as “other”. The breakdown by project therefore stays local: chats and mod calls from another device appear as one group, “Laptop (other device)”, and chats without a title (“Chat from …”).
+cost-ledger creates the folder if needed, writes its file `cost-ledger-<id>.json` there right away and answers:
+
+```text
+Sync on: <folder> · this device: Device 3f9a · 0 other devices found. /ledger shows all devices from now on.
+```
+
+followed by one line on what the file contains. If it answers “Not saved: …” instead, see [When something goes wrong](#when-something-goes-wrong); nothing was changed then.
+
+**3. Name the PC** (optional, but recommended):
+
+```text
+/ledger sync name PC
+```
+
+Without a name, the other computers show it as “Device 3f9a” (from its random ID). The name can have up to 30 characters. Apart from the random ID, it is the only thing about the device that goes into the file; cost-ledger never uses your computer or user name.
+
+**4. Wait for your cloud drive.** Check on the laptop that `cost-ledger-<id>.json` has arrived in the folder (usually seconds to a minute).
+
+**5. Turn sync on, on the laptop**, with the laptop's path to the same folder (here OneDrive lives on drive `E:`), then name it:
+
+```text
+/ledger sync E:\OneDrive\cost-ledger
+/ledger sync name Laptop
+```
+
+This time the answer ends with “1 other device found”.
+
+**6. Check it.** On the laptop:
+
+- `/ledger sync` lists the PC with the time of its last update and its number of chats:
+
+  ```text
+  Sync on: <folder> · this device: Laptop (ID 7c21e0b4)
+
+  • PC: as of Oct 22 14:05, 38 chats
+  ```
+
+- `/ledger` shows “2 devices” at the top. The totals, the history and the models include the PC. In the project list, the PC's chats and mod calls appear as one group, “PC (other device)”; in the chat list its chats are called “Chat from …”, because titles are not shared.
+
+Back on the PC, `/ledger` shows “2 devices” as soon as your cloud drive has brought the laptop's file over.
+
+### Everyday use
+
+There is nothing more to do. Each computer writes its file whenever you run `/ledger …`, and after answers at most every 15 minutes. It reads the other files only when you run `/ledger …`. So the other device's numbers are as of its last write plus your cloud drive's delay; `/ledger sync` shows how old each one is. To get the newest numbers from the other computer, run `/ledger` there once.
+
+### Change the name, the folder or turn it off
+
+- **Rename a device:** `/ledger sync name <name>` at any time. The other computers see the new name after the next write and sync.
+- **Move to another folder:** run `/ledger sync <new folder>` on every computer. The old file stays in the old folder; delete it there by hand if you no longer need it.
+- **Turn sync off:** `/ledger sync off` on that computer. It stops writing and reading; its file stays in the folder, and the other computers keep counting its last state. To remove that device from the others completely, delete its file `cost-ledger-<id>.json` by hand (`/ledger sync` on the device shows its ID). cost-ledger itself never deletes files.
+- **`/ledger reset`** clears only this computer's entries and rewrites its file empty. The other computers keep theirs. Sync, the device name and the plan setting stay.
+- **Plan setting:** `/ledger plan` stays per computer; set it on each one.
+
+### What the file contains
+
+Amounts per day, limit windows, models and tokens, the total of all mod calls per day (without mod names), and what merging needs: each chat's session ID, the time of its last booking and the hour of its first, the times of the first and last booking in each limit window, and whether it ran in the desktop app, the terminal or a script; plus the device's name and ID. **No paths, no project, folder or mod names, no Git remote, no chat titles or messages.** The sync folder itself is not in the file either. Model IDs that are not plain names (a Bedrock ARN, a custom deployment name) are written as “other”. This is why the breakdown by project stays local: chats and mod calls from another device appear as one group, “Laptop (other device)”, and its chats without a title (“Chat from …”). Tests check the file against paths, `host/owner/repo`, the user name and chat titles.
+
+### How the files are merged
+
+- **One file per device:** each computer writes only its own file `cost-ledger-<id>.json` and reads the others. Other files in the folder are ignored, including conflict copies your cloud drive might create (for example `cost-ledger-<id>-PC.json`).
 - **No double counting:** chats are merged by their session ID; if the same chat appears twice (for example from a restored backup), only the newest version counts.
-- **Nothing gets lost:** if the folder is missing (drive disconnected) or a file is half-synced, `/ledger` shows your local ledger with a note and uses the last good copy of the other device. cost-ledger never deletes a file and only writes its own.
-- **Local folders only:** a network path (`\\server\…`) is rejected; use a folder your sync client keeps on disk. On Windows the folder needs a drive letter (`D:\…`), and a drive root is not accepted.
-- **Per device:** `/ledger reset` clears only this device and rewrites its (now empty) file. The plan setting from `/ledger plan` also stays per device.
+- **Nothing gets lost:** if the folder is missing or a file is half-synced, `/ledger` shows your local ledger with a note and uses the last good copy of the other device. Your local ledger never depends on the folder.
+- **Retention:** another device's chats older than `keepDays` are not counted; only their own device removes them from its file.
+
+### When something goes wrong
+
+| Message or symptom | Cause | What to do |
+|---|---|---|
+| `Not saved: “…” is not an absolute local folder …` | Relative path, network path (`\\server\…`), `..`, a drive root, or on Windows a path without a drive letter | Give the full path with drive letter, e.g. `D:\OneDrive\cost-ledger`; File Explorer's **Copy as path** gives it |
+| `Not saved: the folder cannot be written (…)` | The drive does not exist, or the folder may not be written | Check the path and that the cloud drive is running; sync stays off until it works |
+| `Sync failed: … (the local ledger is unchanged).` in `/ledger` | The folder is gone (drive disconnected, folder renamed or deleted) or the write failed | Reconnect the drive. If the folder was deleted, run `/ledger sync <folder>` again: only that command creates a missing folder |
+| `Sync failed: the device file would exceed 4 MiB …` | Very many chats within the retention period | Lower `keepDays` (see Configuration) |
+| `1 device not readable right now.` | The other device's file is still being synced, or was written by an incompatible version | Wait for the cloud drive; update cost-ledger on the other computer |
+| `No other device yet: …` in `/ledger sync`, or no “2 devices” | The other computer has not run step 5, uses a different folder, or the cloud drive has not synced yet | Run `/ledger sync` on both computers: the folder must be the same cloud folder, and each must list the other. Check that the cloud drive is not paused and the files are available offline |
+| `Another device wrote with this device ID (storage copied?) …` | The plugin store was copied from one computer to the other, so both had the same device ID | Nothing; this device switches to a new ID by itself. If a device is counted twice afterwards, delete the leftover file (see Known limitations) |
+
+Sync uses the rights `$.fs.list`, `$.fs.read` and `$.fs.write`, only inside the folder you set and only for files named `cost-ledger-<id>.json` (see [Rights](#rights)).
 
 ## Usage outside the ledger
 

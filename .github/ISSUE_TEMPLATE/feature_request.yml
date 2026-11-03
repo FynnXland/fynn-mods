@@ -10,7 +10,7 @@ body:
     validations: {required: true}
     attributes:
       label: Mod
-      options: ["clawd-buddy", "limit-bars", "sidekick", "quick-replies", "worklist", "cost-ledger", "A new mod", "Several / not sure"]
+      options: ["clawd-buddy", "limit-bars", "sidekick", "quick-replies", "cost-ledger", "A new mod", "Several / not sure"]
   - type: textarea
     id: problem
     validations: {required: true}

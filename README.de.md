@@ -1,7 +1,7 @@
 # fynn-mods
 
-**Sechs Mods für Claude Code: ein animiertes Maskottchen, Balken für die Nutzungslimits, ein Sidekick, der vor dem
-Senden mitdenkt, Schnellantworten, eine To-do-Liste und ein Kostenbuch.**
+**Fünf Mods für Claude Code: ein animiertes Maskottchen, Balken für die Nutzungslimits, ein Sidekick, der vor dem
+Senden mitdenkt, Schnellantworten und ein Kostenbuch.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
@@ -35,10 +35,9 @@ Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mod
 | [limit-bars](#limit-bars) | Balken für das 5-Stunden- und das Wochenlimit, dazu ein Ring, wie lange der Prompt-Cache noch warm ist |
 | [sidekick](#sidekick) | Prüft deine Nachricht vor dem Senden: Kosten bei kaltem Cache, falscher Chat, klarere Fassung, fällige Wartung |
 | [quick-replies](#quick-replies) | Der Vorschlag von Claude Code für die nächste Nachricht als Knopf |
-| [worklist](#worklist) | To-do-Seitenleiste, die Claude eine Aufgabe nach der anderen gibt, aber nur, wenn es sicher fertig ist |
 | [cost-ledger](#cost-ledger) | Kostenbuch über alle Chats, nach Tag, Projekt, Chat und Modell |
 
-**Hilfe in jedem Mod:** `/<befehl> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/todos`, `/ledger`) zeichnet
+**Hilfe in jedem Mod:** `/<befehl> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/ledger`) zeichnet
 eine Tabelle mit allen Befehlen, was gerade an oder aus ist und wie man es umschaltet, und den Einstellungen des Mods
 mit ihren Werten. In `claude -p` und VS Code kommt dasselbe als kurzer Text.
 
@@ -66,7 +65,6 @@ claude plugin install clawd-buddy@fynn-mods
 claude plugin install limit-bars@fynn-mods
 claude plugin install sidekick@fynn-mods
 claude plugin install quick-replies@fynn-mods
-claude plugin install worklist@fynn-mods
 claude plugin install cost-ledger@fynn-mods
 ```
 
@@ -94,14 +92,10 @@ Drei Mods lösen Modellaufrufe **über dein Konto** aus (im Abo zählen sie auf 
 
 - **sidekick** fragt Haiku 5.5 (Effort `medium`) nur, wenn sich eine Prüfung lohnen kann (erste Nachricht eines Chats,
   großer Kontext, kalter Cache): etwa 0,001 $ und 3 Sekunden je Prüfung (API-Wert). Eine Übergabe in einen neuen Chat
-  ist ein größerer Sonnet-Aufruf, nur wenn du ihn wählst. In der Stufe `plan` oder `auto` mit worklist prüft er auch
-  eine lange Nachricht (ab 800 Zeichen), und das Aufteilen in To-dos oder `/later` kostet etwa 0,01 $ mehr. Die Stufe
-  `auto` prüft jede Nachricht ab 300 Zeichen mit Sonnet 5.5 (je etwa 0,012 $) und lässt Sonnet ihre Fassungen schreiben; die Stufe `cache` ruft gar kein Modell auf. `/savings`
+  ist ein größerer Sonnet-Aufruf, nur wenn du ihn wählst. Die Stufe `cache` ruft gar kein Modell auf. `/savings`
   stellt beides der gemessenen Ersparnis gegenüber. Abschalten mit `/sidekick off`. *Gut zu wissen* (standardmäßig
   aus, `/sidekick notes on`) fragt bei längeren Aufgaben das Modell deiner Session, großteils aus dem Cache: etwa
   0,04 $ je Prüfung bei 150k Kontext mit Opus 5.5.
-- **worklist** fragt Haiku 5.5 (Effort `high`) nur, wenn die Regeln nicht sicher erkennen, ob Claude fertig ist: etwa 0,0001 $ je Fall.
-  Abschalten mit der Option `haiku` in `/config`; die Liste hält dann in diesen Fällen an.
 - **quick-replies** forkt die Session nach jeder Antwort **nur mit `/replies more on`** (standardmäßig aus): etwa so
   viel wie eine kurze Antwort, großteils aus dem Prompt-Cache.
 
@@ -156,7 +150,7 @@ ohne Flackern mit.
 
 ### sidekick
 
-![sidekick in der Desktop-App: eine blaue Hinweiszeile unter einer Nachricht schlägt ein Prompt-Audit vor, mit einem Knopf zum Ausführen; darunter eine lange diktierte Nachricht mit drei Aufträgen und sidekicks Rückfrage, ob sie in drei To-dos aufgeteilt werden soll, mit den Optionen Aufteilen, Trotzdem senden und Abbrechen.](assets/sidekick.png)
+![sidekick in der Desktop-App: eine blaue Hinweiszeile unter einer Nachricht schlägt ein Prompt-Audit vor, mit einem Knopf zum Ausführen; darunter sidekicks Rückfrage bei einer Nachricht in einen kalten, großen Chat: Senden schreibt alles neu für etwa 2,40 $, ein neuer Chat mit Übergabe kostet etwa 0,26 $, mit den Optionen Neuer Chat mit Übergabe, Neuer Chat ohne Übergabe, Trotzdem senden und Abbrechen.](assets/sidekick.png)
 
 Ein zweiter Blick auf jede Nachricht, kurz bevor sie rausgeht. Zuerst entscheiden feste Regeln, ohne Kosten. Nur wo
 sich eine Prüfung lohnen kann (erste Nachricht eines Chats, großer Kontext, kalter Cache), schaut zusätzlich kurz
@@ -171,19 +165,12 @@ Nachricht oder fragt nach.
   eine klarere Fassung deiner Nachricht an, die du mit einem Klick sendest.
 - **Falscher Chat:** Gehört eine Nachricht klar zu einem anderen Projekt als der Chat, hält sidekick sie an und fragt,
   ob du im falschen Chat bist, bevor sie im falschen Kontext landet (und dort Kosten verursacht).
-- **Lange Nachricht, mehrere Aufträge:** Ist worklist installiert, lässt sich eine lange (z. B. diktierte) Nachricht mit
-  drei oder mehr getrennten Aufträgen in 3–4 To-dos aufteilen. sidekick zeigt die Schritte und fragt; Sonnet schreibt
-  dann die To-dos mit allen Punkten deiner Nachricht, und worklist arbeitet sie nacheinander ab.
-- **Fünf Stufen:** `/sidekick off`, `cache` (nur die Kalt-Rückfrage, kein Modellaufruf), `guide` (Begleiter, der
-  Standard), `plan` (prüft früher und teilt lange Nachrichten auf) und `auto` (prüft jede Nachricht ab 300 Zeichen und
-  sendet eine klarere Fassung oder eine Aufteilung ohne Rückfrage; neuer Chat und falscher Chat fragen weiter). Ein Label
-  in der Fußzeile neben der Modellauswahl zeigt die Stufe: 🟢 bereit, 🟠 arbeitet oder fragt, 🔴 aus.
-- **`/later <Text>`:** plant Text als 1–4 To-dos mit worklist ein, auch während Claude arbeitet, ohne dass Claude ihn
-  liest. In der Desktop-App beendet der Befehl Claudes laufenden Turn.
+- **Drei Stufen:** `/sidekick off`, `cache` (nur die Kalt-Rückfrage, kein Modellaufruf) und `guide` (Begleiter, der
+  Standard). Ein Label in der Fußzeile neben der Modellauswahl zeigt die Stufe: 🟢 bereit, 🟠 arbeitet oder fragt, 🔴 aus.
+  sidekick sendet nie etwas von selbst: Eine klarere Fassung geht nur raus, wenn du sie im Dialog wählst.
 - **Fällige Wartung:** Einmal pro Chat nennt er höchstens einen fälligen Befehl (`/skill-doctor`, Prompt-Audit, Memory
   aufräumen, `/init`), auf Grundlage einer kostenlosen lokalen Schätzung. Ein Knopf neben der Zeile (auch für einen Befehl,
-  den ein Hinweis nennt, z. B. `/handoff`) führt ihn mit einem Klick aus oder reiht einen Skill, wenn worklist installiert
-  ist, als To-do ein.
+  den ein Hinweis nennt, z. B. `/handoff`) führt ihn mit einem Klick aus.
 - **Nachprüfbare Ersparnis:** `/savings` zeigt, was sidekick gekostet und was er messbar gespart hat;
   `/savings detail` ergänzt Rechenweg, Modellvergleich und Verlauf je Tag.
 - **Gut zu wissen (optional, standardmäßig aus):** Mit `/sidekick notes on` fragt sidekick bei einer längeren Aufgabe,
@@ -192,16 +179,14 @@ Nachricht oder fragt nach.
 
 Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unverändert raus.
 
-- **Befehle:** `/sidekick` (Status und Einstellungen), `/sidekick off|cache|guide|plan|auto|on`, `/sidekick long 800|off`,
-  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick help`, `/later <Text>`,
+- **Befehle:** `/sidekick` (Status und Einstellungen), `/sidekick off|cache|guide|on`,
+  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick help`,
   `/savings [today|week|all]`, `/savings detail`
 - **Rechte kurz:** liest deine Nachricht vor dem Senden; hält sie nur an oder ersetzt sie nur nach deiner Wahl im
-  Dialog (in der Stufe `auto` auch ohne Rückfrage: eine Fassung oder eine Aufteilung); Haiku 5.5 und Sonnet 5.5 über `$.model.complete` mit einer laufenden Kurzfassung, deinen letzten 3 Nachrichten und dem Ende von Claudes letzter Antwort, nie dem
+  Dialog; Haiku 5.5 und Sonnet 5.5 über `$.model.complete` mit einer laufenden Kurzfassung, deinen letzten 3 Nachrichten und dem Ende von Claudes letzter Antwort, nie dem
   ganzen Verlauf; nur mit Gut zu wissen an eine Frage über `$.model.fork` an das Modell deiner Session über den
   Gesprächsverlauf, mit allen Tools gesperrt; auf Knopfdruck führt er den Befehl der Zeile aus (Befehle aus Plugins und eigene, `/skill-doctor`, `/init`;
-  nie MCP-Prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`) oder ruft `/todo` von worklist auf (auch
-  für die To-dos einer Aufteilung oder von `/later`); in der Stufe `auto` sendet er eine umformulierte Nachricht ohne
-  Rückfrage in deinem Namen, nur wenn du diese Stufe gewählt hast; zeichnet sein Label in die Fußzeile; und
+  nie MCP-Prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`); zeichnet sein Label in die Fußzeile; und
   füllt das Eingabefeld, wenn der Befehl abgelehnt wird;
   liest den Pfad der Projektwurzel; teilt clawd-buddy über `$.state` nur die Art des Ereignisses und die Uhrzeit mit,
   nie deine Nachricht. Keine Dateien, Umgebung, kein Netzwerk, keine Einstellungen.
@@ -220,26 +205,6 @@ Mit `/replies more on` füllt ein Fork der Session bis zu vier Plätze; Claude C
   Nachricht, nie automatisch; `$.model.fork` nur mit `more` an. Keine Dateien, Prozesse, kein Netzwerk.
 - **Details:** [mods/quick-replies](mods/quick-replies/README.md) (englisch)
 
-### worklist
-
-![worklist in der Desktop-App: Im Chat steht To-do 2 von 4 als gesendet, rechts listet die To-do-Seitenleiste zwei offene To-dos mit Knöpfen zum Verschieben und Entfernen, ein Feld für neue und den Verlauf mit zwei erledigten To-dos.](assets/worklist.png)
-
-Eine To-do-Seitenleiste neben dem Chat. Aufgaben einreihen, auch während Claude arbeitet. Ist Claude **sicher** fertig,
-wird das laufende To-do abgehakt und das nächste startet von selbst; solange Subagenten oder Hintergrundarbeit laufen,
-wartet sie. Die Liste pausiert nie von selbst: Ist Claude nicht sicher fertig (Rückfrage, Unterbrechung, Fehler,
-offener Plan), hält sie bei diesem To-do an, nennt den Grund und bietet **Fortsetzen**, **Abhaken** und
-**Überspringen**; auch deine Antwort auf Claudes Rückfrage im Chat setzt es fort. Einreihen bei freiem Claude startet
-die Liste auch nach einer Rückfrage. Die Liste übersteht `/clear`; der Verlauf gilt pro Projekt.
-
-- **Befehle:** `/todo <aufgabe>`, `/todos` (Seitenleiste), `/todos pause|resume|done|skip|retry|clear|history|status|close`,
-  `/todos help`
-- **Rechte kurz:** sendet das nächste To-do (oder die Fortsetzung eines angehaltenen) nur nach bestandener Prüfung
-  oder auf deinen Klick als deine Nachricht;
-  Haiku 5.5 für unklare Fälle (abschaltbar); liest, ob noch Subagenten laufen. Im Chat zeigt es gesendete To-dos als orange
-  Zeile und blendet ein alleinstehendes „Fertig.“ / "Done." am Ende von Antworten aus (nur Anzeige). Keine Dateien,
-  Prozesse, kein Netzwerk.
-- **Details:** [mods/worklist](mods/worklist/README.md) (englisch)
-
 ### cost-ledger
 
 ![Die Übersicht /ledger von cost-ledger: Summen für heute, 7 Tage, 30 Tage und gesamt, ein Verlauf über 14 Tage mit Balken nach Modell, Kosten je Projekt, die teuersten Chats und die Modellaufrufe anderer Mods.](assets/cost-ledger.png)
@@ -250,7 +215,16 @@ deine Projekte und die teuersten Chats, gezeichnet im Stil von Claude Code. Im A
 API-Wert ins aktuelle 5-Stunden- und Wochenfenster und in deinen Abo-Monat geflossen ist; dein Abo trägst du einmal mit
 `/ledger plan` ein. Dazu schätzt es, wie viel von jedem Fenster außerhalb des Ledgers verbraucht wurde (claude.ai, Handy-App, Chats ohne den Mod).
 
-**Mehrere Rechner:** `/ledger sync <ordner>` auf jedem Rechner mit demselben Ordner, den dein Cloud-Laufwerk synchron hält, und `/ledger` zeigt alle Geräte zusammen. In den Ordner kommen nur Zahlen, keine Pfade, Projektnamen oder Chat-Titel. Standardmäßig aus.
+**Mehrere Rechner:** Der Sync ist standardmäßig aus. So siehst du PC und Laptop zusammen in einem `/ledger`:
+
+1. Lege im Cloud-Laufwerk (OneDrive, Dropbox, iCloud Drive, Syncthing …) einen neuen Ordner fest, z. B. `cost-ledger`. Sein Pfad darf auf jedem Rechner anders sein.
+2. Auf dem PC: `/ledger sync <vollständiger Pfad zu diesem Ordner>`, danach `/ledger sync name PC`.
+3. Sobald das Cloud-Laufwerk den Ordner abgeglichen hat, auf dem Laptop: `/ledger sync <sein Pfad zum selben Ordner>`, danach `/ledger sync name Laptop`.
+4. Prüfen: `/ledger sync` listet das andere Gerät, `/ledger` zeigt oben „2 Geräte“.
+
+Der Pfad muss absolut sein, unter Windows mit Laufwerksbuchstaben (z. B. `D:\OneDrive\cost-ledger`; im Explorer per Rechtsklick → **Als Pfad kopieren**);
+Netzwerkpfade gehen nicht. In den Ordner kommen nur Zahlen, keine Pfade, Projektnamen oder Chat-Titel. Ausführliche
+Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost-ledger/README.md#sync-between-devices) (englisch).
 
 - **Befehle:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,
   `/ledger plan <abo> <tag|today> [preis]`, `/ledger sync [<ordner>|name <name>|off]`, `/ledger reset`, `/ledger help`
@@ -269,14 +243,10 @@ API-Wert ins aktuelle 5-Stunden- und Wochenfenster und in deinen Abo-Monat geflo
 - **limit-bars und sidekick warnen beide vor kaltem Senden.** Nutzt du beide, schalte die Warnung von limit-bars
   einmal mit `/cache warn off` ab, damit nicht zwei Dialoge hintereinander kommen; die Rückfrage von sidekick ersetzt
   sie.
-- **sidekick gibt Aufgaben an worklist.** Sind beide installiert, reiht der Knopf neben einem Wartungshinweis den
-  Befehl als To-do ein; worklist sendet ihn, sobald die laufende Aufgabe fertig ist. Genauso lässt sich eine lange
-  Nachricht mit mehreren Aufträgen in To-dos aufteilen. Ohne worklist bietet sidekick das nie an und prüft lange
-  Nachrichten dafür auch nicht.
 - **Clawd spielt sidekick mit.** Sind beide installiert, hält Clawd die Lupe ans Eingabefeld, während sidekick prüft,
   zeigt bei einer Rückfrage ein Stoppschild und schreibt einen Brief, wenn sidekick einen neuen Chat mit Übergabe
   startet.
-- **cost-ledger bucht die anderen.** Modellaufrufe von sidekick, worklist, quick-replies und limit-bars stehen nicht in
+- **cost-ledger bucht die anderen.** Modellaufrufe von sidekick, quick-replies und limit-bars stehen nicht in
   `/cost`; cost-ledger bucht sie getrennt, so zeigt `/ledger`, was jeder Mod kostet.
 
 ## Rechte und Vertrauen

@@ -116,7 +116,7 @@ hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, 
 calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.fork, $.process.run, $.prompt.submit, $.session.compact, $.session.id, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
 ```
 
-No file system access of its own, no network, no environment variables read, no tokens or credentials. The only process is Windows PowerShell for the storage ring, and only when `storagePath` is set. In the terminal band, limit-bars passes on the space it uses to the mods further in (smaller `bodyColumns`).
+No file system access of its own (no `$.fs`), no network, no environment variables read, no tokens or credentials. The only process is Windows PowerShell for the storage ring, and only when `storagePath` is set. That scan does walk the whole drive you named and reads sizes and file extensions (never file contents). In the terminal band, limit-bars passes on the space it uses to the mods further in (smaller `bodyColumns`).
 
 In plain language:
 

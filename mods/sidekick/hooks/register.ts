@@ -3,12 +3,13 @@
 // z. B. neuer Chat mit Übergabe, die ein Modell aus Kurzfassung und Verlaufsende schreibt (Verhalten 4). /savings zeigt die Bilanz.
 // Fail-open: Jeder Fehler lässt die Nachricht unverändert durch; es gibt kein `.catch` (SPEC Fehlerverhalten). Ausnahme: nach
 // „Neuer Chat mit Übergabe“ wird bei einem Fehler nie stillschweigend in den kalten Chat gesendet, es wird erneut gefragt.
+// Eine Fassung geht nur nach der Antwort im Dialog raus (seit 0.15.0 gibt es keine Stufe, die ohne Rückfrage sendet).
 import type { EngineInterface, On, RenderElement, RenderNode, Timer } from 'claude-code'
 import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.ts'
 import { lang, setLang, spanText, t, tokensText, usdText } from './i18n.ts'
 import { NOTES_WORDS, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, nonNeg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.ts'
 import type { Note } from './notes.ts'
-import { CHECK, CHECK_AUTO, HANDOFF, SPLIT, modelLabel, modelName } from './models.ts'
+import { CHECK, HANDOFF, modelLabel, modelName } from './models.ts'
 import type { CacheMem, CompleteUsage, StepUsage } from './cache.ts'
 import { joinBand, layer, LEVEL, nameOf, splitBand } from './band.ts'
 import {
@@ -16,8 +17,6 @@ import {
   KEEP_DAYS,
   USAGE,
   applySetting,
-  AUTO_MIN,
-  autoFassung,
   book,
   bookModel,
   bookNote,
@@ -41,18 +40,13 @@ import {
   lineCommand,
   handoffSystem,
   historyParts,
-  isLong,
   isSuppressed,
-  parseSplit,
   parseVerdict,
   rankChoices,
   planCompaction,
   savingsArgs,
   savingsReport,
   shownLine,
-  splitPrompt,
-  splitSystem,
-  splits,
   sumPeriod,
   triggerOf,
   wrongChatChoices,
@@ -101,11 +95,8 @@ const MODE_GREEN = '#3FB950'
 const MODE_ORANGE = '#F0883E'
 const MODE_RED = '#F85149'
 
-/**
- * Eine Zeile unter einer eigenen Nachricht; `cmd`: Befehl für den Button, `queued`: schon als To-do eingereiht (Nachtrag 0.7.0),
- * `ran`: schon ausgeführt (Nachtrag 0.8.1).
- */
-type HintRow = { id: string; line: string; sent?: string; cmd?: string; queued?: boolean; ran?: boolean }
+/** Eine Zeile unter einer eigenen Nachricht; `cmd`: Befehl für den Button, `ran`: schon ausgeführt (Nachtrag 0.8.1). */
+type HintRow = { id: string; line: string; sent?: string; cmd?: string; ran?: boolean }
 
 /** Was der Sidekick je Session weiß; `$.store` `sitzung:<sessionId>` (SPEC Zustand). */
 type Sitzung = {
@@ -161,8 +152,8 @@ function cleanSitzung(v: unknown): Sitzung {
         line: h.line,
         ...(typeof h.sent === 'string' ? { sent: h.sent } : {}),
         ...(typeof h.cmd === 'string' && h.cmd.startsWith('/') ? { cmd: h.cmd } : {}),
-        ...(h.queued === true ? { queued: true } : {}),
-        ...(h.ran === true ? { ran: true } : {}),
+        // `queued` (bis 0.14: als To-do eingereiht) gilt als schon erledigt: kein zweiter Klick auf denselben Befehl
+        ...(h.ran === true || h.queued === true ? { ran: true } : {}),
       }))
       .slice(-30)
   if (o.last && typeof o.last.line === 'string') s.last = o.last
@@ -249,7 +240,7 @@ function buddy($: EngineInterface, kind: BuddyKind | null) {
 }
 
 // ---- Anzeige in der Fußzeile (Nachtrag 0.10.0): `sidekick.status` = Stufe und ob sidekick gerade arbeitet. Der SessionMode-Hook
-// liest den Wert und abonniert ihn so; ein Schreiben zeichnet nur diese Stelle neu, kein $.ui.invalidate (worklist Nachtrag 0.2.2).
+// liest den Wert und abonniert ihn so; ein Schreiben zeichnet nur diese Stelle neu, kein $.ui.invalidate (types:3310-3313).
 // Regeln wie bei `buddy`: nie warten, Fehler verschlucken, nacheinander.
 type Status = { level: Level; busy: boolean }
 let statusLast: string | undefined = undefined // `undefined` = unbekannt (nach einem Neuladen): sicher schreiben
@@ -272,7 +263,7 @@ function noteMode($: EngineInterface, surface: string, err: string) {
     .catch(() => {})
 }
 
-/** Arbeitet sidekick gerade: Prüfung (`check`), offene Rückfrage (`stop`), Übergabe (`handoff`) oder eine Box (Übergabe, Aufteilung). */
+/** Arbeitet sidekick gerade: Prüfung (`check`), offene Rückfrage (`stop`), Übergabe (`handoff`) oder eine Box (Übergabe). */
 const busyNow = () => buddyKind === 'check' || buddyKind === 'stop' || buddyKind === 'handoff' || busy !== null
 function pushStatus($: EngineInterface) {
   const value: Status = { level: settings.level, busy: settings.level !== 'off' && busyNow() }
@@ -363,54 +354,21 @@ async function loadSkills($: EngineInterface, now: number): Promise<Skill[]> {
 
 // ---------- Button unter der Zeile (Nachtrag 0.7.0) ----------
 
-/** worklist bietet `/todo` an (types:1683-1701): Ziel des Buttons (0.7.0) und Bedingung fürs Aufteilen (Nachtrag 0.9.0). */
-function hasTodo(cmds: readonly Cmd[]): boolean {
-  return cmds.some((c) => c.name === 'todo' && c.source === 'plugin' && /^worklist(@|$)/.test(c.plugin ?? ''))
-}
-
-/**
- * Wohin ein Befehl geht: als To-do, wenn worklist `/todo` anbietet und der Befehl ein Skill ist, den Claude selbst aufrufen kann
- * (Name in der Skill-Liste der lokalen Schätzung); sonst direkt ausführen (Nachtrag 0.8.1, Fynn: „anklicken, und es wird gemacht“).
- * Eingebaute Befehle wie `/skill-doctor` oder `/init` kann Claude nicht ausführen, ein To-do dafür liefe ins Leere (rel/skills.md:899).
- */
-function routeOf(base: typeof baseCache, cmd: string): 'todo' | 'run' {
-  if (!base) return 'run'
-  const todo = hasTodo(base.cmds)
-  const name = cmd.replace(/^\//, '').split(/\s+/)[0] ?? ''
-  const skill = (base.b?.skills?.skillFrontmatter ?? []).some((s) => s.name === name)
-  return todo && skill ? 'todo' : 'run'
-}
-
 // Laufende Klicks (Review 0.7.0 S1): die Sperre steht vor dem ersten `await`, ein Doppelklick legt nichts doppelt an
 const pressing = new Set<string>()
 
 /**
- * Klick auf den Button. `route` ist das Ziel, das beim Zeichnen auf dem Button stand (Review S2: Beschriftung und Aktion gleich):
- * `/todo Führe … aus.` über worklist, oder der Befehl selbst über `$.command.run`, „as if the person typed“ und hinter einem
- * laufenden Turn eingereiht (types:2997-3003). Erledigt wird erst nach dem erfolgreichen Aufruf gespeichert (Review K1); bis dahin
- * gilt es nur im Speicher. Lehnt die Engine den Befehl ab, kommt er als Rückfall ins Eingabefeld (Stand 0.7.0).
+ * Klick auf den Button: der Befehl selbst über `$.command.run`, „as if the person typed“ und hinter einem laufenden Turn eingereiht
+ * (types:2997-3003). Erledigt wird erst nach dem erfolgreichen Aufruf gespeichert (Review K1); bis dahin gilt es nur im Speicher.
+ * Lehnt die Engine den Befehl ab, kommt er als Rückfall ins Eingabefeld (Stand 0.7.0). Ein Weg über To-dos entfiel mit 0.15.0.
  */
-async function useHint($: EngineInterface, id: string, route: 'todo' | 'run') {
+async function useHint($: EngineInterface, id: string) {
   const h = ses.hints.find((x) => x.id === id)
-  if (!h?.cmd || h.queued || h.ran || pressing.has(id)) return
+  if (!h?.cmd || h.ran || pressing.has(id)) return
   const cmd = h.cmd
   pressing.add(id)
   $.ui.invalidate('ui.render')
   try {
-    if (route === 'todo') {
-      try {
-        await $.command.run({ command: 'todo', args: t().todoText(cmd) })
-      } catch (err) {
-        $.ui.toast(t().todoFailed(cmd, msg(err)), { timeoutMs: 15000 })
-        return
-      }
-      const now = ses.hints.find((x) => x.id === id)
-      if (now) {
-        now.queued = true
-        saveSes($, await $.clock.now().catch(() => 0))
-      }
-      return
-    }
     const [name = '', ...rest] = cmd.replace(/^\//, '').split(/\s+/)
     try {
       await $.command.run({ command: name, ...(rest.length ? { args: rest.join(' ') } : {}) })
@@ -636,14 +594,14 @@ function closeOpen($: EngineInterface, now: number, ctx: number) {
 }
 
 // `before`: letzte Nachrichten und Kurzfassung vor dieser Nachricht; nach „Abbrechen“ beim falschen Chat zurück (Review S1)
-type Check = { trigger: Trigger; ctx: number; model: string; ttl: 5 | 60; cold: boolean; unknown: boolean; coldFor: number; verdict: Verdict | null; before: { recent: string[]; summary: string }; by?: string }
+type Check = { trigger: Trigger; ctx: number; model: string; ttl: 5 | 60; cold: boolean; unknown: boolean; coldFor: number; verdict: Verdict | null; before: { recent: string[]; summary: string } }
 
 /** Ergebnis des Torwächters: die Prüfung (null = ohne Prüfung durchlassen) und ein Wartungs-Hinweis für genau diese Nachricht. */
 type Gate = { c: Check | null; w: WHint | null }
 const PASS: Gate = { c: null, w: null }
 
-/** Schritt 1 bis 3 der SPEC (Verhalten 3): Filter, Auslöser, Modell-Prüfung. `resendable`: ohne Anhang und `@datei`. */
-async function gate($: EngineInterface, text: string, kind: string, running: boolean, resendable: boolean, signal: AbortSignal): Promise<Gate> {
+/** Schritt 1 bis 3 der SPEC (Verhalten 3): Filter, Auslöser, Modell-Prüfung. */
+async function gate($: EngineInterface, text: string, kind: string, running: boolean, signal: AbortSignal): Promise<Gate> {
   settings = cleanSettings(await $.store.get('settings'))
   pushStatus($)
   if (settings.level === 'off' || running || text.trim().startsWith('/')) return PASS
@@ -680,18 +638,11 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     // Bei der ersten Nachricht gewählt, aber nicht gezeigt: jetzt erneut anbieten (Nachtrag 0.12.0). Keine zweite Messung
     wp = stillOpen($, ses.wartungOffen).catch(() => null)
   }
-  // Auslöser (d), lange Nachricht: nur dann die Befehlsliste laden (aus dem Cache) und nur mit worklist; ohne worklist keine Prüfung
-  // wegen der Länge und keine Kosten (Nachtrag 0.9.0). Ein Fehler kostet nur das Aufteilen.
-  let long = false
-  if (splits(settings) && isLong(text, resendable, settings)) long = await loadBase($, now).then((b) => hasTodo(b.cmds), () => false)
-  const trigger = triggerOf({ first, ctx, cold: st.kind === 'cold', unknown: st.kind === 'unknown', long, chars: text.trim().length, settings })
+  const trigger = triggerOf({ first, ctx, cold: st.kind === 'cold', unknown: st.kind === 'unknown', settings })
   if (!trigger) {
     saveSes($, now)
     return { c: null, w: await wp }
   }
-  // Bei (c) nie aufteilen: die Kalt-Rückfrage hat Vorrang (To-dos schrieben den Cache genauso neu)
-  // Läuft schon eine Aufteilung, keine zweite anbieten (Review K2)
-  const split = long && trigger !== 'c' && !splitting
   const base = { trigger, ctx, model: mem.model, ttl, cold: st.kind === 'cold', unknown: st.kind === 'unknown', coldFor: -st.left, before }
   // Cache-Stufe: nur die Kalt-Rückfrage nach Regeln, kein Modellaufruf (sie kommt auch ohne Urteil, Verhalten 3.4)
   if (settings.level === 'cache') {
@@ -708,55 +659,26 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     cache: cacheText(st.kind, st.left),
     model: mem.model,
     commit: c ? `${c.sha} vor ${spanText(now - c.at)}` : 'keiner',
-    split,
   }, reply)
   // Bricht der Nutzer ab, endet auch die Prüfung (types:2500-2501)
   buddy($, 'check')
   const names = (skills ?? []).map((s) => s.name)
-  const auto = settings.level === 'auto'
-  const ask = async (role: typeof CHECK | typeof CHECK_AUTO, system: string) => {
-    const t0 = await $.clock.now()
-    const r = await $.model.complete({ ...role, system, prompt }, { signal })
-    const done = await $.clock.now()
-    // `usage` kommt auf jedem Arm, auch bei Abbruch (types:6131): immer buchen
-    const usd = completeCost(r.usage as CompleteUsage, role.model)
-    bookDay($, now, (d) => {
-      d.kosten += usd
-      d.pruefungen += 1
-      d.warteMs += done - t0
-      bookModel(d, role.model, 'pruefung', usd, done - t0, r.usage as CompleteUsage)
-    })
-    return r.isAnswered ? parseVerdict(r.text, trigger, names, text, split) : null
-  }
-  // Nachtrag 0.11.0: Haiku prüft. Autonom ab 300 Zeichen prüft Sonnet in einem Aufruf wie bis 0.10: Haiku brauchte für ein
-  // Diktat auch nur zum Melden 5–10 s, zweistufig zusammen 10–14 s (Probe 2026-10-07). Kürzere Nachrichten in Autonom: Haiku
-  // meldet nur, dass eine Fassung lohnt
-  const direct = auto && text.trim().length >= AUTO_MIN
-  // Bei (c) kein Melden: Dort sendet Autonom nie ohne Rückfrage, Haiku liefert die Fassung für die Kalt-Rückfrage wie im
-  // Begleiter (Review 0.11.0 S3)
-  const flag = auto && !direct && trigger !== 'c'
-  const role = direct ? CHECK_AUTO : CHECK
-  let verdict = await ask(role, checkSystem(skills, split, direct, flag))
-  let by: string = role.model
-  if (flag && verdict?.art === 'fassung') {
-    // Eine Fassung, die Haiku trotz Melde-Zusatz schreibt, geht nie ohne Rückfrage raus: Fassungen in Autonom schreibt Sonnet
-    // (Review 0.11.0 S1)
-    if (verdict.urteil !== 'durch') verdict = { ...verdict, urteil: 'hinweis', fassung: '' }
-    // Autonom kurz: Sonnet schreibt die Fassung mit dem Autonom-Zusatz. Scheitert das, bleibt Haikus Zeile. Ist die Art gerade
-    // unterdrückt, wäre der Aufruf umsonst (Review 0.11.0 S2)
-    if (verdict.urteil !== 'durch' && !signal.aborted && !isSuppressed(ses.ignored, 'fassung', ctx, ses.commits)) {
-      const v2 = await ask(CHECK_AUTO, checkSystem(skills, split, true))
-      if (v2) {
-        // Ohne eigene Kurzfassung bleibt Haikus (Review 0.11.0 K2)
-        verdict = { ...v2, kurzfassung: v2.kurzfassung || verdict.kurzfassung }
-        by = CHECK_AUTO.model
-      }
-    }
-  }
+  const t0 = await $.clock.now()
+  const r = await $.model.complete({ ...CHECK, system: checkSystem(skills), prompt }, { signal })
+  const done = await $.clock.now()
+  // `usage` kommt auf jedem Arm, auch bei Abbruch (types:6131): immer buchen
+  const usd = completeCost(r.usage as CompleteUsage, CHECK.model)
+  bookDay($, now, (d) => {
+    d.kosten += usd
+    d.pruefungen += 1
+    d.warteMs += done - t0
+    bookModel(d, CHECK.model, 'pruefung', usd, done - t0, r.usage as CompleteUsage)
+  })
+  let verdict = r.isAnswered ? parseVerdict(r.text, trigger, names, text) : null
   if (verdict?.kurzfassung) ses.summary = verdict.kurzfassung
   if (verdict && verdict.urteil !== 'durch' && isSuppressed(ses.ignored, verdict.art, ctx, ses.commits)) verdict = { ...verdict, urteil: 'durch' }
   saveSes($, now)
-  return { c: { ...base, verdict, by }, w: await wp }
+  return { c: { ...base, verdict }, w: await wp }
 }
 
 /** Die nicht gesendete Nachricht aus dem Prüfkontext nehmen: Sonst sähe die nächste Prüfung das fremde Gebiet als Teil des Chats. */
@@ -767,35 +689,34 @@ function forget($: EngineInterface, c: Check, now: number) {
 }
 
 /** Antworttexte der Rückfrage in der eingestellten Sprache. */
-/** `n`: Zahl der To-dos beim Aufteilen. `who`: Name des Modells, das die Fassung schrieb (Nachtrag 0.11.0). */
-const label = (c: Choice, n = 0, who = whoOf()): string => {
+const label = (c: Choice): string => {
   const x = t()
-  return { new: x.newChat, plain: x.newPlain, fassung: x.fassung(who), split: x.splitN(n), send: x.send, abort: x.abort }[c]
+  return { new: x.newChat, plain: x.newPlain, fassung: x.fassung(whoOf()), send: x.send, abort: x.abort }[c]
 }
 /** Antworttexte, die erste mit „(empfohlen)“. */
-const labels = (list: Choice[], n = 0, who = whoOf()) => list.map((c, i) => label(c, n, who) + (i === 0 ? t().recommended : ''))
+const labels = (list: Choice[]) => list.map((c, i) => label(c) + (i === 0 ? t().recommended : ''))
 /** Gewählte Antwort zurück zur Wahl; „(empfohlen)“ zählt nicht mit. Unbekannter Text (freie Eingabe) gilt als „senden“. */
-function choiceOf(answer: string, n = 0, who = whoOf()): Choice {
+function choiceOf(answer: string): Choice {
   const a = answer.endsWith(t().recommended) ? answer.slice(0, -t().recommended.length) : answer
-  return (['new', 'plain', 'fassung', 'split', 'send', 'abort'] as const).find((c) => label(c, n, who) === a) ?? 'send'
+  return (['new', 'plain', 'fassung', 'send', 'abort'] as const).find((c) => label(c) === a) ?? 'send'
 }
-/** Name des Modells hinter einem Urteil, für Texte wie „Haikus Fassung“; ohne Angabe das der Prüfung. */
-const whoOf = (c?: Check | null) => modelName(c?.by || CHECK.model)
+/** Name des Modells hinter der Prüfung, für Texte wie „Haikus Fassung“. */
+const whoOf = () => modelName(CHECK.model)
 
 const FASSUNG_MAX = 600
 const showable = (f: string) => !!f && f.length <= FASSUNG_MAX
 
-/** Die Rückfrage: Frage und Antworten (2–4, Frage endet mit „?“, types:2332-2346). `n`: Zahl der To-dos beim Aufteilen. */
-function dialog(c: Check, resendable: boolean, base: number): { question: string; options: string[]; art: Art; n?: number; who: string } | null {
+/** Die Rückfrage: Frage und Antworten (2–4, Frage endet mit „?“, types:2332-2346). */
+function dialog(c: Check, resendable: boolean, base: number): { question: string; options: string[]; art: Art } | null {
   const v = c.verdict
-  const who = whoOf(c)
+  const who = whoOf()
   // Falscher Chat vor allem anderen, auch vor der Kalt-Rückfrage: Abbrechen ist dann die bessere Aktion (Fynn 2026-10-06)
   if (v?.urteil === 'anhalten' && v.art === 'falscher_chat') {
     // Im Kalt-Fall dazu, was „Trotzdem senden“ kostet
     const ctx = tokensText(c.ctx)
     const send = usdText(rewriteCost(c.ctx, c.model, c.ttl))
     const cold = c.trigger !== 'c' ? '' : c.unknown ? t().coldUnknown(ctx, send) : t().coldSince(spanText(c.coldFor), ctx, send)
-    return { question: t().wrongChat(v.zeile, cold), options: labels(wrongChatChoices(resendable, v.verlauf), 0, who), art: 'falscher_chat', who }
+    return { question: t().wrongChat(v.zeile, cold), options: labels(wrongChatChoices(resendable, v.verlauf)), art: 'falscher_chat' }
   }
   if (c.trigger === 'c') {
     const send = rewriteCost(c.ctx, c.model, c.ttl)
@@ -815,26 +736,19 @@ function dialog(c: Check, resendable: boolean, base: number): { question: string
     const fassung = v?.art === 'fassung' && showable(v.fassung)
     if (fassung) parts.splice(parts.length - 1, 0, t().fassungBlock(v!.fassung))
     // Die empfohlene Antwort steht auf 1; höchstens 4 Antworten
-    const options = labels(rankChoices({ cold: true, sendUsd: send, verlauf: v?.verlauf, resendable, fassung }), 0, who)
+    const options = labels(rankChoices({ cold: true, sendUsd: send, verlauf: v?.verlauf, resendable, fassung }))
     // Absätze statt eines Blocks
-    return { question: parts.join('\n\n'), options, art: 'neuer_chat', who }
+    return { question: parts.join('\n\n'), options, art: 'neuer_chat' }
   }
   if (!v || v.urteil !== 'anhalten') return null
-  // Lange Nachricht mit mehreren Aufträgen (Nachtrag 0.9.0): Titel als Vorschau, Aufteilen empfohlen. parseVerdict lässt das nur mit
-  // Erlaubnis zu (worklist da, ≥ long, ohne Anhang und @datei, nicht bei (c)); hier noch einmal gegen Anhänge abgesichert
-  if (v.art === 'aufteilen') {
-    const steps = v.schritte ?? []
-    if (!resendable || steps.length < 3 || splitting) return null
-    return { question: t().splitAsk(steps), options: labels(['split', 'send', 'abort'], steps.length, who), art: 'aufteilen', n: steps.length, who }
-  }
   if (v.art === 'neuer_chat') {
     if (!resendable) return null // mit Anhang oder @datei gibt es diese Antwort nicht (SPEC Verhalten 4)
-    return { question: `${v.zeile || t().newTopicDefault} ${t().howNext}`, options: labels(rankChoices({ cold: false, sendUsd: Infinity, verlauf: v.verlauf, resendable, fassung: false }), 0, who), art: 'neuer_chat', who }
+    return { question: `${v.zeile || t().newTopicDefault} ${t().howNext}`, options: labels(rankChoices({ cold: false, sendUsd: Infinity, verlauf: v.verlauf, resendable, fassung: false })), art: 'neuer_chat' }
   }
   // fassung (parseVerdict lässt „anhalten“ nur mit neuer_chat oder einer Fassung zu). Gesendet wird nur, was der Nutzer ganz gesehen
   // hat: eine längere Fassung wird zur Zeile
   if (!showable(v.fassung)) return null
-  return { question: `${v.zeile || t().fassungDefault(who)}\n\n${t().fassungBlock(v.fassung)}\n\n${t().howNext}`, options: labels(['fassung', 'send', 'abort'], 0, who), art: 'fassung', who }
+  return { question: `${v.zeile || t().fassungDefault(who)}\n\n${t().fassungBlock(v.fassung)}\n\n${t().howNext}`, options: labels(['fassung', 'send', 'abort']), art: 'fassung' }
 }
 
 /**
@@ -852,13 +766,12 @@ async function runHandoff($: EngineInterface, text: string, c: Check, plain = fa
   }
 }
 
-type Step = 'handoff' | 'plain' | 'clear' | 'split'
+type Step = 'handoff' | 'plain' | 'clear'
 let busy: { step: Step; since: number } | null = null
 let busyTimer: Timer | null = null
 
 async function showBusy($: EngineInterface, step: Step) {
-  // Beim Aufteilen kein Wert für clawd-buddy: `sidekick.buddy` kennt nur check, stop, handoff und fresh (Nachtrag 0.8.0/0.9.0)
-  if (step !== 'split') buddy($, 'handoff')
+  buddy($, 'handoff')
   busy = { step, since: busy?.since ?? (await $.clock.now()) }
   pushStatus($)
   // Sekunden mitzählen: alle 1 s neu zeichnen, nur solange die Box steht
@@ -952,177 +865,6 @@ async function freshChat($: EngineInterface, text: string, c: Check, handoff: st
   }
 }
 
-// ---------- Aufteilen in To-dos (Nachtrag 0.9.0) ----------
-
-/**
- * Ein `{drop}`-Grund über 4096 Zeichen lässt die Engine nicht gelten: „prompt.submit hook skipped: returned the wrong shape (a drop
- * over 4096 characters)“, und die Nachricht wird **gesendet** (Probe `claude -p` 2.1.291 und Test-Harness; nicht dokumentiert).
- * Angezeigt werden vom Grund außerdem nur etwa 2000 Zeichen, dann „…“ (Probe `-p`). Darum höchstens so viel Text im Grund; der Rest
- * steht vollständig in /sidekick status.
- */
-const DROP_TEXT_MAX = 1800
-/** So viel einer zurückgehaltenen langen Nachricht bleibt in `held:last`. */
-const HELD_MAX = 20000
-
-/**
- * Text für den Grund eines `{drop}` beim Aufteilen: ganz, wenn er passt; sonst gekürzt mit Hinweis, und vollständig in `held:last`
- * (/sidekick status). Gewartet wird nur auf den Store, nie auf ein Modell.
- */
-async function heldText($: EngineInterface, text: string, now: number): Promise<string> {
-  if (text.length <= DROP_TEXT_MAX) return text
-  try {
-    await $.store.set('held:last', { msg: cut(text, HELD_MAX), at: now })
-    return `${cut(text, DROP_TEXT_MAX)}${t().textCut}`
-  } catch {
-    return `${cut(text, DROP_TEXT_MAX)}${t().textCutLost}`
-  }
-}
-
-/** `$.store` `split:last`: die letzte Aufteilung; `todos` vollständig, damit nicht Eingereihtes in /sidekick status steht. */
-type SplitLast = { titles: string[]; todos: string[]; queued: number; at: number }
-
-/** Eine Aufteilung läuft (Timer bis Ende): solange bietet die Prüfung keine zweite an, sonst mischten sich die /todo (Review K2). */
-let splitting = false
-
-/**
- * Ein SPLIT-Aufruf mit Buchung (Rolle „Aufteilung“). `titles` leer = `/later`: SPLIT bestimmt 1 bis 4 Schritte selbst
- * (Nachtrag 0.10.0). Liefert die To-dos oder den Grund, warum es keine gibt; wirft nie.
- */
-async function writeTodos($: EngineInterface, text: string, titles: readonly string[]): Promise<{ todos: string[] | null; why: string }> {
-  const free = titles.length === 0
-  let why = t().splitInvalid
-  try {
-    const start = await $.clock.now()
-    const r = await $.model.complete({ ...SPLIT, system: splitSystem(free), prompt: splitPrompt(ses.summary, text, titles) })
-    const end = await $.clock.now()
-    const usd = completeCost(r.usage as CompleteUsage, SPLIT.model)
-    bookDay($, start, (d) => {
-      d.kosten += usd
-      bookModel(d, SPLIT.model, 'aufteilung', usd, end - start, r.usage as CompleteUsage)
-    })
-    if (r.isAnswered) return { todos: parseSplit(r.text, free ? [1, 4] : titles.length), why }
-    why = r.reason
-  } catch (err) {
-    // Abgelehnt (z. B. kein Modell): wie ein Timeout behandeln
-    why = msg(err)
-  }
-  return { todos: null, why }
-}
-
-/**
- * Die To-dos nacheinander per `/todo` einreihen, je ein Aufruf und abgewartet, damit die Reihenfolge stimmt (types:2997-3003:
- * „queued and run once the session is idle“, `/todo` ist `immediate`). Scheitert eines, endet die Schleife: Toast, die übrigen stehen
- * in `split:last` und in /sidekick status. `true`, wenn alle eingereiht sind.
- */
-async function queueTodos($: EngineInterface, sid: string, last: SplitLast): Promise<boolean> {
-  await $.store.set('split:last', last)
-  for (const todo of last.todos) {
-    try {
-      // Während SPLIT lief, kann ein /clear oder /resume die Session gewechselt haben: dann nicht in den fremden Chat einreihen
-      // (Review 0.9.0 K2); die Texte bleiben in /sidekick status
-      if ((await $.session.id()) !== sid) throw new Error(t().splitOtherChat)
-      const r = await $.command.run({ command: 'todo', args: todo })
-      // worklist fängt eigene Fehler ab und antwortet dann mit Text, bei Erfolg mit `{}` (worklist register.ts:897-903,
-      // :1092-1098); $.command.run lehnt nur unbekannte Befehle ab (types:2997-3003). Ein Text heißt also: nicht eingereiht
-      // (Review 0.9.0 S1)
-      if (typeof r?.text === 'string' && r.text.trim()) throw new Error(cut(r.text.trim(), 140))
-    } catch (err) {
-      await $.store.set('split:last', last).catch(() => {})
-      hideBusy($)
-      $.ui.toast(t().splitPartial(last.queued, last.todos.length, msg(err)), { timeoutMs: 30000 })
-      return false
-    }
-    last.queued += 1
-    // Fortschritt gleich sichern: nach einem Reload mitten in der Schleife zeigt /sidekick status nur den echten Rest (Review K1)
-    await $.store.set('split:last', last).catch(() => {})
-  }
-  return true
-}
-
-/**
- * Nach „In n To-dos aufteilen“ (oder autonom ohne Rückfrage), im einmaligen Timer: SPLIT schreibt die To-do-Texte, dann `/todo`
- * nacheinander. Nichts geht stillschweigend verloren: Scheitert SPLIT, fragt sidekick erneut (Trotzdem senden / Abbrechen), auch in
- * der autonomen Stufe; scheitert ein `/todo`, stehen die übrigen in `split:last` und in /sidekick status.
- */
-async function runSplit($: EngineInterface, text: string, titles: readonly string[], auto: boolean) {
-  const sid = sessionId
-  await showBusy($, 'split')
-  try {
-    const start = await $.clock.now()
-    const { todos, why } = await writeTodos($, text, titles)
-    if (!todos) {
-      // Nie stillschweigend verwerfen: erneut fragen, wie bei der Übergabe (SPEC Nachtrag 0.9.0, Fehlerverhalten)
-      hideBusy($)
-      let answer = t().abort
-      // Offene Rückfrage: Kreis orange, Clawd mit Stoppschild (Review 0.10.0 K4)
-      buddy($, 'stop')
-      try {
-        answer = await $.ui.ask(t().splitFailed(why), { options: [t().send, t().abort], header: HEADER })
-      } catch {
-        // Dialog geschlossen: nicht senden
-      }
-      buddy($, null)
-      if (answer === t().send) await $.prompt.submit({ text, asUser: true })
-      else $.ui.toast(t().notSent(cut(text, 300)), { timeoutMs: 30000 })
-      return
-    }
-    if (!(await queueTodos($, sid, { titles: [...titles], todos, queued: 0, at: start }))) return
-    hideBusy($)
-    $.ui.toast(auto ? t().autoSplitDone(todos.length) : t().splitDone(todos.length), { timeoutMs: 15000 })
-  } finally {
-    splitting = false
-    hideBusy($)
-  }
-}
-
-/**
- * Aufteilen starten (aus prompt.submit): Sperre setzen und den einmaligen Timer stellen, weil der Host `$.command.run` aus dem Hook
- * ablehnt (Verhalten 4). Liefert den Grund für `{drop}`: Der Text steht darin (zu lang: vollständig in /sidekick status), damit er
- * auch dann nicht verloren ist, wenn der Timer nie feuert (Reload). Die Kurzfassung behält die Nachricht, ihr Inhalt wird bearbeitet.
- */
-async function startSplit($: EngineInterface, text: string, titles: readonly string[], now: number, auto: boolean): Promise<string> {
-  splitting = true
-  later($, 300, () => {
-    runSplit($, text, titles, auto).catch((err) => {
-      splitting = false
-      hideBusy($)
-      $.ui.toast(t().splitCrashed(msg(err), cut(text, 300)), { timeoutMs: 30000 })
-    })
-  })
-  return t().dropSplit(titles.length, await heldText($, text, now))
-}
-
-/** `/later` gescheitert: der ganze Text als ein nicht eingereihtes To-do in `split:last`, damit /sidekick status ihn zeigt. */
-async function keepLater($: EngineInterface, text: string, at: number) {
-  const kept: SplitLast = { titles: [], todos: [cut(text, HELD_MAX)], queued: 0, at }
-  await $.store.set('split:last', kept).catch(() => {})
-}
-
-/**
- * `/later <text>` (Nachtrag 0.10.0), im einmaligen Timer: SPLIT bestimmt 1 bis 4 Schritte selbst, dann `/todo` je Schritt. Ohne
- * zweite Frage: Es gibt keine Nachricht, die gesendet werden könnte. Scheitert SPLIT, steht der ganze Text als ein nicht
- * eingereihtes To-do in `split:last` (/sidekick status), und ein Toast nennt ihn.
- */
-async function runLater($: EngineInterface, text: string, sid: string) {
-  await showBusy($, 'split')
-  try {
-    const start = await $.clock.now()
-    const { todos, why } = await writeTodos($, text, [])
-    if (!todos) {
-      await keepLater($, text, start)
-      hideBusy($)
-      $.ui.toast(t().laterFailed(why, cut(text, 300)), { timeoutMs: 30000 })
-      return
-    }
-    if (!(await queueTodos($, sid, { titles: [], todos, queued: 0, at: start }))) return
-    hideBusy($)
-    $.ui.toast(t().laterDone(todos.length), { timeoutMs: 15000 })
-  } finally {
-    splitting = false
-    hideBusy($)
-  }
-}
-
 // ---------- Gut zu wissen (SPEC Nachtrag 0.13.0) ----------
 
 let noteRunning = false // eine Prüfung zur Zeit
@@ -1145,7 +887,7 @@ function maybeNote($: EngineInterface, e: StepFacts) {
     hasNote: !!ses.note,
     shownThisTurn: noteTurn === e.turnId,
     running: noteRunning,
-    busy: busy !== null || splitting,
+    busy: busy !== null,
   })
   if (!go) return
   noteRunning = true
@@ -1220,7 +962,7 @@ type NoteAction = 'explain' | 'known' | 'later' | 'gotit' | 'close' | 'chat'
 /**
  * „Im Chat fragen“: senden, ohne zu warten. Der Aufruf löst sich erst, wenn die neue Runde beginnt, also nach Claudes laufender Arbeit
  * (docs/raw/en/api.md:138); der Knopf soll sofort fertig sein (Review 0.13.0 S1). Als Nachricht von sidekick, nicht `asUser`:
- * worklist wertet `asUser` als Antwort des Nutzers und setzte ein angehaltenes To-do fort (Review 0.13.0 S2). Fehler als Toast.
+ * ein anderes Plugin kann `asUser` als Antwort des Nutzers werten (Review 0.13.0 S2). Fehler als Toast.
  */
 function askInChat($: EngineInterface, n: Note) {
   const x = t()
@@ -1327,11 +1069,8 @@ async function helpCommand($: EngineInterface): Promise<string> {
   const now = await $.clock.now()
   const hs = cleanHints(await $.store.get('hints'))
   const known = cleanTopics(await $.store.get('notes:known')).length
-  // worklist erkannt: direkt aus der Befehlsliste, nicht über loadBase (das scheitert schon, wenn nur die Kontext-Schätzung
-  // scheitert; Review 0.14.0 K4). Scheitert die Liste, steht „nein“
-  const worklist = await $.command.list().then(hasTodo, () => false)
   const source = settings.ttl ? 'set' : mem.ttlSource === 'gemessen' ? 'measured' : 'default'
-  const data = sidekickHelp({ settings, ttl: { min: ttlOf(mem, settings.ttl), source }, hints: { on: hs.on, off: hs.off }, known, worklist })
+  const data = sidekickHelp({ settings, ttl: { min: ttlOf(mem, settings.ttl), source }, hints: { on: hs.on, off: hs.off }, known })
   const tag = `#${(++helpNo).toString(36)}${now.toString(36).slice(-5)}`
   helps.set(tag, data)
   while (helps.size > 10) helps.delete(helps.keys().next().value as string)
@@ -1406,6 +1145,8 @@ async function housekeeping($: EngineInterface) {
     const v = (await $.store.get(k)) as { savedAt?: unknown } | undefined
     if (!v || typeof v.savedAt !== 'number' || now - v.savedAt > KEEP_DAYS * DAY) await $.store.delete(k)
   }
+  // Reste der Aufteilung (0.9 bis 0.14), die nichts mehr liest
+  for (const k of keys.filter((x) => x === 'split:last' || x === 'held:last')) await $.store.delete(k)
   const sids = keys.filter((k) => k.startsWith('bilanz:') && k !== 'bilanz:tage').map((k) => k.slice(7))
   const sources: { sid: string; ledger: Ledger }[] = []
   for (const sid of sids.slice(0, 300)) sources.push({ sid, ledger: cleanLedger(await $.store.get(`bilanz:${sid}`)) })
@@ -1432,7 +1173,6 @@ async function statusText($: EngineInterface): Promise<string> {
   out.push(x.rowBig(tokensText(settings.big)))
   out.push(x.rowSkills(onOff(settings.skills)))
   out.push(x.rowTtl(ttl, settings.ttl ? x.ttlSet : mem.ttlSource === 'gemessen' ? x.ttlMeasured : x.ttlDefault))
-  out.push(x.rowLong(settings.long))
   out.push(x.rowNotes(onOff(settings.notes), cleanTopics(await $.store.get('notes:known')).length))
   if (mem.ctx) out.push(x.rowCtx(tokensText(mem.ctx), cacheText(st.kind, st.left)))
   out.push('', x.summary(ses.summary), '')
@@ -1442,17 +1182,6 @@ async function statusText($: EngineInterface): Promise<string> {
     out.push(x.lastHandoff(hhmm(h.at)), '', h.text, '')
     if (h.msg) out.push(x.handoffMsg(h.msg), '')
   } else out.push(x.noHandoff, '')
-  // Letzte Aufteilung (Nachtrag 0.9.0): Titel, und was nicht eingereiht wurde, vollständig zum Kopieren
-  const sp = (await $.store.get('split:last')) as Partial<SplitLast> | undefined
-  if (sp && Array.isArray(sp.todos) && Array.isArray(sp.titles) && typeof sp.at === 'number') {
-    const k = typeof sp.queued === 'number' ? sp.queued : 0
-    out.push(x.lastSplit(hhmm(sp.at), k, sp.todos.length), '', ...sp.titles.map((s, i) => `${i + 1}. ${s}`), '')
-    const rest = sp.todos.slice(k)
-    if (rest.length) out.push(x.splitRest, '', ...rest.flatMap((s, i) => [`**${k + i + 1}.** ${s}`, '']))
-  } else out.push(x.noSplit, '')
-  // Zurückgehaltene lange Nachricht, die nicht ganz in den Grund des `{drop}` passte
-  const held = (await $.store.get('held:last')) as { msg?: unknown; at?: unknown } | undefined
-  if (held && typeof held.msg === 'string' && typeof held.at === 'number') out.push(x.heldTitle(hhmm(held.at)), '', held.msg, '')
   // Anzeige in der Fußzeile (0.10.1): ob die Engine sie aufruft, wo, und ob das Lesen des Werts scheitert
   const md = (await $.store.get('diag:sessionMode')) as Partial<ModeDiag> | undefined
   out.push(md && typeof md.at === 'number' && typeof md.surface === 'string' ? x.modeSeen(hhmm(md.at), md.surface, typeof md.err === 'string' ? md.err : '') : x.modeNever, '')
@@ -1502,12 +1231,10 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     buddyKind = undefined
     buddy($, null)
     housekeeping($).catch(() => {})
-    // Befehle zuletzt, jeder für sich (CLAUDE.md, Registrieren in session.start); englisch. `/later` mit `immediate`: läuft auch,
-    // während Claude arbeitet (types:3018), und zuletzt (Nachtrag 0.10.0)
+    // Befehle zuletzt, jeder für sich (CLAUDE.md, Registrieren in session.start); englisch
     for (const c of [
-      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|plan|auto|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|long 800|off|hints …|notes on|off|forget|help]' },
+      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|help]' },
       { name: 'savings', description: t().cmdSavings, argumentHint: '[detail] [today|week|all|help]' },
-      { name: 'later', description: t().cmdLater, argumentHint: '<text>', immediate: true as const },
     ]) {
       try {
         await $.command.register(c)
@@ -1575,11 +1302,11 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     } catch {
       // Beiwerk
     }
-    // Mit Anhängen oder `@datei` kein neuer Chat und kein Aufteilen: neu gesendet fehlten sie (types:8558-8561, limit-bars)
+    // Mit Anhängen oder `@datei` kein neuer Chat: neu gesendet fehlten sie (types:8558-8561, limit-bars)
     const resendable = !e.attachments?.length && !/(^|\s)@\S/.test(e.text)
     let g: Gate = PASS
     try {
-      g = await gate($, e.text, e.origin.kind, !!e.turnId || e.wait, resendable, next.signal)
+      g = await gate($, e.text, e.origin.kind, !!e.turnId || e.wait, next.signal)
     } catch {
       buddy($, null)
       return next(e)
@@ -1589,7 +1316,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       buddy($, null)
       return sendWithWartung($, e, g.w, () => next(e))
     }
-    let v = c.verdict
+    const v = c.verdict
     let now = 0
     let base = 20000
     try {
@@ -1598,44 +1325,6 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       if (typeof b === 'number' && b > 0) base = b
     } catch {
       // Schätzung mit Standard
-    }
-    // Autonome Stufe (Nachtrag 0.10.0): Fassung und Aufteilung ohne Rückfrage. Neuer Chat, falscher Chat und die Kalt-Rückfrage
-    // fragen weiter, weil schwer umkehrbar oder teuer
-    if (settings.level === 'auto' && v) {
-      const af = autoFassung(v, c.trigger, e.text, FASSUNG_MAX)
-      if (af === 'send') {
-        const fassung = v.fassung
-        buddy($, null)
-        bookDay($, now, (x) => {
-          countHint(x, 'fassung', 'gezeigt')
-          countHint(x, 'fassung', 'angenommen')
-          x.autonom += 1
-        })
-        // Wie „Fassung senden“: Die Sprechblase im Desktop zeigt das Original, die Zeile darunter und der Rahmen das Gesendete
-        pending = { text: e.text, alt: fassung, line: t().sentFassung(whoOf(c)), sent: fassung }
-        ses.last = { line: t().sentFassung(whoOf(c)), art: 'fassung', at: now }
-        if (g.w) ses.wartungOffen = offenOf(g.w, now)
-        saveSes($, now)
-        const r = await next({ ...e, text: fassung })
-        $.ui.invalidate('ui.render')
-        return r
-      }
-      // Mehr als 40 % kürzer: könnte Inhalt verlieren, also wie im Begleiter fragen (auch wenn die Prüfung nur „hinweis“ sagte)
-      if (af === 'ask') {
-        v = { ...v, urteil: 'anhalten' }
-        c.verdict = v
-      }
-      // `splitting` erneut: `/later` (immediate) kann während der Prüfung gestartet sein (Review 0.10.0 S2)
-      if (v.urteil === 'anhalten' && v.art === 'aufteilen' && v.schritte && resendable && c.trigger !== 'c' && !splitting) {
-        buddy($, null)
-        bookDay($, now, (x) => {
-          countHint(x, 'aufteilen', 'gezeigt')
-          countHint(x, 'aufteilen', 'angenommen')
-          x.autonom += 1
-        })
-        keepWartung($, g.w, now)
-        return { drop: await startSplit($, e.text, v.schritte, now, true) }
-      }
     }
     const d = dialog(c, resendable, base)
     buddy($, d ? 'stop' : null)
@@ -1672,7 +1361,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     }
     let answer: Choice = 'send'
     try {
-      answer = choiceOf(await $.ui.ask(d.question, { options: d.options, header: HEADER }), d.n, d.who)
+      answer = choiceOf(await $.ui.ask(d.question, { options: d.options, header: HEADER }))
       buddy($, null)
     } catch {
       buddy($, null)
@@ -1686,7 +1375,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (answer === 'fassung' && v?.fassung && showable(v.fassung)) {
       bookDay($, now, (x) => countHint(x, 'fassung', 'angenommen'))
       // Sichtbar machen, was gesendet wurde: Der Desktop zeigt in der Sprechblase das Original
-      pending = { text: e.text, alt: v.fassung, line: t().sentFassung(whoOf(c)), sent: v.fassung }
+      pending = { text: e.text, alt: v.fassung, line: t().sentFassung(whoOf()), sent: v.fassung }
       const r = await next({ ...e, text: v.fassung })
       $.ui.invalidate('ui.render')
       return r
@@ -1702,23 +1391,13 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       // Der Text steht im Grund: feuert der Timer nie (Reload), ist er nicht verloren
       return { drop: t().dropStarting(plain, cut(e.text, 3000)) }
     }
-    if (answer === 'split' && d.art === 'aufteilen' && v?.schritte && splitting) {
-      // Während die Frage offen war, startete `/later`: keine zweite Aufteilung daneben (Review 0.10.0 S2); der Text bleibt
-      bookDay($, now, (x) => countHint(x, 'aufteilen', 'abgebrochen'))
-      return { drop: t().splitBusyDrop(await heldText($, e.text, now)) }
-    }
-    if (answer === 'split' && d.art === 'aufteilen' && v?.schritte) {
-      bookDay($, now, (x) => countHint(x, 'aufteilen', 'angenommen'))
-      return { drop: await startSplit($, e.text, v.schritte, now, false) }
-    }
     if (answer === 'abort') {
       // Beim falschen Chat ist Abbrechen die Empfehlung, also angenommen
       const wrong = d.art === 'falscher_chat'
       bookDay($, now, (x) => countHint(x, d.art, wrong ? 'angenommen' : 'abgebrochen'))
-      // Nicht gesendet: aus dem Prüfkontext nehmen. Beim Aufteilen sagt die SPEC das ausdrücklich (Nachtrag 0.9.0 Schritt 4, Review S2)
-      if (wrong || d.art === 'aufteilen') forget($, c, now)
-      const kept = d.art === 'aufteilen' ? await heldText($, e.text, now) : cut(e.text, 3000)
-      return { drop: (wrong ? t().dropWrongChat : t().dropAborted)(kept) }
+      // Nicht gesendet: aus dem Prüfkontext nehmen (falscher Chat)
+      if (wrong) forget($, c, now)
+      return { drop: (wrong ? t().dropWrongChat : t().dropAborted)(cut(e.text, 3000)) }
     }
     // „Trotzdem senden“ (oder freier Text unter „Other“): ignoriert, so senden, wie getippt
     bookDay($, now, (x) => countHint(x, d.art, 'ignoriert'))
@@ -1781,18 +1460,15 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       theirs = await next(e)
       // Elemente als reine Daten {type, props, children} (types:9215-9218); nur der Button kommt aus $.ui.resolve (Nachtrag 0.7.0)
       const line: RenderNode[] = [el('Text', { color: ACCENT }, [`· sidekick: ${hit.line}`])]
-      // Button für den Befehl der Zeile (Nachtrag 0.7.0): mit worklist und einem Skill als To-do, sonst ausführen (0.8.1)
+      // Button für den Befehl der Zeile: führt ihn direkt aus (0.8.1)
       const id = hit.id
       const cmd = hit.cmd
-      if (cmd && hit.queued) line.push(el('Text', { dimColor: true }, [`  ${t().btnQueued}`]))
-      else if (cmd && hit.ran) line.push(el('Text', { dimColor: true }, [`  ${t().btnRan}`]))
+      if (cmd && hit.ran) line.push(el('Text', { dimColor: true }, [`  ${t().btnRan}`]))
       else if (cmd && pressing.has(id)) line.push(el('Text', { dimColor: true }, [`  ${t().btnBusy}`]))
       else if (cmd) {
-        // Das Ziel steht beim Zeichnen fest und geht so in den Klick (Review S2); ohne geladene Befehlsliste: ausführen
-        const route = routeOf(baseCache, cmd)
-        const label = route === 'todo' ? t().btnTodo : t().btnRun(cmd)
+        const label = t().btnRun(cmd)
         // Ein Button trägt eine Funktion und ist darum keine reine Daten-Zeichnung: über $.ui.resolve (Test: „not plain data“)
-        line.push($.ui.resolve(e).Button({ key: 'sidekick-use', label, onPress: () => void useHint($, id, route) }) as RenderNode)
+        line.push($.ui.resolve(e).Button({ key: 'sidekick-use', label, onPress: () => void useHint($, id) }) as RenderNode)
       }
       const kids: RenderNode[] = [el('Box', { key: 'sidekick-line', flexDirection: 'row', flexWrap: 'wrap', columnGap: 1 }, line)]
       if (hit.sent) {
@@ -1849,7 +1525,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       const secs = Math.max(0, Math.round(((await $.clock.now()) - step.since) / 1000))
       // Eine Leerzeile Abstand unter der Box (wirkt sauberer; marginBottom wie unter der Hinweis-Zeile)
       const box = el('Box', { key: 'sidekick-busy', flexShrink: 0, borderStyle: 'round', borderColor: ACCENT, paddingX: 1, marginBottom: 1 }, [
-        el('Text', { color: ACCENT }, [`sidekick ${{ handoff: t().busyHandoff, plain: t().busyPlain, clear: t().busyClear, split: t().busySplit }[step.step]} … ${secs} s`]),
+        el('Text', { color: ACCENT }, [`sidekick ${{ handoff: t().busyHandoff, plain: t().busyPlain, clear: t().busyClear }[step.step]} … ${secs} s`]),
       ])
       // Oberste Ebene über allen anderen Mods, in jeder Reihenfolge der Kette (band.ts, docs/BAND.md); Quick-Replies blenden
       // während der Übergabe aus, sidekick rückt dann auf ihre Höhe
@@ -1876,60 +1552,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       await $.store.set('settings', settings)
       pushStatus($)
     }
-    let text = await statusText($)
-    // Plan und Autonom ohne worklist: Aufteilen und /later fallen weg, ein Satz sagt das (Nachtrag 0.10.0)
-    if (splits(settings)) {
-      const b = await loadBase($, await $.clock.now()).catch(() => null)
-      if (!b || !hasTodo(b.cmds)) text = `${t().noWorklist}\n\n${text}`
-    }
-    return { text }
-  })
-
-  // `/later <text>` (Nachtrag 0.10.0): sofort `{}` zurück, damit Claude nichts liest (en/api.md:43); ein Timer lässt SPLIT 1 bis 4
-  // Schritte bestimmen und reiht sie per /todo ein. In jeder Stufe außer Aus; ohne worklist nur ein Toast mit dem Text.
-  on('command.run', { command: 'later' }, async ($, e) => {
-    const text = e.args.trim()
-    try {
-      settings = cleanSettings(await $.store.get('settings'))
-      if (!text) {
-        $.ui.toast(t().laterHelp, { timeoutMs: 10000 })
-        return {}
-      }
-      if (settings.level === 'off') {
-        $.ui.toast(t().laterOff(cut(text, 300)), { timeoutMs: 20000 })
-        return {}
-      }
-      await bindSession($)
-      // Die Sitzung, in der /later getippt wurde; der Timer reiht nur dort ein (Review 0.10.0 K3)
-      const sid = sessionId
-      const now = await $.clock.now()
-      const b = await loadBase($, now).catch(() => null)
-      if (!b || !hasTodo(b.cmds)) {
-        $.ui.toast(t().laterNoWorklist(cut(text, 300)), { timeoutMs: 20000 })
-        return {}
-      }
-      // Eine Aufteilung läuft noch: sonst mischten sich die /todo (Review 0.9.0 K2)
-      // Auch während einer Übergabe: deren Box und Clawds Zustand blieben sonst nicht stehen (Review 0.10.0 S2)
-      if (splitting || busy !== null) {
-        $.ui.toast(t().laterBusy(cut(text, 300)), { timeoutMs: 20000 })
-        return {}
-      }
-      splitting = true
-      later($, 300, () => {
-        runLater($, text, sid).catch(async (err) => {
-          splitting = false
-          hideBusy($)
-          await keepLater($, text, await $.clock.now().catch(() => 0))
-          $.ui.toast(t().laterFailed(msg(err), cut(text, 300)), { timeoutMs: 30000 })
-        })
-      })
-    } catch (err) {
-      // Nie still: der Text steht im Toast und in /sidekick status (Review 0.10.0 K2)
-      splitting = false
-      await keepLater($, text, await $.clock.now().catch(() => 0))
-      $.ui.toast(t().laterFailed(msg(err), cut(text, 300)), { timeoutMs: 30000 })
-    }
-    return {}
+    return { text: await statusText($) }
   })
 
   // Anzeige in der Fußzeile neben der Modellauswahl (Nachtrag 0.10.0; Vorbild orchestrator register.ts:1371-1376): ein Label an
@@ -1944,7 +1567,8 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     let s: Status = { level: settings.level, busy: settings.level !== 'off' && busyNow() }
     try {
       const { value } = await $.state.get({ plugin: 'sidekick', key: 'status' })
-      if (value) s = value
+      // Ein vor 0.15.0 geschriebener Wert mit Stufe plan oder auto (er überlebt ein Neuladen) zeigte sonst ein leeres Label
+      if (value && value.level in t().level) s = value
     } catch (error) {
       // Ohne Abo zeigt das Label die eingestellte Stufe (0.10.1: vorher blieb es dann leer); der Fehler steht in /sidekick status
       err = msg(error)
@@ -2003,7 +1627,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   on('ui.render', { component: 'CommandOutput', props: { command: 'sidekick' } }, async ($, e, next) => {
     if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
     // Nur die Zeile von `/sidekick help` bzw. `?`: `/sidekick #<gültige Kennung>` trägt die Kennung auch in Zeile 1
-    // („Unbekannt: „#…““) und zeigte sonst die Tabelle (templates/help/README.md Punkt 4, Review worklist 0.7.0 K2; Nachtrag 0.14.1)
+    // („Unbekannt: „#…““) und zeigte sonst die Tabelle (templates/help/README.md Punkt 4; Nachtrag 0.14.1)
     if (!isHelp(String(e.props.args ?? ''))) return next(e)
     const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
     const data = tag ? helps.get(tag) : undefined

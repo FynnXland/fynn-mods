@@ -9,16 +9,14 @@ import type { RuleId } from './wartung.ts'
 
 // ---------- Einstellungen ----------
 
-/** Stufen (Nachtrag 0.10.0): aus, nur Cache-Regel, Begleiter (wie 0.8.1), Plan (dazu Aufteilen, früher prüfen), Autonom. */
-export const LEVELS = ['off', 'cache', 'guide', 'plan', 'auto'] as const
+/**
+ * Stufen: aus, nur Cache-Regel, Begleiter. Plan und Autonom (Nachtrag 0.10.0) gibt es seit 0.15.0 nicht mehr; eine gespeicherte Stufe
+ * `plan` oder `auto` ist kein `Level` und wird beim Lesen zu `guide` (`cleanSettings`).
+ */
+export const LEVELS = ['off', 'cache', 'guide'] as const
 export type Level = (typeof LEVELS)[number]
 export type OnLevel = Exclude<Level, 'off'>
 const isLevel = (x: unknown): x is Level => (LEVELS as readonly unknown[]).includes(x)
-
-/** Autonom prüft jede eigene Nachricht ab so vielen Zeichen (Nachtrag 0.10.0, `autoMin`). */
-export const AUTO_MIN = 300
-/** Autonom sendet eine Fassung nur selbst, wenn sie höchstens so viel kürzer ist als die Nachricht; sonst wird gefragt. */
-export const AUTO_MAX_SHRINK = 0.4
 
 export type Settings = {
   level: Level
@@ -27,13 +25,15 @@ export type Settings = {
   big: number // Auslöser (c): kalt und Kontext ab hier
   skills: boolean // Skill-Liste an die Prüfung
   ttl: 0 | 5 | 60 // 0 = gemessen/Standard
-  long: number // Auslöser (d): Zeichen ab hier, 0 = Aufteilen aus (Nachtrag 0.9.0)
   notes: boolean // „Gut zu wissen“ (Nachtrag 0.13.0); Standard aus, jede Prüfung kostet auf dem Hauptmodell
 }
 
-export const DEFAULT_SETTINGS: Settings = { level: 'guide', lastOn: 'guide', threshold: 80000, big: 150000, skills: true, ttl: 0, long: 800, notes: false }
+export const DEFAULT_SETTINGS: Settings = { level: 'guide', lastOn: 'guide', threshold: 80000, big: 150000, skills: true, ttl: 0, notes: false }
 
-/** Gespeicherte Einstellungen absichern. Bis 0.9 gab es nur `on`: `true` → Begleiter, `false` → Aus (Nachtrag 0.10.0). */
+/**
+ * Gespeicherte Einstellungen absichern. Bis 0.9 gab es nur `on`: `true` → Begleiter, `false` → Aus (Nachtrag 0.10.0). Eine gespeicherte
+ * Stufe `plan` oder `auto` (bis 0.14) und das Feld `long` fallen weg: Die Stufe wird still `guide`, auch als `lastOn`.
+ */
 export function cleanSettings(v: unknown): Settings {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
   const num = (x: unknown, d: number) => (typeof x === 'number' && Number.isFinite(x) && x > 0 ? x : d)
@@ -46,7 +46,6 @@ export function cleanSettings(v: unknown): Settings {
     big: num(o.big, DEFAULT_SETTINGS.big),
     skills: typeof o.skills === 'boolean' ? o.skills : DEFAULT_SETTINGS.skills,
     ttl: o.ttl === 5 || o.ttl === 60 ? o.ttl : 0,
-    long: o.long === 0 ? 0 : num(o.long, DEFAULT_SETTINGS.long),
     notes: o.notes === true,
   }
 }
@@ -55,7 +54,7 @@ export function cleanSettings(v: unknown): Settings {
  * Erste Wörter, die `/sidekick` über `applySetting` annimmt (dazu `status`, `help`, `hints …`, `notes …` im Hook). Der Parser nimmt
  * nur diese, und ein Test prüft jedes gegen `/sidekick help` (Nachtrag 0.14.0, HELP-SPEC §6.5): Wer eins ergänzt, muss die Hilfe mitziehen.
  */
-export const SETTING_WORDS = ['on', 'off', 'cache', 'guide', 'plan', 'auto', 'threshold', 'big', 'skills', 'ttl', 'long'] as const
+export const SETTING_WORDS = ['on', 'off', 'cache', 'guide', 'threshold', 'big', 'skills', 'ttl'] as const
 export const TTL_WORDS = ['5', '60', 'auto'] as const
 /** `help` und `?` öffnen die Hilfe, nur als einziges Wort (HELP-SPEC §2). */
 export const HELP_WORDS = ['help', '?'] as const
@@ -69,57 +68,32 @@ export function applySetting(s: Settings, args: string): Settings | null {
   // `on` holt die zuletzt aktive Stufe zurück, `off` merkt sie sich (Nachtrag 0.10.0)
   if (key === 'on' && !value) return { ...s, level: s.lastOn }
   if (key === 'off' && !value) return { ...s, level: 'off' }
-  if ((key === 'cache' || key === 'guide' || key === 'plan' || key === 'auto') && !value) return { ...s, level: key, lastOn: key }
+  if ((key === 'cache' || key === 'guide') && !value) return { ...s, level: key, lastOn: key }
   if (key === 'threshold' || key === 'big') {
     const n = parseTokens(value ?? '')
     return n ? { ...s, [key]: n } : null
   }
   if (key === 'skills' && (value === 'on' || value === 'off')) return { ...s, skills: value === 'on' }
   if (key === 'ttl' && has(TTL_WORDS, value)) return { ...s, ttl: value === '5' ? 5 : value === '60' ? 60 : 0 }
-  if (key === 'long') {
-    if (value === 'off') return { ...s, long: 0 }
-    const n = parseTokens(value ?? '')
-    return n ? { ...s, long: n } : null
-  }
   return null
 }
 
-export const USAGE = '`/sidekick off|cache|guide|plan|auto|on` · `status` · `threshold 80k` · `big 150k` · `skills on|off` · `ttl 5|60|auto` · `long 800|off` · `hints …` · `notes on|off|forget` · `help`'
+export const USAGE = '`/sidekick off|cache|guide|on` · `status` · `threshold 80k` · `big 150k` · `skills on|off` · `ttl 5|60|auto` · `hints …` · `notes on|off|forget` · `help`'
 
 // ---------- Regeln ----------
 
-export type Trigger = 'a' | 'b' | 'c' | 'd' | 'e'
+export type Trigger = 'a' | 'b' | 'c'
 const TRIGGER_TEXT: Record<Trigger, string> = {
   a: 'erste Nachricht des Chats',
   b: 'Kontext über der Schwelle',
   c: 'Cache kalt und Kontext groß',
-  d: 'lange Nachricht',
-  e: 'Nachricht ab 300 Zeichen (autonome Stufe)',
 }
 
-/** Aufteilen und `/later` gehören zu Plan und Autonom (Nachtrag 0.10.0). */
-export const splits = (s: Settings) => s.level === 'plan' || s.level === 'auto'
-
 /**
- * Lange Nachricht, die sich in To-dos aufteilen ließe (Auslöser (d), Nachtrag 0.9.0): ≥ `long` Zeichen, ohne Anhänge und ohne
- * `@datei` (neu gesendet fehlten sie; worklist löst `@datei` nicht auf, types:8708-8709). Ob worklist `/todo` anbietet, prüft register.ts.
- */
-export function isLong(text: string, resendable: boolean, s: Settings): boolean {
-  const n = text.trim().length
-  // Über 4 × 1900 Zeichen passt die Nachricht nicht verlustfrei in 4 To-dos: SPLIT scheiterte sicher (Review 0.9.0 K4)
-  return s.long > 0 && resendable && n >= s.long && n <= LONG_MAX
-}
-
-/** Längste Nachricht, die sich noch aufteilen lässt: 4 To-dos zu je `TODO_MAX` Zeichen. */
-export const LONG_MAX = 4 * 1900
-
-/**
- * Auslöser aus Schritt 2 (SPEC Verhalten 3.2) je Stufe (Nachtrag 0.10.0); (c) vor (a) vor (b) vor (d) vor (e).
+ * Auslöser aus Schritt 2 (SPEC Verhalten 3.2) je Stufe (Nachtrag 0.10.0); (c) vor (a) vor (b).
  * - Aus: keiner. Cache: nur (c). Begleiter: (a), (b) ab `threshold`, (c).
- * - Plan: dazu (b) schon ab der halben Schwelle und (d). Autonom: wie Plan, dazu (e) jede Nachricht ab `AUTO_MIN` Zeichen.
- * `long`: die Bedingungen von (d) samt worklist; `chars`: Länge der Nachricht (getrimmt).
  */
-export function triggerOf(f: { first: boolean; ctx: number; cold: boolean; unknown?: boolean; long?: boolean; chars?: number; settings: Settings }): Trigger | null {
+export function triggerOf(f: { first: boolean; ctx: number; cold: boolean; unknown?: boolean; settings: Settings }): Trigger | null {
   const lv = f.settings.level
   if (lv === 'off') return null
   // Unbekannt (sidekick sieht einen Chat mit Verlauf zum ersten Mal) gilt vorsichtig wie kalt (597k kalt
@@ -127,15 +101,11 @@ export function triggerOf(f: { first: boolean; ctx: number; cold: boolean; unkno
   if ((f.cold || (f.unknown && !f.first)) && f.ctx >= f.settings.big) return 'c'
   if (lv === 'cache') return null
   if (f.first) return 'a'
-  if (f.ctx >= (splits(f.settings) ? f.settings.threshold / 2 : f.settings.threshold)) return 'b'
-  // Autonom: (e) vor (d), sonst bekäme eine lange Nachricht mit worklist nur die Aufteilen-Prüfung, ohne Fassung und Zeile
-  // (Review 0.10.0 S1). Aufteilen bleibt bei (e) erlaubt, `split` hängt nur an `long`
-  if (lv === 'auto' && (f.chars ?? 0) >= AUTO_MIN) return 'e'
-  if (f.long && splits(f.settings)) return 'd'
+  if (f.ctx >= f.settings.threshold) return 'b'
   return null
 }
 
-export const ARTS = ['neuer_chat', 'falscher_chat', 'skill', 'fassung', 'modell', 'aufteilen', 'sonstiges'] as const
+export const ARTS = ['neuer_chat', 'falscher_chat', 'skill', 'fassung', 'modell', 'sonstiges'] as const
 export type Art = (typeof ARTS)[number]
 
 /** Ignorierter Hinweis-Typ: Kontext und Commit-Zähler, als er ignoriert wurde. */
@@ -157,40 +127,6 @@ export type Skill = { name: string; description: string }
  * Haiku abgestimmt und mit Sonnet 5.5 geprobt (2026-10-06), und die Probe mit `en` lieferte englische Zeilen, Kurzfassung und Übergabe. Die Ausgabesprache folgt `language`. Die Fassung bleibt in der
  * Sprache der Nachricht, weil sie die Nachricht des Nutzers ist. Neutral „der Nutzer“: Der Mod ist öffentlich.
  */
-/** Art `aufteilen` (Nachtrag 0.9.0): nur im Prompt, wenn die Fakten „Aufteilen erlaubt: ja“ nennen. Die Prüfung liefert nur Titel. */
-const SPLIT_RULES = [
-  'Aufteilen (nur, wenn die Fakten "Aufteilen erlaubt: ja" nennen):',
-  '- "aufteilen": Die neue Nachricht enthält mindestens 3 getrennte Aufträge oder Punkte, die sich nacheinander abarbeiten lassen. Dann urteil "anhalten", art "aufteilen". Der Nutzer kann sie dann als einzelne To-dos nacheinander abarbeiten lassen.',
-  '- "schritte": 3 oder 4 kurze Titel der Aufträge in sinnvoller Reihenfolge, je höchstens 60 Zeichen, in der Sprache der Nachricht. Nie mehr als 4: Bei 5 oder mehr Punkten fasse kleine oder verwandte Punkte zu einem Titel zusammen (z. B. „Doku: Cheatsheet und Release-Notes“). Sonst "schritte": [].',
-  '- "zeile" bei "aufteilen": ein kurzer Satz, warum.',
-  '- Nicht aufteilen: eine einzige zusammenhängende Aufgabe mit vielen Details oder Bedingungen; reine Fragen oder Diskussionen; Antworten auf Rückfragen des Assistenten ohne neue Aufträge. Im Zweifel nicht aufteilen.',
-  '',
-]
-
-/**
- * Zusatz nur für die autonome Stufe (Nachtrag 0.10.0): kritischer bei unklaren Nachrichten, die Rollenregeln bleiben. Eine Fassung
- * geht dort ohne Rückfrage raus; darum ausdrücklich, dass sie jeden Punkt behält.
- */
-const AUTO_RULES = [
-  'Autonome Stufe (der Nutzer hat erlaubt, dass eine Fassung ohne Rückfrage gesendet wird):',
-  '- Sei kritischer als sonst: Ist die Nachricht mehrdeutig, unvollständig oder unklar formuliert und lässt sich die Lücke aus Kurzfassung oder letzten Nachrichten füllen, liefere eine Fassung (urteil "anhalten", art "fassung"), auch wenn sie nur etwas klarer ist.',
-  '- Ausnahme: Antwortet die Nachricht auf eine Frage, Auswahl oder einen Vorschlag in der letzten Antwort des Assistenten, gibt es auch hier keine Fassung.',
-  '- Die Fassung behält jeden Punkt, jede Bedingung, jeden Namen und jede Zahl der Nachricht. Sie darf ordnen, präzisieren und Füllwörter streichen, aber nichts weglassen und nichts dazuerfinden.',
-  '- Ist die Nachricht schon klar und vollständig, bleibt es bei "durch". Die Rollenregeln oben gelten unverändert: keine Rückfragen in der Fassung, keine Stimme des Assistenten.',
-  '',
-]
-
-/**
- * Haiku in der autonomen Stufe (Nachtrag 0.11.0): nur melden, dass eine Fassung lohnt; schreiben tut sie danach ein anderes
- * Modell mit `AUTO_RULES`. Haiku selbst mit `AUTO_RULES` brauchte bis 18 s.
- */
-const AUTO_FLAG_RULES = [
-  'Autonome Stufe (eine Fassung würde ohne Rückfrage gesendet; ein anderes Modell schreibt sie):',
-  '- Ist die Nachricht mehrdeutig, unvollständig oder deutlich klarer formulierbar und lässt sich das aus Kurzfassung oder letzten Nachrichten klären, antworte mit urteil "hinweis" und art "fassung", einer kurzen "zeile" dazu, und lasse "fassung" leer. Schreibe die Fassung nicht selbst.',
-  '- Antwortet die Nachricht auf eine Frage, Auswahl oder einen Vorschlag in der letzten Antwort des Assistenten, gilt das nicht.',
-  '',
-]
-
 const BEISPIEL_1 =
   'Beispiel 1: Der Nutzer schreibt „mach die drei projekte mal anders“, und weder Kurzfassung noch letzte Nachrichten sagen, was „anders“ heißt. Falsch: „Lass mich die drei Projekte neu angehen. Was soll sich ändern?“ (Stimme des Assistenten plus Rückfrage). Richtig: {"urteil":"hinweis","art":"fassung","zeile":"Unklar, was mit anders gemeint ist – Stil, Struktur oder Inhalt?","fassung":""}'
 const BEISPIEL_2 =
@@ -202,7 +138,7 @@ const BEISPIEL_2 =
  * Meldung kostet (Fynns Store: 17 von 27 Fassungs-Zeilen und 5 von 5 Skill-Zeilen ignoriert). Größe und Chatwechsel nie als Zeile
  * (Entscheidung 1). Die beiden Beispiele bleiben (Behalte-Liste 7: sie legen die Form fest).
  */
-export function checkSystem(skills: Skill[] | null, split = false, auto = false, flag = false): string {
+export function checkSystem(skills: Skill[] | null): string {
   const out = [
     'Du bist der Sidekick in Claude Code. Der Nutzer tippt gleich eine Nachricht an seinen Coding-Assistenten, und du prüfst sie, bevor sie gesendet wird. Du chattest nie mit dem Nutzer und beantwortest die Nachricht nicht; du gibst nur ein Urteil als JSON.',
     '',
@@ -235,10 +171,6 @@ export function checkSystem(skills: Skill[] | null, split = false, auto = false,
     '- "zeile" bei "falscher_chat": beide Gebiete knapp, z. B. Dieser Chat: Handy-Game (Unity). Deine Nachricht: Website-CSS.',
     '- "kurzfassung" bei "falscher_chat": bleibt beim Gebiet des Chats; die neue Nachricht kommt nicht hinein.',
     '',
-    // Nur, wenn das Aufteilen erlaubt ist (lange Nachricht, worklist da): sonst bleibt der geprobte Prompt unverändert (Nachtrag 0.9.0)
-    ...(split ? SPLIT_RULES : []),
-    ...(auto ? AUTO_RULES : []),
-    ...(flag && !auto ? AUTO_FLAG_RULES : []),
     'Wann welche Art:',
     // Entscheidung 1 (Nachtrag 0.12.0): Größe und Chatwechsel nur als Rückfrage. Bis 0.11 nannte der Prompt „das Thema wechselt bei
     // großem Kontext“ als Beispiel für eine Zeile, daher die blauen Zeilen
@@ -246,7 +178,7 @@ export function checkSystem(skills: Skill[] | null, split = false, auto = false,
     'Fehlt eine Angabe, ist die art "fassung" mit leerer "fassung" (wie Beispiel 1), nie "neuer_chat". Einen Skill schlägst du nur vor, wenn der Assistent ihn aus der Nachricht nicht selbst als passend erkennen würde, und nie, Plugins zu installieren. "modell" gibt es nur, wenn die Fakten "Auslöser: erste Nachricht des Chats" nennen: ein kleineres Modell für einfache Aufgaben oder ein größeres für schwere. "neuer_chat" und "falscher_chat" gibt es nie bei der ersten Nachricht eines Chats, denn der Chat ist dann schon neu, und sein Kontext ist die Grundlast (Anweisungen, Werkzeuge), kein Verlauf. Eine Fassung gibt es nie bei kurzen Nachrichten unter 4 Wörtern wie Grüßen, Tests oder „OK“.',
     '',
     'Ausgabe:',
-    `- "art": "neuer_chat" | "falscher_chat" | "skill" | "fassung" | "modell" | ${split ? '"aufteilen" | ' : ''}"sonstiges".`,
+    `- "art": "neuer_chat" | "falscher_chat" | "skill" | "fassung" | "modell" | "sonstiges".`,
     '- "skill": nur ein Name aus der Skill-Liste unten, exakt geschrieben. In "zeile" beschreibst du den Skill in normalen Worten, ohne seinen Namen (der steht in "skill").',
     '- "fassung": die komplette verbesserte Nachricht, vom Nutzer an den Assistenten, in seinem Ton und in der Sprache seiner Nachricht, ohne Erfundenes. Sonst leer.',
     `- "zeile": ein kurzer Satz, höchstens 120 Zeichen, auf ${t().outLang}, sachlich. Umlaute als ä, ö, ü und ß, nie als ae, oe, ue oder ss (Übergabe, nicht Uebergabe). Bei "durch" leer. Ohne Lob und ohne Anrede.`,
@@ -255,9 +187,7 @@ export function checkSystem(skills: Skill[] | null, split = false, auto = false,
     `- "kurzfassung": schreibe die laufende Kurzfassung des Chats fort, auf ${t().outLang}, höchstens 600 Zeichen: Thema, Stand, Entscheidungen, letzter Commit. Nur aus dem, was du siehst; als Entscheidung nur, was der Nutzer ausdrücklich gewählt hat, keine Annahmen.`,
     '',
     'Antworte nur mit einem JSON-Objekt, ohne Erklärung:',
-    split
-      ? '{"urteil":"durch|hinweis|anhalten","art":"…","zeile":"…","fassung":"…","skill":"…","schritte":["…"],"verlauf":"braucht|kaum|nicht","kurzfassung":"…"}'
-      : '{"urteil":"durch|hinweis|anhalten","art":"…","zeile":"…","fassung":"…","skill":"…","verlauf":"braucht|kaum|nicht","kurzfassung":"…"}',
+    '{"urteil":"durch|hinweis|anhalten","art":"…","zeile":"…","fassung":"…","skill":"…","verlauf":"braucht|kaum|nicht","kurzfassung":"…"}',
   ]
   if (skills && skills.length) {
     out.push('', 'Skills (Aufruf mit /name):')
@@ -272,7 +202,6 @@ type CheckFacts = {
   cache: string // „warm, noch 42 min“ / „kalt seit 14 min“ / „unbekannt“
   model: string
   commit: string // „abc123 vor 20 min“ / „keiner“
-  split?: boolean // Aufteilen erlaubt (Nachtrag 0.9.0)
 }
 
 /** Auf höchstens `n` Zeichen, an einer Wortgrenze, mit „…“ (nie mitten im Wort). */
@@ -285,8 +214,6 @@ function cutWords(t: string, n: number): string {
 }
 
 const ZEILE_MAX = 160
-/** Titel eines Schritts beim Aufteilen (Nachtrag 0.9.0). */
-const SCHRITT_MAX = 60
 
 export const cut = (t: string, n: number) => {
   const s = String(t ?? '')
@@ -339,7 +266,7 @@ export function checkPrompt(summary: string, recent: string[], text: string, f: 
   out.push('', 'Letzte Antwort des Assistenten (Ende; die neue Nachricht antwortet oft darauf):', '[ANTWORT]', reply || '(keine)', '[/ANTWORT]')
   out.push(
     '',
-    `Fakten: Auslöser: ${TRIGGER_TEXT[f.trigger]}; Kontext: ${tokensText(f.ctx)} Tokens; Cache: ${f.cache}; Modell: ${f.model ? priceFor(f.model).id : 'unbekannt'}; letzter Commit: ${f.commit}${f.split ? '; Aufteilen erlaubt: ja' : ''}`,
+    `Fakten: Auslöser: ${TRIGGER_TEXT[f.trigger]}; Kontext: ${tokensText(f.ctx)} Tokens; Cache: ${f.cache}; Modell: ${f.model ? priceFor(f.model).id : 'unbekannt'}; letzter Commit: ${f.commit}`,
     '',
     'Neue Nachricht:',
     '<<<',
@@ -357,7 +284,6 @@ export type Verdict = {
   skill: string
   verlauf?: Verlauf
   kurzfassung: string
-  schritte?: string[] // nur bei Art `aufteilen`: 3–4 Titel (Nachtrag 0.9.0)
 }
 
 export type Verlauf = 'braucht' | 'kaum' | 'nicht'
@@ -404,9 +330,9 @@ export function soundsLikeReply(fassung: string, msg = ''): boolean {
 /**
  * Antwort der Prüfung lesen. Alles Unverwertbare ist `null` = durch (fail-open, SPEC Fehlerverhalten). Haiku setzte das JSON oft in
  * ```json-Zäune. `modell` nur bei Auslöser (a), Skills nur aus der Liste; ein „anhalten“ ohne konkrete bessere Aktion wird zum
- * Hinweis. `aufteilen` nur mit `split` (Aufteilen erlaubt) und 3–4 nicht leeren Titeln, sonst durch (Nachtrag 0.9.0).
+ * Hinweis.
  */
-export function parseVerdict(raw: string, trigger: Trigger, skillNames: string[], msg?: string, split = false): Verdict | null {
+export function parseVerdict(raw: string, trigger: Trigger, skillNames: string[], msg?: string): Verdict | null {
   const answer = String(raw || '')
   const a = answer.indexOf('{')
   const b = answer.lastIndexOf('}')
@@ -440,16 +366,6 @@ export function parseVerdict(raw: string, trigger: Trigger, skillNames: string[]
   const verlauf = str(o.verlauf)
   if (verlauf === 'braucht' || verlauf === 'kaum' || verlauf === 'nicht') v.verlauf = verlauf
   if (v.urteil === 'durch') return v
-  if (v.art === 'aufteilen') {
-    const raw = Array.isArray(o.schritte) ? o.schritte : []
-    const steps = raw.map((x) => cutWords(str(x).replace(/\s+/g, ' '), SCHRITT_MAX))
-    // Ohne Erlaubnis, bei (c) (nie aufteilen, die Kalt-Rückfrage hat Vorrang), mit 2 oder 5 Schritten oder leeren Titeln: durch
-    if (!split || trigger === 'c' || steps.length < 3 || steps.length > 4 || steps.some((x) => !x)) return { ...v, urteil: 'durch' }
-    return { ...v, urteil: 'anhalten', fassung: '', skill: '', schritte: steps }
-  }
-  // Auslöser (d) gibt es nur fürs Aufteilen: in einem kleinen Chat sonst keine Zeilen oder Rückfragen, die es ohne die Länge
-  // nicht gäbe (Review 0.9.0 K3). Die Kurzfassung bleibt
-  if (trigger === 'd') return { ...v, urteil: 'durch' }
   if (v.art === 'modell' && trigger !== 'a') return { ...v, urteil: 'durch' }
   // Bei der ersten Nachricht ist der Chat schon neu (Rat zum neuen Chat in einem frischen Chat)
   if (v.art === 'neuer_chat' && trigger === 'a') return { ...v, urteil: 'durch' }
@@ -542,17 +458,6 @@ function withoutKontext(v: Verdict): Verdict {
 export function shownLine(v: Verdict): string {
   const r = withoutKontext({ ...v, urteil: 'hinweis' })
   return r.urteil === 'hinweis' ? r.zeile : ''
-}
-
-/**
- * Autonome Stufe (Nachtrag 0.10.0): Was mit einer Fassung geschieht. `send` = ohne Rückfrage senden; `ask` = wie im Begleiter fragen,
- * weil sie mehr als 40 % kürzer ist als die Nachricht (es könnte Inhalt fehlen); `null` = keine Fassung, oder Auslöser (c), wo die
- * Kalt-Rückfrage gilt. `max`: längste Fassung, die ganz in einen Dialog passt (FASSUNG_MAX in register.ts).
- */
-export function autoFassung(v: Verdict | null, trigger: Trigger, text: string, max: number): 'send' | 'ask' | null {
-  if (!v || v.urteil === 'durch' || v.art !== 'fassung' || !v.fassung || trigger === 'c') return null
-  if (v.fassung.length > max) return null
-  return v.fassung.length < (1 - AUTO_MAX_SHRINK) * text.trim().length ? 'ask' : 'send'
 }
 
 // ---------- Übergabe (Modell: HANDOFF in models.ts) ----------
@@ -730,84 +635,17 @@ export function handoffPrompt(summary: string, start: string, tail: string, mess
   return out.join('\n')
 }
 
-// ---------- Aufteilen in To-dos (Modell: SPLIT in models.ts, Nachtrag 0.9.0) ----------
-
-/** worklist schneidet ein To-do bei 2000 Zeichen (worklist model.ts:13); Luft für den „Fertig.“-Zusatz. */
-export const TODO_MAX = 1900
-
-/**
- * Anweisung für SPLIT. Wie die Prüfung deutsch; die To-dos bleiben in der Sprache der Nachricht, weil sie die Nachricht des Nutzers
- * sind (wie die Fassung).
- */
-export function splitSystem(free = false): string {
-  return [
-    'Du teilst eine lange Nachricht des Nutzers an seinen Coding-Assistenten in einzelne To-dos auf. Ein Werkzeug (worklist) sendet die To-dos später nacheinander im selben Chat, jedes erst, wenn das vorige fertig ist.',
-    'Du beantwortest die Nachricht nicht und führst nichts aus. Du gibst nur die To-do-Texte als JSON.',
-    '',
-    'Regeln:',
-    // `/later` (Nachtrag 0.10.0): ohne Titel aus einer Prüfung, SPLIT bestimmt 1 bis 4 Schritte selbst
-    free
-      ? '- Es gibt keine Titel: Bestimme die Schritte selbst, 1 bis 4 To-dos in sinnvoller Reihenfolge. Ein kurzer Einzelauftrag ist genau ein To-do. Teile nur, was sich getrennt nacheinander abarbeiten lässt.'
-      : '- Genau so viele To-dos wie Titel, in derselben Reihenfolge; jedes To-do gehört zu seinem Titel.',
-    '- Jedes To-do ist eine Nachricht vom Nutzer an den Assistenten: „ich“ ist der Nutzer, „du“ der Assistent. Ton und Sprache der Nachricht des Nutzers.',
-    '- Jeder Punkt der Nachricht landet in genau einem To-do: nichts weglassen. Auch Bedingungen, Pfade, Namen, Zahlen und Beispiele bleiben erhalten. Füllwörter und Wiederholungen des Diktats dürfen weg.',
-    '- Nichts hinzufügen, was nicht in der Nachricht steht: keine eigenen Prüfschritte, Beispiele oder Vorschläge.',
-    '- Gilt etwas für alle Aufträge (Rahmen, Vorgaben, Ziel), steht es in To-do 1; spätere To-dos dürfen sich darauf beziehen („wie oben“, „im selben Projekt“).',
-    '- Jedes To-do ist ein vollständiger Auftrag. Es läuft im selben Chat und darf sich auf vorige Schritte beziehen.',
-    (free ? '- Gibt es mehr als ein To-do, endet To-do 1' : '- To-do 1 endet') + ' mit einer eigenen Zeile, die die folgenden Schritte als eigene To-dos nennt, damit der Assistent sie nicht vorzieht, z. B. „Danach folgen als eigene To-dos: 2. …, 3. … Bitte jetzt nur Schritt 1.“ (in der Sprache der Nachricht).',
-    `- Jedes To-do höchstens ${TODO_MAX} Zeichen.`,
-    '- Keine doppelten Anführungszeichen im Text (sie zerbrechen das JSON); wenn nötig ‚einfache‘. Zeilenumbrüche als \\n.',
-    '',
-    'Antworte nur mit einem JSON-Objekt, ohne Erklärung:',
-    '{"todos":["…","…","…"]}',
-  ].join('\n')
-}
-
-export function splitPrompt(summary: string, text: string, titles: readonly string[]): string {
-  return [
-    `Kurzfassung des Chats: ${summary || '(keine)'}`,
-    '',
-    ...(titles.length ? ['Titel (Reihenfolge der To-dos):', ...titles.map((x, i) => `${i + 1}. ${x}`)] : ['Titel: keine. Bestimme die Schritte selbst (1 bis 4).']),
-    '',
-    'Nachricht des Nutzers, vollständig:',
-    '<<<',
-    text,
-    '>>>',
-  ].join('\n')
-}
-
-/**
- * Antwort von SPLIT: genau `n` (bei `/later` `[min, max]`) nicht leere To-dos mit höchstens `TODO_MAX` Zeichen, sonst `null`
- * (dann fragt sidekick erneut bzw. meldet es).
- */
-export function parseSplit(raw: string, n: number | readonly [number, number]): string[] | null {
-  const answer = String(raw || '')
-  const a = answer.indexOf('{')
-  const b = answer.lastIndexOf('}')
-  if (a < 0 || b <= a) return null
-  let o: unknown
-  try {
-    o = JSON.parse(answer.slice(a, b + 1))
-  } catch {
-    return null
-  }
-  const list = (o as { todos?: unknown })?.todos
-  const [min, max] = typeof n === 'number' ? [n, n] : n
-  if (!Array.isArray(list) || list.length < min || list.length > max) return null
-  const todos = list.map((x) => (typeof x === 'string' ? x.trim() : ''))
-  // Zu lang wird nicht gekürzt: worklist schnitte sonst ein Ende ab, und nichts soll verloren gehen
-  if (todos.some((x) => !x || x.length > TODO_MAX)) return null
-  return todos
-}
-
-
 // ---------- Bilanz ----------
 
 type Counts = { gezeigt: number; angenommen: number; ignoriert: number; abgebrochen: number }
 
 /** Eigene Modellaufrufe je Modell-ID und Rolle (SPEC Nachtrag 0.5.0): Anzahl, $ und Dauer, dazu Tokens. */
 export type Use = { n: number; usd: number; ms: number }
-/** `hinweis`: Prüfung „Gut zu wissen“ über `$.model.fork` (Nachtrag 0.13.0); ihre Kosten stehen nicht in `kosten` (eigene Rechnung). */
+/**
+ * `hinweis`: Prüfung „Gut zu wissen“ über `$.model.fork` (Nachtrag 0.13.0); ihre Kosten stehen nicht in `kosten` (eigene Rechnung).
+ * `aufteilung`: seit 0.15.0 wird nichts mehr gebucht; die Rolle bleibt, damit die Kosten früherer Aufteilungen (0.9 bis 0.14) in
+ * `/savings detail` bei ihrem Modell stehen und nicht als „früher“ erscheinen.
+ */
 export const ROLES = ['pruefung', 'uebergabe', 'aufteilung', 'hinweis'] as const
 export type Role = (typeof ROLES)[number]
 export type ModelUse = Record<Role, Use> & { in: number; out: number }
@@ -839,7 +677,6 @@ export type Day = {
   pruefungen: number
   warteMs: number // Summe der Wartezeit geprüfter Nachrichten
   uebergaben: number
-  autonom: number // ohne Rückfrage gesendete Fassungen und Aufteilungen (Nachtrag 0.10.0)
   hinweise: Partial<Record<Art, Counts>>
   kaltVermieden: { n: number; usd: number }
   neuWarm: { n: number; usd: number }
@@ -856,7 +693,6 @@ export function emptyDay(): Day {
     pruefungen: 0,
     warteMs: 0,
     uebergaben: 0,
-    autonom: 0,
     hinweise: {},
     kaltVermieden: { n: 0, usd: 0 },
     neuWarm: { n: 0, usd: 0 },
@@ -881,7 +717,6 @@ function cleanDay(v: unknown): Day {
   d.pruefungen = n0(o.pruefungen)
   d.warteMs = n0(o.warteMs)
   d.uebergaben = n0(o.uebergaben)
-  d.autonom = n0(o.autonom)
   for (const k of ['kaltVermieden', 'neuWarm', 'kaltOhne'] as const) d[k] = { n: n0(o[k]?.n), usd: n0(o[k]?.usd) }
   for (const a of ARTS) {
     const c = o.hinweise?.[a]
@@ -909,7 +744,6 @@ export function addDay(a: Day, b: Day): Day {
   out.pruefungen += b.pruefungen
   out.warteMs += b.warteMs
   out.uebergaben += b.uebergaben
-  out.autonom += b.autonom
   for (const k of ['kaltVermieden', 'neuWarm', 'kaltOhne'] as const) out[k] = { n: out[k].n + b[k].n, usd: out[k].usd + b[k].usd }
   for (const a2 of ARTS) {
     const x = b.hinweise[a2]
@@ -1352,7 +1186,6 @@ export function savingsReport(d: Day, p: Period, now: number, tag = '', days?: R
     out.push(`| ${nz.n} | ${usdText(nz.usd)} | ${secsText(nz.ms, nz.n)} | ${nz.gezeigt} | ${nz.erklaert} | ${nz.bekannt} | ${nz.spaeter} | ${nz.chat} | ${nz.ignoriert} | ${nz.keins} | ${nz.verworfen} | ${nz.fehler} |`, '')
   }
   out.push(x.handoffs(d.uebergaben, d.hinweise.modell?.gezeigt ?? 0))
-  if (d.autonom) out.push(x.autoSent(d.autonom))
   out.push(x.coldWithout(d.kaltOhne.n, usdText(d.kaltOhne.usd)))
   const sk = Object.entries(d.skills).sort((a, b) => b[1] - a[1])
   out.push(x.skillsUsed(sk.slice(0, 8).map(([k, v]) => `\`${k}\` ${v}×`).join(', ')))
@@ -1379,7 +1212,7 @@ export function handoffEstimate(histChars: number, base: number, model: string, 
 
 // ---------- Empfehlung: was auf Platz 1 steht ----------
 
-export type Choice = 'new' | 'plain' | 'fassung' | 'split' | 'send' | 'abort'
+export type Choice = 'new' | 'plain' | 'fassung' | 'send' | 'abort'
 
 /**
  * Falscher Chat (Fynn 2026-10-06): Abbrechen auf Platz 1, dann der neue Chat, den `verlauf` nahelegt (ein anderes Gebiet braucht den

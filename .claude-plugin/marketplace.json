@@ -1,6 +1,6 @@
 {
   "name": "fynn-mods",
-  "description": "Fynn's daily-driver Claude Code mods: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies, a to-do worklist and a cost ledger.",
+  "description": "Fynn's daily-driver Claude Code mods: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies and a cost ledger.",
   "owner": {
     "name": "Fynn Hansen"
   },
@@ -18,17 +18,12 @@
     {
       "name": "sidekick",
       "source": "./mods/sidekick",
-      "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Haiku 5.5 (Sonnet 5.5 writes rewritten versions in level auto): a hint line under your message or a question (new chat with handoff, a skill, a clearer version, or \"wrong chat?\" when the message belongs to another project). Names due maintenance once per chat (/skill-doctor, prompt-audit, consolidate-memory, /init). With worklist installed, a long message with several tasks can be split into 3-4 to-dos, and /later plans text as to-dos. Five levels (off, cache, guide, plan, auto) with a colored label in the prompt footer. /savings shows cost and measurable savings at a glance, /savings detail compares the models over time. Optional, off by default (/sidekick notes on): while Claude works, a \"good to know\" note above the prompt when you likely missed something with consequences (one question to your main model over the conversation, every 6 steps). /sidekick help shows all commands and settings as a table."
+      "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Haiku 5.5: a hint line under your message or a question (new chat with handoff, a skill, a clearer version that is only sent if you choose it, or \"wrong chat?\" when the message belongs to another project). It never rewrites or sends anything without asking. Names due maintenance once per chat (/skill-doctor, prompt-audit, consolidate-memory, /init). Three levels (off, cache, guide) with a colored label in the prompt footer. /savings shows cost and measurable savings at a glance, /savings detail compares the models over time. Optional, off by default (/sidekick notes on): while Claude works, a \"good to know\" note above the prompt when you likely missed something with consequences (one question to your main model over the conversation, every 6 steps). /sidekick help shows all commands and settings as a table."
     },
     {
       "name": "quick-replies",
       "source": "./mods/quick-replies",
       "description": "Claude Code's own next-message suggestion as a button above Clawd; click it, type 1 in the empty prompt, or send just 1 to send it. With /replies more on, a fork of the session fills up to four places in total. /replies help shows all commands and settings as a table."
-    },
-    {
-      "name": "worklist",
-      "source": "./mods/worklist",
-      "description": "To-do sidebar next to the chat: queue tasks, even while Claude is working. When Claude is clearly done, the to-do is checked off and the next one starts; otherwise the list stops with a reason and buttons (Continue keeps the order). Runs by default, never pauses on its own. Survives /clear. History per project. /todo, /todos help"
     },
     {
       "name": "cost-ledger",
