@@ -35,9 +35,68 @@ type Surface = 'terminal' | 'desktop'
 const ORANGE = 'claude'
 const YELLOW = 'warning'
 const RED = 'error'
-// Farben je Modell, nach Anteil vergeben; ohne Modell-Daten gedimmt
-const MODEL_COLORS = ['claude', 'suggestion', 'success', 'permission', 'warning', 'planMode', 'ide', 'remember']
+// Farben je Modell (ab 0.8.1, Fynn 2026-11-04): fest je Familie statt nach Rang, damit ein Modell in jeder Ansicht dieselbe
+// Farbe hat, und klar verschiedene Farbtöne. Vorher waren vier der acht Rang-Farben Blautöne (suggestion, permission, ide,
+// remember). Opus ist Claudes Hausfarbe, die übrigen folgen der Häufigkeit in Fynns Daten.
+const FAMILY_COLORS: readonly [string, string][] = [
+  ['opus', 'claude'],
+  ['sonnet', 'ide'],
+  ['haiku', 'success'],
+  ['fable', 'autoAccept'],
+  ['mythos', 'planMode'],
+]
+/** Für weitere Modelle oder eine zweite Version derselben Familie in einer Ansicht. */
+const SPARE_COLORS = ['warning', 'permission']
+/** Alle Mod-Aufrufe zusammen, in einem eigenen Farbton (die Modelle der Mods zeigt /ledger models). */
+const MODS_COLOR = 'bashBorder'
 const UNKNOWN_COLOR = 'inactive'
+/**
+ * Näherung der Theme-Farben (dunkles Theme) für Svg, das keine Theme-Keys kennt (types SvgProps: als Bild gezeichnet).
+ * Legende und Beträge daneben stehen als Text in echten Theme-Farben.
+ */
+export const THEME_HEX: Record<string, string> = {
+  claude: '#D77757',
+  ide: '#4782C8',
+  success: '#4EBA65',
+  autoAccept: '#AF87FF',
+  planMode: '#48968C',
+  warning: '#E5B84B',
+  permission: '#B1B9F9',
+  bashBorder: '#FD5DB1',
+  inactive: '#8A8A8A',
+}
+
+/**
+ * Farbe je Modell-Schlüssel in der Reihenfolge `keys` (größter Betrag zuerst): die Farbe seiner Familie, solange sie in
+ * dieser Ansicht noch frei ist, sonst eine Reservefarbe, danach Grau. Ohne Modell-Daten immer Grau.
+ */
+export function familyColors(keys: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>()
+  const used = new Set<string>()
+  const spare = [...SPARE_COLORS]
+  for (const k of keys) {
+    if (k === UNKNOWN_MODEL) {
+      out.set(k, UNKNOWN_COLOR)
+      continue
+    }
+    const fam = FAMILY_COLORS.find(([f]) => k.startsWith(f))?.[1]
+    const c = fam && !used.has(fam) ? fam : (spare.shift() ?? UNKNOWN_COLOR)
+    used.add(c)
+    out.set(k, c)
+  }
+  return out
+}
+
+/** Alle Mod-Teile eines Verlaufs (`mod:<modell>`) unter einem Schlüssel. */
+const MODS_KEY = MOD_PART
+function poolMods(parts: readonly { key: string; usd: number }[]): { key: string; usd: number }[] {
+  const out = new Map<string, number>()
+  for (const p of parts) {
+    const k = p.key.startsWith(MOD_PART) ? MODS_KEY : p.key
+    out.set(k, (out.get(k) ?? 0) + p.usd)
+  }
+  return [...out.entries()].map(([key, usd]) => ({ key, usd }))
+}
 
 type Props = Record<string, string | number | boolean>
 
@@ -94,20 +153,16 @@ export function stackedBar(surface: Surface, ratio: number, cells: number, parts
 const bar = (sf: Surface, ratio: number, cells: number, color: string) => stackedBar(sf, ratio, cells, [{ color, share: 1 }])
 
 /**
- * Farbe je Verlaufsteil: erst die Chat-Modelle nach Gesamtbetrag, danach die Mod-Teile (`mod:…`), damit sie in der
- * Legende hinter dem Chat stehen. Beträge ohne Modell-Daten (Chat wie Mods) immer gedimmt.
+ * Farbe je Verlaufsteil, in Legenden-Reihenfolge: die Chat-Modelle nach Gesamtbetrag in der Farbe ihrer Familie, dann
+ * „ohne Angabe“ (grau), zuletzt alle Mod-Aufrufe zusammen (`MODS_KEY`, ein eigener Farbton).
  */
 export function modelColors(buckets: Bucket[]): Map<string, string> {
   const tot = new Map<string, number>()
-  for (const b of buckets) for (const p of b.parts) tot.set(p.key, (tot.get(p.key) ?? 0) + p.usd)
-  const unknown = (k: string) => k === UNKNOWN_MODEL || k === MOD_PART + UNKNOWN_MODEL
-  const isMod = (k: string) => (k.startsWith(MOD_PART) ? 1 : 0)
-  const keys = [...tot.entries()]
-    .filter(([k]) => !unknown(k))
-    .sort((a, b) => isMod(a[0]) - isMod(b[0]) || b[1] - a[1])
-    .map(([k]) => k)
-  const out = new Map(keys.map((k, i) => [k, MODEL_COLORS[i % MODEL_COLORS.length]!]))
-  for (const k of [UNKNOWN_MODEL, MOD_PART + UNKNOWN_MODEL]) if (tot.has(k)) out.set(k, UNKNOWN_COLOR)
+  for (const b of buckets) for (const p of poolMods(b.parts)) tot.set(p.key, (tot.get(p.key) ?? 0) + p.usd)
+  const chat = [...tot.entries()].filter(([k]) => k !== MODS_KEY && k !== UNKNOWN_MODEL).sort((a, b) => b[1] - a[1]).map(([k]) => k)
+  const out = familyColors(chat)
+  if (tot.has(UNKNOWN_MODEL)) out.set(UNKNOWN_MODEL, UNKNOWN_COLOR)
+  if (tot.has(MODS_KEY)) out.set(MODS_KEY, MODS_COLOR)
   return out
 }
 
@@ -127,8 +182,8 @@ function figure(label: string, w: { usd: number; chats: number }, width: string,
 
 /**
  * Verlauf der letzten 14 Tage oder Wochen: je Zeile ein Balken, geteilt nach Modell, darunter die Legende. Der Betrag ist
- * der echte Chat-Betrag plus die Mod-Aufrufe; die Aufteilung folgt den geschätzten Modell-Anteilen, Mod-Teile stehen in
- * der Legende als „Modell · Mods“. Die Ampel färbt bei Tagen den Betrag.
+ * der echte Chat-Betrag plus die Mod-Aufrufe; die Aufteilung folgt den geschätzten Modell-Anteilen, alle Mod-Teile stehen
+ * zusammen als „Mod-Aufrufe“ (ab 0.8.1). Die Ampel färbt bei Tagen den Betrag.
  */
 function historyBlock(r: Report, s: Settings, sf: Surface, inner: number, weeks: boolean): RenderElement[] {
   const lang = s.lang
@@ -145,7 +200,16 @@ function historyBlock(r: Report, s: Settings, sf: Surface, inner: number, weeks:
     row({}, [
       cell(labelW, dim(weeks ? weekLabel(isoWeek(b.key), lang) : shortDate(b.key, lang))),
       weeks
-        ? stackedBar(sf, max > 0 ? b.usd / max : 0, cells, b.parts.map((p) => ({ color: colors.get(p.key) ?? UNKNOWN_COLOR, share: b.usd > 0 ? p.usd / b.usd : 0 })))
+        ? stackedBar(
+            sf,
+            max > 0 ? b.usd / max : 0,
+            cells,
+            // Legenden-Reihenfolge auch im Balken: dieselbe Farbe steht in jeder Zeile an derselben Stelle
+            [...colors.keys()].flatMap((k) => {
+              const p = poolMods(b.parts).find((x) => x.key === k)
+              return p ? [{ color: colors.get(k)!, share: b.usd > 0 ? p.usd / b.usd : 0 }] : []
+            }),
+          )
         : bar(sf, max > 0 ? b.usd / max : 0, cells, ORANGE),
       cell(10, b.usd > 0 ? text(usd(b.usd, lang), weeks ? {} : ampel(b.usd, s)) : dim('–'), true),
       cell(12, b.key === top ? dim(`  ${t.highest}`) : ''),
@@ -185,25 +249,77 @@ function chatsBlock(r: Report, title: string, width: number, limit: number, basi
   return col({ width: basis }, [heading(title), ...kids])
 }
 
-/** `/ledger models`: je Modell Anteil am geschätzten API-Wert als Balken, Betrag, Anzahl und darunter die Tokens. */
+const f2 = (n: number) => String(Math.round(n * 100) / 100)
+const escSvg = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/**
+ * Kreis mit Anteilen (Svg, Desktop): Bögen ab 12 Uhr im Uhrzeigersinn, zwischen zwei Teilen eine Fuge von 2°, in der Mitte
+ * ein Text. Ein einziger Teil ist ein ganzer Kreis (ein Bogen auf seinen Startpunkt zeichnet nichts).
+ */
+export function donutSvg(parts: { hex: string; share: number }[], center: string, alt: string): { source: string; width: number; height: number; alt: string } {
+  const size = 104
+  const c = size / 2
+  const R = 40
+  const W = 14
+  const list = parts.filter((p) => p.share > 0)
+  const sum = list.reduce((a, p) => a + p.share, 0)
+  const gap = list.length > 1 ? (2 / 360) * 2 * Math.PI : 0
+  const pt = (a: number) => `${f2(c + R * Math.sin(a))} ${f2(c - R * Math.cos(a))}`
+  let body = `<circle cx="${c}" cy="${c}" r="${R}" fill="none" stroke="${THEME_HEX.inactive}" stroke-opacity="0.25" stroke-width="${W}"/>`
+  if (list.length === 1) body += `<circle cx="${c}" cy="${c}" r="${R}" fill="none" stroke="${list[0]!.hex}" stroke-width="${W}"/>`
+  else {
+    let at = 0
+    for (const p of list) {
+      const span = (p.share / sum) * 2 * Math.PI
+      const a0 = at + gap / 2
+      const a1 = Math.max(a0 + 0.001, at + span - gap / 2)
+      body += `<path d="M${pt(a0)}A${R} ${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${pt(a1)}" fill="none" stroke="${p.hex}" stroke-width="${W}"/>`
+      at += span
+    }
+  }
+  body += `<style>.t{fill:#ECEAE3}@media (prefers-color-scheme: light){.t{fill:#262624}}</style>`
+  body += `<text class="t" x="${c}" y="${c + 5}" text-anchor="middle" font-family="'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="600">${escSvg(center)}</text>`
+  return { source: `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${body}</svg>`, width: size, height: size, alt }
+}
+
+/**
+ * `/ledger models`: je Modell Anteil am geschätzten API-Wert, Betrag, Anzahl und darunter die Tokens, in der festen Farbe
+ * der Modellfamilie (ab 0.8.1). Desktop: oben ein Kreis mit den Anteilen, je Zeile ein Farbquadrat statt eines Balkens;
+ * Terminal: farbige Balken.
+ */
 function modelsBlock(r: Report, title: string, sf: Surface, inner: number, lang: Lang): RenderElement {
   const t = T[lang]
   const sum = r.models.reduce((a, m) => a + m.usd, 0)
   const names = r.models.map((m) => modelName(m.key, lang))
-  const nameW = Math.min(16, Math.max(10, ...names.map((n) => n.length + 1)))
+  const colors = familyColors(r.models.map((m) => m.key))
+  const share = (v: number) => (sum > 0 ? Math.round((v / sum) * 100) : 0)
+  const nameW = Math.min(16, Math.max(10, ...names.map((n) => n.length + 1))) + (sf === 'desktop' ? 2 : 0)
   const cells = Math.max(6, Math.min(32, inner - nameW - 6 - 10 - 8 - 1))
   const kids: RenderNode[] = r.models.length
     ? r.models.flatMap((m, i) => [
-        row({ marginTop: 1 }, [
-          cell(nameW, text(names[i]!, { bold: true })),
-          bar(sf, sum > 0 ? m.usd / sum : 0, cells, ORANGE),
-          cell(6, dim(`${sum > 0 ? Math.round((m.usd / sum) * 100) : 0} %`), true),
+        // Umbruch nur, wenn die Zeile nicht passt (bei 40 Spalten zu breit, Review 0.8.1 K6)
+        row({ marginTop: 1, flexWrap: 'wrap' }, [
+          sf === 'desktop'
+            ? cell(nameW, el('Text', {}, [text('■ ', { color: colors.get(m.key)! }), text(names[i]!, { bold: true })]))
+            : cell(nameW, text(names[i]!, { bold: true })),
+          ...(sf === 'desktop' ? [] : [bar(sf, sum > 0 ? m.usd / sum : 0, cells, colors.get(m.key)!)]),
+          cell(6, dim(`${share(m.usd)} %`), true),
           cell(10, text(usd(m.usd, lang)), true),
           cell(8, dim(`${m.n}×`), true),
         ]),
         dim(t.tokenLine(tokens(m.in, lang), tokens(m.out, lang), tokens(m.cr, lang), tokens(m.cw, lang))),
       ])
     : [dim(t.noTokens)]
+  if (sf === 'desktop' && sum > 0) {
+    const alt = r.models.map((m, i) => `${names[i]} ${share(m.usd)} %`).join(', ')
+    const pic = donutSvg(
+      r.models.map((m) => ({ hex: THEME_HEX[colors.get(m.key)!] ?? THEME_HEX.inactive!, share: m.usd })),
+      usd(sum, lang),
+      alt,
+    )
+    const svg: RenderElement = { type: 'Svg', props: { source: pic.source, alt: pic.alt, width: pic.width, height: pic.height } }
+    kids.unshift(el('Box', { marginTop: 1 }, [svg]))
+  }
   kids.push(el('Box', { marginTop: 1 }, [dim(t.modelsNote)]))
   return col({}, [heading(title), ...kids])
 }

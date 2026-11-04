@@ -41,7 +41,7 @@ import {
 import { buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, safeProj, shareRec, usersIn, validDir } from '../hooks/sync.ts'
 import type { SyncFile } from '../hooks/sync.ts'
 import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from '../hooks/i18n.ts'
-import { modelColors, stackedBar } from '../hooks/view.ts'
+import { THEME_HEX, donutSvg, familyColors, modelColors, stackedBar } from '../hooks/view.ts'
 import { arcPath, bigUsd, hereBar, hereSvg, hereText, shareOf, shareText } from '../hooks/here.ts'
 import { helpMarkdown, helpTree, stateText } from '../hooks/help.ts'
 import type { Rec } from '../hooks/logic.ts'
@@ -601,12 +601,12 @@ test('Verlauf: Mod-Aufrufe je Modell als eigene Teile; Rest ohne Modell „mod:u
   expect(r.series.days[1]!.parts).toEqual([{ key: 'mod:unbekannt', usd: 0.1 }])
   near(r.series.weeks[0]!.usd, 2.4)
   expect(summaryText(r, 'weeks', 30, '', 'de')).toMatch(/Wochen \(Chat \+ Mods\): KW 41 2,40 \$/)
-  // Farben: Chat-Modelle zuerst, Mod-Teile dahinter, beide „ohne Angabe“ gedimmt
+  // Farben (ab 0.8.1): Chat-Modelle in der Farbe ihrer Familie, dann „ohne Angabe“ grau, alle Mod-Aufrufe zusammen in einer Farbe
   const colors = modelColors([{ key: d0, usd: 9, parts: [{ key: 'mod:opus-5-5', usd: 5 }, { key: 'haiku-4-5', usd: 1 }, { key: 'mod:unbekannt', usd: 1 }, { key: 'unbekannt', usd: 2 }] }])
-  expect([...colors.entries()]).toEqual([['haiku-4-5', 'claude'], ['mod:opus-5-5', 'suggestion'], ['unbekannt', 'inactive'], ['mod:unbekannt', 'inactive']])
-  expect(partLabel('mod:sonnet-5-5', 'de')).toBe('Sonnet 5.5 · Mods')
-  expect(partLabel('mod:sonnet-5-5', 'en')).toBe('Sonnet 5.5 · mods')
-  expect(partLabel('mod:unbekannt', 'de')).toBe('Mods ohne Angabe')
+  expect([...colors.entries()]).toEqual([['haiku-4-5', 'success'], ['unbekannt', 'inactive'], ['mod:', 'bashBorder']])
+  expect(partLabel('mod:sonnet-5-5', 'de')).toBe('Mod-Aufrufe')
+  expect(partLabel('mod:sonnet-5-5', 'en')).toBe('Mod calls')
+  expect(partLabel('mod:unbekannt', 'de')).toBe('Mod-Aufrufe')
   expect(partLabel('opus-5-5', 'de')).toBe('Opus 5.5')
   expect(partLabel('unbekannt', 'de')).toBe('ohne Angabe')
   // Rundungsrest aus r8 ergibt keinen eigenen Teil
@@ -2713,3 +2713,66 @@ test('0.8.0 Review K2/K3/K8: kein Ordnername für Skript-Läufe; alt ohne Markdo
   // Ohne Projekt und ohne Buchung ein lesbarer Satz
   expect(hereText({ ...h, project: null, booked: false, chatUsd: 0 }, 'de')).toBe('**Dieser Chat** (kein Projekt): noch nichts gebucht · nur dieses Gerät')
 })
+
+// ---------- 0.8.1: feste Modellfarben, Kreis in /ledger models ----------
+
+test('0.8.1 Farben: fest je Familie, unabhängig vom Rang; zweite Version und Fremdes bekommen Reservefarben, danach Grau', () => {
+  const a = familyColors(['opus-5-5', 'sonnet-5-5', 'haiku-5-5'])
+  const b = familyColors(['haiku-5-5', 'sonnet-5-5', 'opus-5-5']) // andere Reihenfolge, gleiche Farben
+  for (const k of ['opus-5-5', 'sonnet-5-5', 'haiku-5-5']) expect(b.get(k), k).toBe(a.get(k))
+  expect([...a.values()]).toEqual(['claude', 'ide', 'success'])
+  const c = familyColors(['opus-5-5', 'opus-4-8', 'gateway-x', 'other', 'fable-5-1', 'mythos-5-1', 'unbekannt'])
+  expect([...c.values()]).toEqual(['claude', 'warning', 'permission', 'inactive', 'autoAccept', 'planMode', 'inactive'])
+  // Unter den Farben einer Ansicht höchstens ein Blauton (ide) neben dem hellen permission; die alten suggestion/remember nie
+  for (const v of c.values()) expect(['suggestion', 'remember'].includes(v)).toBe(false)
+  // Jede Farbe hat eine Näherung fürs Svg
+  for (const v of [...a.values(), ...c.values(), 'bashBorder']) expect(THEME_HEX[v], v).toMatch(/^#[0-9A-F]{6}$/)
+})
+
+test('0.8.1 donutSvg: Bögen mit Fuge, ein Teil ist ein ganzer Kreis, Mitte maskiert, kein Skript', () => {
+  const two = donutSvg([{ hex: '#D77757', share: 3 }, { hex: '#4782C8', share: 1 }], '4 $', 'Opus 75 %, Sonnet 25 %')
+  expect(two.source.match(/<path /g)).toHaveLength(2)
+  expect(two.source).toMatch(/stroke="#D77757"/)
+  expect(two.width).toBe(104)
+  expect(two.source).not.toMatch(/<script|on[a-z]+=/i)
+  const one = donutSvg([{ hex: '#D77757', share: 1 }], 'a<b', 'x')
+  expect(one.source.match(/<path /g)).toBeNull()
+  expect(one.source).toMatch(/<circle cx="52" cy="52" r="40" fill="none" stroke="#D77757"/)
+  expect(one.source).toMatch(/>a&lt;b</)
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  test(`0.8.1 UI ${surface}: /ledger models in Familienfarben (Desktop mit Kreis), /ledger weeks mit einer Mod-Farbe`, { plugins: [sidekick], ...DE }, async ($, on) => {
+    const w = world(on)
+    on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_IN } as never }))
+    await w.start($)
+    await w.turn($, 2, { usage: U('claude-opus-5-5', 1000, 2000) })
+    await w.turn($, 2.5, { usage: U('claude-sonnet-5-5', 1000, 2000) })
+    await $.command.run({ command: 'probe', args: '' }) // Mod-Aufruf
+    // Schmale Breite (Review 0.8.1 K6): keine feste Breite und keine Zeile ohne Umbruch breiter als die Zeile
+    const narrow = await mountLedger($, await w.ledger($, 'models'), surface, 40, 'models')
+    expect(await narrow.find({ text: /^ENGINE:/ })).toBeUndefined()
+    const nb = (await narrow.findAll({ type: 'Box' })) as any[]
+    expect(nb.map((b) => b.props.width).filter((x: unknown) => typeof x === 'number').every((x: number) => x <= 36)).toBe(true)
+    for (const r of nb.filter((b) => b.props.flexDirection === 'row' && !b.props.flexWrap)) expect(minRow(r) <= 36, String(minRow(r))).toBe(true)
+    await narrow.unmount()
+    const md = await mountLedger($, await w.ledger($, 'models'), surface, 120, 'models')
+    if (surface === 'desktop') {
+      const svg = (await md.findAll({ type: 'Svg' })) as any[]
+      expect(svg).toHaveLength(1)
+      expect(svg[0].props.source).toMatch(/stroke="#D77757"/) // Opus
+      expect(svg[0].props.source).toMatch(/stroke="#4782C8"/) // Sonnet
+      expect(svg[0].props.alt).toMatch(/Opus 5\.5 \d+ %/)
+      expect((await md.findAll({ type: 'Text', text: '■ ' })).map((t: any) => t.props.color)).toContain('claude')
+      expect(await md.find({ type: 'Text', text: /^▄+$/ })).toBeUndefined()
+    } else {
+      const bars = (await md.findAll({ type: 'Text', text: /^▄+$/ })) as any[]
+      expect(bars.map((b) => b.props.color)).toEqual(expect.arrayContaining(['claude', 'ide']))
+      expect(await md.find({ type: 'Svg' })).toBeUndefined()
+    }
+    await md.unmount()
+    const wk = await mountLedger($, await w.ledger($, 'weeks'), surface, 120, 'weeks')
+    expect(await wk.find({ type: 'Text', text: 'Mod-Aufrufe' })).toBeDefined()
+    expect(await wk.find({ type: 'Text', text: /· Mods$/ })).toBeUndefined() // keine Mod-Farbe je Modell mehr
+    await wk.unmount()
+  })

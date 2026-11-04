@@ -952,12 +952,11 @@ export function isoWeek(monday: string): number {
 /** Teil eines Verlaufsbalkens, der aus Mod-Aufrufen stammt: `mod:sonnet-5-5`, ohne Modell-Daten `mod:unbekannt`. */
 export const MOD_PART = 'mod:'
 
-/** Legendentext eines Verlaufsteils: `opus-5-5` → `Opus 5.5`, `mod:sonnet-5-5` → `Sonnet 5.5 · Mods`. */
+/** Legendentext eines Verlaufsteils: `opus-5-5` → `Opus 5.5`; jeder Mod-Teil (`mod:…`) → „Mod-Aufrufe“ (ab 0.8.1 ein Teil). */
 export function partLabel(key: string, lang: Lang): string {
   const t = T[lang]
-  if (!key.startsWith(MOD_PART)) return key === UNKNOWN_MODEL ? t.noData : modelName(key, lang)
-  const model = key.slice(MOD_PART.length)
-  return model === UNKNOWN_MODEL ? t.modsNoData : t.modsPart(modelName(model, lang))
+  if (key.startsWith(MOD_PART)) return t.modCalls
+  return key === UNKNOWN_MODEL ? t.noData : modelName(key, lang)
 }
 
 /**
