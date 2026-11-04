@@ -31,13 +31,18 @@ policy:
   What they send is listed in each README; anything beyond that is in scope.
 - **Running commands:** sidekick and limit-bars run Claude Code commands only on your click or choice, from the set
   described in their READMEs.
-- **Processes:** only limit-bars, only with `storagePath` set, starts Windows PowerShell with two fixed, read-only
-  scripts. The drive path is passed as an environment variable, never as part of the script.
+- **Processes:** two mods start Windows PowerShell, each with two fixed scripts. limit-bars only with `storagePath`
+  set (read-only scripts; the drive path is passed as an environment variable, never as part of the script). spotify
+  reads and controls the Spotify session of the Windows media controls (the control command is passed as an
+  environment variable; the scripts write no files and open no connections).
 - **Stored data:** each mod keeps its data in its own plugin store, a JSON file under `~/.claude/plugins/store/` on
-  your machine. No mod has network access of its own, and none reads or stores login data or tokens.
+  your machine. The one exception is cost-ledger's optional sync, which reads and writes only `cost-ledger-<id>.json`
+  files in the folder you set with `/ledger sync`. No mod has network access of its own, and none reads or stores
+  login data or tokens.
 
 ## Out of scope
 
 - Vulnerabilities in Claude Code itself or in its mods API (report them to Anthropic)
-- Behavior that a mod's README documents and that needs your own choice, such as level `auto` in sidekick
+- Behavior that a mod's README documents and that needs your own choice, such as sending the clearer version you
+  picked in sidekick's dialog
 - Attacks that require an attacker who already controls your user account or your Claude Code configuration

@@ -1,0 +1,49 @@
+{
+  "name": "spotify",
+  "version": "0.3.1",
+  "description": "Windows only. Spotify player above the prompt: album cover, title, artist, position and clickable controls (restart/previous, play/pause, next). Reads the Windows media controls, no login, no network.",
+  "author": {
+    "name": "Fynn Hansen"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the mod's texts. en: English, de: Deutsch.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
+      ]
+    },
+    "size": {
+      "type": "string",
+      "title": "Size",
+      "description": "auto: in the desktop the bar above all other band mods, or the compact size in the row when it fits. full: its own bar above the other band mods with cover, title, position bar and all buttons. compact: in the row, cover, title and previous/play/next. mini: in the row, cover and play/pause. off: hidden. /spotify size overrides this in all open chats.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "full",
+        "compact",
+        "mini",
+        "off"
+      ]
+    },
+    "pollSeconds": {
+      "type": "number",
+      "title": "Poll every (seconds)",
+      "description": "How often the Windows media controls are read while the band is on screen.",
+      "default": 4,
+      "min": 3,
+      "max": 10
+    },
+    "extraButtons": {
+      "type": "boolean",
+      "title": "Extra buttons",
+      "description": "In the desktop bar, also show −15 s, +15 s, shuffle and repeat next to previous, play/pause and next. The commands /spotify back, forward, shuffle and repeat work either way.",
+      "default": false
+    }
+  }
+}

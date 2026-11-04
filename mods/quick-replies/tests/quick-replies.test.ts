@@ -757,7 +757,7 @@ for (const [qrTier, skTier] of [['prepend', 'append'], ['append', 'prepend']] as
 test('band.ts: höchste Ebene oben, ohne Ebenen bleibt der Grund unverändert, eine fremde Hülle gibt ihre Ebenen frei', () => {
   const ground = { type: 'Text', props: {}, children: ['clawd'] } as RenderNode
   expect(joinBand([], ground)).toBe(ground)
-  expect(splitBand(ground)).toEqual({ layers: [], base: ground })
+  expect(splitBand(ground)).toEqual({ layers: [], slots: [], base: ground })
   const a = layer(20, 'quick-replies', 'A')
   const b = layer(30, 'sidekick', 'B')
   const joined = joinBand([a, b], ground) as Node
@@ -1067,3 +1067,42 @@ test('0.5.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht in
     expect(d.settings.map((s) => s.value)).toEqual([lang, lang === 'en' ? 'off' : 'aus', 'auto'])
   }
 })
+
+// ---- 0.5.3: Plätze der Grund-Zeile (limit-bars, spotify, Clawd) gehen nie verloren (band.ts, docs/BAND.md)
+
+// Partner-Mod weiter innen: baut die Zeile mit drei Plätzen (so wie limit-bars, spotify und clawd-buddy sie nach docs/BAND.md setzen)
+const slots = (tier: Tier) => ({
+  name: `slots-${tier}`,
+  tier,
+  register(on: On) {
+    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+      const theirs = await next(e)
+      const slot = (key: string) => ({ type: 'Box', props: { key, flexShrink: 0 }, children: [key] })
+      return {
+        type: 'Box',
+        props: { key: 'band-row', flexDirection: 'row' },
+        children: [slot('slot:10:limit-bars'), slot('slot:20:spotify'), { type: 'Box', props: { key: 'band-rest', flexGrow: 1 }, children: [theirs] }, slot('slot:30:clawd-buddy:right')],
+      } as RenderNode
+    })
+  },
+})
+
+// Nur innen: ein Partner außen müsste selbst band.ts nutzen; die Reihenfolge aller Mods mit band.ts prüft mods/spotify/tests
+for (const tier of ['append'] as const) {
+  test(`Plätze anderer Mods bleiben im Grund (Partner innen), die Pille steht darüber`, { plugins: [slots(tier)] }, async ($, on) => {
+    world(on)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await boot($, surface)
+      await finish($)
+      await suggest($, 'Committe die Änderungen')
+      const tree = (await ui.drawn()) as Node
+      expect(tree.props.key).toBe('band')
+      expect(tree.children[0].props.key).toBe('layer:20:quick-replies')
+      const ground = keys(tree.children[1])
+      expect(ground).toEqual(expect.arrayContaining(['slot:10:limit-bars', 'slot:20:spotify', 'slot:30:clawd-buddy:right']))
+      expect(ground.indexOf('slot:10:limit-bars')).toBeLessThan(ground.indexOf('slot:20:spotify'))
+      expect(ground).not.toContain('quick-replies')
+      await ui.unmount()
+    }
+  })
+}

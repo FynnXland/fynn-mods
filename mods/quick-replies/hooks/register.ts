@@ -533,12 +533,13 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         cached = { sig, node }
       }
       // Eigene Ebene über dem Grund (Clawd, Balken), unter sidekick; gilt in jeder Reihenfolge der Mods (band.ts, docs/BAND.md)
-      const { layers, base } = splitBand(theirs)
+      // Plätze der Grund-Zeile (limit-bars, spotify, Clawd) gehen unverändert weiter
+      const { layers, slots, base } = splitBand(theirs)
       // Während sidekick einen neuen Chat startet, keine Pille; sidekick weiter innen sieht sie nicht
-      if (layers.some((l) => nameOf(l) === 'sidekick')) return joinBand(layers, base)
+      if (layers.some((l) => nameOf(l) === 'sidekick')) return joinBand(layers, base, slots)
       shown = true
       seen = texts
-      return joinBand([...layers, layer(LEVEL.quickReplies, 'quick-replies', cached.node)], base)
+      return joinBand([...layers, layer(LEVEL.quickReplies, 'quick-replies', cached.node)], base, slots)
     } catch (err) {
       // Fehler aus der Kette weiterwerfen (docs/raw/en/events.md:313-316); eigener Fehler: Clawd und Balken bleiben stehen
       if (nextFailed) throw err

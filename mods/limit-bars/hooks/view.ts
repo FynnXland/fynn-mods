@@ -26,6 +26,12 @@ export type Shown = {
   /** Ganze Prozent: `long` (en `71%`, de `71 %`), `short` (`71%`), `alt` für den alt-Text. */
   pct: { long: string; short: string; alt: string }
   reset?: { long: string; short: string; alt: string }
+  /** Nur am Wochenfenster bei `noFiveHour`: Strich bei gleichmäßigem Verbrauch, 0..1 (SPEC.md, Ausbau 0.10.0, 2.). */
+  mark?: number
+  /** Farbe des Strichs (0.10.2): orange, solange der Verbrauch darunter liegt; rot, sobald er ihn erreicht hat. */
+  markColor?: string
+  /** Nur die Tempo-Zeile (obere Zeile ohne 5h-Fenster): Kopf in Tempo-Farbe, darunter die Prognose, `alt`. */
+  pace?: PaceText
 }
 
 const KINDS: readonly Kind[] = ['five_hour', 'seven_day']
@@ -42,8 +48,11 @@ export function pickWindows(rateLimits: readonly { kind: string; percentUsed: nu
   return out
 }
 
-/** Stand, den sich alle Chats auf dem Rechner teilen (`$.store` unter `limits`): wann gemessen, welche Fenster. */
-export type Shared = { at: number; wins: Win[] }
+/**
+ * Stand, den sich alle Chats auf dem Rechner teilen (`$.store` unter `limits`): wann gemessen, welche Fenster. `miss` (seit 0.10.0):
+ * wie viele Messungen in Folge `seven_day` ohne `five_hour` brachten; fehlt bei 0 und bei Einträgen von 0.9.0.
+ */
+export type Shared = { at: number; wins: Win[]; miss?: number }
 
 /** `limits` aus dem Store prüfen: nur `five_hour`/`seven_day` mit Zahlen, sonst undefined (fremde oder alte Form). */
 export function cleanShared(v: unknown): Shared | undefined {
@@ -56,7 +65,178 @@ export function cleanShared(v: unknown): Shared | undefined {
     if (!w || typeof w.percentUsed !== 'number' || !Number.isFinite(w.percentUsed)) continue
     out.push({ kind, percentUsed: w.percentUsed, resetsAt: typeof w.resetsAt === 'number' && Number.isFinite(w.resetsAt) ? w.resetsAt : undefined })
   }
-  return out.length > 0 ? { at, wins: out } : undefined
+  if (out.length === 0) return undefined
+  const miss = (v as { miss?: unknown }).miss
+  return typeof miss === 'number' && Number.isFinite(miss) && miss >= 1 ? { at, wins: out, miss: Math.floor(miss) } : { at, wins: out }
+}
+
+// ---------- Kein 5h-Limit (SPEC.md, Ausbau 0.10.0, 1.) ----------
+
+/**
+ * Ab so vielen Messungen in Folge ohne `five_hour` gilt `noFiveHour`. Eine reicht nicht: In cost-ledgers Aufzeichnung
+ * (`rl`/`lim` je Chat) meldete am 2026-10-20 gegen 23 Uhr und am 2026-10-28 um 00:07 je ein Chat nur `seven_day`, während
+ * andere Chats zur selben Zeit ein laufendes 5h-Fenster hatten (SPEC.md, Offene Punkte 0.10.0).
+ */
+export const NO_FIVE_AFTER = 2
+
+/** Messung mit Wochenfenster, aber ohne 5h-Fenster. Ohne beide (vor der ersten Messung) gilt der bisherige Leerzustand. */
+export function lacksFive(wins: readonly Win[]): boolean {
+  return wins.some((w) => w.kind === 'seven_day') && !wins.some((w) => w.kind === 'five_hour')
+}
+
+/** Zähler nach einer neuen Messung: weiter hoch, solange `five_hour` fehlt; mit `five_hour` (oder leer) zurück auf 0. */
+export function nextMiss(prev: number, wins: readonly Win[]): number {
+  return lacksFive(wins) ? prev + 1 : 0
+}
+
+/** Zähler aus einem gemeinsamen Stand. Ein Eintrag ohne `miss` (0.9.0) zählt als eine Messung nach `prev`. */
+export function sharedMiss(s: Shared, prev: number): number {
+  return s.miss ?? nextMiss(prev, s.wins)
+}
+
+// ---------- Wochen-Tempo (SPEC.md, Ausbau 0.10.0, 2.) ----------
+
+const HOUR = 3600000
+const WEEK = 7 * 24 * HOUR
+const EARLY = 6 * HOUR // vorher keine Prognose
+const TOLERANCE = 5 // Prozentpunkte um den gleichmäßigen Verbrauch: grau, „im Plan“
+const RED_BEFORE = 24 * HOUR // rot, wenn 100 % mehr als einen Tag vor dem Reset erreicht wären
+const FULL_STEP = 15 * 60000 // „reicht bis“ auf 15 min abgerundet: sonst wandert die Uhrzeit alle paar Sekunden (Neuzeichnen)
+
+export type Pace = {
+  kind: 'none' | 'early' | 'plan' | 'over'
+  /** gleichmäßiger Verbrauch jetzt, 0..100; fehlt ohne `resetsAt` */
+  even?: number
+  delta: number // Prozentpunkte über (+) oder unter (−) `even`
+  forecast: number // Stand zum Reset bei gleichem Tempo
+  full?: number // wann 100 % erreicht wären (ms), nur bei `over`
+  color: string
+}
+
+/**
+ * Tempo des Wochenfensters: `start = resetsAt − 7 d`, `elapsed = (now − start) / 7 d`, `even = elapsed × 100`,
+ * `delta = percentUsed − even`, `forecast = percentUsed / elapsed`, `full = start + (now − start) × 100 / percentUsed`.
+ * Farbe: grau bis 5 Punkte über dem Plan (und darunter), orange darüber, rot, wenn `full` mehr als 24 h vor dem Reset liegt.
+ */
+export function paceOf(week: Win, now: number): Pace {
+  const p = week.percentUsed
+  if (week.resetsAt === undefined) return { kind: 'none', delta: 0, forecast: 0, color: GREY }
+  const start = week.resetsAt - WEEK
+  const ms = now - start
+  const even = Math.max(0, Math.min(1, ms / WEEK)) * 100
+  if (ms < EARLY || now >= week.resetsAt) return { kind: 'early', even, delta: 0, forecast: 0, color: GREY }
+  const delta = p - even
+  const forecast = p / (even / 100)
+  if (!(forecast > 100)) return { kind: 'plan', even, delta, forecast, color: GREY } // unter Tempo grau, ohne Grün
+  const full = start + (ms * 100) / p
+  const color = delta <= TOLERANCE ? GREY : full < week.resetsAt - RED_BEFORE ? RED : ORANGE
+  return { kind: 'over', even, delta, forecast, full, color }
+}
+
+export type PaceText = {
+  head: string // `+12 % über Tempo`, `im Plan`, `12 % unter Tempo`, `Woche frisch`; leer ohne `resetsAt`
+  sub?: string // `reicht bis Fr 14:00` bzw. `Prognose 78 %`
+  color: string
+  alt: string
+}
+
+/** Wann 100 % erreicht wären, abgerundet auf 15 min: lang wie der Wochen-Reset (`Fr 14:00`), kurz `Fr14h` bzw. `14h`. */
+function fullText(full: number, now: number, lang: Lang): { long: string; short: string; alt: string } {
+  const at = Math.floor(full / FULL_STEP) * FULL_STEP
+  const c = clockText(at, now, lang)
+  const d = new Date(at)
+  const sameDay = c.long === c.short
+  return {
+    long: c.long,
+    // `Fr4h` statt `Fr4` (Review 0.10.0 K4: die Zahl allein war schwer lesbar)
+    short: `${sameDay ? '' : T[lang].weekdays[d.getDay()]}${d.getHours()}h`,
+    alt: sameDay ? c.long : `${T[lang].weekdaysLong[d.getDay()]} ${hhmm(at)}`,
+  }
+}
+
+/**
+ * Die obere Zeile ohne 5h-Fenster: `5h ∞`, dahinter das Tempo (Terminal in einer Zeile: `5h ∞ · +12 % · reicht bis
+ * Fr 14:00`, kurz `5h ∞ +12% Fr14h`, dann `5h ∞`). `mark` ist der Strich auf dem Wochenbalken (0..1), außer ohne Prognose.
+ */
+export function paceShown(week: Win, now: number, lang: Lang): { top: Shown; mark?: number } {
+  const t = T[lang]
+  const pc = paceOf(week, now)
+  const n = (x: number) => String(Math.round(Math.abs(x)))
+  let head = ''
+  let sub: string | undefined
+  let short = ''
+  const alt: string[] = [t.paceAltNone]
+  if (pc.kind === 'early') {
+    head = t.paceFresh
+    short = t.fresh
+    alt.push(t.paceAltFresh)
+  } else if (pc.kind === 'plan' || pc.kind === 'over') {
+    const d = Math.round(pc.delta)
+    head = Math.abs(pc.delta) <= TOLERANCE ? t.paceOnPlan : d > 0 ? t.paceOver(n(d)) : t.paceUnder(n(d))
+    alt.push(Math.abs(pc.delta) <= TOLERANCE ? t.paceAltOnPlan : t.paceAltDelta(n(d), d > 0))
+    if (pc.kind === 'over' && pc.full !== undefined) {
+      const f = fullText(pc.full, now, lang)
+      sub = t.paceLasts(f.long)
+      short = `${d > 0 ? '+' : ''}${d}% ${f.short}`
+      alt.push(t.paceAltLasts(f.alt))
+    } else {
+      const fc = n(Math.min(100, pc.forecast))
+      sub = t.paceForecast(fc)
+      short = `~${fc}%`
+      alt.push(t.paceAltForecast(fc))
+    }
+  }
+  // Terminal, eine Zeile: deutlich über dem Plan die kurze Form der Spec (`+12 % · reicht bis Fr 14:00`), sonst derselbe Kopf wie
+  // im Desktop (`im Plan · reicht bis …`, Review 0.10.0 K4)
+  const d = Math.round(pc.delta)
+  const lead = pc.kind === 'over' && Math.abs(pc.delta) > TOLERANCE ? t.pct(`+${d}`) : head
+  const long = [lead, sub].filter(Boolean).join(' · ')
+  return {
+    top: {
+      tag: '5h',
+      name: t.paceAltNone,
+      color: pc.color,
+      strong: false,
+      fresh: false,
+      ratio: 0,
+      pct: { long: '∞', short: '∞', alt: '' },
+      reset: long ? { long, short, alt: '' } : undefined,
+      pace: { head, sub, color: pc.color, alt: alt.join(', ') },
+    },
+    mark: pc.kind === 'none' || pc.even === undefined || now >= (week.resetsAt ?? 0) ? undefined : pc.even / 100,
+  }
+}
+
+/**
+ * Was ohne 5h-Fenster gezeigt wird: oben die Tempo-Zeile (wenn der Schalter `5h` an ist), am Wochenbalken der Strich.
+ * `shown` ist die Liste aus `shownWindows`, die ohne 5h-Fenster höchstens die Woche enthält.
+ */
+export function withPace(shown: readonly Shown[], wins: readonly Win[], now: number, lang: Lang, showTop: boolean): Shown[] {
+  const week = wins.find((w) => w.kind === 'seven_day')
+  if (!week) return [...shown]
+  const p = paceShown(week, now, lang)
+  // Orange, solange der Verbrauch unter dem Strich liegt; rot, sobald er ihn erreicht hat (Fynn, 0.10.2). Verglichen in ganzen
+  // Prozent wie Anzeige und `keyOf`, damit die Farbe nicht bei jedem Tick hin und her springt.
+  const reached = Math.round(week.percentUsed) >= Math.round((p.mark ?? 0) * 100)
+  const rest = shown.map((s) =>
+    s.tag === '7d' && !s.fresh && p.mark !== undefined ? { ...s, mark: p.mark, markColor: reached ? RED : ORANGE } : s,
+  )
+  return showTop ? [p.top, ...rest] : rest
+}
+
+/** Ein Balken der Breite `width` als Läufe: gefüllt, leer und an der Stelle `mark` ein Strich (Terminal). */
+export function barRuns(ratio: number, width: number, color: string, mark?: number, markColor = ORANGE): { n: number; color: string; mark?: boolean }[] {
+  const f = filled(ratio, width)
+  const cells: { color: string; mark?: boolean }[] = []
+  for (let i = 0; i < width; i++) cells.push({ color: i < f ? color : EMPTY })
+  if (mark !== undefined && width >= MIN_BLOCK) cells[Math.max(0, Math.min(width - 1, Math.floor(mark * width)))] = { color: markColor, mark: true }
+  const out: { n: number; color: string; mark?: boolean }[] = []
+  for (const c of cells) {
+    const last = out[out.length - 1]
+    if (last && last.color === c.color && !last.mark && !c.mark) last.n += 1
+    else out.push({ n: 1, ...c })
+  }
+  return out
 }
 
 // Resets, die näher beieinander liegen, gelten als dasselbe Fenster (zwei 5-h-Fenster liegen mindestens 5 h auseinander)
@@ -181,9 +361,10 @@ export type TermLayout = { blocks: Block[]; width: number; extra?: string }
 const MIN_BLOCK = 12
 const GAP = 2
 
-function block(s: Shown, short: boolean): Block {
+/** `bare`: nur Kürzel und Wert (`5h ∞`), die letzte Stufe der Tempo-Zeile. */
+function block(s: Shown, short: boolean, bare = false): Block {
   const pct = short ? s.pct.short : s.pct.long
-  const rest = s.reset ? (short ? ` ${s.reset.short}` : ` · ${s.reset.long}`) : ''
+  const rest = s.reset && !bare ? (short ? ` ${s.reset.short}` : ` · ${s.reset.long}`) : ''
   return { shown: s, pct, rest, width: Math.max(MIN_BLOCK, s.tag.length + 1 + pct.length + rest.length) }
 }
 
@@ -197,6 +378,7 @@ export function layoutTerminal(shown: readonly Shown[], bodyColumns: number, ext
   const avail = Math.min(44, bodyColumns - 40)
   if (avail < MIN_BLOCK + 1) return null
   if (shown.length === 0) return extra && extra.length + 1 <= avail ? { blocks: [], width: extra.length + 1, extra } : null
+  if (shown[0]?.pace) return layoutPace(shown, avail, extra)
   if (extra) {
     const blocks = shown.map((s) => block(s, false))
     const used = blocks.reduce((a, b) => a + b.width, 0) + GAP * blocks.length + extra.length
@@ -208,6 +390,29 @@ export function layoutTerminal(shown: readonly Shown[], bodyColumns: number, ext
   for (const blocks of tries) {
     const used = blocks.reduce((a, b) => a + b.width, 0) + GAP * (blocks.length - 1)
     if (used + 1 <= avail) return { blocks, width: used + 1 }
+  }
+  return null
+}
+
+/**
+ * Terminal mit Tempo-Zeile (Ausbau 0.10.0, Review K1/S1): Hier ist die Woche das eigentliche Limit. Deshalb wird zuerst die
+ * Tempo-Zeile kleiner (lang → `5h ∞ +12% Fr14h` → `5h ∞` → weg), erst dann fällt die Woche weg. Der Cache-Block steht in jeder
+ * Stufe dabei, solange er passt; die Langform passt neben der Woche ohnehin nie in 44 Spalten.
+ */
+function layoutPace(shown: readonly Shown[], avail: number, extra?: string): TermLayout | null {
+  const [top, ...rest] = shown
+  const long = rest.map((s) => block(s, false))
+  const short = rest.map((s) => block(s, true))
+  const stages: Block[][] = [
+    [block(top!, false), ...long],
+    [block(top!, true), ...short],
+    [block(top!, true, true), ...short],
+    ...(short.length > 0 ? [short] : []),
+  ]
+  const width = (blocks: Block[], x?: string) => blocks.reduce((a, b) => a + b.width, 0) + GAP * (blocks.length - 1) + (x ? GAP + x.length : 0) + 1
+  for (const blocks of stages) {
+    if (extra && width(blocks, extra) <= avail) return { blocks, width: width(blocks, extra), extra }
+    if (width(blocks) <= avail) return { blocks, width: width(blocks) }
   }
   return null
 }

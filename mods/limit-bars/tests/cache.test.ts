@@ -516,10 +516,10 @@ test('Reihenfolge außen im Terminal: Balkenbox mit Cache-Block links, innen sie
   const w = world(on, { inner: 'clawd' })
   await w.step($, usage(300000, 5000))
   const t = await $.ui.mount(band('terminal', 120))
-  const kids = (await t.drawn()).children as { props: { key?: string; width?: number } }[]
-  expect(kids[0].props.key).toBe('limit-bars')
+  const kids = (await t.drawn()).children as { props: { key?: string }; children: { props: { width?: number } }[] }[]
+  expect(kids[0].props.key).toBe('slot:10:limit-bars')
   expect(await t.find({ type: 'Text', text: '◔ 60m' })).toBeDefined()
-  expect(w.seen.cols).toBe(120 - (kids[0].props.width as number))
+  expect(w.seen.cols).toBe(120 - (kids[0].children[0]!.props.width as number))
   expect(await t.find({ type: 'Text', text: 'clawd' })).toBeDefined()
 })
 

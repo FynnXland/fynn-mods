@@ -46,7 +46,7 @@ function commands(): HelpCommand[] {
 
 /**
  * BEDIENUNG: die Knöpfe der „Gut zu wissen“-Karte (Nachtrag 0.13.0, Ziffern nur während der Arbeit) und der Knopf neben einer
- * blauen Zeile (Nachtrag 0.7.0/0.8.1). Beschriftungen wie auf den Knöpfen.
+ * blauen Zeile (Nachtrag 0.7.0/0.8.1), an der Wartungszeile Einfügen und „?“ (Ausbau 0.16.0). Beschriftungen wie auf den Knöpfen.
  */
 function controls(): HelpCommand[] {
   const x = t()
@@ -59,6 +59,8 @@ function controls(): HelpCommand[] {
     { cmd: `2 ${x.noteChat}`, does: h.cChat },
     { cmd: `0 ${x.noteClose}`, does: h.cClose },
     { cmd: h.cLine, does: h.cLineDoes },
+    { cmd: h.cInsert, does: h.cInsertDoes },
+    { cmd: h.cWhy, does: h.cWhyDoes },
   ]
 }
 

@@ -4,7 +4,7 @@ Checks your message just before it is sent: first with fixed rules, and only whe
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.15.0**
+Tested with Claude Code **v2.1.295** · Plugin version **0.16.0**
 
 **All commands at a glance:** `/sidekick help` (or `/sidekick ?`) draws a table of every command, the buttons, each feature with its current state and how to change it, and your settings.
 
@@ -68,17 +68,26 @@ The handoff **never** comes from the main model. On a cold cache, the main model
 
 ## Maintenance hints
 
-Some commands only help if you remember to run them. **Once per chat**, on your first own message, sidekick checks what is due and names at most **one** command as a line under a message. It runs nothing and makes no model call for this; the numbers come from a free local estimate (the `/context` breakdown). If the model check has its own line or question for that message, the check wins, and since 0.12.0 the maintenance hint comes with your next message that has neither. It survives `/reload-plugins`; it is dropped if you run the command in between or turn the hint off. There is no second measurement later in the chat.
+Some commands only help if you remember to run them. On your first own message in a chat, sidekick checks what is due and names at most **one** command as a line under a message. It runs nothing and makes no model call for this; the numbers come from a free local estimate (the `/context` breakdown). If the model check has its own line or question for that message, the check wins, and since 0.12.0 the maintenance hint comes with your next message that has neither. It survives `/reload-plugins`; it is dropped if you run the command in between or turn the hint off.
+
+Since 0.16.0 there is **one second measurement per chat**: on your next own message after a commit, or after 60 minutes without an own message. So a chat shows at most two maintenance hints.
+
+Next to the line (since 0.16.0):
+
+- **Insert in prompt** puts the command into the empty prompt box; you send it yourself. The line then reads "✓ in prompt". If you have already typed something, nothing is inserted (a slash command only works at the start of a message) and a notice shows the command. In the **desktop app** the button reads **Copy**: the app draws its own prompt box, which a plugin most likely cannot write to (Claude Code's types say so for surfaces with their own prompt box), so sidekick tries the prompt box first and then puts the command on the clipboard (paste with Ctrl+V). Whether the desktop app accepts the clipboard write is not documented and not yet confirmed; if it does not, the notice shows the command to type.
+- **?** (desktop app) opens two or three sentences: what the command does, why it is suggested now (with the measured numbers), and what it costs or changes. In the terminal this text always stands under the line. It is fixed text, no model call.
 
 | Rank | Rule | Command | Due when … | Quiet period after |
 |---|---|---|---|---|
-| 1 | `skills-cut` | `/skill-doctor` | the skill list no longer fits the budget: Claude only sees part of your skills | 7 days |
-| 2 | `audit` | `/claude-api prompt-audit` | the project's CLAUDE.md files total ≥ 3k tokens and the audit never ran, they grew by ≥ 30 % since, or the model changed | 30 days |
-| 3 | `memory` | `/consolidate-memory` | the memory index is ≥ 1k tokens and was never cleaned up or grew by ≥ 40 %; from 5k (close to the load limit) always | 14 days, from 5k 7 days |
-| 4 | `skills-heavy` | `/skill-doctor` | skill list ≥ 4k tokens and ≥ 10 skills that can be disabled went unused for 30 days (only after 30 days of counting) | 30 days |
-| 5 | `init` | `/init` | the project has no CLAUDE.md of its own and you chatted there on ≥ 3 days | 30 days |
+| 1 | `skills-cut` | `/skill-doctor` | the skill list no longer fits the budget: Claude only sees part of your skills | 3 days |
+| 2 | `audit` | `/claude-api prompt-audit` | the project's CLAUDE.md files total ≥ 2k tokens and the audit never ran, they grew by ≥ 20 % since, or the model changed | 14 days |
+| 3 | `memory` | `/consolidate-memory` | the memory index is ≥ 500 tokens and was never cleaned up or grew by ≥ 30 %; from 5k (close to the load limit) always | 7 days, from 5k 3 days |
+| 4 | `skills-heavy` | `/skill-doctor` | skill list ≥ 4k tokens and ≥ 10 skills that can be disabled went unused for 30 days (only after 30 days of counting) | 14 days |
+| 5 | `init` | `/init` | the project has no CLAUDE.md of its own and you chatted there on ≥ 2 days | 14 days |
 
-- **Done** is detected when you type the command (or the skill runs). Otherwise: `/sidekick hints done <rule>`. If a hint for it came first, `/savings` counts it as accepted.
+The values changed in 0.16.0 (before: 7, 30, 14/7, 30 and 30 days; audit from 3k with 30 % growth, memory from 1k with 40 %, init from 3 days), because the hints came too rarely.
+
+- **Done** is detected when you type the command (or the skill runs), also when you send it after **Insert in prompt**; `/doctor prompt-audit` counts for `audit` too. Inserting or copying alone does not count. In the desktop app plugins do not see a typed `/skill-doctor` or `/init`; there, and whenever you ran it some other way, mark it with `/sidekick hints done <rule>`. If a hint for it came first, `/savings` counts it as accepted.
 - **Project** = project root (`$.session.root`). Worktrees under `.claude/worktrees/<name>` count toward the main project.
 
 ## Good to know (since 0.13.0, off by default)
@@ -108,7 +117,7 @@ While Claude works on a longer task, sidekick asks at step 6, 12, 18 … of a tu
 | `/sidekick hints on` · `off` | all maintenance hints on/off |
 | `/sidekick hints <rule> on` · `off` | one rule on/off (`skills-cut`, `audit`, `memory`, `skills-heavy`, `init`) |
 | `/sidekick hints done <rule>` | mark as done by hand |
-| `/sidekick hints audit-min 2k` | threshold of the audit rule (default 3k) |
+| `/sidekick hints audit-min 2k` | threshold of the audit rule (default 2k) |
 | `/sidekick notes` · `notes status` | Good to know: on or off, number of known topics, what it costs |
 | `/sidekick notes on` · `off` | Good to know on/off (default off; level Off pauses it too) |
 | `/sidekick notes forget` | forget the topics marked *Know this* or *Got it* |
@@ -142,9 +151,9 @@ An unknown argument to `/sidekick`, `/sidekick hints`, `/sidekick notes` or `/sa
 
 ## Button under the hint line (since 0.7.0, runs directly since 0.8.1)
 
-When a blue line under your message names a command, a button sits next to it. That is a maintenance hint such as `/claude-api prompt-audit`, `/skill-doctor`, `/init`, `/consolidate-memory`, a skill sidekick suggests, or since 0.8.1 a command in the sentence that exists in this session (from a plugin, your own command or skill, or `/skill-doctor` and `/init`; other built-in commands and MCP prompts get no button):
+Maintenance lines have their own buttons since 0.16.0 (**Insert in prompt** / **Copy** and **?**, see [Maintenance hints](#maintenance-hints)). This section is about the lines from the message check: when such a line names a command, a button sits next to it. That is a skill sidekick suggests, or since 0.8.1 a command in the sentence that exists in this session (from a plugin, your own command or skill, or `/skill-doctor` and `/init`; other built-in commands and MCP prompts get no button):
 
-- **Run /command**: the default. The button names the command, one click runs it, as if you had typed it and pressed Enter. If Claude is still working, it runs once the current turn is done. The line then reads "✓ ran"; a maintenance hint counts as done.
+- **Run /command**: the default. The button names the command, one click runs it, as if you had typed it and pressed Enter. If Claude is still working, it runs once the current turn is done. The line then reads "✓ ran"; a maintenance command run this way counts as done.
 - **Handoff:** a line that suggests the handoff skill (`/uebergabe`, `limit-bars:uebergabe`) shows and runs limit-bars' **`/handoff`** instead: the skill writes the handoff, then you are asked whether to start a new chat with it. Without `/handoff` the full skill name is used.
 - Short names are resolved: `/uebergabe` finds `limit-bars:uebergabe` when exactly one plugin has it. Unknown or ambiguous names, file paths like `/hooks/hooks.json` or `/init.ts`, and words without a slash get no button. `/clear`, `/exit`, `/quit`, `/login`, `/logout` and `/rewind` never get one.
 - What the button says is what it does: the target is decided when the line is drawn.
@@ -156,6 +165,7 @@ When a blue line under your message names a command, a button sits next to it. T
 - **clawd-buddy** shows what sidekick does: while it checks your message, holds it back with a question, or starts a new chat. sidekick writes only the kind of state and a timestamp to `$.state` (`sidekick.buddy`), which clawd-buddy reads. Neither mod needs the other.
 - **limit-bars** stays a display. To avoid two dialogs in a row, turn off its cold-cache warning once: **`/cache warn off`** (the German `/cache warnung aus` works too). sidekick's question replaces it.
 - Claude Code's built-in plugin **`cc-plugin-you-should-know`** (off by default, availability depends on your organization) does what sidekick's **Good to know** does. Use one of them: with both on, every check runs twice. `/savings` only includes sidekick's own.
+- **spotify** (since 0.15.2): in the desktop app, the handoff box and the Good-to-know note stand above the full Spotify bar, with a thin blue line below them that disappears with them. In the terminal nothing changed.
 - **quick-replies:** its suggestions use the digits 1, 2, 3 … after a turn; a Good-to-know note only carries digits while Claude is working, so they never clash.
 
 ## Stored data
@@ -198,8 +208,8 @@ Texts are English by default. For German, set `language` to `de`. Amounts then r
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.step, tool.call{tool=Bash|PowerShell}, prompt.submit, skill.prompt, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, command.run{command=later}, ui.render{component=SessionMode}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
-calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.complete, $.model.fork, $.prompt.fill, $.prompt.read, $.prompt.submit, $.session.id, $.session.messages, $.session.root, $.session.surfaces, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
+hooks: session.start, turn.step, tool.call{tool=Bash|PowerShell}, prompt.submit, skill.prompt, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, ui.render{component=SessionMode}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
+calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.complete, $.model.fork, $.prompt.fill, $.prompt.read, $.prompt.submit, $.session.id, $.session.messages, $.session.root, $.session.surfaces, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.copy, $.ui.invalidate, $.ui.resolve, $.ui.toast
 state writes: sidekick.buddy, sidekick.status
 state reads: sidekick.status
 ```
@@ -209,13 +219,14 @@ In plain language:
 - `prompt.submit`: reads your message before sending; can hold it back (`drop`) or replace it with the rewritten version, **only after you choose so in the dialog**. Nothing is ever sent without asking. Detects typed maintenance commands as done.
 - `turn.step`: reads the token counts of each main-loop request (cache warm/cold, context, savings measurement). Read only. With Good to know on, it also starts the check at step 6, 12, 18 … in the background; the request itself is not changed or delayed.
 - `$.model.fork` (Good to know, only after `/sidekick notes on`): one question to your session's own model over its own conversation, with every tool denied, answered as a short JSON. Nothing leaves your session's login; the answer is shown only to you.
-- `$.prompt.read`: *Discuss in chat* writes the note only into an empty prompt box; if you have typed something, a notice says so instead.
+- `$.prompt.read`: *Discuss in chat* and **Insert in prompt** write only into an empty prompt box; if you have typed something, a notice says so instead.
 - `tool.call{tool=Bash|PowerShell}`: after the run, reads `gitOperation.commit` (commit hash). Changes nothing.
 - `skill.prompt`: counts which skill ran and detects maintenance skills as done. Changes nothing.
 - `ui.render{component=UserMessage}`: appends the hint line to the display of your message, with a button when the line names a command.
 - `$.ui.resolve`: builds that button (a button carries its click handler, so it cannot be plain data).
 - `$.command.run` (on a click): runs the command shown in the line, as if you typed it. Only commands from plugins, your own commands and skills, and the built-in maintenance commands `/skill-doctor` and `/init`; never MCP prompts, never `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`. Since 0.15.0 this is the only thing a click does.
-- `$.prompt.fill`: as a fallback, when Claude Code refuses the command: puts it into the prompt box at the cursor. Never sends it, never overwrites what you typed. And for *Discuss in chat* (Good to know): puts the note into the empty prompt box, never sends it.
+- `$.prompt.fill`: **Insert in prompt** on a maintenance line (since 0.16.0): puts the command into the empty prompt box, never sends it. As a fallback, when Claude Code refuses a command from the check's line: puts it into the prompt box at the cursor. Never sends it, never overwrites what you typed. And for *Discuss in chat* (Good to know): puts the note into the empty prompt box, never sends it.
+- `$.ui.copy` (since 0.16.0, only after a click on **Copy** or **Insert in prompt**, and only when the prompt box refused the text): puts the maintenance command of that line on the clipboard of the surface you clicked on. Nothing else is copied.
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=CommandOutput, props has {command=sidekick}}` (since 0.14.0): draws the output of `/sidekick help` as a table in the terminal and the desktop app. Display only; `/sidekick status`, other outputs and other surfaces stay Markdown.
 - `ui.render{component=AbovePrompt}`: only while a new chat is being started, a small blue box above the prompt shows progress and seconds; and, with Good to know on, the current note with its buttons. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
@@ -278,7 +289,7 @@ claude --plugin-dir <path-to-clone>/mods/sidekick
 - **Maintenance hints:**
   - `/consolidate-memory` is missing in CLI sessions; the rule stays silent there.
   - A typed `/skill-doctor` is not detected as done in the desktop app. Afterwards run `/sidekick hints done skills-cut`.
-  - The check runs on the first own message of a chat. After a change via `/sidekick hints …`, it checks once more on the next message.
+  - The check runs on the first own message of a chat, and since 0.16.0 once more after a commit or a 60-minute pause. After a change via `/sidekick hints …`, the first check runs again on the next message.
   - Messages inserted by the host that start with a tag like `<system-reminder>` don't count as yours.
   - Claude reads the output of `/sidekick hints status` too and sometimes offers the items as tasks.
   - `skills-heavy` only kicks in after 30 days of counting skill usage.

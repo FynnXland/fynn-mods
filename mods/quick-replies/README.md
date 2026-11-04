@@ -4,7 +4,7 @@ After Claude answers, Claude Code often suggests your next message itself (the g
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.5.2**
+Tested with Claude Code **v2.1.295** · Plugin version **0.5.3**
 
 ## Display
 

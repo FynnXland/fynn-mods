@@ -30,20 +30,32 @@ export type RuleState = { doneAt?: number; doneTokens?: number; doneModel?: stri
 export type Wartung = { v: 1; regeln: Partial<Record<RuleId, RuleState>>; sessions: string[] }
 
 export type HintSettings = { on: boolean; off: RuleId[]; auditMin: number }
-export const DEFAULT_HINTS: HintSettings = { on: true, off: [], auditMin: 3000 }
+export const DEFAULT_HINTS: HintSettings = { on: true, off: [], auditMin: 2000 } // bis 0.15: 3000 (Ausbau 0.16.0, E4)
 
-// Schwellen (SPEC Nachtrag, Die Regeln). Einstellbar ist nur auditMin.
-export const AUDIT_GROWTH = 1.3
-export const MEMORY_MIN = 1000
-export const MEMORY_GROWTH = 1.4
+// Schwellen (SPEC Nachtrag 0.2.0, Die Regeln; Werte seit Ausbau 0.16.0, E4). Einstellbar ist nur auditMin.
+export const AUDIT_GROWTH = 1.2
+export const MEMORY_MIN = 500
+export const MEMORY_GROWTH = 1.3
 export const MEMORY_FULL = 5000 // nahe der Ladegrenze von MEMORY.md (200 Zeilen oder 25 KB, rel/memory.md:548)
 export const HEAVY_TOKENS = 4000
 export const HEAVY_UNUSED = 10
 export const UNUSED_DAYS = 30
-export const INIT_DAYS = 3
+export const INIT_DAYS = 2
 
-/** `cmd`: der Befehl der Zeile (`/claude-api prompt-audit`), für den Button unter der Nachricht (Nachtrag 0.7.0). */
-export type Hint = { id: RuleId; line: string; cmd?: string }
+/** Zweite Messung im Chat nach so vielen Minuten ohne eigene Nachricht (oder nach einem Commit), Ausbau 0.16.0, E5. */
+export const SECOND_PAUSE_MIN = 60
+
+/** Ruhezeiten in Tagen nach „gezeigt“ und „erledigt“ (Ausbau 0.16.0, E4; bis 0.15: 7, 30, 14/7, 30, 30). */
+export const REST = { skillsCut: 3, audit: 14, memory: 7, memoryFull: 3, skillsHeavy: 14, init: 14 } as const
+
+/**
+ * `cmd`: der Befehl der Zeile (`/claude-api prompt-audit`), für den Button unter der Nachricht (Nachtrag 0.7.0).
+ * `why`: die Erklärung hinter „?“ mit den Zahlen von jetzt, feste Bausteine aus i18n.ts, kein Modellaufruf (Ausbau 0.16.0).
+ */
+export type Hint = { id: RuleId; line: string; why: string; cmd?: string }
+
+/** Was eine Regel meldet, wenn sie fällig ist. */
+type Due = { line: string; why: string }
 
 /** Befehl je Regel, null wenn er in dieser Session fehlt: für den Button und für „fehlt“ in der Statustabelle. */
 const CMD_OF: Record<RuleId, (a: Avail) => string | null> = {
@@ -58,59 +70,77 @@ type Rule = {
   id: RuleId
   /** Ruhezeit in Tagen, nach einem gezeigten Hinweis und nach „erledigt“. */
   rest: (m: Measure) => number
-  /** Zeile, wenn fällig; sonst null. */
-  due: (m: Measure, st: RuleState, s: HintSettings) => string | null
+  /** Zeile und Erklärung, wenn fällig; sonst null. */
+  due: (m: Measure, st: RuleState, s: HintSettings) => Due | null
 }
 
 const pct = (now: number, then: number) => Math.round((now / then - 1) * 100)
 
+// Quellen der Erklärungen: skills-cut/-heavy rel/skills.md:941; audit rel/memory.md:100-102; memory rel/memory.md:37, :552 und die
+// Beschreibung des Skills; init rel/memory.md:79
 /** Die Regeln, nach Rang (SPEC Nachtrag): Wer weiter oben steht, gewinnt, wenn mehrere fällig sind. */
 export const RULES: Rule[] = [
   {
     id: 'skills-cut',
-    rest: () => 7,
+    rest: () => REST.skillsCut,
     due: (m) => {
-      if (!m.avail.skillDoctor || !(m.skillsTotal > 0) || m.skillsIncluded >= m.skillsTotal) return null
-      return t().wSkillsCut(m.skillsIncluded, m.skillsTotal, m.avail.skillDoctor)
+      const cmd = m.avail.skillDoctor
+      if (!cmd || !(m.skillsTotal > 0) || m.skillsIncluded >= m.skillsTotal) return null
+      return { line: t().wSkillsCut(m.skillsIncluded, m.skillsTotal, cmd), why: t().whySkillsCut(cmd, m.skillsIncluded, m.skillsTotal) }
     },
   },
   {
     id: 'audit',
-    rest: () => 30,
+    rest: () => REST.audit,
     due: (m, st, s) => {
-      if (!m.avail.audit || m.project < s.auditMin) return null
-      if (!st.doneAt) return t().wAuditNever(tokensText(m.project), m.avail.audit)
-      if (st.doneTokens && m.project >= AUDIT_GROWTH * st.doneTokens) return t().wAuditGrown(shortDate(st.doneAt), pct(m.project, st.doneTokens), m.avail.audit)
-      if (st.doneModel && m.model && st.doneModel !== m.model) return t().wAuditModel(m.model, m.avail.audit)
+      const cmd = m.avail.audit
+      if (!cmd || m.project < s.auditMin) return null
+      const x = t()
+      const tok = tokensText(m.project)
+      if (!st.doneAt) return { line: x.wAuditNever(tok, cmd), why: x.whyAudit(cmd, x.whyAuditNever(tok)) }
+      if (st.doneTokens && m.project >= AUDIT_GROWTH * st.doneTokens) {
+        const p = pct(m.project, st.doneTokens)
+        return { line: x.wAuditGrown(shortDate(st.doneAt), p, cmd), why: x.whyAudit(cmd, x.whyAuditGrown(tok, p, shortDate(st.doneAt))) }
+      }
+      if (st.doneModel && m.model && st.doneModel !== m.model) return { line: x.wAuditModel(m.model, cmd), why: x.whyAudit(cmd, x.whyAuditModel(m.model)) }
       return null
     },
   },
   {
     id: 'memory',
-    rest: (m) => ((m.autoMem ?? 0) >= MEMORY_FULL ? 7 : 14),
+    rest: (m) => ((m.autoMem ?? 0) >= MEMORY_FULL ? REST.memoryFull : REST.memory),
     due: (m, st) => {
-      if (!m.avail.memory || m.autoMem === null) return null
-      if (m.autoMem >= MEMORY_FULL) return t().wMemoryFull(tokensText(m.autoMem), m.avail.memory)
+      const cmd = m.avail.memory
+      if (!cmd || m.autoMem === null) return null
+      const x = t()
+      const tok = tokensText(m.autoMem)
+      if (m.autoMem >= MEMORY_FULL) return { line: x.wMemoryFull(tok, cmd), why: x.whyMemory(cmd, tok, x.whyMemoryFull) }
       if (m.autoMem < MEMORY_MIN) return null
-      if (!st.doneAt) return t().wMemoryNever(tokensText(m.autoMem), m.avail.memory)
-      if (st.doneTokens && m.autoMem >= MEMORY_GROWTH * st.doneTokens) return t().wMemoryGrown(shortDate(st.doneAt), pct(m.autoMem, st.doneTokens), m.avail.memory)
+      if (!st.doneAt) return { line: x.wMemoryNever(tok, cmd), why: x.whyMemory(cmd, tok, x.whyMemoryNever) }
+      if (st.doneTokens && m.autoMem >= MEMORY_GROWTH * st.doneTokens) {
+        const p = pct(m.autoMem, st.doneTokens)
+        return { line: x.wMemoryGrown(shortDate(st.doneAt), p, cmd), why: x.whyMemory(cmd, tok, x.whyMemoryGrown(p, shortDate(st.doneAt))) }
+      }
       return null
     },
   },
   {
     id: 'skills-heavy',
-    rest: () => 30,
+    rest: () => REST.skillsHeavy,
     due: (m) => {
-      if (!m.avail.skillDoctor || m.countingDays < UNUSED_DAYS || m.skillsTokens < HEAVY_TOKENS || m.unused === null || m.unused < HEAVY_UNUSED) return null
-      return t().wSkillsHeavy(m.unused, UNUSED_DAYS, tokensText(m.skillsTokens), m.avail.skillDoctor)
+      const cmd = m.avail.skillDoctor
+      if (!cmd || m.countingDays < UNUSED_DAYS || m.skillsTokens < HEAVY_TOKENS || m.unused === null || m.unused < HEAVY_UNUSED) return null
+      const tok = tokensText(m.skillsTokens)
+      return { line: t().wSkillsHeavy(m.unused, UNUSED_DAYS, tok, cmd), why: t().whySkillsHeavy(cmd, m.unused, UNUSED_DAYS, tok) }
     },
   },
   {
     id: 'init',
-    rest: () => 30,
+    rest: () => REST.init,
     due: (m) => {
-      if (!m.avail.init || m.hasOwn || m.sessionDays < INIT_DAYS) return null
-      return t().wInit(m.sessionDays, m.avail.init)
+      const cmd = m.avail.init
+      if (!cmd || m.hasOwn || m.sessionDays < INIT_DAYS) return null
+      return { line: t().wInit(m.sessionDays, cmd), why: t().whyInit(cmd, m.sessionDays) }
     },
   },
 ]
@@ -124,11 +154,26 @@ export function pickHint(m: Measure, w: Wartung, s: HintSettings, now: number): 
     const rest = r.rest(m) * DAY
     if (st.hintAt && now - st.hintAt < rest) continue
     if (st.doneAt && now - st.doneAt < rest) continue
-    const line = r.due(m, st, s)
+    const d = r.due(m, st, s)
     const cmd = CMD_OF[r.id](m.avail)
-    if (line) return { id: r.id, line, ...(cmd ? { cmd } : {}) }
+    if (d) return { id: r.id, line: d.line, why: d.why, ...(cmd ? { cmd } : {}) }
   }
   return null
+}
+
+/**
+ * Was nach `$.prompt.fill` an der Wartungszeile geschieht (Ausbau 0.16.0; types:8642-8666, :8745-8762):
+ * - `filled`: der Befehl steht allein im Feld (oder das Feld ist nicht lesbar, `text` leer).
+ * - `mixed`: Fynn tippte zwischen `read` und `fill`, `append` hängte den Befehl an seinen Text; so wirkt er nicht als Befehl (Review K1).
+ * - `dialog`: ein Dialog hält die Tasten.
+ * - `copy`: kein Eingabefeld (`no_composer`, Desktop) oder ohne Grund abgelehnt (ein Hook): in die Zwischenablage.
+ */
+export function fillOutcome(r: { isFilled: boolean; refusal?: string; text?: string } | null, cmd: string): 'filled' | 'mixed' | 'dialog' | 'copy' {
+  if (r?.isFilled) {
+    const now = (r.text ?? '').trim()
+    return now && now !== cmd ? 'mixed' : 'filled'
+  }
+  return r?.refusal === 'dialog' ? 'dialog' : 'copy'
 }
 
 /** Hat ein Audit oder Aufräumen die Dateien verkleinert, wird die Vergleichsgröße mitgenommen: Wachstum zählt ab dem kleineren Stand. */
@@ -166,7 +211,8 @@ export function doneFromText(text: string): RuleId[] {
   const m = /^\/([\w:-]+)(?:\s+(\S+))?/.exec(typed)
   if (!m) return []
   const [, cmd, arg] = m
-  if (cmd === 'claude-api') return arg === 'prompt-audit' ? DONE_BY.audit! : []
+  // `/doctor prompt-audit` ist der Weg der Doku (rel/memory.md:100), er läuft über den Skill claude-api (rel/memory.md:104)
+  if (cmd === 'claude-api' || cmd === 'doctor') return arg === 'prompt-audit' ? DONE_BY.audit! : []
   if (cmd === 'skill-doctor') return DONE_BY['skill-doctor']!
   if (cmd === 'init') return DONE_BY.init!
   if (cmd === 'consolidate-memory' || cmd!.endsWith(':consolidate-memory')) return DONE_BY.memory!

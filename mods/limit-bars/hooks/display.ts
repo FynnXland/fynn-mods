@@ -63,7 +63,13 @@ export function parseOnOff(s: string): boolean | undefined {
   return undefined
 }
 
-export type BarsCommand = { kind: 'status' } | { kind: 'reset' } | { kind: 'help' } | { kind: 'set'; part: Part; on: boolean } | { kind: 'bad' }
+export type BarsCommand =
+  | { kind: 'status' }
+  | { kind: 'reset' }
+  | { kind: 'help' }
+  | { kind: 'set'; part: Part; on: boolean }
+  | { kind: 'style'; style: 'bar' | 'ring' }
+  | { kind: 'bad' }
 
 // Wortlisten des Parsers, exportiert für den Vollständigkeitstest der Hilfe (docs/HELP-SPEC.md §6 Punkt 5)
 /** `help` und `?`, nur als einziges Wort (HELP-SPEC §2); gilt auch für die Nebenbefehle `/cache`, `/handoff`, `/keepwarm`, `/disk`. */
@@ -86,15 +92,47 @@ export function isHelp(args: string): boolean {
   return w.length === 1 && HELP_WORDS.includes(w[0]!)
 }
 
-/** `/bars`, `/bars help`, `/bars reset`, `/bars show <teil> on|off` und kurz `/bars <teil> on|off`. */
+/** `/bars`, `/bars help`, `/bars reset`, `/bars style bar|ring`, `/bars show <teil> on|off` und kurz `/bars <teil> on|off`. */
 export function parseBars(args: string): BarsCommand {
   const w = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (w.length === 0 || (w.length === 1 && STATUS_WORDS.includes(w[0]!))) return { kind: 'status' }
   if (isHelp(args)) return { kind: 'help' }
   if (w.length === 1 && RESET_WORDS.includes(w[0]!)) return { kind: 'reset' }
+  // `/bars style bar|ring` (Ausbau 0.10.0)
+  if (STYLE_WORDS.includes(w[0]!)) {
+    const st = w.length === 2 ? parseStyle(w[1]!) : undefined
+    return st ? { kind: 'style', style: st } : { kind: 'bad' }
+  }
   const rest = SHOW_WORDS.includes(w[0]!) ? w.slice(1) : w
   if (rest.length !== 2) return { kind: 'bad' }
   const part = parsePart(rest[0]!)
   const on = parseOnOff(rest[1]!)
   return part && on !== undefined ? { kind: 'set', part, on } : { kind: 'bad' }
+}
+
+// ---------- Stil: Balken oder Ringe (SPEC.md, Ausbau 0.10.0, 3.) ----------
+
+export type Style = 'bar' | 'ring'
+export const STYLE_WORDS: readonly string[] = ['style']
+const STYLE_ALIASES: ReadonlyArray<[Style, readonly string[]]> = [
+  ['bar', ['bar', 'balken']],
+  ['ring', ['ring', 'kreis']],
+]
+export const STYLE_VALUE_WORDS: readonly string[] = STYLE_ALIASES.flatMap(([, names]) => names)
+
+/** `bar`/`ring` und die deutschen Aliase `balken`/`kreis`. */
+export function parseStyle(s: string): Style | undefined {
+  const x = s.trim().toLowerCase()
+  return STYLE_ALIASES.find(([, names]) => names.includes(x))?.[0]
+}
+
+/** Stil aus userConfig `style`; alles außer `ring` ist `bar` (Standard). */
+export function styleFromOptions(options: Readonly<Record<string, unknown>>): Style {
+  return options.style === 'ring' ? 'ring' : 'bar'
+}
+
+/** Per `/bars style` gespeicherter Stil (`display.style` im Store), sonst undefined. */
+export function cleanStyle(v: unknown): Style | undefined {
+  const s = v && typeof v === 'object' ? (v as { style?: unknown }).style : undefined
+  return s === 'bar' || s === 'ring' ? s : undefined
 }

@@ -13,7 +13,7 @@ body:
     validations: {required: true}
     attributes:
       label: Mod
-      options: ["clawd-buddy", "limit-bars", "sidekick", "quick-replies", "cost-ledger", "Several / not sure"]
+      options: ["clawd-buddy", "limit-bars", "sidekick", "quick-replies", "spotify", "cost-ledger", "Several / not sure"]
   - type: input
     id: mod-version
     validations: {required: true}

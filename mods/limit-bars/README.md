@@ -4,7 +4,7 @@ Two slim bars on the left of the band above the prompt show live how much of the
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.8.0**
+Tested with Claude Code **v2.1.295** · Plugin version **0.10.4**
 
 ## Display
 
@@ -18,6 +18,7 @@ Tested with Claude Code **v2.1.295** · Plugin version **0.8.0**
 - **After a reset**, until a new measurement arrives: `0% · fresh`, dimmed, with an empty bar.
 - **Before Claude Code knows the limits** (new chat, before the first reply), the desktop app shows empty, dimmed bars with `5h –` and `7d –`, and the ring shows `–`. In the terminal the bars only appear once there are values.
 - **Data source:** `$.session.usage()` at start and every 2 s, plus every measurement (`session.measure`, after each turn). `usage()` returns the values of the latest API response, so it updates even in the middle of a long turn. The 2 s tick polls but only redraws when a displayed number or color changes (otherwise buttons of other mods in the band flicker); it stops when the band is no longer drawn.
+- **No 5-hour limit:** some plans report only the weekly window. After two readings in a row without a 5-hour window (one is not enough: single readings without it also happened while the window was running), the top line shows the **weekly pace** instead of an empty bar: `5h ∞ · +12% over pace`, below it `lasts until Fri 14:00` (when 100 % would be reached at the current pace, rounded down to 15 min) or `forecast 78%` (the share at the reset). In the first 6 hours of a week it reads `week fresh`. A line on the weekly bar marks even use (where you would be if you spread the week evenly): orange while your usage is below it, red once it has reached it. In the desktop app it has a thin edge in a darker shade of the same color and reaches well above the bar and a little below it. Colors: grey up to 5 points over even use (and below it), orange above, red when 100 % would be reached more than a day before the reset. The 5-hour bar returns as soon as a reading contains the window again. The `5h` switch (`/bars show 5h off`) hides the pace line as well. The count is shared between chats (`limits.miss` in `$.store`), so new chats show the pace right away.
 - **Shared between chats:** `usage()` only knows this chat's latest API response. When it changes, the chat stores the reading with its time in `$.store` under `limits`; every chat on this computer takes the newest reading on its next tick. Usage in one Claude Code chat therefore shows up in all open chats within about 2 s. Usage on claude.ai or another device shows up only with this chat's next response.
 
 Runs in: the desktop app's Code tab and the terminal. In `claude -p`, the Agent SDK, VS Code and mobile it draws nothing and starts no tick.
@@ -51,13 +52,15 @@ Every part of the display can be shown or hidden on its own. **The storage ring 
 | Weekly bar | `showWeekly` | `/bars show week on\|off` | on |
 | Cache ring | `showCache` | `/bars show cache on\|off` | on |
 | Storage ring | `showStorage` (and `storagePath`) | `/bars show storage on\|off` | off (no `storagePath`) |
+| Style: bars or rings | `style` | `/bars style bar\|ring` | bar |
 
 - **Two ways, one rule:** a value set with `/bars` wins over the setting. `/bars reset` drops all command values, so the settings apply again. `/bars` alone shows what is on and where each value comes from.
 - **`/bars` applies to all open chats** (stored in `$.store`, picked up within 2 s). **Settings** are read when the plugin loads. After changing them under `/plugin` → Configure options, Claude Code runs `/reload-plugins` when you close the panel (if that would invalidate the prompt cache, it asks first and leaves the change pending; `/reload-plugins --force` applies it). After `claude plugin configure`, restart Claude Code. Other open chats keep the old values until they reload.
 - **Hiding the cache ring only hides the ring.** The question before a cold send, the notice before expiry, `/cache`, `/handoff` and `/keepwarm` keep working; turn them off with `/cache warn off` and `/cache hints off`.
 - **Hiding the storage ring** stops the background queries and scans (no PowerShell). `/disk` still scans when you call it and `storagePath` is set. `/bars show storage on` without `storagePath` tells you where to set it.
 - **Everything hidden:** limit-bars draws nothing and keeps no space free in the band; other mods (clawd-buddy, quick-replies) use the full width.
-- Short forms and German aliases: `/bars 5h off`, `/bars woche aus`, `/bars speicher an`, `/bars cache aus`.
+- **Rings** (`style: ring`, desktop app only): one ring per limit in the style of the cache ring, `5h` and `7d` in orange on top, the percentage in the middle, the reset in small type below. Without a 5-hour limit: `5h ∞` with the pace as text, then the weekly ring with a small notch at even use. Rings take less width than the bars (5h, week and cache: 154 × 56 px). The terminal always keeps the bars; `/bars style ring` there saves the value and says so.
+- Short forms and German aliases: `/bars 5h off`, `/bars woche aus`, `/bars speicher an`, `/bars cache aus`, `/bars style kreis`, `/bars style balken`.
 - `onlyFiveHour` still works (on = weekly bar hidden) but is deprecated; use `showWeekly`.
 
 ## Commands
@@ -70,7 +73,7 @@ Every part of the display can be shown or hidden on its own. **The storage ring 
 | `/handoff continue` · `/handoff show` | Apply the last handoff afterwards (clear and continue with it), or show it (the last 3 are kept in `$.store`) |
 | `/keepwarm [hours]` · `/keepwarm off` | Keep the cache warm, default 2 h, at most 4 h. **Off by default**, because every ping costs quota. `/keepwarm` without a number turns off a running keep-warm |
 | `/disk` · `/disk refresh` | Drive usage by file type, as a ring with a legend (see [Storage ring](#storage-ring)). Scans again if the last scan is older than an hour, or always with `refresh` |
-| `/bars` · `/bars show 5h\|week\|cache\|storage on\|off` · `/bars reset` | Show or hide parts of the display in all open chats (see [Customize](#customize)) |
+| `/bars` · `/bars show 5h\|week\|cache\|storage on\|off` · `/bars style bar\|ring` · `/bars reset` | Show or hide parts of the display in all open chats (see [Customize](#customize)) |
 | `/bars help` · `/bars ?` | All commands, features and settings at a glance, with their current state and how to switch them. In the terminal and the desktop app a drawn table with headings in the theme's warning color (yellow, follows light and dark); in `claude -p` and VS Code the same as Markdown. It shows the state at the moment you call it; call it again after switching something |
 | `/cache help` · `/handoff help` · `/keepwarm help` · `/disk help` | Answer only with "All commands: `/bars help`". `/handoff help` does not start a handoff |
 
@@ -97,6 +100,7 @@ The cache guard is modeled on Cache Keeper by Nate Herk (MIT); the skill `ueberg
 | `showWeekly` | Show weekly bar | the bar for the weekly limit | on |
 | `showCache` | Show cache ring | the cache ring (the cache guard stays) | on |
 | `showStorage` | Show storage ring | the storage ring; only shown with `storagePath` | on |
+| `style` | Style | `bar`: bars · `ring`: one ring per limit (desktop app only; the terminal keeps the bars) | `bar` |
 | `onlyFiveHour` | 5-hour limit only (deprecated) | on: weekly bar hidden; use `showWeekly` instead | off |
 | `storagePath` | Storage drive | drive for the storage ring, for example `E:\` (Windows only); empty: no storage ring and no PowerShell | empty |
 
@@ -113,13 +117,15 @@ The cache guard is modeled on Cache Keeper by Nate Herk (MIT); the skill `ueberg
 
 ```text
 hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, command.run{command=cache}, command.run{command=handoff}, command.run{command=keepwarm}, command.run{command=bars}, command.run{command=disk}, ui.render{component=CommandOutput, props has {command=bars}}, ui.render{component=CommandOutput, props has {command=disk}}, session.measure, ui.render{component=AbovePrompt}
-calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.fork, $.process.run, $.prompt.submit, $.session.compact, $.session.id, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
+calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.fork, $.process.run, $.prompt.submit, $.session.compact, $.session.id, $.session.usage, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
+state writes: limit-bars.band
 ```
 
 No file system access of its own (no `$.fs`), no network, no environment variables read, no tokens or credentials. The only process is Windows PowerShell for the storage ring, and only when `storagePath` is set. That scan does walk the whole drive you named and reads sizes and file extensions (never file contents). In the terminal band, limit-bars passes on the space it uses to the mods further in (smaller `bodyColumns`).
 
 In plain language:
 
+- `$.state.set`: tells the spotify mod how wide the bars are (`limit-bars.band`, a width in pixels), so spotify can make room for them. Written at session start and when the display changes, never while drawing. Nothing else reads it.
 - `$.session.usage`: limits, context size and session cost at start and on every tick (without `breakdown`, free)
 - Hook `session.measure`: takes the percentage and reset time of `five_hour` and `seven_day` after every measurement
 - Hook `turn.step`: reads, for every request of the main loop, how much was read from the cache and how much was written; changes nothing

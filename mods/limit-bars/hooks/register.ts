@@ -8,7 +8,7 @@
 // Texte en/de nach `userConfig.language` (i18n.ts); Argumente englisch, die deutschen gelten weiter als Alias.
 // Fail-open: Ein Fehler heißt nur „keine Anzeige“ bzw. „Nachricht geht unverändert durch“; was andere Mods zeichnen, bleibt erhalten.
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
-import { joinBand, splitBand } from './band.ts'
+import { joinBand, slot, SLOTS, splitBand } from './band.ts'
 import {
   DEFAULT_SETTINGS,
   MIN,
@@ -40,12 +40,14 @@ import {
   KEEP_OFF_WORDS,
   PARTS,
   cleanOverrides,
+  cleanStyle,
   displayFromOptions,
   effectiveDisplay,
   isHelp,
   parseBars,
+  styleFromOptions,
 } from './display.ts'
-import type { Display, Overrides } from './display.ts'
+import type { Display, Overrides, Style } from './display.ts'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import { HELP_ACCENT, barsHelpData } from './helpdata.ts'
@@ -66,7 +68,22 @@ import {
 } from './storage.ts'
 import type { Drive, Scan, StorageReport } from './storage.ts'
 import { desktopSvg } from './svg.ts'
-import { EMPTY, ORANGE, cleanShared, filled, layoutTerminal, mergeWins, pickWindows, placeholderWindows, shownWindows } from './view.ts'
+import {
+  GREY,
+  NO_FIVE_AFTER,
+  ORANGE,
+  barRuns,
+  cleanShared,
+  lacksFive,
+  layoutTerminal,
+  mergeWins,
+  nextMiss,
+  pickWindows,
+  placeholderWindows,
+  sharedMiss,
+  shownWindows,
+  withPace,
+} from './view.ts'
 import type { Opts, ResetStyle, Shared, Shown, Win } from './view.ts'
 
 // Optionen aus userConfig, in register() gesetzt
@@ -78,6 +95,15 @@ let baseDisplay: Display = displayFromOptions({})
 let overrides: Overrides = {}
 const shownParts = () => effectiveDisplay(baseDisplay, overrides)
 let displayPinned = false // /bars konnte nicht speichern: der lokale Wert gilt, der Takt liest ihn nicht neu
+// Balken oder Ringe (Ausbau 0.10.0): userConfig `style`, darüber `/bars style` (`display.style` im Store); Ringe nur im Desktop
+let baseStyle: Style = 'bar'
+let styleOverride: Style | undefined
+const styleNow = (): Style => styleOverride ?? baseStyle
+// Zuletzt gezeichnete Oberfläche: `/bars style ring` sagt im Terminal, dass Ringe nur im Desktop erscheinen (command.run nennt
+// keine Oberfläche, types@2.1.295 CommandRunInput)
+let lastSurface: string | null = null
+/** Was unter `display` gespeichert wird: die Schalter und, falls per Befehl gesetzt, der Stil. */
+const displayValue = () => (styleOverride ? { ...overrides, style: styleOverride } : { ...overrides })
 
 // Limits: flüchtig (Kontingent gehört zum Konto und kommt mit jeder Messung neu)
 let wins: Win[] = []
@@ -86,6 +112,11 @@ let usageAsked = false
 // eigene Messung, kam eine neue Antwort: dann `{at, wins}` nach `$.store` `limits`. Jeder Tick übernimmt von dort, was neuer ist.
 let winsAt = 0 // wann der angezeigte Stand gemessen wurde (eigene Antwort oder ein anderer Chat)
 let ownKey = '' // die zuletzt gesehene eigene Messung
+// Kein 5h-Limit (Ausbau 0.10.0): Messungen in Folge mit `seven_day`, aber ohne `five_hour`; geteilt in `limits.miss`.
+// Ab NO_FIVE_AFTER (zwei) zeigt die obere Zeile das Wochen-Tempo.
+let fiveMiss = 0
+const noFiveHour = () => fiveMiss >= NO_FIVE_AFTER && lacksFive(wins)
+const sharedValue = (at: number, w: Win[], miss: number): Shared => (miss > 0 ? { at, wins: w, miss } : { at, wins: w })
 // Takt, nur solange das Band gezeichnet wird (Timer mit cancel(), types@2.1.288:11912-11917; eine abgelehnte Periode beendet ihn,
 // types@2.1.288:3251). Jeder Tick holt `$.session.usage()`: Das sind die Werte der letzten API-Antwort (types@2.1.288:11033-11034), also
 // auch mitten in einem langen Turn, während `session.measure` erst am Turn-Ende kommt (Fynn, 2026-10-05: "aktualisiert viel zu selten").
@@ -200,10 +231,13 @@ async function takeBaseline($: EngineInterface, fresh: Win[], now: number): Prom
   if (s && JSON.stringify(merged) === JSON.stringify(s.wins)) {
     wins = s.wins
     winsAt = s.at
+    // Beide Zweige zählen vom gemeinsamen Stand aus, nicht vom lokalen: sonst zählte ein schon gelesener 0.9.0-Eintrag doppelt (Review K2)
+    fiveMiss = sharedMiss(s, 0)
   } else {
     wins = merged
     winsAt = now
-    $.store.set('limits', { at: now, wins: merged }).catch(() => {})
+    fiveMiss = nextMiss(s ? sharedMiss(s, 0) : fiveMiss, merged)
+    $.store.set('limits', sharedValue(now, merged, fiveMiss)).catch(() => {})
   }
   refresh($, now)
 }
@@ -221,15 +255,29 @@ function takeOwn($: EngineInterface, fresh: Win[], now: number): void {
     takeBaseline($, fresh, now).catch(() => {})
     return
   }
+  const prevAt = winsAt
+  const prevMiss = fiveMiss
   ownKey = k
   wins = fresh
   winsAt = now
+  fiveMiss = nextMiss(prevMiss, fresh)
   if (fresh.length === 0) return
   // Erst neu lesen, dann schreiben: Hat ein anderer Chat gerade neuer geschrieben, bleibt das stehen
   // (get + set sind nicht atomar, docs/raw/en/interface.md:848-855)
   $.store
     .get('limits')
-    .then((v) => ((cleanShared(v)?.at ?? 0) > now ? undefined : $.store.set('limits', { at: now, wins: fresh })))
+    .then((v) => {
+      const s = cleanShared(v)
+      if ((s?.at ?? 0) > now) return undefined
+      // Hat seit dem letzten Übernehmen ein anderer Chat geschrieben (z. B. eine Messung mit 5h-Fenster), zählt der Zähler von dort
+      // weiter, nicht vom lokalen Stand (Review 0.10.0 K1)
+      if (s && s.at > prevAt) {
+        const miss = nextMiss(sharedMiss(s, prevMiss), fresh)
+        if (winsAt === now) fiveMiss = miss
+        return $.store.set('limits', sharedValue(now, fresh, miss))
+      }
+      return $.store.set('limits', sharedValue(now, fresh, fiveMiss))
+    })
     .catch(() => {})
 }
 
@@ -240,6 +288,7 @@ async function readShared($: EngineInterface): Promise<void> {
     if (s && s.at > winsAt) {
       wins = s.wins
       winsAt = s.at
+      fiveMiss = sharedMiss(s, fiveMiss)
     }
   } catch {
     // eigener Stand
@@ -457,13 +506,16 @@ function snapshot(now: number) {
   // Woche aus: wie das alte onlyFiveHour; 5h aus: danach herausfiltern (Platzhalter ebenso)
   const o: Opts = { ...opts, onlyFiveHour: !sh.weekly }
   const only = (list: Shown[]) => list.filter((x) => (x.tag === '5h' ? sh.fiveHour : sh.weekly))
-  const shown = wins.length > 0 ? only(shownWindows(wins, now, o)) : []
+  let shown = wins.length > 0 ? only(shownWindows(wins, now, o)) : []
+  // Ohne 5h-Fenster: oben das Wochen-Tempo (Schalter 5h), am Wochenbalken der Strich (Ausbau 0.10.0)
+  if (noFiveHour()) shown = withPace(shown, wins, now, lang, sh.fiveHour)
   const ttl = ttlOf(mem, settings)
   const st = cacheState(mem.lastActivity, ttl, now, !!keep)
   const big = mem.ctx >= settings.bigTokens
   const drive = driveOf(storagePath)
   const dv = sh.storage && drive && disk.d ? diskView(drive, disk.d, disk.scan, lang) : undefined
   return {
+    style: styleNow(),
     shown,
     // Desktop: ohne Limits Platzhalter (5h –, 7d –), damit die Balken sofort sichtbar sind; nur die eingeschalteten
     bars: wins.length > 0 ? shown : only(placeholderWindows(o)),
@@ -478,7 +530,20 @@ function snapshot(now: number) {
 function keyOf(v: ReturnType<typeof snapshot>): string {
   const r = v.ring
   return JSON.stringify([
-    v.bars.map((x) => [x.tag, x.pct.long, x.reset?.long ?? '', x.color, x.strong, x.fresh, Math.round(x.ratio * 44)]),
+    v.style,
+    // Tempo nur mit gerundeten Werten (ganze Prozent, Uhrzeit auf 15 min, Strich auf ganze Prozent): Der 2-s-Takt zeichnet so
+    // nicht öfter neu als nötig (SPEC.md, Ausbau 0.10.0, 2.)
+    v.bars.map((x) => [
+      x.tag,
+      x.pct.long,
+      x.reset?.long ?? '',
+      x.color,
+      x.strong,
+      x.fresh,
+      Math.round(x.ratio * 44),
+      x.mark === undefined ? -1 : Math.round(x.mark * 100),
+      x.markColor ?? '',
+    ]),
     r ? [r.main, r.sub ?? '', r.subColor ?? '', r.color, r.mainColor, ringFilled(r.fill), r.kept] : null,
     v.block?.text ?? '',
     v.disk ? [v.disk.main, v.disk.sub, v.disk.arcs.map((a) => [a.color, Math.round(a.to * 360)])] : null,
@@ -628,7 +693,9 @@ async function readDisplay($: EngineInterface): Promise<void> {
   // Ließ sich ein /bars-Wert nicht speichern, gilt er in diesem Chat bis zum nächsten erfolgreichen Schreiben (Review 0.6.0, S2)
   if (displayPinned) return
   try {
-    overrides = cleanOverrides(await $.store.get('display'))
+    const v = await $.store.get('display')
+    overrides = cleanOverrides(v)
+    styleOverride = cleanStyle(v)
   } catch {
     // bisheriger Stand
   }
@@ -641,9 +708,35 @@ function maybeStartDisk($: EngineInterface): void {
   later($, 2000, () => void startDisk($).catch(() => {}))
 }
 
+// Breite des Platzes im Desktop (Pixel) für spotify: `$.state` `limit-bars.band` (types/index.d.ts, docs/BAND.md „Platzbreite“).
+// `undefined` = noch nie geschrieben (der nächste Aufruf schreibt sicher, auch `null`). Nie im Zeichnen: ui.render darf nicht schreiben.
+let publishedWidth: number | null | undefined = undefined
+let publishedKey = '' // Änderungsschlüssel der Anzeige beim letzten Prüfen: die Breite ändert sich nur mit ihr (und das Bild zu bauen kostet)
+let publishChain: Promise<unknown> = Promise.resolve()
+function publishBand($: EngineInterface, v: ReturnType<typeof snapshot>, key = keyOf(v)) {
+  if (key === publishedKey) return
+  publishedKey = key
+  const width = v.bars.length > 0 || v.ring || v.disk ? desktopSvg(v.bars, v.ring, v.disk, v.style).width : null
+  if (width === publishedWidth) return
+  publishedWidth = width
+  // Schreibvorgänge nacheinander; Beiwerk: ein Fehler ändert nichts an den Balken. Abgelehnt (etwa aus einem Zeichnen heraus,
+  // types@2.1.295:3405) wird der Stand vergessen, damit die nächste Änderung oder der nächste Tick es erneut versucht (Review K6)
+  publishChain = publishChain
+    .then(() => $.state.set({ plugin: 'limit-bars', key: 'band' }, width === null ? null : { width }))
+    .catch(() => {
+      if (publishedWidth === width) {
+        publishedWidth = undefined
+        publishedKey = ''
+      }
+    })
+}
+
 /** Neu zeichnen nur bei sichtbarer Änderung (Minute, Prozent, Kontext, Zustand). */
 function refresh($: EngineInterface, now: number) {
-  if (keyOf(snapshot(now)) === drawnKey) return
+  const v = snapshot(now)
+  const key = keyOf(v)
+  publishBand($, v, key)
+  if (key === drawnKey) return
   awaitingRender = true
   $.ui.invalidate('ui.render')
 }
@@ -651,6 +744,9 @@ function refresh($: EngineInterface, now: number) {
 export function register(on: On, options: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
   const hl = typeof options.highlightAt === 'number' && Number.isFinite(options.highlightAt) ? options.highlightAt : 90
   lang = langOf(options.language)
+  publishedWidth = undefined
+  publishedKey = ''
+  publishChain = Promise.resolve()
   opts = {
     resetStyle: STYLES.find((s) => s === options.resetStyle) ?? 'mixed',
     highlightAt: Math.max(50, Math.min(100, hl)),
@@ -659,13 +755,16 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   }
   storagePath = typeof options.storagePath === 'string' ? options.storagePath.trim() : ''
   baseDisplay = displayFromOptions(options)
+  baseStyle = styleFromOptions(options)
   rawOptions = options
 
   on('session.start', async ($, e, next) => {
     // Nur wo das Band gezeichnet wird (types@2.1.288:9576); `-p`/SDK liefern null, VS Code und mobil zeichnen kein Band
     if (e.surface === 'terminal' || e.surface === 'desktop') {
+      lastSurface = e.surface
       await readDisplay($)
       await loadWindows($)
+      publishBand($, snapshot(await $.clock.now()))
       if (wins.length > 0) $.ui.invalidate('ui.render')
       // Speicher-Ring: außerhalb des Hooks, der Sitzungsstart wartet nicht auf PowerShell; ausgeblendet kein PowerShell
       maybeStartDisk($)
@@ -955,12 +1054,16 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         memTtl: mem.ttl,
         memTtlSource: mem.ttlSource,
         keep,
+        style: styleNow(),
+        styleByCommand: styleOverride !== undefined,
+        noFive: noFiveHour(),
       })
       return { text: helpMarkdown(data, rememberHelp(await $.clock.now(), data)) }
     }
     let note = ''
     if (c.kind === 'reset') {
       overrides = {}
+      styleOverride = undefined
       try {
         await $.store.delete('display')
         displayPinned = false
@@ -973,7 +1076,16 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       if (c.part === 'storage' && c.on && !driveOf(storagePath)) return { text: storagePath ? t.storageWindowsOnly : t.storageOff }
       overrides = { ...overrides, [c.part]: c.on }
       try {
-        await $.store.set('display', overrides)
+        await $.store.set('display', displayValue())
+        displayPinned = false
+      } catch (err) {
+        displayPinned = true
+        note = t.barsSaveFailed(msg(err))
+      }
+    } else if (c.kind === 'style') {
+      styleOverride = c.style
+      try {
+        await $.store.set('display', displayValue())
         displayPinned = false
       } catch (err) {
         displayPinned = true
@@ -988,12 +1100,16 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
     const sh = shownParts()
     const rows = PARTS.map((p) => {
-      const state = !sh[p] ? t.barsOff : p !== 'storage' || driveOf(storagePath) ? t.barsOn : storagePath ? t.barsNotWindows : t.barsNoPath
+      let state = t.barsOff
+      if (sh[p] && p === 'fiveHour' && noFiveHour()) state = t.barsNoFive
+      else if (sh[p]) state = p !== 'storage' || driveOf(storagePath) ? t.barsOn : storagePath ? t.barsNotWindows : t.barsNoPath
       return `| ${t.barsPart[p]} | ${state} | ${overrides[p] !== undefined ? t.barsByCommand : t.barsBySetting} |`
     })
+    rows.push(`| ${t.barsStyle} | ${t.styleName[styleNow()]} | ${styleOverride ? t.barsByCommand : t.barsBySetting} |`)
     const lines: string[] = []
     if (c.kind === 'set') lines.push(t.barsSet(t.barsPart[c.part], c.on ? t.barsOn : t.barsOff), '')
     if (c.kind === 'reset') lines.push(t.barsReset, '')
+    if (c.kind === 'style') lines.push(t.styleSet(t.styleName[c.style]), ...(c.style === 'ring' && lastSurface === 'terminal' ? [t.styleDesktopOnly] : []), '')
     lines.push(t.barsTitle, '', t.barsHead, '|---|---|---|', ...rows, '', t.barsUsage)
     // Cache-Ring aus heißt nur: Anzeige weg (Fynn); Rückfrage und Hinweise bleiben
     if (c.kind === 'set' && c.part === 'cache' && !c.on) lines.push(t.barsCacheNote)
@@ -1112,6 +1228,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
     try {
       if (e.surface !== 'terminal' && e.surface !== 'desktop') return await pass(e)
+      lastSurface = e.surface
       // Nennt `session.start` die Oberfläche nicht (z. B. eine App, die als SDK startet), holt das erste Zeichnen den Anfangsstand
       // Ersatzweg, wenn session.start die Oberfläche nicht nannte: auch die /bars-Werte holen (Review 0.6.0, S1)
       if (!usageAsked) {
@@ -1158,7 +1275,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         theirs = await pass(e)
         const { Svg } = $.ui.resolve(e)
         // Ohne Limits stehen Platzhalter da (5h –, 7d –), damit die Balken wie der Ring sofort sichtbar sind
-        const pic = desktopSvg(view.bars, view.ring, view.disk)
+        const pic = desktopSvg(view.bars, view.ring, view.disk, view.style)
         // Unten bündig mit Clawds Füßen, auch wenn die Desktop-App alignItems der äußeren Zeile nicht umsetzt (Spalte + flex-end)
         mine = Box({ key: 'limit-bars', flexShrink: 0, flexDirection: 'column', justifyContent: 'flex-end', children: [Svg({ source: pic.source, alt: pic.alt, width: pic.width, height: pic.height })] })
       } else {
@@ -1189,7 +1306,26 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         }
         const children: RenderNode[] = lay.blocks.map((b) => {
           const s = b.shown
-          const f = filled(s.ratio, b.width)
+          // Tempo-Zeile ohne 5h-Fenster: `5h ∞` gedimmt, das Tempo in seiner Farbe, darunter kein Balken (Ausbau 0.10.0)
+          if (s.pace) {
+            const grey = s.color === GREY
+            return Box({
+              flexDirection: 'column',
+              width: b.width,
+              flexShrink: 0,
+              children: [
+                Box({
+                  flexDirection: 'row',
+                  children: [
+                    Text({ color: ORANGE, children: [s.tag] }),
+                    Text({ dimColor: true, children: [` ${b.pct}`] }),
+                    ...(b.rest ? [grey ? Text({ dimColor: true, wrap: 'truncate-end', children: [b.rest] }) : Text({ color: s.color, wrap: 'truncate-end', children: [b.rest] })] : []),
+                  ],
+                }),
+                Text({ children: [' '] }),
+              ],
+            })
+          }
           return Box({
             flexDirection: 'column',
             width: b.width,
@@ -1206,10 +1342,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
               }),
               Box({
                 flexDirection: 'row',
-                children: [
-                  ...(f > 0 ? [Text({ color: s.color, children: ['▄'.repeat(f)] })] : []),
-                  ...(f < b.width ? [Text({ color: EMPTY, children: ['▄'.repeat(b.width - f)] })] : []),
-                ],
+                // Am Wochenbalken ohne 5h-Fenster ein Strich beim gleichmäßigen Verbrauch (`┆`), sonst nur gefüllt und leer
+                children: barRuns(s.ratio, b.width, s.color, s.mark, s.markColor).map((r) => Text({ color: r.color, children: [r.mark ? '┆' : '▄'.repeat(r.n)] })),
               }),
             ],
           })
@@ -1234,25 +1368,12 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       }
       // Ebenen anderer Mods (Quick-Replies, sidekick) bleiben über dem Grund, nie neben den Balken, egal wer in der Kette außen
       // liegt (band.ts, docs/BAND.md). Die Balken kommen nur neben den Grund.
-      const { layers, base } = splitBand(theirs)
-      if (!base) return joinBand(layers, mine)
-      // Ohne weitere Mods antwortet der Kern mit seinem eigenen Knoten `{type:'engine'}` (types@2.1.288:9033-9041), der im Band
-      // nichts zeichnet (types@2.1.288:9570). Dann ist limit-bars innen bzw. allein, der Knoten bleibt erhalten. Er steht NEBEN den
-      // Balken, nicht darunter: Die Desktop-App gibt ihm Höhe, übereinander rutschten die Balken über Clawds Füße (Fynn, 2026-10-03).
-      if (typeof base === 'object' && base.type === 'engine' && !stack) {
-        return joinBand(layers, Box({ flexDirection: 'row', alignItems: 'flex-end', children: [mine, Box({ flexGrow: 1, children: [base] })] }))
-      }
-      if (stack) return joinBand(layers, Box({ flexDirection: 'column', children: [mine, base] }))
-      // limit-bars weiter außen: Balken links, der Rest rechts, unten bündig (wie clawd-buddy, gespiegelt gebaut)
-      return joinBand(
-        layers,
-        Box({
-          flexDirection: 'row',
-          alignItems: 'flex-end',
-          // Rechte Seite: Inhalt nach rechts (alignItems) und nach unten (justifyContent) als Spalte, unabhängig von alignItems der Zeile
-          children: [mine, Box({ flexGrow: 1, flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'flex-end', children: [base] })],
-        }),
-      )
+      // Die Balken sind Platz 10 der Grund-Zeile: die Zeile sortiert die Plätze, egal wer in der Kette außen liegt (band.ts).
+      // Der Kern-Knoten `{type:'engine'}` (types@2.1.288:9033-9041) bleibt als Rest in der Mitte erhalten.
+      const { layers, slots, base } = splitBand(theirs)
+      // Nur der Ausweichweg: lehnt die Engine das Umschreiben von bodyColumns ab, gilt der Rest gestapelt unter den Balken
+      if (stack && base) return joinBand(layers, Box({ flexDirection: 'column', children: [mine, base] }), slots)
+      return joinBand(layers, base, [...slots, slot(SLOTS.limitBars, 'limit-bars', mine)])
     } catch (err) {
       // Fehler aus der Kette: weiterwerfen, die Engine behandelt den Hook dann als gescheitert (docs/raw/en/events.md:313-316)
       if (nextFailed) throw err

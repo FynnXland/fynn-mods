@@ -1,7 +1,7 @@
 # fynn-mods
 
-**Five mods for Claude Code: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies and a cost
-ledger.**
+**Six mods for Claude Code: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies, a Spotify
+player (Windows) and a cost ledger.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
@@ -12,21 +12,23 @@ ledger.**
 [Install](#installation) · [The mods](#the-mods) · [Troubleshooting](#troubleshooting) · **English** · [Deutsch](README.de.md)
 
 <p align="center">
-  <img src="assets/hero.gif" width="790" alt="The Claude Code prompt in the desktop app with four mods: four reply suggestions numbered 1 to 4 above the prompt, below them the 5-hour and weekly limit bars, the cache ring and the storage ring, Clawd the pixel crab typing on a laptop and jumping for joy, and the sidekick level Guide in the prompt footer.">
-  <br><i>quick-replies, limit-bars and clawd-buddy share the band above the prompt; sidekick shows its level in the
-  footer. Four suggestions need <code>/replies more on</code>; the storage ring is optional.</i>
+  <img src="assets/hero.gif" width="790" alt="The Claude Code prompt in the desktop app with five mods: on top a music player bar with a made-up song, cover, position bar and buttons; below it four reply suggestions numbered 1 to 4, the 5-hour and weekly limit bars, the cache ring and the storage ring, and Clawd the pixel crab typing on a laptop and jumping for joy; the sidekick level Guide sits in the prompt footer.">
+  <br><i>spotify, quick-replies, limit-bars and clawd-buddy share the band above the prompt; sidekick shows its level
+  in the footer. Rebuilt with invented data. Four suggestions need <code>/replies more on</code>; the storage ring is
+  optional.</i>
 </p>
 
 My daily-driver set of [Claude Code mods](https://code.claude.com/docs/en/plugins/mods/overview), the plugins that
 draw into Claude Code's own interface in the terminal and in the desktop app. They keep an eye on usage limits, the
-prompt cache and costs, check messages before they go out and queue the next tasks. The mods are tuned to work side
-by side, but each one is a separate plugin you can install on its own.
+prompt cache and costs, check messages before they go out and put your music player above the prompt. The mods are
+tuned to work side by side, but each one is a separate plugin you can install on its own.
 
 This repository is a Claude Code plugin marketplace named `fynn-mods`.
 
 > **English or German.** Every mod speaks English by default: buttons, messages, dialogs and the answers of the model
 > calls some mods make. Each mod has a `language` option (`en` or `de`); set it to `de` for German with
-> `/plugin configure <mod>@fynn-mods` in a session. The screenshots below show the German setting.
+> `/plugin configure <mod>@fynn-mods` in a session. The pictures below show the English default. They are rebuilt
+> from the mods' own drawing code with an invented sample project, so no real chats, paths or costs appear.
 
 | Mod | In one line |
 |---|---|
@@ -34,9 +36,10 @@ This repository is a Claude Code plugin marketplace named `fynn-mods`.
 | [limit-bars](#limit-bars) | 5-hour and weekly limit bars, plus a ring showing how long the prompt cache stays warm |
 | [sidekick](#sidekick) | Checks your message before it is sent: cold-cache costs, wrong chat, better wording, due maintenance |
 | [quick-replies](#quick-replies) | Claude Code's next-message suggestion as a one-click button |
+| [spotify](#spotify) | Spotify player above the prompt with cover, position and controls (Windows only) |
 | [cost-ledger](#cost-ledger) | Cost ledger across all chats, by day, project, chat and model |
 
-**Help in every mod:** `/<command> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/ledger`) draws a
+**Help in every mod:** `/<command> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/spotify`, `/ledger`) draws a
 table of all commands, what is on or off right now and how to switch it, and the mod's settings with their values.
 In `claude -p` and VS Code you get the same as short text.
 
@@ -46,6 +49,8 @@ In `claude -p` and VS Code you get the same as short text.
   `claude --version`.
 - Runs in the terminal and in the Code tab of the Claude desktop app. In `claude -p`, the Agent SDK, VS Code and on
   mobile most mods draw nothing; see each mod's README.
+- spotify needs Windows and the Spotify desktop app. The other five are not tied to one system (used daily on
+  Windows, tested on Linux in CI); limit-bars' optional storage ring is Windows only.
 - The mods API can change between Claude Code releases. If a mod breaks after an update, please open an issue.
 
 ## Installation
@@ -63,6 +68,7 @@ claude plugin install clawd-buddy@fynn-mods
 claude plugin install limit-bars@fynn-mods
 claude plugin install sidekick@fynn-mods
 claude plugin install quick-replies@fynn-mods
+claude plugin install spotify@fynn-mods        # Windows only
 claude plugin install cost-ledger@fynn-mods
 ```
 
@@ -93,8 +99,8 @@ Three mods make model calls **on your account** (on a subscription they count to
 - **quick-replies** forks the session after each answer **only with `/replies more on`** (off by default): roughly
   the cost of one short answer, mostly from the prompt cache.
 
-limit-bars makes a call only while you have `/keepwarm` running (off by default). clawd-buddy and cost-ledger make no
-model calls. cost-ledger records the calls of the other mods, so you can see what they cost.
+limit-bars makes a call only while you have `/keepwarm` running (off by default). clawd-buddy, spotify and cost-ledger
+make no model calls. cost-ledger records the calls of the other mods, so you can see what they cost.
 
 ## The mods
 
@@ -117,8 +123,12 @@ Subagents show up as small helpers next to him.
 
 ![limit-bars: the 5-hour limit bar at 42 % with reset in 2 h 14 min, the weekly bar at 18 % with reset Monday 09:00, a green cache ring with 42 minutes left at 212k tokens of context, and the storage ring for drive E: with 419 of 931 GB used.](assets/limit-bars.svg)
 
-Two slim bars left of Clawd show how much of the 5-hour and the weekly limit you've used and when each resets. A ring
-next to them shows how long this chat's prompt cache stays warm, and the context size. The cache guard asks before
+![limit-bars with /bars style ring: four rings for the 5-hour limit at 42 %, the weekly limit at 18 %, the cache with 42 minutes left and 212k tokens, and the storage ring with 419 of 931 GB used.](assets/limit-bars-rings.svg)
+
+Two slim bars left of Clawd show how much of the 5-hour and the weekly limit you've used and when each resets; in the
+desktop app `/bars style ring` draws them as rings instead. A ring next to them shows how long this chat's prompt
+cache stays warm, and the context size. On plans that report only a weekly limit, the top line shows your weekly
+pace instead (`5h ∞ · +12% over pace`, `lasts until Fri 14:00`), and a line on the weekly bar marks even use. The cache guard asks before
 you send into a large chat with a cold cache, which would re-write the whole context.
 
 An optional third ring shows how full a drive is, split by file type (programs, media, AI models, code …), with
@@ -133,16 +143,16 @@ Every open chat on the same computer shares the newest limit reading and checks 
 without flicker.
 
 - **Commands:** `/cache` (overview and settings), `/handoff [continue|show]` (write a handoff and continue in a fresh
-  chat), `/keepwarm [hours|off]`, `/disk [refresh]`, `/bars [show <part> on|off | reset]`, `/bars help`
+  chat), `/keepwarm [hours|off]`, `/disk [refresh]`, `/bars [show <part> on|off | style bar|ring | reset]`, `/bars help`
 - **Rights in short:** reads limits, context size and cache statistics; can hold a message back to ask you first; runs
   `/clear` and `/compact` and sends a handoff only after you choose so; `$.model.fork` only while `/keepwarm` runs;
   only with `storagePath` set, runs Windows PowerShell with two fixed, read-only scripts (drive size, sizes by file
-  extension). No files, network or environment variables.
+  extension); tells spotify only how wide the bars are (`$.state`). No files, network or environment variables.
 - **Details:** [mods/limit-bars](mods/limit-bars/README.md)
 
 ### sidekick
 
-![sidekick in the desktop app (German setting): a blue hint line under a message that suggests a prompt audit, with a button to run it, then sidekick's question for a message sent into a cold, large chat: sending rewrites everything for about $2.40, a new chat with handoff costs about $0.26, with the options new chat with handoff, new chat without handoff, send anyway and cancel.](assets/sidekick.png)
+![sidekick in the desktop app: under a message, a blue sidekick line suggests /claude-api prompt-audit with the buttons Copy and ?, the opened explanation says what the audit does and why it is due; below, sidekick's question for a message sent into a cold, large chat: sending rewrites everything for about $2.40, a new chat with handoff costs about $0.26, with the options new chat with handoff, new chat without handoff, send anyway and cancel.](assets/sidekick.png)
 
 A second pair of eyes on every message, right before it is sent. Fixed rules decide first, at no cost. Only where a
 check can pay off (the first message of a chat, a large context, a cold cache) a quick Haiku 5.5 call looks at it
@@ -159,9 +169,10 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
 - **Three levels:** `/sidekick off`, `cache` (only the cold-cache question, no model call) and `guide` (the default). A label in the prompt footer next to the
   model picker shows the level: 🟢 ready, 🟠 working or asking, 🔴 off. sidekick never sends anything on its own: a
   clearer version only goes out if you choose it in the dialog.
-- **Due maintenance:** once per chat it names at most one due command (`/skill-doctor`, prompt audit, memory
-  consolidation, `/init`), based on a free local estimate. A button next to the line (also for a command a hint names, e.g.
-  `/handoff`) runs it with one click.
+- **Due maintenance:** up to twice per chat it names one due command (`/skill-doctor`, prompt audit, memory
+  consolidation, `/init`), based on a free local estimate. **Insert in prompt** (in the desktop app **Copy**) hands you
+  the command to send yourself, and **?** explains why it is due now and what it costs. A command named in a hint
+  line from the message check (e.g. `/handoff`) gets a button that runs it with one click.
 - **Savings you can check:** `/savings` shows what sidekick cost and what it measurably saved; `/savings detail` adds
   the calculation, a model comparison and a day-by-day history.
 - **Good to know (optional, off by default):** with `/sidekick notes on`, sidekick asks during a longer task whether
@@ -177,14 +188,15 @@ If a check fails or times out, your message goes through unchanged.
   the dialog; Haiku 5.5 and Sonnet 5.5 via `$.model.complete` with a short running summary, your last 3 messages and the end of Claude's last reply, never the whole
   history; only with Good to know on, one question via `$.model.fork` to your session's own model over the
   conversation, with every tool denied; on a button click it runs the command shown in the line (plugin and your own commands, `/skill-doctor`,
-  `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`); draws its label in the prompt footer; and fills
-  the prompt if the command is refused; reads the project root path; tells clawd-buddy via `$.state` only the kind of
+  `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`); draws its label in the prompt footer; fills
+  the empty prompt with a maintenance command on *Insert in prompt* or if a command is refused; copies it to the
+  clipboard on *Copy* (`$.ui.copy`); reads the project root path; tells clawd-buddy via `$.state` only the kind of
   event and the time, never your message. No files, environment, network or settings.
 - **Details:** [mods/sidekick](mods/sidekick/README.md)
 
 ### quick-replies
 
-![quick-replies in the desktop app (German setting): after Claude's answer, a pill above Clawd and the limit bars offers three numbered reply suggestions.](assets/quick-replies.png)
+![quick-replies in the desktop app: after Claude's answer, a pill above the limit bars and Clawd offers four numbered reply suggestions: Run the tests, Collapse it by default?, Commit the change and Show me the diff.](assets/quick-replies.png)
 
 Claude Code often suggests your next message as grey text in the prompt. quick-replies turns it into a button in its
 own pill above Clawd. Click it, or type `1` into the empty prompt, and it's sent as your message. With
@@ -195,13 +207,34 @@ own pill above Clawd. Click it, or type `1` into the empty prompt, and it's sent
   automatically; `$.model.fork` only with `more` on. No files, processes or network.
 - **Details:** [mods/quick-replies](mods/quick-replies/README.md)
 
+### spotify
+
+![spotify in the desktop app: a player bar on top of the band with a made-up song, Recipe for Rain by Juniper Static, an abstract sunset cover, a green position bar at 1:23 of 3:34 and the buttons previous, pause and next; below it the limit bars, the cache and storage rings and Clawd.](assets/spotify.png)
+
+**Windows only.** A Spotify player in the band above the prompt: album cover, title and artist, a position bar in the
+style of the limit bars, and buttons for restart/previous, play/pause and next. It reads and controls the Spotify
+desktop app through the Windows media controls: no login, no token, no network, no Spotify API. Browsers and other
+players are ignored. In the desktop app it gets its own bar on top of the band; in the terminal it is one line
+(`♪ Title – Artist 1:23/3:45 ⏮ ⏯ ⏭`) that shrinks when the window gets narrow. With `extraButtons` the bar adds
+−15 s, +15 s, shuffle and repeat.
+
+- **Commands:** `/spotify` (now playing), `/spotify play|pause|toggle|next|prev`, `/spotify back|forward`,
+  `/spotify shuffle [on|off]`, `/spotify repeat [off|all|track]`, `/spotify size auto|full|compact|mini`,
+  `/spotify on|off`, `/spotify help`
+- **Rights in short:** starts Windows PowerShell 5.1 with two fixed scripts (read the Spotify session; send a control
+  command), with the command passed only as an environment variable; tells clawd-buddy via `$.state` only whether
+  music is playing, no title or artist; reads how wide limit-bars and Clawd are. No files, network, tokens or model
+  calls.
+- **Details:** [mods/spotify](mods/spotify/README.md)
+
 ### cost-ledger
 
-![cost-ledger's /ledger overview (German setting): totals for today, 7 days, 30 days and all time, a 14-day history with bars split by model, costs per project, the most expensive chats and the model calls made by other mods.](assets/cost-ledger.png)
+![cost-ledger's /ledger overview with invented data: totals for today, 7 days, 30 days and all time, the plan and limit line, a 14-day history, costs per project, the most expensive chats, the mod calls included in the amounts and the share of this chat in its project.](assets/cost-ledger.png)
 
 After every answer cost-ledger books what the chat has cost so far (the same figure as `/cost`), the tokens per model
 and the model calls made by other mods. `/ledger` shows today, 7 and 30 days and the total, a history split by model,
-your projects and the most expensive chats, drawn in Claude Code's own style. On a subscription, `/ledger limits` shows
+your projects and the most expensive chats, drawn in Claude Code's own style. `/ledger here` shows what this project
+has cost and this chat's share of it, as a ring in the desktop app. On a subscription, `/ledger limits` shows
 how much API value went into the current 5-hour and weekly window and into your subscription month; set your plan once
 with `/ledger plan`. It also estimates how much of each window you used outside the ledger (claude.ai, the mobile app, chats without the mod).
 
@@ -216,7 +249,7 @@ The path must be absolute, on Windows with a drive letter (e.g. `D:\OneDrive\cos
 paths do not work. Only numbers and each project’s folder name go into the folder, no paths or chat titles. Full guide with paths per system and
 troubleshooting: [Sync between devices](mods/cost-ledger/README.md#sync-between-devices).
 
-- **Commands:** `/ledger`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,
+- **Commands:** `/ledger`, `/ledger here`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,
   `/ledger plan <plan> <day|today> [price]`, `/ledger sync [<folder>|name <name>|off]`, `/ledger reset`, `/ledger help`
 - **Rights in short:** reads the session's cost, usage and limit windows; observes other mods' model calls and passes
   them on unchanged; stores the project name, the git remote as `host/owner/repo`, the first 50 characters of a chat's
@@ -225,10 +258,13 @@ troubleshooting: [Sync between devices](mods/cost-ledger/README.md#sync-between-
 
 ## How they work together
 
-- **One band above the prompt.** clawd-buddy, limit-bars, quick-replies and sidekick all draw into the band above the
-  prompt and share a small layout convention: the limit bars and cache ring sit left of Clawd, the quick-replies pill
-  sits above both, and sidekick's progress box appears there only while it starts a new chat. Each mod also works
-  alone.
+- **One band above the prompt.** clawd-buddy, limit-bars, quick-replies, spotify and sidekick all draw into the band
+  above the prompt and share a small layout convention: the limit bars and cache ring sit left of Clawd, the
+  quick-replies pill sits above both, spotify's bar sits on top in the desktop app (in the terminal it takes a place
+  between the bars and Clawd), and sidekick's boxes appear there only while it has something to show. Each mod also
+  works alone.
+- **Clawd bobs along to your music.** With spotify playing, Clawd nods to the beat when he has time and sometimes
+  puts on headphones. spotify tells him only *that* music is playing, never what.
 - **limit-bars and sidekick both guard against cold sends.** If you use both, turn off limit-bars' warning once with
   `/cache warn off`, so you don't get two dialogs in a row; sidekick's question replaces it.
 - **Clawd acts out what sidekick does.** With both installed, Clawd holds a magnifying glass to the input while
@@ -241,8 +277,10 @@ troubleshooting: [Sync between devices](mods/cost-ledger/README.md#sync-between-
 A mod is code that runs inside Claude Code with your permissions. Every mod here declares what it hooks into and which
 API calls it makes; `claude plugin validate mods/<mod>` prints the exact list, and each README explains in plain
 language what they are for. None of these mods reads or stores login data or tokens, none has network access of its own, and
-none writes anywhere but its own plugin store, with one exception: cost-ledger writes its own file into the folder you choose, but only if you turn on `/ledger sync`. The only mod that looks at your drive is limit-bars, and only with its
-optional storage ring: it reads sizes, never file contents. Found a security problem? See [SECURITY.md](SECURITY.md).
+none writes anywhere but its own plugin store, with one exception: cost-ledger writes its own file into the folder you choose, but only if you turn on `/ledger sync`. Two mods start processes, both only Windows PowerShell with fixed
+scripts: spotify, to read and control the Spotify session of the Windows media controls (no files, no network), and
+limit-bars, only for its optional storage ring. That ring is also the only thing that looks at your drive: it reads
+sizes, never file contents. Found a security problem? See [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
 
@@ -252,6 +290,7 @@ optional storage ring: it reads sizes, never file contents. Found a security pro
 | A mod broke after a Claude Code update | Update the mods (`claude plugin marketplace update fynn-mods`, then `claude plugin update <mod>@fynn-mods`). If that doesn't help, please open an issue. |
 | Two questions in a row before a cold send | limit-bars and sidekick both guard against cold sends. Turn off limit-bars' question with `/cache warn off`. |
 | Everything is in English | Set the `language` option to `de` with `/plugin configure <mod>@fynn-mods`. |
+| spotify shows nothing | It is Windows only and needs the Spotify desktop app (the web player is not recognized). While Spotify is closed it draws nothing; `/spotify` tells you what it sees. `/spotify on` if you turned it off. |
 | The storage ring is missing or empty | It is Windows only and off by default: set `storagePath` (for example `D:\`) in `/config`, and check that `/bars show storage on` is set. If it stays empty, `/disk` shows the error. |
 | cost-ledger shows a Haiku 5.5 chat at about ten times its cost | Claude Code v2.1.291 priced Haiku 5.5 like Haiku 4.5 in `/cost`, and cost-ledger books that value for the chat. Update Claude Code; v2.1.295 prices it correctly. Model calls of the mods use cost-ledger's own prices. |
 
@@ -268,6 +307,8 @@ start on a pull request, please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This is an unofficial hobby project. It is not made, endorsed or supported by Anthropic. clawd-buddy is a fan homage
 to Clawd, the Claude Code mascot; the pixels are drawn by hand. If Anthropic objects to it, it will be removed.
+Spotify is a trademark of Spotify AB; the spotify mod is not made or endorsed by Spotify and only talks to the Spotify
+desktop app through Windows.
 
 ## License
 

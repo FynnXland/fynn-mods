@@ -41,7 +41,7 @@ import {
   cleanSettings,
 } from '../hooks/logic.ts'
 import type { Ledger, Level } from '../hooks/logic.ts'
-import { DEFAULT_HINTS, applyHints, availOf, cleanWartung, doneFromSkill, doneFromText, memoryMeasure, normModel, pickHint, projectKey, rebase, rootFromFiles, unusedSkills } from '../hooks/wartung.ts'
+import { DEFAULT_HINTS, fillOutcome, applyHints, availOf, cleanWartung, doneFromSkill, doneFromText, memoryMeasure, normModel, pickHint, projectKey, rebase, rootFromFiles, unusedSkills } from '../hooks/wartung.ts'
 import type { Measure, Wartung } from '../hooks/wartung.ts'
 import { T, dec, setLang, shortDate, spanText, tokensText, usdText } from '../hooks/i18n.ts'
 import { CHECK, CHECK_NAME, HANDOFF as HANDOFF_ROLE, genitiveDe, modelLabel, modelName } from '../hooks/models.ts'
@@ -287,7 +287,8 @@ type W = {
   model?: string
   skills?: { totalSkills: number; includedSkills: number; tokens: number; skillFrontmatter: { name: string; source: string; tokens: number }[] }
   cmds?: { name: string; description: string; source: string; plugin?: string }[]
-  fillFails?: boolean // $.prompt.fill: Dialog hält die Tasten
+  fillFails?: boolean // $.prompt.fill lehnt ab; den Grund `dialog` streicht die Engine bei einem Hook (types:8649-8653), also ohne Grund
+  copyFails?: boolean // $.ui.copy: nichts kopiert (Ausbau 0.16.0)
   forkDelayMs?: number // $.model.fork braucht so lange („Gut zu wissen“, Nachtrag 0.13.0)
   submitDelayMs?: number // $.prompt.submit eines Plugins löst sich erst so spät (die Runde startet erst, wenn Claude frei ist)
   runFails?: boolean // ein anderer Befehl als /clear scheitert (Nachtrag 0.8.1)
@@ -395,6 +396,11 @@ function world(on: On, o: W = {}) {
     fills.push({ text: e.text, mode: e.mode })
     return { isFilled: true }
   })
+  const copies: { text: string; surface?: string }[] = []
+  on('ui.copy', ($, e) => {
+    copies.push({ text: e.text, ...(e.surface ? { surface: e.surface } : {}) })
+    return { value: o.copyFails ? { isCopied: false, reason: 'no-clipboard' } : { isCopied: true } } as never
+  })
   on('command.run', ($, e) => {
     commands.push(e.command)
     commandArgs.push(`${e.command} ${e.args ?? ''}`.trim())
@@ -466,6 +472,7 @@ function world(on: On, o: W = {}) {
     saved,
     toasts,
     fills,
+    copies,
     commandArgs,
     asks,
     sent,
@@ -1058,7 +1065,8 @@ deTest('Während der Übergabe: blaue Box über dem Prompt mit Sekunden, danach 
   const busy = JSON.stringify(await band.find({ key: 'sidekick-busy' }))
   expect(busy).toContain('sidekick schreibt die Übergabe')
   expect(busy).toContain('3 s')
-  expect(busy).toContain('"marginBottom":1') // Leerzeile unter der Box (Fynn, 2026-10-06)
+  // Leerzeile unter der Box (Fynn, 2026-10-06) nur im Terminal; im Desktop gibt seit 0.15.2 der blaue Streifen den Abstand
+  expect(busy).not.toContain('marginBottom')
   await band.unmount()
   // Übergabe fertig: /clear, senden, Box weg
   await w.clock.advance(3000)
@@ -1106,11 +1114,158 @@ deTest('Übergabe läuft, Band nach band.ts von innen: sidekick-Ebene zuoberst, 
   type N = { props: { key?: string }; children: N[] }
   const tree = (await band.drawn()) as N
   // sidekick rückt auf die Höhe der Pille: direkt über dem Grund
-  expect(tree.children.map((c) => c.props.key)).toEqual(['layer:30:sidekick', 'band-base'])
+  expect(tree.children.map((c) => c.props.key)).toEqual(['layer:50:sidekick', 'band-base'])
   expect(await band.find({ key: 'quick-replies' })).toBeUndefined()
   expect(await band.find({ key: 'limit-bars' })).toBeDefined()
   await band.unmount()
 })
+
+deTest('0.15.1: Übergabe läuft, die Plätze der Grund-Zeile (limit-bars, spotify, Clawd) bleiben neben dem Rest, sidekick liegt zuoberst', async ($, on) => {
+  const w = world(on, { handoffDelayMs: 5000 })
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
+  w.setAnswer('Neuer Chat mit Übergabe')
+  await $.prompt.submit(userPrompt('neues Thema'))
+  await w.clock.advance(1400)
+  const slot = (key: string) => ({ type: 'Box', props: { key, flexShrink: 0 }, children: [key] })
+  w.setBand({ type: 'Box', props: { key: 'band-row', flexDirection: 'row' }, children: [slot('slot:10:limit-bars'), slot('slot:20:spotify'), { type: 'Box', props: { key: 'band-rest', flexGrow: 1 }, children: [{ type: 'engine', ref: 0 }] }, slot('slot:30:clawd-buddy:right')] })
+  const band = await $.ui.mount({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface: 'desktop', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } } as never)
+  type N = { props: { key?: string }; children: N[] }
+  const tree = (await band.drawn()) as N
+  expect(tree.children.map((c) => c.props.key)).toEqual(['layer:50:sidekick', 'band-base'])
+  for (const k of ['slot:10:limit-bars', 'slot:20:spotify', 'slot:30:clawd-buddy:right']) expect(await band.find({ key: k })).toBeDefined()
+  await band.unmount()
+})
+
+// ---------- 0.15.2: über der Spotify-Leiste, blauer Streifen im Desktop (SPEC Nachtrag 0.15.2) ----------
+
+type Tier = 'prepend' | 'append'
+type BN = { type?: string; props?: Record<string, unknown>; children?: BN[] }
+const bkey = (n: unknown) => String((n as BN)?.props?.key ?? '')
+const bkeys = (n: unknown): string[] => (n && typeof n === 'object' ? [bkey(n), ...((n as BN).children ?? []).flatMap(bkeys)] : [])
+const types = (n: unknown): string[] => (n && typeof n === 'object' ? [String((n as BN).type ?? ''), ...((n as BN).children ?? []).flatMap(types)] : [])
+// Wie spotify im Desktop, Stufe full: eigene Ebene 40 über dem Grund (mods/spotify/hooks/register.ts). Partner-Mods laufen in eigener
+// Umgebung (keine Importe aus dem Test), darum eine knappe eigene Fassung des Protokolls (docs/BAND.md). Andere Oberflächen: durchreichen
+const spotifyBar = (tier: Tier) => ({
+  name: `spotify-${tier}`,
+  tier,
+  register(on: On) {
+    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+      const bkey = (n: unknown) => String((n as BN)?.props?.key ?? '')
+      const theirs = (await next(e)) as BN
+      if (e.surface !== 'desktop') return theirs as never
+      const bar: BN = { type: 'Box', props: { key: 'layer:40:spotify', flexDirection: 'column', flexShrink: 0 }, children: [{ type: 'Box', props: { key: 'spotify' }, children: [] }] }
+      const isRoot = bkey(theirs) === 'band'
+      const layers = isRoot ? (theirs.children ?? []).filter((c) => bkey(c).startsWith('layer:')) : []
+      const ground = isRoot
+        ? (theirs.children ?? []).find((c) => bkey(c) === 'band-base')
+        : { type: 'Box', props: { key: 'band-base', flexDirection: 'row' }, children: [{ type: 'Box', props: { flexGrow: 1 }, children: [theirs] }] }
+      const all = [...layers, bar].sort((a, b) => Number(bkey(b).split(':')[1]) - Number(bkey(a).split(':')[1]))
+      return { type: 'Box', props: { key: 'band', flexDirection: 'column' }, children: [...all, ...(ground ? [ground] : [])] } as never
+    })
+  },
+})
+// Spotify außen (prepend) heißt sidekick innen und umgekehrt (docs/raw/en/test.md:362-363; prepend liegt außen: docs/raw/en/admin.md:283)
+const skSide = (tier: Tier) => (tier === 'prepend' ? 'innen' : 'außen')
+const BUSY_BAND = (surface: string) =>
+  ({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface, props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } }) as never
+
+/** Die sidekick-Ebene im Desktop: Inhalt (`key`) und darunter der blaue Streifen als Svg 2400 × 26 in Akzentfarbe. */
+function expectStripe(layer: BN, key: string) {
+  expect(bkey(layer)).toBe('layer:50:sidekick')
+  const inner = (layer.children ?? [])[0]
+  expect((inner.children ?? []).map(bkey)).toEqual([key, 'sidekick-stripe'])
+  // Keine Leerzeile zwischen Anzeige und Streifen (Sicht-Check 0.15.2)
+  expect(JSON.stringify((inner.children ?? [])[0])).not.toContain('marginBottom')
+  const stripe = (inner.children ?? [])[1]
+  expect(stripe.props).toMatchObject({ width: '100%', overflow: 'hidden', flexShrink: 0 })
+  const svg = (stripe.children ?? [])[0]
+  expect(svg.type).toBe('Svg')
+  expect(svg.props).toMatchObject({ alt: 'Trennlinie unter der sidekick-Anzeige', width: 2400, height: 26 })
+  const src = String(svg.props?.source)
+  expect(src).toContain('fill="#6CB6FF"')
+  expect(src).toContain('<rect y="8" width="2400" height="2"')
+  expect(src).toContain('opacity="0.85"')
+}
+
+for (const tier of ['prepend', 'append'] as const) {
+  test(`0.15.2: Übergabe, sidekick ${skSide(tier)}: Box (50) über der Spotify-Leiste (40), Streifen nur im Desktop`, { ...DE, plugins: [spotifyBar(tier)] }, async ($, on) => {
+    setLang('de')
+    const w = world(on, { handoffDelayMs: 5000 })
+    // Vorher: nur die Spotify-Leiste, keine sidekick-Ebene, kein Streifen
+    let band = await $.ui.mount(BUSY_BAND('desktop'))
+    let tree = (await band.drawn()) as BN
+    expect((tree.children ?? []).map(bkey)).toEqual(['layer:40:spotify', 'band-base'])
+    expect(bkeys(tree)).not.toContain('sidekick-stripe')
+    await band.unmount()
+    w.setCtx(90000)
+    w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
+    w.setAnswer('Neuer Chat mit Übergabe')
+    await $.prompt.submit(userPrompt('neues Thema'))
+    await w.clock.advance(1400)
+    band = await $.ui.mount(BUSY_BAND('desktop'))
+    tree = (await band.drawn()) as BN
+    expect((tree.children ?? []).map(bkey)).toEqual(['layer:50:sidekick', 'layer:40:spotify', 'band-base'])
+    expectStripe((tree.children ?? [])[0], 'sidekick-busy')
+    await band.unmount()
+    // Terminal: Box ohne Streifen und ohne Svg (Spotify ist dort ein Platz der Grund-Zeile)
+    band = await $.ui.mount(BUSY_BAND('terminal'))
+    tree = (await band.drawn()) as BN
+    expect((tree.children ?? []).map(bkey)).toEqual(['layer:50:sidekick', 'band-base'])
+    expect(bkeys(tree)).toContain('sidekick-busy')
+    expect(bkeys(tree)).not.toContain('sidekick-stripe')
+    expect(JSON.stringify((tree.children ?? [])[0])).toContain('"marginBottom":1')
+    expect(types(tree)).not.toContain('Svg')
+    await band.unmount()
+    // VS Code und mobile: unverändert, auch während der Übergabe (Review 0.15.2 K1)
+    for (const surface of ['vscode', 'mobile']) {
+      band = await $.ui.mount(BUSY_BAND(surface))
+      tree = (await band.drawn()) as BN
+      expect(bkeys(tree).some((k) => k.startsWith('layer:') || k.startsWith('sidekick'))).toBe(false)
+      await band.unmount()
+    }
+    // Übergabe fertig: Ebene und Streifen weg, die Spotify-Leiste bleibt
+    await w.clock.advance(5000)
+    await flush()
+    expect(w.commands).toEqual(['clear'])
+    band = await $.ui.mount(BUSY_BAND('desktop'))
+    tree = (await band.drawn()) as BN
+    expect((tree.children ?? []).map(bkey)).toEqual(['layer:40:spotify', 'band-base'])
+    expect(bkeys(tree)).not.toContain('sidekick-stripe')
+    await band.unmount()
+  })
+
+  test(`0.15.2: Gut zu wissen, sidekick ${skSide(tier)}: Hinweis (50) über der Spotify-Leiste (40), Streifen nur im Desktop; VS Code und mobile unverändert`, { ...DE, plugins: [spotifyBar(tier)] }, async ($, on) => {
+    setLang('de')
+    world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+    // „Gut zu wissen“ aus: keine sidekick-Ebene, kein Streifen
+    let ui = await $.ui.mount(bandNote('desktop'))
+    let tree = (await ui.drawn()) as BN
+    expect((tree.children ?? []).map(bkey)).toEqual(['layer:40:spotify', 'band-base'])
+    expect(bkeys(tree)).not.toContain('sidekick-stripe')
+    await ui.unmount()
+    await notesOn($)
+    ui = await $.ui.mount(bandNote('desktop'))
+    tree = (await ui.drawn()) as BN
+    expect((tree.children ?? []).map(bkey)).toEqual(['layer:50:sidekick', 'layer:40:spotify', 'band-base'])
+    expectStripe((tree.children ?? [])[0], 'sidekick-note')
+    await ui.unmount()
+    ui = await $.ui.mount(bandNote('terminal'))
+    tree = (await ui.drawn()) as BN
+    expect(bkey((tree.children ?? [])[0])).toBe('layer:50:sidekick')
+    expect(bkeys(tree)).toContain('sidekick-note')
+    expect(bkeys(tree)).not.toContain('sidekick-stripe')
+    expect(JSON.stringify((tree.children ?? [])[0])).toContain('"marginBottom":1')
+    expect(types(tree)).not.toContain('Svg')
+    await ui.unmount()
+    for (const surface of ['vscode', 'mobile']) {
+      ui = await $.ui.mount(bandNote(surface))
+      tree = (await ui.drawn()) as BN
+      expect(bkeys(tree).some((k) => k.startsWith('layer:') || k.startsWith('sidekick'))).toBe(false)
+      await ui.unmount()
+    }
+  })
+}
 
 // ---------- Wartungs-Hinweise (SPEC Nachtrag 0.2.0) ----------
 
@@ -1156,38 +1311,42 @@ deTest('Wartung, Auswahl: skills-cut vor audit; danach audit, solange skills-cut
   expect(h?.line).toBe('Skill-Liste gekürzt: Claude sieht 52 von 61 Skills → /skill-doctor')
   const w = { ...W0, regeln: { 'skills-cut': { hintAt: NOW } } }
   expect(pickHint(m, w, DEFAULT_HINTS, NOW + DAY)?.id).toBe('audit')
-  expect(pickHint(m, w, DEFAULT_HINTS, NOW + 8 * DAY)?.id).toBe('skills-cut') // Ruhezeit 7 Tage
+  expect(pickHint(m, w, DEFAULT_HINTS, NOW + 2 * DAY)?.id).toBe('audit') // Ruhezeit 3 Tage (0.16.0)
+  expect(pickHint(m, w, DEFAULT_HINTS, NOW + 4 * DAY)?.id).toBe('skills-cut')
   expect(pickHint(m, W0, { ...DEFAULT_HINTS, off: ['skills-cut'] }, NOW)?.id).toBe('audit')
   expect(pickHint(m, W0, { ...DEFAULT_HINTS, on: false }, NOW)).toBe(null)
 })
 
-deTest('Wartung, audit: Schwelle 3k, Wachstum ≥ 30 %, anderes Modell, Ruhezeit 30 Tage', async () => {
+deTest('Wartung, audit (0.16.0): Schwelle 2k, Wachstum ≥ 20 %, anderes Modell, Ruhezeit 14 Tage', async () => {
   expect(pickHint(measure({ project: 3400 }), W0, DEFAULT_HINTS, NOW)?.line).toBe('Anweisungen ≈ 3,4k Tokens, prompt-audit lief hier noch nie → /claude-api prompt-audit (eigener Chat)')
-  expect(pickHint(measure({ project: 2900 }), W0, DEFAULT_HINTS, NOW)).toBe(null)
-  expect(pickHint(measure({ project: 2900 }), W0, { ...DEFAULT_HINTS, auditMin: 2000 }, NOW)?.id).toBe('audit')
+  expect(pickHint(measure({ project: 2000 }), W0, DEFAULT_HINTS, NOW)?.id).toBe('audit')
+  expect(pickHint(measure({ project: 1900 }), W0, DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(measure({ project: 2900 }), W0, { ...DEFAULT_HINTS, auditMin: 3000 }, NOW)).toBe(null)
   const done = (o: object = {}) => ({ ...W0, regeln: { audit: { doneAt: ago(40), doneTokens: 3000, doneModel: 'claude-opus-5-5', ...o } } })
-  expect(pickHint(measure({ project: 3900 }), done(), DEFAULT_HINTS, NOW)?.line).toContain('um 30 % gewachsen → /claude-api prompt-audit')
-  expect(pickHint(measure({ project: 3800 }), done(), DEFAULT_HINTS, NOW)).toBe(null) // 27 %
-  expect(pickHint(measure({ project: 3500 }), done(), DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(measure({ project: 3600 }), done(), DEFAULT_HINTS, NOW)?.line).toContain('um 20 % gewachsen → /claude-api prompt-audit')
+  expect(pickHint(measure({ project: 3500 }), done(), DEFAULT_HINTS, NOW)).toBe(null) // 17 %
   expect(pickHint(measure({ project: 3500, model: 'claude-opus-6' }), done({ doneModel: 'claude-opus-5-5' }), DEFAULT_HINTS, NOW)?.line).toBe('Seit dem letzten Audit neues Modell (claude-opus-6) → /claude-api prompt-audit')
   // `[1m]` gilt als dasselbe Modell
   expect(normModel('claude-opus-5-5[1m]')).toBe('claude-opus-5-5')
   expect(pickHint(measure({ project: 3500, model: normModel('Claude-Opus-5-5[1m]') }), done(), DEFAULT_HINTS, NOW)).toBe(null)
-  // Ruhezeit: Audit vor 20 Tagen, gewachsen → noch nicht; Hinweis vor 10 Tagen → nicht; vor 31 Tagen → wieder
-  expect(pickHint(measure({ project: 5000 }), done({ doneAt: ago(20) }), DEFAULT_HINTS, NOW)).toBe(null)
-  expect(pickHint(measure({ project: 3400 }), { ...W0, regeln: { audit: { hintAt: ago(10) } } }, DEFAULT_HINTS, NOW)).toBe(null)
-  expect(pickHint(measure({ project: 3400 }), { ...W0, regeln: { audit: { hintAt: ago(31) } } }, DEFAULT_HINTS, NOW)?.id).toBe('audit')
+  // Ruhezeit 14 Tage: Audit vor 10 Tagen, gewachsen → noch nicht; Hinweis vor 13 Tagen → nicht; vor 15 Tagen → wieder
+  expect(pickHint(measure({ project: 5000 }), done({ doneAt: ago(10) }), DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(measure({ project: 3400 }), { ...W0, regeln: { audit: { hintAt: ago(13) } } }, DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(measure({ project: 3400 }), { ...W0, regeln: { audit: { hintAt: ago(15) } } }, DEFAULT_HINTS, NOW)?.id).toBe('audit')
 })
 
-deTest('Wartung, memory: ab 1k nie aufgeräumt, +40 %, ab 5k mit 7 Tagen Ruhe', async () => {
+deTest('Wartung, memory (0.16.0): ab 500 nie aufgeräumt, +30 %, Ruhe 7 Tage, ab 5k 3 Tage', async () => {
   expect(pickHint(measure({ autoMem: 1600 }), W0, DEFAULT_HINTS, NOW)?.line).toBe('Memory-Index ≈ 1,6k Tokens, nie aufgeräumt → /anthropic-skills:consolidate-memory')
-  expect(pickHint(measure({ autoMem: 900 }), W0, DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(measure({ autoMem: 500 }), W0, DEFAULT_HINTS, NOW)?.id).toBe('memory')
+  expect(pickHint(measure({ autoMem: 499 }), W0, DEFAULT_HINTS, NOW)).toBe(null)
   expect(pickHint(measure({ autoMem: null }), W0, DEFAULT_HINTS, NOW)).toBe(null)
   const done = (days: number, tokens: number) => ({ ...W0, regeln: { memory: { doneAt: ago(days), doneTokens: tokens } } })
   expect(pickHint(measure({ autoMem: 1200 }), done(20, 1000), DEFAULT_HINTS, NOW)).toBe(null)
-  expect(pickHint(measure({ autoMem: 1400 }), done(20, 1000), DEFAULT_HINTS, NOW)?.line).toContain('um 40 % gewachsen')
-  expect(pickHint(measure({ autoMem: 5200 }), done(8, 5000), DEFAULT_HINTS, NOW)?.line).toBe('Memory-Index nahe der Ladegrenze (≈ 5,2k Tokens) → /anthropic-skills:consolidate-memory')
-  expect(pickHint(measure({ autoMem: 5200 }), done(6, 5000), DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(measure({ autoMem: 1300 }), done(20, 1000), DEFAULT_HINTS, NOW)?.line).toContain('um 30 % gewachsen')
+  expect(pickHint(measure({ autoMem: 1300 }), done(6, 1000), DEFAULT_HINTS, NOW)).toBe(null) // Ruhe 7 Tage
+  expect(pickHint(measure({ autoMem: 1300 }), done(8, 1000), DEFAULT_HINTS, NOW)?.id).toBe('memory')
+  expect(pickHint(measure({ autoMem: 5200 }), done(4, 5000), DEFAULT_HINTS, NOW)?.line).toBe('Memory-Index nahe der Ladegrenze (≈ 5,2k Tokens) → /anthropic-skills:consolidate-memory')
+  expect(pickHint(measure({ autoMem: 5200 }), done(2, 5000), DEFAULT_HINTS, NOW)).toBe(null)
   // Ohne den Befehl (CLI-Session, Probe Phase 0) bleibt die Regel stumm
   expect(pickHint(measure({ autoMem: 1600, avail: { ...AVAIL, memory: null } }), W0, DEFAULT_HINTS, NOW)).toBe(null)
 })
@@ -1198,6 +1357,9 @@ deTest('Wartung, skills-heavy erst ab 30 Tagen Zählung; eingebaute Skills zähl
   expect(pickHint({ ...m, unused: 9 }, W0, DEFAULT_HINTS, NOW)).toBe(null)
   expect(pickHint({ ...m, countingDays: 29 }, W0, DEFAULT_HINTS, NOW)).toBe(null)
   expect(pickHint({ ...m, skillsTokens: 3900 }, W0, DEFAULT_HINTS, NOW)).toBe(null)
+  // Ruhezeit 14 Tage (0.16.0)
+  expect(pickHint(m, { ...W0, regeln: { 'skills-heavy': { hintAt: ago(13) } } }, DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(m, { ...W0, regeln: { 'skills-heavy': { hintAt: ago(15) } } }, DEFAULT_HINTS, NOW)?.id).toBe('skills-heavy')
   const listed = [
     { name: 'docx', source: 'syncedSkills' },
     { name: 'pdf', source: 'syncedSkills' },
@@ -1207,9 +1369,12 @@ deTest('Wartung, skills-heavy erst ab 30 Tagen Zählung; eingebaute Skills zähl
   expect(unusedSkills(listed, new Set(['anthropic-skills:pdf', 'remotion-create']))).toBe(1)
 })
 
-deTest('Wartung, init: keine eigene CLAUDE.md und Chats an ≥ 3 Tagen; Datei im Elternordner zählt nicht', async () => {
+deTest('Wartung, init (0.16.0): keine eigene CLAUDE.md und Chats an ≥ 2 Tagen; Datei im Elternordner zählt nicht', async () => {
   expect(pickHint(measure({ hasOwn: false, sessionDays: 3 }), W0, DEFAULT_HINTS, NOW)?.line).toBe('Noch keine CLAUDE.md in diesem Projekt (Chats an 3 Tagen) → /init')
-  expect(pickHint(measure({ hasOwn: false, sessionDays: 2 }), W0, DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(measure({ hasOwn: false, sessionDays: 2 }), W0, DEFAULT_HINTS, NOW)?.line).toBe('Noch keine CLAUDE.md in diesem Projekt (Chats an 2 Tagen) → /init')
+  expect(pickHint(measure({ hasOwn: false, sessionDays: 1 }), W0, DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(measure({ hasOwn: false, sessionDays: 2 }), { ...W0, regeln: { init: { hintAt: ago(13) } } }, DEFAULT_HINTS, NOW)).toBe(null)
+  expect(pickHint(measure({ hasOwn: false, sessionDays: 2 }), { ...W0, regeln: { init: { hintAt: ago(15) } } }, DEFAULT_HINTS, NOW)?.id).toBe('init')
   const parent = { path: 'C:\\Proj\\CLAUDE.md', type: 'Project', tokens: 200 }
   expect(memoryMeasure([parent], PROJ)).toEqual({ project: 200, hasOwn: false, autoMem: null })
   const own = memoryMeasure([parent, projectFile(2000), { path: 'D:\\Home\\f\\.claude\\projects\\x\\memory\\MEMORY.md', type: 'AutoMem', tokens: 493 }, { path: 'C:\\x\\memory\\topic.md', type: 'AutoMem', tokens: 99 }], PROJ)
@@ -1373,7 +1538,7 @@ deTest('/sidekick hints: status, Regel aus, done, audit-min, unbekannt', async (
   const status = String((await $.command.run({ command: 'sidekick', args: 'hints status' }) as { text?: string }).text)
   expect(status).toContain('**Wartungs-Hinweise** an')
   expect(status).toContain('prompt-audit')
-  expect(status).toContain('3,4k (ab 3,0k)')
+  expect(status).toContain('3,4k (ab 2,0k)')
   await $.command.run({ command: 'sidekick', args: 'hints audit off' })
   expect((w.saved.get('hints') as { off: string[] }).off).toEqual(['audit'])
   await $.command.run({ command: 'sidekick', args: 'hints audit-min 2k' })
@@ -1628,7 +1793,7 @@ test('i18n: Wartungs-Zeile und hints-Status auf Englisch', async ($, on) => {
   const status = String(((await $.command.run({ command: 'sidekick', args: 'hints status' })) as { text?: string }).text)
   expect(status).toContain('**Maintenance hints** on')
   expect(status).toContain('| Rule | Measured | done | shown | next possible |')
-  expect(status).toContain('3.4k (from 3.0k)')
+  expect(status).toContain('3.4k (from 2.0k)')
   const err = String(((await $.command.run({ command: 'sidekick', args: 'hints done nope' })) as { text?: string }).text)
   expect(err).toContain('Unknown rule "nope". Possible:')
   void w
@@ -2157,37 +2322,42 @@ async function mountLine($: Engine, text: string, requestId: string, surface = '
   return $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId, surface, props: { text, origin: { kind: 'composer' }, isExpanded: true } } as never)
 }
 
+// Seit 0.16.0 hat nur noch der Skill-Hinweis der Prüfung „ausführen“; die Wartungszeile fügt ein (Tests unter „0.16.0“)
+function skillHint(w: ReturnType<typeof world>, zeile = 'Ein Skill prüft Mods gegen die Doku.') {
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'skill', zeile, skill: 'mod-review' }), usage: MODEL_USAGE })
+}
+
 deTest('0.8.1: der Button führt den Befehl direkt aus, einmal; danach steht „ausgeführt“ (Desktop und Terminal)', async ($, on) => {
-  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
-  await $.prompt.submit(userPrompt('los gehts'))
-  const ui = await mountLine($, 'los gehts', 'b1', 'desktop')
-  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('ausführen')
+  const w = world(on)
+  skillHint(w)
+  await $.prompt.submit(userPrompt('prüf mal den mod bitte'))
+  const ui = await mountLine($, 'prüf mal den mod bitte', 'b1', 'desktop')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('/mod-review ausführen')
   await ui.press({ key: 'sidekick-use' })
   await flush()
   await ui.unmount()
-  expect(w.commandArgs).toContain('claude-api prompt-audit')
+  expect(w.commandArgs).toContain('mod-review')
   expect(w.fills).toEqual([])
-  await flush(120)
-  expect(wStore(w).regeln.audit?.doneAt).toBe(NOW)
-  expect(today(w.ledger()).wartung.audit?.angenommen).toBe(1)
   for (const surface of ['desktop', 'terminal']) {
-    const again = await mountLine($, 'los gehts', 'b1', surface)
+    const again = await mountLine($, 'prüf mal den mod bitte', 'b1', surface)
     expect(JSON.stringify(await again.find({ key: 'sidekick-line' }))).toContain('✓ ausgeführt')
     expect(await again.find({ key: 'sidekick-use' })).toBeFalsy()
     await again.unmount()
   }
-  expect(w.commandArgs.filter((c) => c.startsWith('claude-api')).length).toBe(1)
+  expect(w.commandArgs.filter((c) => c.startsWith('mod-review')).length).toBe(1)
 })
 
 deTest('0.8.1: im Terminal hat die Zeile denselben Button', async ($, on) => {
-  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
-  await $.prompt.submit(userPrompt('los gehts'))
-  const ui = await mountLine($, 'los gehts', 'b1t', 'terminal')
+  const w = world(on)
+  skillHint(w)
+  await $.prompt.submit(userPrompt('prüf mal den mod bitte'))
+  const ui = await mountLine($, 'prüf mal den mod bitte', 'b1t', 'terminal')
   expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('ausführen')
   await ui.press({ key: 'sidekick-use' })
   await flush()
   await ui.unmount()
-  expect(w.commandArgs).toContain('claude-api prompt-audit')
+  expect(w.commandArgs).toContain('mod-review')
 })
 
 deTest('0.7.0: Skill-Hinweis der Prüfung bekommt den Button (führt aus); Zeile ohne Befehl keinen', async ($, on) => {
@@ -2212,27 +2382,29 @@ deTest('0.7.0: Skill-Hinweis der Prüfung bekommt den Button (führt aus); Zeile
 })
 
 deTest('0.8.1 Fehlerpfade: abgelehnter Befehl kommt ins Eingabefeld; Button bleibt für einen neuen Versuch', async ($, on) => {
-  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, runFails: true })
-  await $.prompt.submit(userPrompt('los gehts'))
-  const ui = await mountLine($, 'los gehts', 'b6')
+  const w = world(on, { runFails: true })
+  skillHint(w)
+  await $.prompt.submit(userPrompt('prüf mal den mod bitte'))
+  const ui = await mountLine($, 'prüf mal den mod bitte', 'b6')
   await ui.press({ key: 'sidekick-use' })
   await flush()
   await ui.unmount()
-  expect(w.fills).toEqual([{ text: '/claude-api prompt-audit', mode: 'insert' }])
-  expect(w.toasts.some((x) => x.includes('/claude-api prompt-audit ließ sich nicht starten') && x.includes('Enter schickt ihn ab'))).toBe(true)
-  const again = await mountLine($, 'los gehts', 'b6')
+  expect(w.fills).toEqual([{ text: '/mod-review', mode: 'insert' }])
+  expect(w.toasts.some((x) => x.includes('/mod-review ließ sich nicht starten') && x.includes('Enter schickt ihn ab'))).toBe(true)
+  const again = await mountLine($, 'prüf mal den mod bitte', 'b6')
   expect(await again.find({ key: 'sidekick-use' })).toBeTruthy()
   await again.unmount()
 })
 
 deTest('0.8.1 Fehlerpfad: Befehl abgelehnt und Eingabefeld unter einem Dialog → Toast mit dem Befehl', async ($, on) => {
-  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, runFails: true, fillFails: true })
-  await $.prompt.submit(userPrompt('los gehts'))
-  const ui = await mountLine($, 'los gehts', 'b6b')
+  const w = world(on, { runFails: true, fillFails: true })
+  skillHint(w)
+  await $.prompt.submit(userPrompt('prüf mal den mod bitte'))
+  const ui = await mountLine($, 'prüf mal den mod bitte', 'b6b')
   await ui.press({ key: 'sidekick-use' })
   await flush()
   await ui.unmount()
-  expect(w.toasts.some((x) => x.includes('/claude-api prompt-audit ließ sich nicht starten (') && !x.includes('Enter'))).toBe(true)
+  expect(w.toasts.some((x) => x.includes('/mod-review ließ sich nicht starten (') && !x.includes('Enter'))).toBe(true)
 })
 
 deTest('0.7.0 Review: Skill bei anderer Art gibt keinen Button; Doppelpunkt im Namen', async ($, on) => {
@@ -2334,10 +2506,11 @@ deTest('0.8.1: Zeile mit /uebergabe (Art sonstiges) bekommt den Button; Klick st
 
 test('0.8.1 en: run button and failure text in English', async ($, on) => {
   setLang('en')
-  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, runFails: true })
-  await $.prompt.submit(userPrompt('lets go now'))
-  const ui = await mountLine($, 'lets go now', 'e1')
-  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Run /claude-api prompt-audit')
+  const w = world(on, { runFails: true })
+  skillHint(w, 'A skill checks mods against the docs.')
+  await $.prompt.submit(userPrompt('please check the mod now'))
+  const ui = await mountLine($, 'please check the mod now', 'e1')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Run /mod-review')
   await ui.press({ key: 'sidekick-use' })
   await flush()
   await ui.unmount()
@@ -2373,13 +2546,14 @@ deTest('0.8.1 Review: eingebaute Befehle außer Wartung, MCP, Pfade und Wörter 
 })
 
 deTest('0.8.1 Review: Doppelklick auf „ausführen“ startet den Befehl einmal', async ($, on) => {
-  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
-  await $.prompt.submit(userPrompt('los gehts'))
-  const ui = await mountLine($, 'los gehts', 'r9')
+  const w = world(on)
+  skillHint(w)
+  await $.prompt.submit(userPrompt('prüf mal den mod bitte'))
+  const ui = await mountLine($, 'prüf mal den mod bitte', 'r9')
   await Promise.all([ui.press({ key: 'sidekick-use' }), ui.press({ key: 'sidekick-use' })])
   await flush()
   await ui.unmount()
-  expect(w.commandArgs.filter((c) => c.startsWith('claude-api')).length).toBe(1)
+  expect(w.commandArgs.filter((c) => c.startsWith('mod-review')).length).toBe(1)
 })
 
 // ---------- 0.10.0: Stufen, Statusanzeige (seit 0.15.0 nur off, cache, guide) ----------
@@ -2830,7 +3004,7 @@ deTest('0.12.0 Wartung: offener Hinweis übersteht /reload-plugins (Session aus 
   await $.prompt.submit(userPrompt('nach dem Neuladen'))
   const line = await lineUnder($, 'nach dem Neuladen', 'r1')
   expect(line).toContain('prompt-audit lief hier noch nie')
-  expect(line).toContain('ausführen')
+  expect(line).toContain('Kopieren') // Desktop, Ausbau 0.16.0
   await flush()
   expect(today(w.ledger()).wartung.audit?.gezeigt).toBe(1)
   expect(wStore(w).regeln.audit?.hintAt).toBe(NOW)
@@ -3702,4 +3876,245 @@ test('0.14.0 Hilfe (en): Funktionen und Einstellungen in Englisch, Desktop-Fußz
   expect(await ui.find({ type: 'Text', text: 'Turn the mod off: + → Plugins → Manage plugins · Change settings: /plugin configure sidekick in a terminal' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'CONTROLS' })).toBeDefined()
   await ui.unmount()
+})
+
+// ---------- Ausbau 0.16.0: Wartungszeile einfügen statt ausführen, „?“, öfter ----------
+
+// Pfad zusammengesetzt: die Export-Prüfung (scripts/export-public.ps1) verbietet Windows-Benutzerpfade auch in Tests
+const MEMORY_FILE = (tokens: number) => ({ path: ['C:', 'Users', 'f', '.claude', 'projects', 'x', 'memory', 'MEMORY.md'].join('\\'), type: 'AutoMem', tokens })
+
+deTest('0.16.0: Wartungszeile im Terminal: „In Eingabefeld“ füllt das leere Feld, sendet nichts, erledigt nichts; abgeschickt → angenommen', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'i1', 'terminal')
+  const line = JSON.stringify(await ui.find({ key: 'sidekick-line' }))
+  expect(line).toContain('In Eingabefeld')
+  expect(line).not.toContain('ausführen')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.fills).toEqual([{ text: '/claude-api prompt-audit', mode: 'append' }])
+  expect(w.commandArgs.some((c) => c.startsWith('claude-api'))).toBe(false)
+  expect(w.sent).toEqual(['los gehts'])
+  await flush(120)
+  expect(wStore(w).regeln.audit?.doneAt).toBe(undefined)
+  const again = await mountLine($, 'los gehts', 'i1', 'terminal')
+  expect(JSON.stringify(await again.find({ key: 'sidekick-line' }))).toContain('✓ im Eingabefeld')
+  expect(await again.find({ key: 'sidekick-use' })).toBeFalsy()
+  await again.unmount()
+  // Fynn schickt den eingefügten Befehl selbst ab
+  await w.clock.advance(2 * MIN)
+  await $.prompt.submit(userPrompt('/claude-api prompt-audit'))
+  await flush(120)
+  expect(wStore(w).regeln.audit?.doneAt).toBe(NOW + 2 * MIN)
+  expect(today(w.ledger()).wartung.audit?.angenommen).toBe(1)
+})
+
+deTest('0.16.0: Eingabefeld nicht leer → nichts eingefügt, Toast mit dem Befehl, Button bleibt', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  w.setPromptText('halb getippt')
+  const ui = await mountLine($, 'los gehts', 'i2', 'terminal')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.fills).toEqual([])
+  expect(w.copies).toEqual([])
+  expect(w.toasts).toContain('Eingabefeld ist nicht leer. Befehl: /claude-api prompt-audit')
+  const again = await mountLine($, 'los gehts', 'i2', 'terminal')
+  expect(await again.find({ key: 'sidekick-use' })).toBeTruthy()
+  await again.unmount()
+})
+
+deTest('0.16.0: Desktop: „Kopieren“; nimmt das Feld den Text nicht, kommt er in die Zwischenablage', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, fillFails: true })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'i3', 'desktop')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Kopieren')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.copies.map((c) => c.text)).toEqual(['/claude-api prompt-audit'])
+  expect(w.toasts).toContain('/claude-api prompt-audit kopiert. Mit Strg+V ins Eingabefeld einfügen und abschicken.')
+  // Kopieren lässt den Button stehen (ein zweites Kopieren schadet nicht)
+  const again = await mountLine($, 'los gehts', 'i3', 'desktop')
+  expect(await again.find({ key: 'sidekick-use' })).toBeTruthy()
+  await again.unmount()
+  expect(wStore(w).regeln.audit?.doneAt).toBe(undefined)
+})
+
+deTest('0.16.0: Desktop, Feld und Zwischenablage nehmen nichts → Toast mit dem Befehl zum Abtippen', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, fillFails: true, copyFails: true })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'i4', 'desktop')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.toasts).toContain('Einfügen und Kopieren gingen hier nicht. Befehl zum Abtippen: /claude-api prompt-audit')
+})
+
+deTest('0.16.0: Desktop mit Eingabefeld (falls die App es erlaubt): eingefügt statt kopiert', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'i5', 'desktop')
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  await ui.unmount()
+  expect(w.fills.length).toBe(1)
+  expect(w.copies).toEqual([])
+})
+
+deTest('0.16.0: Doppelklick auf „In Eingabefeld“ fügt einmal ein', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'i6', 'terminal')
+  await Promise.all([ui.press({ key: 'sidekick-use' }), ui.press({ key: 'sidekick-use' })])
+  await flush()
+  await ui.unmount()
+  expect(w.fills.length).toBe(1)
+})
+
+deTest('0.16.0: „?“ im Desktop klappt die Erklärung mit den Zahlen auf und wieder zu', async ($, on) => {
+  world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  let ui = await mountLine($, 'los gehts', 'q1', 'desktop')
+  expect(await ui.find({ key: 'sidekick-why' })).toBeTruthy()
+  expect(await ui.find({ key: 'sidekick-why-text' })).toBeFalsy()
+  await ui.press({ key: 'sidekick-why' })
+  await flush()
+  await ui.unmount()
+  ui = await mountLine($, 'los gehts', 'q1', 'desktop')
+  const why = JSON.stringify(await ui.find({ key: 'sidekick-why-text' }))
+  expect(why).toContain('/claude-api prompt-audit prüft CLAUDE.md, Regeln, Skills und Befehle')
+  expect(why).toContain('Jetzt, weil deine Anweisungen ≈ 3,4k Tokens haben und prompt-audit hier noch nie lief.')
+  expect(why).toContain('Ein Durchlauf auf dem Hauptmodell')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-why' }))).toContain('? zu')
+  await ui.press({ key: 'sidekick-why' })
+  await flush()
+  await ui.unmount()
+  ui = await mountLine($, 'los gehts', 'q1', 'desktop')
+  expect(await ui.find({ key: 'sidekick-why-text' })).toBeFalsy()
+  await ui.unmount()
+})
+
+deTest('0.16.0: Terminal zeigt die Erklärung immer, ohne „?“; andere Oberflächen als Text', async ($, on) => {
+  world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+  await $.prompt.submit(userPrompt('los gehts'))
+  const ui = await mountLine($, 'los gehts', 'q2', 'terminal')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-why-text' }))).toContain('prompt-audit hier noch nie lief')
+  expect(await ui.find({ key: 'sidekick-why' })).toBeFalsy()
+  await ui.unmount()
+  const vs = await mountLine($, 'los gehts', 'q2', 'vscode')
+  expect(JSON.stringify(await vs.drawn())).toContain('prompt-audit hier noch nie lief')
+  await vs.unmount()
+})
+
+deTest('0.16.0: Erklärung je Regel mit den Zahlen der Messung', async () => {
+  const why = (m: Partial<Measure>, w: Wartung = W0) => pickHint(measure(m), w, DEFAULT_HINTS, NOW)?.why ?? ''
+  expect(why({ skillsTotal: 61, skillsIncluded: 52 })).toContain('Claude sieht nur 52 von 61 Skills')
+  expect(why({ project: 3400 })).toContain('≈ 3,4k Tokens haben und prompt-audit hier noch nie lief')
+  const done = { ...W0, regeln: { audit: { doneAt: ago(20), doneTokens: 3000, doneModel: 'claude-opus-5-5' } } }
+  expect(why({ project: 3900 }, done)).toContain(`seit dem Audit vom ${shortDate(ago(20))} um 30 % auf ≈ 3,9k Tokens gewachsen`)
+  expect(why({ project: 3100, model: 'claude-opus-6' }, done)).toContain('ein neues Modell läuft (claude-opus-6)')
+  expect(why({ autoMem: 1600 })).toContain('MEMORY.md ≈ 1,6k Tokens hat und nie aufgeräumt wurde')
+  expect(why({ autoMem: 5200 })).toContain('nahe der Ladegrenze')
+  expect(why({ skillsTokens: 4800, unused: 18, countingDays: 30 })).toContain('18 Skills seit 30 Tagen ungenutzt sind und die Liste ≈ 4,8k Tokens')
+  expect(why({ hasOwn: false, sessionDays: 2 })).toContain('du an 2 Tagen Chats hattest')
+})
+
+test('0.16.0 en: insert button, copy toast and explanation in English', async ($, on) => {
+  setLang('en')
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL, fillFails: true })
+  await $.prompt.submit(userPrompt('first real message here'))
+  const term = await mountLine($, 'first real message here', 'en1', 'terminal')
+  expect(JSON.stringify(await term.find({ key: 'sidekick-line' }))).toContain('Insert in prompt')
+  expect(JSON.stringify(await term.find({ key: 'sidekick-why-text' }))).toContain('Now, because your instructions are ≈ 3.4k tokens and prompt-audit never ran here.')
+  await term.unmount()
+  const desk = await mountLine($, 'first real message here', 'en1', 'desktop')
+  expect(JSON.stringify(await desk.find({ key: 'sidekick-line' }))).toContain('Copy')
+  await desk.press({ key: 'sidekick-use' })
+  await flush()
+  await desk.unmount()
+  expect(w.toasts).toContain('Copied /claude-api prompt-audit. Paste it into the prompt with Ctrl+V and send it.')
+})
+
+deTest('0.16.0: /doctor prompt-audit (Weg der Doku) erledigt den Audit', async () => {
+  expect(doneFromText('/doctor prompt-audit')).toEqual(['audit'])
+  expect(doneFromText('/doctor')).toEqual([])
+})
+
+deTest('0.16.0: zweite Messung nach einem Commit: zweiter Hinweis (memory), danach keiner mehr', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400), MEMORY_FILE(1600)], cmds: ALL_CMDS })
+  await $.prompt.submit(userPrompt('erste Nachricht'))
+  expect(await lineUnder($, 'erste Nachricht', 's1')).toContain('prompt-audit lief hier noch nie')
+  await w.clock.advance(5 * MIN)
+  await $.prompt.submit(userPrompt('zweite Nachricht'))
+  expect(await lineUnder($, 'zweite Nachricht', 's2')).not.toContain('sidekick')
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m x' } as never)
+  await flush()
+  await w.clock.advance(5 * MIN)
+  await $.prompt.submit(userPrompt('dritte Nachricht'))
+  expect(await lineUnder($, 'dritte Nachricht', 's3')).toContain('Memory-Index ≈ 1,6k Tokens, nie aufgeräumt')
+  await flush()
+  expect(today(w.ledger()).wartung.memory?.gezeigt).toBe(1)
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m y' } as never)
+  await flush()
+  await w.clock.advance(5 * MIN)
+  await $.prompt.submit(userPrompt('vierte Nachricht'))
+  expect(await lineUnder($, 'vierte Nachricht', 's4')).not.toContain('sidekick')
+})
+
+deTest('0.16.0: zweite Messung nach 60 min ohne eigene Nachricht; nach 59 min nicht', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400), MEMORY_FILE(1600)], cmds: ALL_CMDS })
+  await $.prompt.submit(userPrompt('erste Nachricht'))
+  await w.clock.advance(59 * MIN)
+  await $.prompt.submit(userPrompt('zweite Nachricht'))
+  expect(await lineUnder($, 'zweite Nachricht', 'p2')).not.toContain('sidekick')
+  await w.clock.advance(60 * MIN)
+  await $.prompt.submit(userPrompt('dritte Nachricht'))
+  expect(await lineUnder($, 'dritte Nachricht', 'p3')).toContain('Memory-Index')
+})
+
+deTest('0.16.0: alte Sitzung ohne Regel an der Zeile (vor 0.16.0) behält „ausführen“', async ($, on) => {
+  const saved = new Map<string, unknown>([['sitzung:sess-1', { own: 1, wartung: true, hints: [{ id: 'alt1', line: 'Alt → /init', cmd: '/init' }] }]])
+  world(on, { saved, cmds: ALL_CMDS })
+  await $.prompt.submit(userPrompt('nach dem Update'))
+  const ui = await mountLine($, 'Alt', 'alt1', 'desktop')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('/init ausführen')
+  await ui.unmount()
+})
+
+deTest('0.16.0 Review S1/K1: nach fill – allein im Feld, angehängt an Getipptes, Dialog, kein Eingabefeld', async () => {
+  const cmd = '/claude-api prompt-audit'
+  expect(fillOutcome({ isFilled: true, text: cmd }, cmd)).toBe('filled')
+  expect(fillOutcome({ isFilled: true, text: '' }, cmd)).toBe('filled') // Feld nicht lesbar
+  expect(fillOutcome({ isFilled: true }, cmd)).toBe('filled')
+  expect(fillOutcome({ isFilled: true, text: 'abc' + cmd }, cmd)).toBe('mixed')
+  expect(fillOutcome({ isFilled: false, refusal: 'dialog', text: '' }, cmd)).toBe('dialog')
+  expect(fillOutcome({ isFilled: false, refusal: 'no_composer', text: '' }, cmd)).toBe('copy')
+  expect(fillOutcome({ isFilled: false, text: '' }, cmd)).toBe('copy')
+  expect(fillOutcome(null, cmd)).toBe('copy')
+})
+
+deTest('0.16.0 Review S2: solange ein Hinweis offen ist, keine zweite Messung, auch nach einem Commit', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400), MEMORY_FILE(1600)], cmds: ALL_CMDS })
+  // Nachricht 1: die Prüfung hat eine eigene Zeile, audit wartet als offener Hinweis
+  skillHint(w)
+  await $.prompt.submit(userPrompt('prüf mal den mod bitte'))
+  expect(await lineUnder($, 'prüf mal den mod bitte', 'o1')).not.toContain('prompt-audit')
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m x' } as never)
+  await flush()
+  w.setCtx(1000)
+  await w.clock.advance(5 * MIN)
+  // Nachricht 2: der offene audit-Hinweis kommt, keine zweite Messung (memory nicht)
+  await $.prompt.submit(userPrompt('zweite Nachricht'))
+  const line = await lineUnder($, 'zweite Nachricht', 'o2')
+  expect(line).toContain('prompt-audit lief hier noch nie')
+  expect(line).not.toContain('Memory-Index')
+  await flush()
+  expect(today(w.ledger()).wartung.memory).toBe(undefined)
+  // Nachricht 3: jetzt darf die zweite Messung laufen (Commit seit der ersten Messung)
+  await w.clock.advance(5 * MIN)
+  await $.prompt.submit(userPrompt('dritte Nachricht'))
+  expect(await lineUnder($, 'dritte Nachricht', 'o3')).toContain('Memory-Index')
 })

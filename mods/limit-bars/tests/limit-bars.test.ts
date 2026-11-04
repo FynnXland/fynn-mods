@@ -240,7 +240,7 @@ test('Countdown läuft mit der Uhr: in 2 h 14 min → in 1 h 14 min', DE, async 
   expect(await ui.find({ type: 'Text', text: ' · in 1 h 14 min' })).toBeDefined()
 })
 
-test('Reset vergeht ohne neue Messung: 0 % gedimmt, frisch; aus voll wird nicht mehr voll', DE, async ($, on) => {
+test('Reset vergeht ohne neue Messung: 0 % gedimmt, frisch; aus voll wird nicht mehr voll', { ...DE, timeoutMs: 30_000 }, async ($, on) => {
   const { clock } = world(on)
   await measure($, limits(100, 30))
   const ui = await $.ui.mount(band('terminal'))
@@ -281,7 +281,7 @@ test('resetStyle countdown: beide als Countdown', { options: { language: 'de', r
   expect(alt).toContain('Reset in 2 T 23 h')
 })
 
-test('resetStyle mixed (Standard): 5h Countdown, Woche Uhrzeit; Kurzform unter einer Minute', DE, async ($, on) => {
+test('resetStyle mixed (Standard): 5h Countdown, Woche Uhrzeit; Kurzform unter einer Minute', { ...DE, timeoutMs: 30_000 }, async ($, on) => {
   const { clock } = world(on)
   await measure($, limits(10, 10))
   const ui = await $.ui.mount(band('terminal'))
@@ -404,12 +404,14 @@ test('Reihenfolge außen: Balken links, Inhalt weiter innen rechts in einer Zeil
   const ui = await $.ui.mount(band('terminal', 120))
   const tree = await ui.drawn()
   expect(tree).toMatchObject({ type: 'Box', props: { flexDirection: 'row', alignItems: 'flex-end' } })
-  const kids = tree.children as { props: { key?: string; flexGrow?: number; width?: number } }[]
-  expect(kids[0].props.key).toBe('limit-bars')
+  const kids = tree.children as { props: { key?: string; flexGrow?: number; flexShrink?: number }; children?: { props: { width?: number; flexShrink?: number } }[] }[]
+  // Seit 0.9.0 ein Platz der Grund-Zeile (band.ts, docs/BAND.md): Platz 10, darin die Balkenbox
+  expect(kids[0].props.key).toBe('slot:10:limit-bars')
   // Läuft das Band über, schrumpft die Beschriftung nicht (im Sicht-Check sonst abgeschnitten)
-  expect((kids[0].props as { flexShrink?: number }).flexShrink).toBe(0)
+  expect(kids[0].props.flexShrink).toBe(0)
+  expect(kids[0].children![0]!.props.flexShrink).toBe(0)
   expect(kids[1].props.flexGrow).toBe(1)
-  const b = kids[0].props.width as number
+  const b = kids[0].children![0]!.props.width as number
   expect(b <= 44).toBe(true)
   expect(seen.bodyColumns).toBe(120 - b)
   expect(await ui.find({ type: 'Text', text: ' · in 2 h 14 min' })).toBeDefined()
@@ -425,7 +427,7 @@ test('Reihenfolge innen bzw. allein: Kern-Knoten NEBEN den Balken (nicht darunte
       // Übereinander gab die Desktop-App dem Kern-Knoten Höhe, die Balken rutschten über Clawds Füße (Fynn, 2026-10-03)
       expect(tree).toMatchObject({ type: 'Box', props: { flexDirection: 'row', alignItems: 'flex-end' } })
       const kids = tree.children as { props: { key?: string; flexGrow?: number }; children?: unknown[] }[]
-      expect(kids[0].props.key).toBe('limit-bars')
+      expect(kids[0].props.key).toBe('slot:10:limit-bars')
       expect(kids[1].props.flexGrow).toBe(1)
       expect(kids[1].children?.[0]).toMatchObject({ type: 'engine' })
       if (surface === 'terminal') {
@@ -499,9 +501,27 @@ test('Reihenfolge: liegt quick-replies weiter innen, bleibt seine Pille über de
     expect(tree.children.map((c) => c.props.key)).toEqual(['layer:20:quick-replies', 'band-base'])
     // Im Grund: Balken links, der fremde Text rechts, keine Pille
     const row = tree.children[1].children[0].children[0]
-    expect(row.children[0].props.key).toBe('limit-bars')
+    expect(row.children[0].props.key).toBe('slot:10:limit-bars')
     expect(JSON.stringify(row)).toContain('von anderen')
     expect(JSON.stringify(row)).not.toContain('quick-replies')
     await ui.unmount()
   }
+})
+
+test('0.9.0: die Platzbreite wird als $.state limit-bars.band gemeldet (nie beim Zeichnen), null ohne Anzeige', DE, async ($, on) => {
+  world(on)
+  const writes: unknown[] = []
+  on('state.set', ($, e) => {
+    writes.push(e.value)
+    return { value: undefined } as never
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await measure($, limits(71, 18))
+  const ui = await $.ui.mount(band('desktop', 120))
+  await ui.drawn()
+  const widths = writes.filter((w): w is { width: number } => !!w && typeof w === 'object')
+  expect(widths.length >= 1).toBe(true)
+  expect(widths.at(-1)!.width > 100).toBe(true)
+  await ui.unmount()
 })

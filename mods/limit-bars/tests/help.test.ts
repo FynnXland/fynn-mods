@@ -1,7 +1,7 @@
 // limit-bars 0.7.0: /bars help als gezeichnete Tabelle (docs/HELP-SPEC.md §6), Verweis der Nebenbefehle, Vollständigkeit.
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { DISK_WORDS, HANDOFF_CONTINUE_WORDS, HANDOFF_SHOW_WORDS, HELP_WORDS, KEEP_OFF_WORDS, ON_OFF_WORDS, PART_WORDS, RESET_WORDS, SHOW_WORDS, STATUS_WORDS, parseBars } from '../hooks/display.ts'
+import { DISK_WORDS, HANDOFF_CONTINUE_WORDS, HANDOFF_SHOW_WORDS, HELP_WORDS, KEEP_OFF_WORDS, ON_OFF_WORDS, PART_WORDS, RESET_WORDS, SHOW_WORDS, STATUS_WORDS, STYLE_VALUE_WORDS, STYLE_WORDS, parseBars } from '../hooks/display.ts'
 import { CACHE_WORDS, DEFAULT_SETTINGS } from '../hooks/cache.ts'
 import { stateText } from '../hooks/help.ts'
 import { HELP_ACCENT, barsHelpData } from '../hooks/helpdata.ts'
@@ -78,10 +78,10 @@ test('0.7.0 Hilfe: help, ?, HELP und Leerzeichen liefern Markdown mit Kennung (e
   world(on)
   for (const word of ['help', '?', 'HELP', '  help  ']) {
     const text = await bars($, word)
-    expect(text, word).toMatch(/^\*\*limit-bars · Help\*\* · #[0-9a-z]{5,}\n\nUsage limits as bars above the prompt/)
+    expect(text, word).toMatch(/^\*\*limit-bars · Help\*\* · #[0-9a-z]{5,}\n\nUsage limits as bars or rings above the prompt/)
     expect(text.length < 10_000, word).toBe(true)
   }
-  expect(await bars($, 'help me')).toBe(T.en.unknownArg('help me', '[show 5h|week|cache|storage on|off] [reset] [help]'))
+  expect(await bars($, 'help me')).toBe(T.en.unknownArg('help me', '[show 5h|week|cache|storage on|off] [style bar|ring] [reset] [help]'))
   expect(await bars($, 'help me')).toContain('→ `/bars help`')
   expect(parseBars('?')).toEqual({ kind: 'help' })
   expect(parseBars('show help')).toEqual({ kind: 'bad' })
@@ -99,8 +99,8 @@ test('0.7.0 Hilfe (de): Markdown mit allen fünf Befehlen, Skill, Funktionen, Ei
   expect(lines[lines.length - 2]).toBe('')
   for (const cmd of ['/bars', '/bars show 5h|week|cache|storage on|off', '/bars reset', '/bars help', '/cache', '/cache ttl 5|60|auto', '/cache warn on|off', '/cache hints on|off', '/cache big <n>', '/handoff', '/handoff show', '/handoff continue', '/keepwarm [stunden]', '/keepwarm off', '/disk [refresh]', 'Skill uebergabe'])
     expect(lines.some((l) => l.startsWith(`- \`${cmd}\`: `)), cmd).toBe(true)
-  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* 5-Stunden-Balken ● an · per Einstellung \(\/bars 5h off\) · Wochen-Balken ● an · per Einstellung \(\/bars week off\) · Cache-Ring ● an · per Einstellung \(\/bars cache off\) · Speicher-Ring ○ ohne storagePath \(Einstellung storagePath\) · Rückfrage vor kaltem Senden ● an \(\/cache warn off\) · Hinweis vor Ablauf ● an \(\/cache hints off\) · Schwelle „groß“ 150k \(Standard\) \(\/cache big <n>\) · Cache-Dauer auto · 60 min \(Standard\) \(\/cache ttl 5\|60\|auto\) · Warmhalten ○ aus \(\/keepwarm \[stunden\]\)$/m)
-  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Reset-Anzeige mixed \(Standard\) · Hervorheben ab \(%\) 90 \(Standard\) · 5-Stunden-Balken zeigen an \(Standard\) · Wochen-Balken zeigen an \(Standard\) · Cache-Ring zeigen an \(Standard\) · Speicher-Ring zeigen an \(Standard\) · Nur 5-Stunden-Limit \(veraltet\) aus \(Standard\) · Speicher-Laufwerk leer = aus \(Standard\)$/m)
+  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* 5-Stunden-Balken ● an · per Einstellung \(\/bars 5h off\) · Wochen-Balken ● an · per Einstellung \(\/bars week off\) · Cache-Ring ● an · per Einstellung \(\/bars cache off\) · Speicher-Ring ○ ohne storagePath \(Einstellung storagePath\) · Stil Balken · per Einstellung \(Standard\) \(\/bars style ring\) · Rückfrage vor kaltem Senden ● an \(\/cache warn off\) · Hinweis vor Ablauf ● an \(\/cache hints off\) · Schwelle „groß“ 150k \(Standard\) \(\/cache big <n>\) · Cache-Dauer auto · 60 min \(Standard\) \(\/cache ttl 5\|60\|auto\) · Warmhalten ○ aus \(\/keepwarm \[stunden\]\)$/m)
+  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Reset-Anzeige mixed \(Standard\) · Hervorheben ab \(%\) 90 \(Standard\) · 5-Stunden-Balken zeigen an \(Standard\) · Wochen-Balken zeigen an \(Standard\) · Cache-Ring zeigen an \(Standard\) · Speicher-Ring zeigen an \(Standard\) · Nur 5-Stunden-Limit \(veraltet\) aus \(Standard\) · Stil bar \(Standard\) · Speicher-Laufwerk leer = aus \(Standard\)$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure limit-bars · Mod abschalten: /plugin disable limit-bars')
 })
 
@@ -307,6 +307,9 @@ const input = (o: Partial<HelpInput> = {}): HelpInput => ({
   memTtl: 60,
   memTtlSource: 'Standard',
   keep: null,
+  style: 'bar',
+  styleByCommand: false,
+  noFive: false,
   ...o,
 })
 
@@ -318,12 +321,12 @@ test('0.7.0 Hilfe Vollständigkeit: jedes Wort, das die Parser annehmen, steht i
     const d = barsHelpData(input({ lang }))
     // Ganze Wörter aus Befehlsspalte und Alias-Zeile, nicht Teilstrings (templates/help/README.md: sonst steckt `on` in „configure“)
     const tokens = new Set([...d.commands.map((c) => c.cmd), ...(d.notes ?? [])].join(' ').split(/[\s·,|=()[\]<>]+/).filter(Boolean))
-    for (const word of [...HELP_WORDS, ...STATUS_WORDS, ...RESET_WORDS, ...SHOW_WORDS, ...ON_OFF_WORDS, ...PART_WORDS, ...SIDE, ...OTHER])
+    for (const word of [...HELP_WORDS, ...STATUS_WORDS, ...RESET_WORDS, ...SHOW_WORDS, ...ON_OFF_WORDS, ...PART_WORDS, ...STYLE_WORDS, ...STYLE_VALUE_WORDS, ...SIDE, ...OTHER])
       expect(tokens.has(word), `${lang}: ${word}`).toBe(true)
     expect(tokens.has('configure'), lang).toBe(false) // nur Befehle und Aliase, nicht die Fußzeile
-    // alle vier Teile und alle neun Einstellungen
+    // alle vier Teile und alle zehn Einstellungen
     expect(d.features.slice(0, 4).map((f) => f.toggle)).toEqual(['/bars 5h off', '/bars week off', '/bars cache off', lang === 'de' ? 'Einstellung storagePath' : 'setting storagePath'])
-    expect(d.settings.length).toBe(9)
+    expect(d.settings.length).toBe(10)
   }
 })
 
@@ -331,12 +334,12 @@ test('0.7.0 Hilfe-Daten: Werte, Standard und Zustandstexte', () => {
   const d = barsHelpData(input({ lang: 'en', overrides: { fiveHour: false }, shown: { fiveHour: false, weekly: true, cache: true, storage: true }, hasDrive: true, storagePath: 'E:\\', memTtlSource: 'gemessen', memTtl: 5 }))
   expect(d.features[0]).toEqual({ name: '5-hour bar', state: { kind: 'off', text: 'off · by /bars' }, toggle: '/bars 5h on' })
   expect(d.features[3]).toEqual({ name: 'Storage ring', state: { kind: 'on', text: 'on · by setting' }, toggle: '/bars storage off' })
-  expect(d.features[7]!.state).toEqual({ kind: 'value', text: 'auto · 5 min measured', isDefault: false })
-  expect(d.features[8]).toEqual({ name: 'Keep-warm', state: { kind: 'off' }, toggle: '/keepwarm [hours]' })
+  expect(d.features[8]!.state).toEqual({ kind: 'value', text: 'auto · 5 min measured', isDefault: false })
+  expect(d.features[9]).toEqual({ name: 'Keep-warm', state: { kind: 'off' }, toggle: '/keepwarm [hours]' })
   expect(d.settings[0]).toEqual({ title: 'Language', value: 'en', isDefault: true })
-  expect(d.settings[8]).toEqual({ title: 'Storage drive', value: 'E:\\' })
+  expect(d.settings[9]).toEqual({ title: 'Storage drive', value: 'E:\\' })
   expect(stateText(d.features[0]!.state, 'en')).toBe('○ off · by /bars')
-  expect(stateText(d.features[7]!.state, 'en')).toBe('auto · 5 min measured')
+  expect(stateText(d.features[8]!.state, 'en')).toBe('auto · 5 min measured')
   // Speicher-Ring per /bars aus und ohne Laufwerk: Schalter ist storagePath, nicht /bars storage on (Review K4)
   const off = barsHelpData(input({ lang: 'en', overrides: { storage: false }, shown: { fiveHour: true, weekly: true, cache: true, storage: false } }))
   expect(off.features[3]).toEqual({ name: 'Storage ring', state: { kind: 'off', text: 'off · by /bars' }, toggle: 'setting storagePath' })

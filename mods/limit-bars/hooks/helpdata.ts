@@ -3,7 +3,7 @@
 import type { KeepWarm, Settings } from './cache.ts'
 import { DEFAULT_SETTINGS, tokensText } from './cache.ts'
 import { PART_ARG } from './display.ts'
-import type { Display, Overrides, Part } from './display.ts'
+import type { Display, Overrides, Part, Style } from './display.ts'
 import type { HelpData, HelpFeature, HelpSetting } from './help.ts'
 import { T, hhmm } from './i18n.ts'
 import type { Lang } from './i18n.ts'
@@ -29,6 +29,11 @@ export type HelpInput = {
   memTtl: 5 | 60
   memTtlSource: 'Standard' | 'gemessen'
   keep: KeepWarm | null
+  /** Stil, der gilt, und ob er per `/bars style` gesetzt ist (Ausbau 0.10.0) */
+  style: Style
+  styleByCommand: boolean
+  /** Das Abo meldet kein 5h-Fenster: die obere Zeile zeigt das Wochen-Tempo */
+  noFive: boolean
 }
 
 // Standards aus plugin.json (userConfig `default`)
@@ -41,8 +46,9 @@ const DEFAULTS: Readonly<Record<string, string | number | boolean>> = {
   showCache: true,
   showStorage: true,
   onlyFiveHour: false,
+  style: 'bar',
 }
-const SETTING_KEYS = ['language', 'resetStyle', 'highlightAt', 'showFiveHour', 'showWeekly', 'showCache', 'showStorage', 'onlyFiveHour', 'storagePath'] as const
+const SETTING_KEYS = ['language', 'resetStyle', 'highlightAt', 'showFiveHour', 'showWeekly', 'showCache', 'showStorage', 'onlyFiveHour', 'style', 'storagePath'] as const
 
 
 export function barsHelpData(i: HelpInput): HelpData {
@@ -59,7 +65,9 @@ export function barsHelpData(i: HelpInput): HelpData {
       if (!on) return { name, state: { kind: 'off', text: `${onOff(false)} · ${by}` }, toggle: h.setPath }
       return { name, state: { kind: 'off', text: i.storagePath ? h.noDrive : h.noPath }, toggle: h.setPath }
     }
-    return { name, state: { kind: on ? 'on' : 'off', text: `${onOff(on)} · ${by}` }, toggle: `/bars ${PART_ARG[p]} ${on ? 'off' : 'on'}` }
+    // Ohne 5h-Fenster zeigt der Schalter 5h das Tempo (Ausbau 0.10.0)
+    const what = p === 'fiveHour' && on && i.noFive ? `${onOff(true)} · ${h.noFive}` : onOff(on)
+    return { name, state: { kind: on ? 'on' : 'off', text: `${what} · ${by}` }, toggle: `/bars ${PART_ARG[p]} ${on ? 'off' : 'on'}` }
   }
 
   const s = i.settings
@@ -83,6 +91,7 @@ export function barsHelpData(i: HelpInput): HelpData {
     commands: [
       { cmd: '/bars', does: h.bars },
       { cmd: '/bars show 5h|week|cache|storage on|off', does: h.barsShow },
+      { cmd: '/bars style bar|ring', does: h.barsStyle },
       { cmd: '/bars reset', does: h.barsReset },
       { cmd: '/bars help', does: h.barsHelp },
       { cmd: '/cache', does: h.cache },
@@ -104,6 +113,11 @@ export function barsHelpData(i: HelpInput): HelpData {
       part('weekly', h.weekly),
       part('cache', h.cacheRing),
       part('storage', h.storageRing),
+      {
+        name: h.style,
+        state: { kind: 'value', text: `${t.styleName[i.style]} · ${i.styleByCommand ? h.byCommand : h.bySetting}`, isDefault: !i.styleByCommand && i.style === DEFAULTS.style },
+        toggle: `/bars style ${i.style === 'ring' ? 'bar' : 'ring'}`,
+      },
       { name: h.guard, state: { kind: s.guard ? 'on' : 'off' }, toggle: `/cache warn ${s.guard ? 'off' : 'on'}` },
       { name: h.alerts, state: { kind: s.alerts ? 'on' : 'off' }, toggle: `/cache hints ${s.alerts ? 'off' : 'on'}` },
       { name: h.big, state: { kind: 'value', text: tokensText(s.bigTokens, i.lang), isDefault: s.bigTokens === DEFAULT_SETTINGS.bigTokens }, toggle: '/cache big <n>' },

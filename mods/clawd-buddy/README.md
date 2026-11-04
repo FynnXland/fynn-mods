@@ -25,7 +25,7 @@ Clawd runs on his own. What he does depends on what is happening:
 | Birthday (setting) or New Year's Eve | cake with candles, party hat; fireworks, sparkler |
 | Usage limit reached (5-hour or weekly) | 5 h: turns the hourglass, dozes with an alarm clock, spins a top, is annoyed or sad (can't keep working); weekly: sits on a suitcase, goes fishing, tends a potted plant, paints, knits a scarf, builds a sandcastle. After the reset: a jump for joy or a confetti cannon (always plays to the end) |
 | Night (default 23:00 to 6:00) | yawns, nods off, sleeps with a nightcap |
-| Music is playing in Spotify (needs the spotify mod, which is not published yet) and he has time (idle, while you type, long waits) | bobs to the beat with little notes, puts on headphones from his bag (takes them off again when the music stops), plays air guitar when he is in a good mood; at night he only nods quietly and does not fall asleep while the music plays. There is no beat information, so he uses a fixed tempo |
+| Music is playing in Spotify (needs the [spotify](../spotify/README.md) mod, Windows only) and he has time (idle, while you type, long waits) | bobs to the beat with little notes, puts on headphones from his bag (takes them off again when the music stops), plays air guitar when he is in a good mood; at night he only nods quietly and does not fall asleep while the music plays. There is no beat information, so he uses a fixed tempo |
 | You come back after at least 2 h (first input, or the desktop session becomes visible again), at any time of day | gets up or rubs his eyes, then stretches, has a coffee, brushes his teeth, does jumping jacks or waters a flower |
 | Claude switches between tools within seconds | at most two animations in a row are cut short; the third one stays at least about 8 s, so he does not flip back and forth; a question for you ("waiting for you") is exempt and usually shows within about 2–4 s; only if two questions come within about 8 s while he is switching quickly can the second take up to about 8 s |
 | Mood | Piling errors make him irritable (facepalm, stomping, steam); successes in a row put him in a good mood; long stretches of work make him tired. Everything wears off again. |
@@ -92,7 +92,7 @@ In plain language:
 - Hook `session.compact`: notices only that the main conversation is being compacted and when it ends. Never reads the conversation.
 - Hook `skill.prompt`: notices only that a skill starts. Never reads the skill's text.
 - `$.state.get` (`sidekick.buddy`): reads what the sidekick mod is doing right now (check, question, new chat), a kind and a timestamp, no texts. Without sidekick it stays empty. sidekick does not need to be installed.
-- `$.state.get` (`spotify.playing`): reads only whether the spotify mod is playing music right now (true/false), no title or artist. Without the spotify mod (not published yet) he never bobs along.
+- `$.state.get` (`spotify.playing`): reads only whether the spotify mod is playing music right now (true/false), no title or artist. Without the spotify mod he never bobs along.
 - `$.state.set` (`clawd-buddy.band`): publishes only the pixel width of his band slot in the desktop app (400, or null when he is off or in the terminal), so spotify can make room. No other data. Written at session start, on `/clawd on|off`, and again right after `/clear`, `/resume` or `/branch` (which reset it).
 
 From tool results he reads only the "error" (`isError`) and "denied" (`deny`) flags, never contents or texts.

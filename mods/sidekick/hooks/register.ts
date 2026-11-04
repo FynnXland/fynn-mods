@@ -4,14 +4,14 @@
 // Fail-open: Jeder Fehler lässt die Nachricht unverändert durch; es gibt kein `.catch` (SPEC Fehlerverhalten). Ausnahme: nach
 // „Neuer Chat mit Übergabe“ wird bei einem Fehler nie stillschweigend in den kalten Chat gesendet, es wird erneut gefragt.
 // Eine Fassung geht nur nach der Antwort im Dialog raus (seit 0.15.0 gibt es keine Stufe, die ohne Rückfrage sendet).
-import type { EngineInterface, On, RenderElement, RenderNode, Timer } from 'claude-code'
+import type { EngineInterface, On, RenderElement, RenderNode, Timer, UiPressArgument } from 'claude-code'
 import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.ts'
 import { lang, setLang, spanText, t, tokensText, usdText } from './i18n.ts'
 import { NOTES_WORDS, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, nonNeg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.ts'
 import type { Note } from './notes.ts'
 import { CHECK, HANDOFF, modelLabel, modelName } from './models.ts'
 import type { CacheMem, CompleteUsage, StepUsage } from './cache.ts'
-import { joinBand, layer, LEVEL, nameOf, splitBand } from './band.ts'
+import { joinBand, layer, nameOf, splitBand } from './band.ts'
 import {
   DEFAULT_SETTINGS,
   KEEP_DAYS,
@@ -58,7 +58,9 @@ import type { HelpData } from './help.ts'
 import { sidekickHelp } from './helpdata.ts'
 import {
   HEAVY_TOKENS,
+  REST,
   RULE_IDS,
+  SECOND_PAUSE_MIN,
   UNUSED_DAYS,
   accepted,
   addSessionDay,
@@ -68,6 +70,7 @@ import {
   cleanWartung,
   doneFromSkill,
   doneFromText,
+  fillOutcome,
   hintsStatus,
   hintsUsage,
   markDone,
@@ -95,8 +98,11 @@ const MODE_GREEN = '#3FB950'
 const MODE_ORANGE = '#F0883E'
 const MODE_RED = '#F85149'
 
-/** Eine Zeile unter einer eigenen Nachricht; `cmd`: Befehl für den Button, `ran`: schon ausgeführt (Nachtrag 0.8.1). */
-type HintRow = { id: string; line: string; sent?: string; cmd?: string; ran?: boolean }
+/**
+ * Eine Zeile unter einer eigenen Nachricht; `cmd`: Befehl für den Button, `ran`: schon ausgeführt (Nachtrag 0.8.1).
+ * Wartungszeile (Ausbau 0.16.0): `wid` die Regel, `why` die Erklärung hinter „?“, `filled`: der Befehl steht schon im Eingabefeld.
+ */
+type HintRow = { id: string; line: string; sent?: string; cmd?: string; ran?: boolean; wid?: RuleId; why?: string; filled?: boolean }
 
 /** Was der Sidekick je Session weiß; `$.store` `sitzung:<sessionId>` (SPEC Zustand). */
 type Sitzung = {
@@ -113,6 +119,10 @@ type Sitzung = {
   // Gewählter Wartungs-Hinweis, der noch nicht gezeigt wurde, weil die Prüfung eine eigene Zeile oder Rückfrage hatte; er kommt bei
   // der nächsten eigenen Nachricht ohne beides (Nachtrag 0.12.0)
   wartungOffen: Offen | null
+  // Zweite Messung (Ausbau 0.16.0, E5): schon gelaufen; Commits bei der ersten Messung; Zeit der letzten eigenen Nachricht
+  wartung2: boolean
+  wartungCommits: number
+  ownAt: number
   note: Note | null // „Gut zu wissen“ über dem Prompt (Nachtrag 0.13.0)
 }
 
@@ -121,7 +131,7 @@ type Offen = WHint & { at?: number }
 const offenOf = (h: WHint, now: number): Offen => ({ ...h, at: (h as Offen).at ?? now })
 
 function emptySitzung(): Sitzung {
-  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null, note: null }
+  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null, wartung2: false, wartungCommits: 0, ownAt: 0, note: null }
 }
 
 /** Offener Wartungs-Hinweis aus dem Store, tolerant gelesen (fehlt oder kaputt → null). */
@@ -132,6 +142,7 @@ function cleanOffen(v: unknown): Offen | null {
     id: o.id as RuleId,
     line: o.line,
     key: o.key,
+    why: typeof o.why === 'string' ? o.why : '',
     ...(typeof o.cmd === 'string' && o.cmd.startsWith('/') ? { cmd: o.cmd } : {}),
     ...(typeof o.at === 'number' ? { at: o.at } : {}),
   }
@@ -154,6 +165,9 @@ function cleanSitzung(v: unknown): Sitzung {
         ...(typeof h.cmd === 'string' && h.cmd.startsWith('/') ? { cmd: h.cmd } : {}),
         // `queued` (bis 0.14: als To-do eingereiht) gilt als schon erledigt: kein zweiter Klick auf denselben Befehl
         ...(h.ran === true || h.queued === true ? { ran: true } : {}),
+        ...((RULE_IDS as readonly unknown[]).includes(h.wid) ? { wid: h.wid as RuleId } : {}),
+        ...(typeof h.why === 'string' && h.why ? { why: h.why } : {}),
+        ...(h.filled === true ? { filled: true } : {}),
       }))
       .slice(-30)
   if (o.last && typeof o.last.line === 'string') s.last = o.last
@@ -162,6 +176,9 @@ function cleanSitzung(v: unknown): Sitzung {
   if (o.commit && typeof o.commit.sha === 'string') s.commit = o.commit
   if (o.wartung === true) s.wartung = true
   s.wartungOffen = cleanOffen(o.wartungOffen)
+  if (o.wartung2 === true) s.wartung2 = true
+  if (typeof o.wartungCommits === 'number') s.wartungCommits = o.wartungCommits
+  if (typeof o.ownAt === 'number') s.ownAt = o.ownAt
   s.note = cleanNote(o.note)
   return s
 }
@@ -172,7 +189,7 @@ let ses: Sitzung = emptySitzung()
 let settings: Settings = { ...DEFAULT_SETTINGS }
 // Hinweis, der an die nächste eigene Zeile mit diesem Text gebunden wird (UserMessage kennt die Message-ID, prompt.submit nicht)
 // `alt`: die gesendete Fassung; der Desktop zeigt in der Sprechblase das Original, daher passen beide Texte
-let pending: { text: string; alt?: string; line: string; sent?: string; cmd?: string } | null = null
+let pending: { text: string; alt?: string; line: string; sent?: string; cmd?: string; wid?: RuleId; why?: string } | null = null
 let askedCold = false // „Trotzdem senden“ im Kalt-Dialog: der folgende Kaltstart war gefragt, zählt nicht als „ohne Rückfrage“
 let skillCache: { at: number; list: Skill[] } | null = null
 type Breakdown = Awaited<ReturnType<EngineInterface['session']['usage']>>['context']['breakdown']
@@ -193,6 +210,26 @@ let helpNo = 0
 /** Ein Zeichen-Element als reine Daten (StyledElement, types:8851): Box oder Text mit einfachen Props. */
 function el(type: 'Box' | 'Text', props: Record<string, string | number | boolean>, children: RenderNode[]): RenderElement {
   return { type, props, children }
+}
+
+// Höhe der sidekick-Ebene im Band (Nachtrag 0.15.2): über der Spotify-Leiste (40, mods/spotify/hooks/view.ts BAR_LEVEL). Steht hier
+// statt in band.ts, weil band.ts in allen Mods dieselbe Kopie ist; LEVEL folgt beim nächsten gemeinsamen Band-Update (docs/BAND.md)
+const SIDEKICK_LEVEL = 50
+// Streifen wie die orange Trennlinie der Spotify-Leiste (mods/spotify/hooks/view.ts sepSvg): breiter als jedes Fenster, die Box schneidet ab
+const STRIPE_W = 2400
+const STRIPE_H = 26
+
+/** Blaue Linie (2 px) mit 8 px Luft darüber und 16 px darunter. */
+function stripeSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${STRIPE_W}" height="${STRIPE_H}" viewBox="0 0 ${STRIPE_W} ${STRIPE_H}"><rect y="8" width="${STRIPE_W}" height="2" fill="${ACCENT}" opacity="0.85"/></svg>`
+}
+
+/** Die sidekick-Ebene; im Desktop mit dem blauen Streifen darunter. Svg gibt es nur auf entfernten Oberflächen (types:3795-3800). */
+function sidekickLayer(content: RenderElement, surface: string): RenderElement {
+  if (surface !== 'desktop') return layer(SIDEKICK_LEVEL, 'sidekick', content)
+  const svg = { type: 'Svg', props: { source: stripeSvg(), alt: t().stripeAlt, width: STRIPE_W, height: STRIPE_H } } as RenderElement
+  const stripe = el('Box', { key: 'sidekick-stripe', width: '100%', overflow: 'hidden', flexShrink: 0 }, [svg])
+  return layer(SIDEKICK_LEVEL, 'sidekick', el('Box', { flexDirection: 'column', flexShrink: 0 }, [content, stripe]))
 }
 
 /** Den Teilbaum mit `props.key === key` entfernen (z. B. die Pille von quick-replies); alles andere bleibt, wie es ist. */
@@ -398,6 +435,55 @@ async function useHint($: EngineInterface, id: string) {
   }
 }
 
+/**
+ * Wartungszeile (Ausbau 0.16.0, E1-E3): den Befehl ins Eingabefeld schreiben, Fynn schickt ihn selbst ab. Nichts wird gesendet, nichts
+ * als erledigt gebucht; erledigt wird er erst, wenn der Befehl wirklich läuft (prompt.submit, skill.prompt).
+ * - Feld nicht leer: kein Einfügen. Ein Slash-Befehl wirkt nur am Anfang einer Nachricht, angehängt wäre er Text (E2).
+ * - `append` statt `replace`: tippt Fynn zwischen read und fill, bleibt sein Text (wie Review 0.13.0 K2).
+ * - `no_composer` (Desktop zeichnet ein eigenes Eingabefeld, headless) oder ohne Grund: in die Zwischenablage (E3, types:2559-2572),
+ *   sonst der Befehl im Toast zum Abtippen. `dialog`: erst den Dialog beantworten.
+ */
+type Surface = NonNullable<Parameters<EngineInterface['ui']['copy']>[0]['surface']>
+
+async function insertHint($: EngineInterface, id: string, surface: Surface | undefined) {
+  const h = ses.hints.find((x) => x.id === id)
+  if (!h?.cmd || h.filled || pressing.has(id)) return
+  const cmd = h.cmd
+  const x = t()
+  pressing.add(id)
+  try {
+    const box = await $.prompt.read().catch(() => null)
+    if (box && box.text.trim()) {
+      $.ui.toast(x.insBoxFull(cmd), { timeoutMs: 10000 })
+      return
+    }
+    const next = fillOutcome(await $.prompt.fill({ text: cmd, mode: 'append' }).catch(() => null), cmd)
+    if (next === 'filled') {
+      const row = ses.hints.find((y) => y.id === id)
+      if (row) {
+        row.filled = true
+        saveSes($, await $.clock.now().catch(() => 0))
+      }
+      return
+    }
+    if (next === 'mixed' || next === 'dialog') {
+      $.ui.toast(next === 'mixed' ? x.insBoxFull(cmd) : x.insDialog(cmd), { timeoutMs: 10000 })
+      return
+    }
+    // Die Oberfläche des Drucks (ButtonProps.onPress, types:1150-1160)
+    const c = await $.ui.copy({ text: cmd, ...(surface ? { surface } : {}) }).catch(() => null)
+    $.ui.toast(c?.isCopied ? x.insCopied(cmd) : x.insFailed(cmd), { timeoutMs: 15000 })
+  } catch {
+    $.ui.toast(x.insFailed(cmd), { timeoutMs: 15000 })
+  } finally {
+    pressing.delete(id)
+    $.ui.invalidate('ui.render')
+  }
+}
+
+// „?“ an der Wartungszeile: aufgeklappt, nur im Speicher (Ausbau 0.16.0)
+const whyOpen = new Set<string>()
+
 // ---------- Wartungs-Hinweise (SPEC Nachtrag 0.2.0) ----------
 
 /** Projektwurzel über `$.session.root()` (types:2675-2681); ohne sie der Ordner der tiefsten Projekt-Anweisungsdatei. */
@@ -441,7 +527,7 @@ async function measureNow($: EngineInterface, now: number): Promise<{ m: Measure
     avail,
   }
   const heavy = w.regeln['skills-heavy'] ?? {}
-  const resting = [heavy.hintAt, heavy.doneAt].some((t) => !!t && now - t < UNUSED_DAYS * DAY)
+  const resting = [heavy.hintAt, heavy.doneAt].some((t) => !!t && now - t < REST.skillsHeavy * DAY)
   if (avail.skillDoctor && m.skillsTokens >= HEAVY_TOKENS && !resting) {
     const u = await skillUsage($, now)
     m.countingDays = u.countingDays
@@ -550,7 +636,7 @@ async function sendWithWartung<R>($: EngineInterface, e: { text: string }, h: WH
   if (!h) return send()
   try {
     const now = await $.clock.now()
-    pending = { text: e.text, line: h.line, ...(h.cmd ? { cmd: h.cmd } : {}) }
+    pending = { text: e.text, line: h.line, wid: h.id, ...(h.why ? { why: h.why } : {}), ...(h.cmd ? { cmd: h.cmd } : {}) }
     ses.last = { line: h.line, art: 'sonstiges', at: now }
     ses.wartungOffen = null
     saveSes($, now)
@@ -631,12 +717,20 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
   // Einmal pro Session, parallel zur Modell-Prüfung; ein Fehler kostet nur den Hinweis, nie die Nachricht (fail-open)
   let wp: Promise<WHint | null> = Promise.resolve(null)
   // Cache-Stufe: keine Wartungs-Hinweise (Nachtrag 0.10.0)
+  const ownBefore = ses.ownAt
+  ses.ownAt = now
   if (!ses.wartung && settings.level !== 'cache') {
     ses.wartung = true
+    ses.wartungCommits = ses.commits
     wp = maintenance($, now).catch(() => null)
   } else if (ses.wartungOffen && settings.level !== 'cache') {
-    // Bei der ersten Nachricht gewählt, aber nicht gezeigt: jetzt erneut anbieten (Nachtrag 0.12.0). Keine zweite Messung
+    // Bei der ersten Nachricht gewählt, aber nicht gezeigt: jetzt erneut anbieten (Nachtrag 0.12.0)
     wp = stillOpen($, ses.wartungOffen).catch(() => null)
+  } else if (!ses.wartung2 && settings.level !== 'cache' && (ses.commits > ses.wartungCommits || (ownBefore > 0 && now - ownBefore >= SECOND_PAUSE_MIN * 60000))) {
+    // Zweite Messung, höchstens einmal je Chat: nach einem Commit oder nach einer Pause (Ausbau 0.16.0, E5). Was in diesem Chat schon
+    // gezeigt wurde, ruht ohnehin (hintAt)
+    ses.wartung2 = true
+    wp = maintenance($, now).catch(() => null)
   }
   const trigger = triggerOf({ first, ctx, cold: st.kind === 'cold', unknown: st.kind === 'unknown', settings })
   if (!trigger) {
@@ -1041,7 +1135,8 @@ function noteView(n: Note, cols: number, surface: string, digits: boolean, butto
   const head = (label: string, rest: string) =>
     el('Text', {}, [el('Text', { color: ACCENT }, ['✦ ']), el('Text', { color: ACCENT, bold: true }, [label]), ...(rest ? [el('Text', { dimColor: true }, [' · ']), el('Text', {}, [rest])] : [])])
   const buttons = (kids: RenderNode[]) => el('Box', { key: 'sidekick-note-buttons', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3 }, kids)
-  const frame = { key: 'sidekick-note', flexDirection: 'column', width: Math.max(20, cols), marginBottom: 1 }
+  // Leerzeile darunter nur im Terminal; im Desktop gibt der blaue Streifen den Abstand (Nachtrag 0.15.2, Sicht-Check)
+  const frame = { key: 'sidekick-note', flexDirection: 'column', width: Math.max(20, cols), ...(surface === 'desktop' ? {} : { marginBottom: 1 }) }
   if (!n.open)
     return el('Box', frame, [
       head(x.noteTag[n.art], n.thema),
@@ -1443,7 +1538,14 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       const own = ['composer', 'bridge', 'sdk'].includes(e.props.origin.kind)
       const shown = e.props.text.trim()
       if (!hit && own && pending && (shown === pending.text.trim() || shown === pending.alt?.trim())) {
-        hit = { id: e.requestId, line: pending.line, ...(pending.sent ? { sent: cut(pending.sent, 2000) } : {}), ...(pending.cmd ? { cmd: pending.cmd } : {}) }
+        hit = {
+          id: e.requestId,
+          line: pending.line,
+          ...(pending.sent ? { sent: cut(pending.sent, 2000) } : {}),
+          ...(pending.cmd ? { cmd: pending.cmd } : {}),
+          ...(pending.wid ? { wid: pending.wid } : {}),
+          ...(pending.why ? { why: pending.why } : {}),
+        }
         pending = null
         ses.hints = [...ses.hints, hit].slice(-30)
         saveSes($, await $.clock.now())
@@ -1453,24 +1555,54 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       // Andere Oberflächen: nur Text (Farbe und Rahmen sind dort nicht belegt)
       if (e.surface !== 'terminal' && e.surface !== 'desktop') {
         const sent = hit.sent ? t().sentPlain(hit.sent) : ''
-        return next({ ...e, props: { ...e.props, text: `${e.props.text}\n\n· sidekick: ${hit.line}${sent}` } })
+        const why = hit.wid && hit.why ? `\n\n${hit.why}` : ''
+        return next({ ...e, props: { ...e.props, text: `${e.props.text}\n\n· sidekick: ${hit.line}${sent}${why}` } })
       }
       // Eigene Zeichnung unter der unveränderten Nachricht: die Zeile farbig, eine gesendete Fassung im Rahmen.
       // Ein Hook darf die Zeichnung der Engine einbetten (types:3864-3871); ein ungültiger Baum zeichnet die der Engine.
       theirs = await next(e)
       // Elemente als reine Daten {type, props, children} (types:9215-9218); nur der Button kommt aus $.ui.resolve (Nachtrag 0.7.0)
       const line: RenderNode[] = [el('Text', { color: ACCENT }, [`· sidekick: ${hit.line}`])]
-      // Button für den Befehl der Zeile: führt ihn direkt aus (0.8.1)
       const id = hit.id
       const cmd = hit.cmd
-      if (cmd && hit.ran) line.push(el('Text', { dimColor: true }, [`  ${t().btnRan}`]))
-      else if (cmd && pressing.has(id)) line.push(el('Text', { dimColor: true }, [`  ${t().btnBusy}`]))
-      else if (cmd) {
-        const label = t().btnRun(cmd)
-        // Ein Button trägt eine Funktion und ist darum keine reine Daten-Zeichnung: über $.ui.resolve (Test: „not plain data“)
-        line.push($.ui.resolve(e).Button({ key: 'sidekick-use', label, onPress: () => void useHint($, id) }) as RenderNode)
-      }
+      const x = t()
+      // Ein Button trägt eine Funktion und ist darum keine reine Daten-Zeichnung: über $.ui.resolve (Test: „not plain data“)
+      const Button = (p: { key: string; label: string; onPress: (press: UiPressArgument) => void }) => $.ui.resolve(e).Button(p) as RenderNode
+      if (hit.wid) {
+        // Wartungszeile (Ausbau 0.16.0): Befehl ins Eingabefeld (Desktop: kopieren), „?“ klappt die Erklärung auf
+        if (cmd && hit.filled) line.push(el('Text', { dimColor: true }, [`  ${x.btnFilled}`]))
+        else if (cmd && pressing.has(id)) line.push(el('Text', { dimColor: true }, [`  ${x.btnBusy}`]))
+        else if (cmd) {
+          const label = e.surface === 'desktop' ? x.btnCopy : x.btnInsert
+          line.push(Button({ key: 'sidekick-use', label, onPress: (press) => void insertHint($, id, press.surface) }))
+        }
+        // Im Terminal steht die Erklärung immer da (ob ein Button im Verlauf erreichbar ist, ist seit 0.7.0 [UNKLAR]); dort kein „?“
+        if (hit.why && e.surface === 'desktop') {
+          const open = whyOpen.has(id)
+          line.push(
+            Button({
+              key: 'sidekick-why',
+              label: open ? x.btnWhyClose : x.btnWhy,
+              onPress: () => {
+                if (whyOpen.has(id)) whyOpen.delete(id)
+                else whyOpen.add(id)
+                $.ui.invalidate('ui.render')
+              },
+            }),
+          )
+        }
+      } else if (cmd && hit.ran) line.push(el('Text', { dimColor: true }, [`  ${x.btnRan}`]))
+      else if (cmd && pressing.has(id)) line.push(el('Text', { dimColor: true }, [`  ${x.btnBusy}`]))
+      // Button für den Befehl der Zeile (Skill-Hinweis der Prüfung): führt ihn direkt aus (0.8.1)
+      else if (cmd) line.push(Button({ key: 'sidekick-use', label: x.btnRun(cmd), onPress: () => void useHint($, id) }))
       const kids: RenderNode[] = [el('Box', { key: 'sidekick-line', flexDirection: 'row', flexWrap: 'wrap', columnGap: 1 }, line)]
+      if (hit.wid && hit.why) {
+        if (e.surface === 'terminal') kids.push(el('Box', { key: 'sidekick-why-text', paddingLeft: 2 }, [el('Text', { dimColor: true }, [hit.why])]))
+        else if (whyOpen.has(id)) {
+          const frame = { key: 'sidekick-why-text', flexDirection: 'column', borderStyle: 'round', borderColor: ACCENT, paddingX: 1 }
+          kids.push(el('Box', frame, [el('Text', {}, [hit.why])]))
+        }
+      }
       if (hit.sent) {
         const frame = { key: 'sidekick-sent', flexDirection: 'column', borderStyle: 'round', borderColor: ACCENT, paddingX: 1 }
         kids.push(el('Box', frame, [el('Text', { dimColor: true }, [t().sentLabel]), el('Text', {}, [hit.sent])]))
@@ -1507,7 +1639,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (!step && note) {
       const n = note
       try {
-        const { layers, base } = splitBand(theirs)
+        const { layers, slots, base } = splitBand(theirs)
         // Ziffern nur, solange Claude arbeitet: Danach löst eine allein getippte Ziffer im leeren Eingabefeld den Knopf aus
         // (docs/raw/en/reference.md:244), etwa die Antwort „2“ auf „Variante 1 oder 2?“ (Review 0.13.0 K1). quick-replies belegt
         // 1 … n ebenfalls erst nach der Runde; liegt es doch im Band, ohne Ziffern
@@ -1515,7 +1647,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
         const digits = e.props.isWorking && !qr
         const ui = $.ui.resolve(e)
         const view = noteView(n, e.props.bodyColumns, e.surface, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a, e.surface))
-        return joinBand([...layers, layer(LEVEL.sidekick, 'sidekick', view)], base)
+        return joinBand([...layers, sidekickLayer(view, e.surface)], base, slots)
       } catch {
         return theirs
       }
@@ -1523,15 +1655,17 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (!step) return theirs
     try {
       const secs = Math.max(0, Math.round(((await $.clock.now()) - step.since) / 1000))
-      // Eine Leerzeile Abstand unter der Box (wirkt sauberer; marginBottom wie unter der Hinweis-Zeile)
-      const box = el('Box', { key: 'sidekick-busy', flexShrink: 0, borderStyle: 'round', borderColor: ACCENT, paddingX: 1, marginBottom: 1 }, [
+      // Eine Leerzeile Abstand unter der Box (wirkt sauberer; marginBottom wie unter der Hinweis-Zeile). Im Desktop nicht: Dort steht
+      // der blaue Streifen 8 px darunter wie die orange Linie unter der Spotify-Leiste; mit Leerzeile hinge er ab (Nachtrag 0.15.2)
+      const gap = e.surface === 'desktop' ? {} : { marginBottom: 1 }
+      const box = el('Box', { key: 'sidekick-busy', flexShrink: 0, borderStyle: 'round', borderColor: ACCENT, paddingX: 1, ...gap }, [
         el('Text', { color: ACCENT }, [`sidekick ${{ handoff: t().busyHandoff, plain: t().busyPlain, clear: t().busyClear }[step.step]} … ${secs} s`]),
       ])
       // Oberste Ebene über allen anderen Mods, in jeder Reihenfolge der Kette (band.ts, docs/BAND.md); Quick-Replies blenden
       // während der Übergabe aus, sidekick rückt dann auf ihre Höhe
-      const { layers, base } = splitBand(theirs)
+      const { layers, slots, base } = splitBand(theirs)
       const rest = base ? withoutKey(base as RenderElement, 'quick-replies') : null
-      return joinBand([...layers.filter((l) => nameOf(l) !== 'quick-replies'), layer(LEVEL.sidekick, 'sidekick', box)], rest)
+      return joinBand([...layers.filter((l) => nameOf(l) !== 'quick-replies'), sidekickLayer(box, e.surface)], rest, slots)
     } catch {
       return theirs
     }
