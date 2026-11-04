@@ -4,7 +4,7 @@ A cost ledger across all your chats. After every answer, cost-ledger records wha
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.8.1** · Requires Claude Code v2.1.287 or later (mods)
+Tested with Claude Code **v2.1.295** · Plugin version **0.8.2** · Requires Claude Code v2.1.287 or later (mods)
 
 ## Usage
 
@@ -167,7 +167,7 @@ Sync uses the rights `$.fs.list`, `$.fs.read` and `$.fs.write`, only inside the 
 
 `% used` covers your whole account, while the dollar amounts only come from chats with cost-ledger. `/ledger limits` estimates the gap: cost-ledger takes the completed, fully recorded window with at least 20 % where the most API value per percent went through the ledger, as “how much one percent costs”. For every window it then shows “outside the ledger ≈ 12 % of 40 %” (a percentage-point estimate) and marks past windows with “outside 12 %”. Until there is such a window, it says when the estimate starts.
 
-**Runs in:** terminal and the desktop Code tab (its own rendering at the command line, colors from the theme). Terminal verified with 0.3.x; desktop verified with 0.3.1 on 2026-10-06 (0.3.0 fell back to the Markdown summary there, fixed in 0.3.1). The 0.5.0 views (`/ledger limits`, the limit line) are covered by rendering tests for both surfaces; a visual check is pending. The help table (0.6.0) was checked in the terminal. Sync (0.7.0) was verified with `claude -p` in a real session; its views are covered by rendering tests for both surfaces. `/ledger here` and the reworked overview (0.8.0) were checked in the terminal; the desktop ring is drawn as an image (`Svg`) and was checked in the desktop app on 2026-11-03 (dark theme). The `/ledger models` ring (0.8.1) is covered by rendering tests; a visual check in the desktop app is pending. In `claude -p` and other surfaces you get the Markdown summary. Claude only reads that summary (at most 10 lines for the views, about 15 for the help), not the rendering.
+**Runs in:** terminal and the desktop Code tab (its own rendering at the command line, colors from the theme). Terminal verified with 0.3.x; desktop verified with 0.3.1 on 2026-10-06 (0.3.0 fell back to the Markdown summary there, fixed in 0.3.1). The 0.5.0 views (`/ledger limits`, the limit line) are covered by rendering tests for both surfaces; a visual check is pending. The help table (0.6.0) was checked in the terminal. Sync (0.7.0) was verified with `claude -p` in a real session; its views are covered by rendering tests for both surfaces. `/ledger here` and the reworked overview (0.8.0) were checked in the terminal; the desktop ring is drawn as an image (`Svg`) and was checked in the desktop app on 2026-11-03 (dark theme). The `/ledger models` ring (0.8.1) was checked in the desktop app on 2026-11-04 (dark theme); 0.8.2 fits large totals inside it. In `claude -p` and other surfaces you get the Markdown summary. Claude only reads that summary (at most 10 lines for the views, about 15 for the help), not the rendering.
 
 ## Configuration
 

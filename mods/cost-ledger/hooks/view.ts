@@ -8,6 +8,7 @@
 import type { RenderElement, RenderNode } from 'claude-code'
 import { T, dateTime, duration, fullDate, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
 import type { Lang } from './i18n.ts'
+import { bigUsd } from './here.ts'
 import {
   MOD_PART,
   UNKNOWN_MODEL,
@@ -278,7 +279,10 @@ export function donutSvg(parts: { hex: string; share: number }[], center: string
     }
   }
   body += `<style>.t{fill:#ECEAE3}@media (prefers-color-scheme: light){.t{fill:#262624}}</style>`
-  body += `<text class="t" x="${c}" y="${c + 5}" text-anchor="middle" font-family="'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="600">${escSvg(center)}</text>`
+  // Innen ist Platz für etwa 2 × (R − W/2) − 8 = 58 px; die Schrift schrumpft mit der Länge (je Zeichen ≈ 0,6 × Größe),
+  // damit auch fünfstellige Beträge nicht an den Ring stoßen (Fynn 2026-11-04)
+  const fs = Math.max(8, Math.min(14, Math.floor((2 * (R - W / 2) - 8) / (Math.max(1, center.length) * 0.6))))
+  body += `<text class="t" x="${c}" y="${c + Math.round(fs / 3)}" text-anchor="middle" font-family="'Segoe UI', system-ui, sans-serif" font-size="${fs}" font-weight="600">${escSvg(center)}</text>`
   return { source: `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${body}</svg>`, width: size, height: size, alt }
 }
 
@@ -314,7 +318,7 @@ function modelsBlock(r: Report, title: string, sf: Surface, inner: number, lang:
     const alt = r.models.map((m, i) => `${names[i]} ${share(m.usd)} %`).join(', ')
     const pic = donutSvg(
       r.models.map((m) => ({ hex: THEME_HEX[colors.get(m.key)!] ?? THEME_HEX.inactive!, share: m.usd })),
-      usd(sum, lang),
+      bigUsd(sum, lang), // ab 100 $ ohne Cent, wie die große Zahl in /ledger here
       alt,
     )
     const svg: RenderElement = { type: 'Svg', props: { source: pic.source, alt: pic.alt, width: pic.width, height: pic.height } }

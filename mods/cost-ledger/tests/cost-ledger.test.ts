@@ -2776,3 +2776,13 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect(await wk.find({ type: 'Text', text: /· Mods$/ })).toBeUndefined() // keine Mod-Farbe je Modell mehr
     await wk.unmount()
   })
+
+test('0.8.2 donutSvg: die Zahl in der Mitte passt in den Ring, auch fünf- und siebenstellig', () => {
+  const size = (s: string) => Number(/font-size="(\d+)" font-weight/.exec(donutSvg([{ hex: '#D77757', share: 1 }], s, 'x').source)![1])
+  expect(size('42 $')).toBe(14)
+  for (const s of ['10.520 $', '$10,520', '1.234.567 $']) {
+    const fs = size(s)
+    expect(fs < 14, s).toBe(true)
+    expect(s.length * 0.6 * fs <= 58, s).toBe(true) // Innenraum: 2 × (40 − 7) − 8 px
+  }
+})
