@@ -1,7 +1,7 @@
 # fynn-mods
 
 **Sechs Mods für Claude Code: ein animiertes Maskottchen, Balken für die Nutzungslimits, ein Sidekick, der vor dem
-Senden mitdenkt, Schnellantworten, ein Spotify-Player (Windows) und ein Kostenbuch.**
+Senden mitdenkt, Schnellantworten, eine Musikleiste für Spotify (Windows) und ein Kostenbuch.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
@@ -13,7 +13,7 @@ Senden mitdenkt, Schnellantworten, ein Spotify-Player (Windows) und ein Kostenbu
 
 <p align="center">
   <img src="assets/hero.gif" width="790" alt="Der Prompt von Claude Code in der Desktop-App mit fünf Mods: oben eine Musik-Leiste mit einem erfundenen Titel, Cover, Positionsbalken und Knöpfen; darunter vier Antwortvorschläge mit den Nummern 1 bis 4, die Balken für das 5-Stunden- und das Wochenlimit, der Cache-Ring und der Speicher-Ring und Clawd, die Pixel-Krabbe, die auf dem Laptop tippt und vor Freude springt; in der Fußzeile die sidekick-Stufe Guide.">
-  <br><i>spotify, quick-replies, limit-bars und clawd-buddy teilen sich das Band über dem Prompt; sidekick zeigt seine
+  <br><i>tune-strip, quick-replies, limit-bars und clawd-buddy teilen sich das Band über dem Prompt; sidekick zeigt seine
   Stufe in der Fußzeile. Nachgebaut mit erfundenen Daten. Vier Vorschläge gibt es mit <code>/replies more on</code>; der
   Speicher-Ring ist optional.</i>
 </p>
@@ -38,10 +38,10 @@ Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mod
 | [limit-bars](#limit-bars) | Balken für das 5-Stunden- und das Wochenlimit, dazu ein Ring, wie lange der Prompt-Cache noch warm ist |
 | [sidekick](#sidekick) | Prüft deine Nachricht vor dem Senden: Kosten bei kaltem Cache, falscher Chat, klarere Fassung, fällige Wartung |
 | [quick-replies](#quick-replies) | Der Vorschlag von Claude Code für die nächste Nachricht als Knopf |
-| [spotify](#spotify) | Spotify-Player über dem Prompt mit Cover, Position und Knöpfen (nur Windows) |
+| [tune-strip](#tune-strip) | Musikleiste für Spotify über dem Prompt mit Cover, Position und Knöpfen (nur Windows) |
 | [cost-ledger](#cost-ledger) | Kostenbuch über alle Chats, nach Tag, Projekt, Chat und Modell |
 
-**Hilfe in jedem Mod:** `/<befehl> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/spotify`, `/ledger`) zeichnet
+**Hilfe in jedem Mod:** `/<befehl> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/tune`, `/ledger`) zeichnet
 eine Tabelle mit allen Befehlen, was gerade an oder aus ist und wie man es umschaltet, und den Einstellungen des Mods
 mit ihren Werten. In `claude -p` und VS Code kommt dasselbe als kurzer Text.
 
@@ -51,7 +51,7 @@ mit ihren Werten. In `claude -p` und VS Code kommt dasselbe als kurzer Text.
   `claude --version`.
 - Läuft im Terminal und im Code-Tab der Claude-Desktop-App. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen
   die meisten Mods nichts; Details in der README des jeweiligen Mods.
-- spotify braucht Windows und die Spotify-Desktop-App. Die anderen fünf sind an kein System gebunden (täglich unter
+- tune-strip braucht Windows und die Spotify-Desktop-App. Die anderen fünf sind an kein System gebunden (täglich unter
   Windows im Einsatz, in der CI unter Linux getestet); nur der optionale Speicher-Ring von limit-bars läuft nur unter
   Windows.
 - Die Mods-API kann sich zwischen Claude-Code-Versionen ändern. Funktioniert ein Mod nach einem Update nicht mehr,
@@ -72,7 +72,7 @@ claude plugin install clawd-buddy@fynn-mods
 claude plugin install limit-bars@fynn-mods
 claude plugin install sidekick@fynn-mods
 claude plugin install quick-replies@fynn-mods
-claude plugin install spotify@fynn-mods        # nur Windows
+claude plugin install tune-strip@fynn-mods     # nur Windows
 claude plugin install cost-ledger@fynn-mods
 ```
 
@@ -107,7 +107,7 @@ Drei Mods lösen Modellaufrufe **über dein Konto** aus (im Abo zählen sie auf 
 - **quick-replies** forkt die Session nach jeder Antwort **nur mit `/replies more on`** (standardmäßig aus): etwa so
   viel wie eine kurze Antwort, großteils aus dem Prompt-Cache.
 
-limit-bars macht nur einen Aufruf, solange `/keepwarm` läuft (standardmäßig aus). clawd-buddy, spotify und cost-ledger
+limit-bars macht nur einen Aufruf, solange `/keepwarm` läuft (standardmäßig aus). clawd-buddy, tune-strip und cost-ledger
 machen keine Modellaufrufe. cost-ledger bucht die Aufrufe der anderen Mods, so siehst du, was sie kosten.
 
 ## Die Mods
@@ -157,7 +157,7 @@ ohne Flackern mit.
 - **Rechte kurz:** liest Limits, Kontextgröße und Cache-Werte; kann eine Nachricht für eine Rückfrage anhalten; führt
   `/clear` und `/compact` aus und sendet eine Übergabe nur auf deine Wahl; `$.model.fork` nur, solange `/keepwarm`
   läuft; nur mit gesetztem `storagePath` startet er Windows PowerShell mit zwei festen, nur lesenden Skripten
-  (Laufwerksgröße, Größen nach Dateiendung); teilt spotify über `$.state` nur mit, wie breit die Balken sind. Keine
+  (Laufwerksgröße, Größen nach Dateiendung); teilt tune-strip über `$.state` nur mit, wie breit die Balken sind. Keine
   Dateien, kein Netzwerk, keine Umgebungsvariablen.
 - **Details:** [mods/limit-bars](mods/limit-bars/README.md) (englisch)
 
@@ -220,25 +220,28 @@ Mit `/replies more on` füllt ein Fork der Session bis zu vier Plätze; Claude C
   Nachricht, nie automatisch; `$.model.fork` nur mit `more` an. Keine Dateien, Prozesse, kein Netzwerk.
 - **Details:** [mods/quick-replies](mods/quick-replies/README.md) (englisch)
 
-### spotify
+### tune-strip
 
-![spotify in der Desktop-App: eine Player-Leiste ganz oben im Band mit einem erfundenen Titel, Recipe for Rain von Juniper Static, einem abstrakten Sonnenuntergangs-Cover, einem grünen Positionsbalken bei 1:23 von 3:34 und den Knöpfen zurück, Pause und weiter; darunter die Limit-Balken, Cache- und Speicher-Ring und Clawd.](assets/spotify.png)
+![tune-strip in der Desktop-App: eine Player-Leiste ganz oben im Band mit einem erfundenen Titel, Recipe for Rain von Juniper Static, einem abstrakten Sonnenuntergangs-Cover, einem grünen Positionsbalken bei 1:23 von 3:34 und den Knöpfen zurück, Pause und weiter; darunter die Limit-Balken, Cache- und Speicher-Ring und Clawd.](assets/tune-strip.png)
 
-**Nur Windows.** Ein Spotify-Player im Band über dem Prompt: Albumcover, Titel und Interpret, ein Positionsbalken im
+**Nur Windows.** Eine Musikleiste für Spotify im Band über dem Prompt: Albumcover, Titel und Interpret, ein Positionsbalken im
 Stil der Limit-Balken und Knöpfe für Neustart/zurück, Abspielen/Pause und weiter. Er liest und steuert die
 Spotify-Desktop-App über die Windows-Mediensteuerung: keine Anmeldung, kein Token, kein Netzwerk, keine Spotify-API.
 Browser und andere Player bleiben außen vor. In der Desktop-App bekommt er eine eigene Leiste ganz oben im Band, im
 Terminal ist er eine Zeile (`♪ Titel – Interpret 1:23/3:45 ⏮ ⏯ ⏭`), die bei schmalem Fenster schrumpft. Mit
 `extraButtons` kommen −15 s, +15 s, Zufall und Wiederholen dazu.
 
-- **Befehle:** `/spotify` (läuft gerade), `/spotify play|pause|toggle|next|prev`, `/spotify back|forward`,
-  `/spotify shuffle [on|off]`, `/spotify repeat [off|all|track]`, `/spotify size auto|full|compact|mini`,
-  `/spotify on|off`, `/spotify help`
+- **Befehle:** `/tune` (läuft gerade), `/tune play|pause|toggle|next|prev`, `/tune back|forward`,
+  `/tune shuffle [on|off]`, `/tune repeat [off|all|track]`, `/tune size auto|full|compact|mini`,
+  `/tune on|off`, `/tune help`
 - **Rechte kurz:** startet Windows PowerShell 5.1 mit zwei festen Skripten (Spotify-Sitzung lesen; Steuerbefehl
   senden), der Befehl geht nur als Umgebungsvariable hinein; teilt clawd-buddy über `$.state` nur mit, ob Musik läuft,
   ohne Titel oder Interpret; liest, wie breit limit-bars und Clawd sind. Keine Dateien, kein Netzwerk, keine Tokens,
   keine Modellaufrufe.
-- **Details:** [mods/spotify](mods/spotify/README.md) (englisch)
+- **Umbenannt:** Bis 0.3.1 hieß der Mod `spotify` mit dem Befehl `/spotify`. Zum Umstieg
+  `claude plugin marketplace update fynn-mods` und danach einmal `claude plugin install tune-strip@fynn-mods`; der
+  Marketplace ordnet den alten Namen dem neuen zu, deine Einstellungen ziehen mit um.
+- **Details:** [mods/tune-strip](mods/tune-strip/README.md) (englisch)
 
 ### cost-ledger
 
@@ -272,13 +275,13 @@ Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost
 
 ## Zusammenspiel
 
-- **Ein Band über dem Prompt.** clawd-buddy, limit-bars, quick-replies, spotify und sidekick zeichnen alle ins Band
+- **Ein Band über dem Prompt.** clawd-buddy, limit-bars, quick-replies, tune-strip und sidekick zeichnen alle ins Band
   über dem Prompt und folgen einer kleinen gemeinsamen Absprache: Limit-Balken und Cache-Ring stehen links neben Clawd,
-  die quick-replies-Pille darüber, die spotify-Leiste in der Desktop-App ganz oben (im Terminal ein Platz zwischen den
+  die quick-replies-Pille darüber, die tune-strip-Leiste in der Desktop-App ganz oben (im Terminal ein Platz zwischen den
   Balken und Clawd), und die Boxen von sidekick erscheinen dort nur, solange er etwas zu zeigen hat. Jeder Mod
   funktioniert auch allein.
-- **Clawd wippt zur Musik.** Läuft spotify, nickt Clawd im Takt, wenn er Zeit hat, und setzt manchmal Kopfhörer auf.
-  spotify verrät ihm nur, *dass* Musik läuft, nie was.
+- **Clawd wippt zur Musik.** Läuft tune-strip, nickt Clawd im Takt, wenn er Zeit hat, und setzt manchmal Kopfhörer auf.
+  tune-strip verrät ihm nur, *dass* Musik läuft, nie was.
 - **limit-bars und sidekick warnen beide vor kaltem Senden.** Nutzt du beide, schalte die Warnung von limit-bars
   einmal mit `/cache warn off` ab, damit nicht zwei Dialoge hintereinander kommen; die Rückfrage von sidekick ersetzt
   sie.
@@ -294,7 +297,7 @@ Ein Mod ist Code, der in Claude Code mit deinen Rechten läuft. Jeder Mod hier l
 hängt und welche API-Aufrufe er macht; `claude plugin validate mods/<mod>` zeigt die genaue Liste, und jede README
 erklärt in Klartext, wofür sie da sind. Keiner dieser Mods liest oder speichert Anmeldedaten oder Tokens, keiner hat einen
 eigenen Netzwerkzugang, und keiner schreibt irgendwohin außer in seinen eigenen Plugin-Speicher; einzige Ausnahme: cost-ledger schreibt seine eigene Datei in den Ordner, den du wählst, aber nur, wenn du `/ledger sync` einschaltest. Zwei Mods
-starten Prozesse, beide nur Windows PowerShell mit festen Skripten: spotify, um die Spotify-Sitzung der
+starten Prozesse, beide nur Windows PowerShell mit festen Skripten: tune-strip, um die Spotify-Sitzung der
 Windows-Mediensteuerung zu lesen und zu steuern (keine Dateien, kein Netzwerk), und limit-bars nur für den optionalen
 Speicher-Ring. Dieser Ring ist auch das Einzige, was auf dein Laufwerk schaut: Er liest Größen, nie Dateiinhalte. Sicherheitsproblem
 gefunden? Siehe [SECURITY.md](SECURITY.md) (englisch).
@@ -307,7 +310,7 @@ gefunden? Siehe [SECURITY.md](SECURITY.md) (englisch).
 | Nach einem Claude-Code-Update geht ein Mod nicht mehr | Die Mods aktualisieren (`claude plugin marketplace update fynn-mods`, dann `claude plugin update <mod>@fynn-mods`). Hilft das nicht, bitte ein Issue anlegen. |
 | Zwei Rückfragen hintereinander vor dem Senden mit kaltem Cache | limit-bars und sidekick fragen beide vor dem Senden mit kaltem Cache nach. Die Rückfrage von limit-bars mit `/cache warn off` abschalten. |
 | Alles ist englisch | Die Option `language` mit `/plugin configure <mod>@fynn-mods` auf `de` stellen. |
-| spotify zeigt nichts | Er läuft nur unter Windows und braucht die Spotify-Desktop-App (der Web-Player wird nicht erkannt). Ist Spotify geschlossen, zeichnet er nichts; `/spotify` sagt, was er sieht. Falls ausgeschaltet: `/spotify on`. |
+| tune-strip zeigt nichts | Er läuft nur unter Windows und braucht die Spotify-Desktop-App (der Web-Player wird nicht erkannt). Ist Spotify geschlossen, zeichnet er nichts; `/tune` sagt, was er sieht. Falls ausgeschaltet: `/tune on`. |
 | Der Speicher-Ring fehlt oder bleibt leer | Er läuft nur unter Windows und ist standardmäßig aus: `storagePath` (z. B. `D:\`) in `/config` setzen und prüfen, ob `/bars show storage on` gilt. Bleibt er leer, zeigt `/disk` den Fehler. |
 | cost-ledger zeigt einen Chat mit Haiku 5.5 etwa zehnfach zu teuer an | Claude Code v2.1.291 berechnete Haiku 5.5 in `/cost` wie Haiku 4.5, und cost-ledger bucht diesen Wert für den Chat. Claude Code aktualisieren; v2.1.295 rechnet richtig. Modellaufrufe der Mods rechnet cost-ledger mit eigenen Preisen. |
 
@@ -324,7 +327,7 @@ Pull Request anfängst, lies bitte [CONTRIBUTING.md](CONTRIBUTING.md) (englisch)
 
 Das ist ein inoffizielles Hobbyprojekt, nicht von Anthropic erstellt, unterstützt oder geprüft. clawd-buddy ist eine
 Fan-Hommage an Clawd, das Maskottchen von Claude Code; die Pixel sind von Hand gezeichnet. Hat Anthropic Einwände, wird
-der Mod entfernt. Spotify ist eine Marke der Spotify AB; der Mod spotify stammt nicht von Spotify und spricht nur über
+der Mod entfernt. Spotify ist eine Marke der Spotify AB; der Mod tune-strip stammt nicht von Spotify und spricht nur über
 Windows mit der Spotify-Desktop-App.
 
 ## Lizenz

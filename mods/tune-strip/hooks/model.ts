@@ -1,4 +1,4 @@
-// spotify: reine Logik ohne `$`: Position, Zeitformat, Befehle von `/spotify`, Wahl der Stufe, Takt.
+// tune-strip: reine Logik ohne `$`: Position, Zeitformat, Befehle von `/tune`, Wahl der Stufe, Takt.
 import { REPEAT_MODES } from './ps.ts'
 import type { ControlCmd, RepeatMode, Track } from './ps.ts'
 
@@ -57,8 +57,8 @@ export type ControlWord = (typeof CONTROL_WORDS)[number]
 const ON_OFF: Record<string, boolean> = { on: true, off: false }
 const REPEAT_ARG: Record<string, RepeatMode> = { off: 'None', none: 'None', all: 'List', list: 'List', track: 'Track', one: 'Track' }
 
-/** `/spotify <args>` lesen. Leere Eingabe zeigt den Stand; unbekanntes erstes Wort ist `unknown`. */
-export function parseSpotify(args: string): Parsed {
+/** `/tune <args>` lesen. Leere Eingabe zeigt den Stand; unbekanntes erstes Wort ist `unknown`. */
+export function parseTune(args: string): Parsed {
   const w = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
   const [first, second] = w
   if (!first || first === 'status') return w.length > 1 ? { kind: 'unknown', word: w.join(' ') } : { kind: 'status' }

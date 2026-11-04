@@ -1,4 +1,4 @@
-// spotify: Texte en/de, ohne `$`. Die Sprache kommt aus `userConfig.language` (Standard en, release/I18N.md). Beide Tabellen haben
+// tune-strip: Texte en/de, ohne `$`. Die Sprache kommt aus `userConfig.language` (Standard en, release/I18N.md). Beide Tabellen haben
 // dieselben Schlüssel. Befehle und Argumente sind in beiden Sprachen englisch (Memory: befehle-englisch).
 
 export type Lang = 'en' | 'de'
@@ -37,7 +37,7 @@ const en = {
   enabled: (v: boolean) => `${v ? 'band on' : 'band off'}. Controls by command still work.`,
   unknown: (w: string) => `unknown "${w}".`,
   badArg: (w: string, a: string) => `"${a}" does not fit ${w}.`,
-  seeHelp: 'All commands: /spotify help',
+  seeHelp: 'All commands: /tune help',
   hint: 'play|pause|toggle|next|prev|back|forward|shuffle|repeat|size|on|off|help',
   alt: {
     cover: (track: string) => `Cover: ${track}`,
@@ -80,8 +80,8 @@ const en = {
     featSize: 'Size',
     featShuffle: 'Shuffle button',
     bySetting: 'Setting',
-    footerTerminal: 'Change settings: /plugin configure spotify · Turn the mod off: /plugin disable spotify',
-    footerDesktop: 'Turn the mod off: + → Plugins → Manage plugins · Change settings: /plugin configure spotify in a terminal',
+    footerTerminal: 'Change settings: /plugin configure tune-strip · Turn the mod off: /plugin disable tune-strip',
+    footerDesktop: 'Turn the mod off: + → Plugins → Manage plugins · Change settings: /plugin configure tune-strip in a terminal',
     settings: { language: 'Language / Sprache', size: 'Size', pollSeconds: 'Poll every (s)', extraButtons: 'Extra buttons (±15 s, shuffle, repeat)' },
   },
 }
@@ -116,7 +116,7 @@ const de: typeof en = {
   enabled: (v) => `Band ${v ? 'an' : 'aus'}. Steuern per Befehl geht weiter.`,
   unknown: (w) => `unbekannt „${w}“.`,
   badArg: (w, a) => `„${a}“ passt nicht zu ${w}.`,
-  seeHelp: 'Alle Befehle: /spotify help',
+  seeHelp: 'Alle Befehle: /tune help',
   hint: 'play|pause|toggle|next|prev|back|forward|shuffle|repeat|size|on|off|help',
   alt: {
     cover: (track) => `Cover: ${track}`,
@@ -159,8 +159,8 @@ const de: typeof en = {
     featSize: 'Größe',
     featShuffle: 'Zufall-Knopf',
     bySetting: 'Einstellung',
-    footerTerminal: 'Einstellungen ändern: /plugin configure spotify · Mod abschalten: /plugin disable spotify',
-    footerDesktop: 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure spotify',
+    footerTerminal: 'Einstellungen ändern: /plugin configure tune-strip · Mod abschalten: /plugin disable tune-strip',
+    footerDesktop: 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure tune-strip',
     settings: { language: 'Sprache', size: 'Größe', pollSeconds: 'Abfrage alle (s)', extraButtons: 'Zusatzknöpfe (±15 s, Zufall, Wiederholen)' },
   },
 }

@@ -1,4 +1,0 @@
-{
-  "description": "spotify – hooks module",
-  "modules": ["./register.ts"]
-}

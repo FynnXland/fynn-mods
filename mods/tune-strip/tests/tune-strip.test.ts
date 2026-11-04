@@ -1,9 +1,9 @@
-// spotify: Skripte, Antworten, Befehle, Stufen, Band-Reihenfolge, Zeichnung und Fehlerpfade (SPEC.md → Tests).
+// tune-strip: Skripte, Antworten, Befehle, Stufen, Band-Reihenfolge, Zeichnung und Fehlerpfade (SPEC.md → Tests).
 // PowerShell läuft nie echt: `process.run` ist gestubbt (die echten Skripte prüft scripts/smoke.ps1 und der Sicht-Check).
 import type { On, RenderNode } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { joinBand, layer, slot, splitBand } from '../hooks/band.ts'
-import { actionFor, desktopRoom, desktopStage, fmtTime, nextRepeat, parseSpotify, pickStage, pollInterval, positionNow, ratio } from '../hooks/model.ts'
+import { actionFor, desktopRoom, desktopStage, fmtTime, nextRepeat, parseTune, pickStage, pollInterval, positionNow, ratio } from '../hooks/model.ts'
 import { CONTROL_SCRIPT, PS_ABS, QUERY_SCRIPT, parseQuery, trackKey } from '../hooks/ps.ts'
 import type { Track } from '../hooks/ps.ts'
 import { DESKTOP_WIDTHS, TERMINAL_WIDTHS, clip, coverSvg, infoSvg, sepSvg } from '../hooks/view.ts'
@@ -29,7 +29,7 @@ const COVER = 'AAAA'.repeat(50)
 const props = (bodyColumns: number) =>
   ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
 const band = (surface: 'terminal' | 'desktop' | 'vscode' | 'mobile', bodyColumns = 120, extra: Record<string, unknown> = {}) =>
-  ({ plugin: 'spotify', component: 'AbovePrompt', requestId: 'above-prompt', props: { ...props(bodyColumns), ...extra }, surface }) as never
+  ({ plugin: 'tune-strip', component: 'AbovePrompt', requestId: 'above-prompt', props: { ...props(bodyColumns), ...extra }, surface }) as never
 
 const q = (o: Partial<Record<string, unknown>> = {}, cover = false) =>
   JSON.stringify({
@@ -171,28 +171,28 @@ test('Zeitformat und Anteil', async () => {
   expect(ratio(5, 0)).toBe(0)
 })
 
-test('/spotify: Wörter, Argumente und Fehlformen', async () => {
-  expect(parseSpotify('')).toEqual({ kind: 'status' })
-  expect(parseSpotify('STATUS')).toEqual({ kind: 'status' })
-  expect(parseSpotify('help')).toEqual({ kind: 'help' })
-  expect(parseSpotify('?')).toEqual({ kind: 'help' })
-  expect(parseSpotify('help me')).toEqual({ kind: 'unknown', word: 'help me' })
-  for (const w of ['play', 'pause', 'toggle', 'next', 'prev', 'back', 'forward']) expect(parseSpotify(w)).toEqual({ kind: 'control', word: w })
-  expect(parseSpotify('next now')).toEqual({ kind: 'unknown', word: 'next now' })
-  expect(parseSpotify('shuffle')).toEqual({ kind: 'control', word: 'shuffle' })
-  expect(parseSpotify('shuffle on')).toEqual({ kind: 'control', word: 'shuffle', arg: 'on' })
-  expect(parseSpotify('shuffle maybe')).toEqual({ kind: 'badArg', word: 'shuffle', arg: 'maybe' })
-  expect(parseSpotify('repeat all')).toEqual({ kind: 'control', word: 'repeat', arg: 'List' })
-  expect(parseSpotify('repeat track')).toEqual({ kind: 'control', word: 'repeat', arg: 'Track' })
-  expect(parseSpotify('repeat off')).toEqual({ kind: 'control', word: 'repeat', arg: 'None' })
-  expect(parseSpotify('repeat 5; calc')).toEqual({ kind: 'badArg', word: 'repeat', arg: '5; calc' })
-  expect(parseSpotify('size mini')).toEqual({ kind: 'size', size: 'mini' })
-  expect(parseSpotify('size auto')).toEqual({ kind: 'size', size: 'auto' })
-  expect(parseSpotify('size off')).toEqual({ kind: 'enabled', value: false })
-  expect(parseSpotify('size huge')).toEqual({ kind: 'badArg', word: 'size', arg: 'huge' })
-  expect(parseSpotify('off')).toEqual({ kind: 'enabled', value: false })
-  expect(parseSpotify('on')).toEqual({ kind: 'enabled', value: true })
-  expect(parseSpotify('volume 5')).toEqual({ kind: 'unknown', word: 'volume' })
+test('/tune: Wörter, Argumente und Fehlformen', async () => {
+  expect(parseTune('')).toEqual({ kind: 'status' })
+  expect(parseTune('STATUS')).toEqual({ kind: 'status' })
+  expect(parseTune('help')).toEqual({ kind: 'help' })
+  expect(parseTune('?')).toEqual({ kind: 'help' })
+  expect(parseTune('help me')).toEqual({ kind: 'unknown', word: 'help me' })
+  for (const w of ['play', 'pause', 'toggle', 'next', 'prev', 'back', 'forward']) expect(parseTune(w)).toEqual({ kind: 'control', word: w })
+  expect(parseTune('next now')).toEqual({ kind: 'unknown', word: 'next now' })
+  expect(parseTune('shuffle')).toEqual({ kind: 'control', word: 'shuffle' })
+  expect(parseTune('shuffle on')).toEqual({ kind: 'control', word: 'shuffle', arg: 'on' })
+  expect(parseTune('shuffle maybe')).toEqual({ kind: 'badArg', word: 'shuffle', arg: 'maybe' })
+  expect(parseTune('repeat all')).toEqual({ kind: 'control', word: 'repeat', arg: 'List' })
+  expect(parseTune('repeat track')).toEqual({ kind: 'control', word: 'repeat', arg: 'Track' })
+  expect(parseTune('repeat off')).toEqual({ kind: 'control', word: 'repeat', arg: 'None' })
+  expect(parseTune('repeat 5; calc')).toEqual({ kind: 'badArg', word: 'repeat', arg: '5; calc' })
+  expect(parseTune('size mini')).toEqual({ kind: 'size', size: 'mini' })
+  expect(parseTune('size auto')).toEqual({ kind: 'size', size: 'auto' })
+  expect(parseTune('size off')).toEqual({ kind: 'enabled', value: false })
+  expect(parseTune('size huge')).toEqual({ kind: 'badArg', word: 'size', arg: 'huge' })
+  expect(parseTune('off')).toEqual({ kind: 'enabled', value: false })
+  expect(parseTune('on')).toEqual({ kind: 'enabled', value: true })
+  expect(parseTune('volume 5')).toEqual({ kind: 'unknown', word: 'volume' })
 })
 
 test('Wort → Steuer-Aufruf: Argumente nur als Zahl oder fester Wert', async () => {
@@ -255,33 +255,33 @@ const mk = (no: number, name: string, side: 'left' | 'right' = 'left') => (inner
 }
 const order = (n: RenderNode | null) => keysOf(n as Node).filter((k) => k.startsWith('slot:')).map((k) => k.split(':')[2])
 
-test('Plätze: in jeder Reihenfolge der Kette steht limit-bars vor spotify vor clawd-buddy', async () => {
+test('Plätze: in jeder Reihenfolge der Kette steht limit-bars vor tune-strip vor clawd-buddy', async () => {
   const mods = {
     bars: mk(10, 'limit-bars'),
-    spotify: mk(20, 'spotify'),
+    'tune-strip': mk(20, 'tune-strip'),
     clawd: mk(30, 'clawd-buddy', 'right'),
   }
   const perms = [
-    ['bars', 'spotify', 'clawd'],
-    ['bars', 'clawd', 'spotify'],
-    ['spotify', 'bars', 'clawd'],
-    ['spotify', 'clawd', 'bars'],
-    ['clawd', 'bars', 'spotify'],
-    ['clawd', 'spotify', 'bars'],
+    ['bars', 'tune-strip', 'clawd'],
+    ['bars', 'clawd', 'tune-strip'],
+    ['tune-strip', 'bars', 'clawd'],
+    ['tune-strip', 'clawd', 'bars'],
+    ['clawd', 'bars', 'tune-strip'],
+    ['clawd', 'tune-strip', 'bars'],
   ] as const
   for (const p of perms) {
     // p[0] liegt innen (zeichnet zuerst), p[2] außen
     let tree: RenderNode | null = { type: 'engine', ref: 0 } as never
     for (const name of p) tree = mods[name](tree)
-    expect(order(tree)).toEqual(['limit-bars', 'spotify', 'clawd-buddy'])
+    expect(order(tree)).toEqual(['limit-bars', 'tune-strip', 'clawd-buddy'])
     // Der Kern-Knoten geht nicht verloren und steht in der Mitte
     expect(JSON.stringify(tree)).toContain('"engine"')
   }
 })
 
 test('Plätze: allein steht nur Spotify in der Zeile; ohne Plätze und Ebenen bleibt der Grund unverändert', async () => {
-  const alone = mk(20, 'spotify')(null)
-  expect(order(alone)).toEqual(['spotify'])
+  const alone = mk(20, 'tune-strip')(null)
+  expect(order(alone)).toEqual(['tune-strip'])
   const base = { type: 'Text', props: {}, children: ['x'] } as never
   expect(joinBand([], base, [])).toBe(base)
   expect(joinBand([], null, [])).toBeNull()
@@ -289,25 +289,25 @@ test('Plätze: allein steht nur Spotify in der Zeile; ohne Plätze und Ebenen bl
 
 test('Plätze und Ebenen: Ebenen anderer Mods gehen nie verloren, auch nicht aus fremden Hüllen', async () => {
   const lay = (n: number, name: string) => layer(n, name, key(name))
-  // quick-replies innen (Ebene + Grund), spotify außen, dann sidekick außen
+  // quick-replies innen (Ebene + Grund), tune-strip außen, dann sidekick außen
   const inner = joinBand([lay(20, 'quick-replies')], key('ground'), [])
-  const withSpotify = mk(20, 'spotify')(inner)
+  const withSpotify = mk(20, 'tune-strip')(inner)
   const s = splitBand(withSpotify)
   expect(s.layers.length).toBe(1)
   expect(s.slots.length).toBe(1)
   const all = joinBand([...s.layers, lay(30, 'sidekick')], s.base, s.slots)
   const k = keysOf(all as Node)
   expect(k.indexOf('layer:30:sidekick')).toBeLessThan(k.indexOf('layer:20:quick-replies'))
-  expect(k.indexOf('layer:20:quick-replies')).toBeLessThan(k.indexOf('slot:20:spotify'))
+  expect(k.indexOf('layer:20:quick-replies')).toBeLessThan(k.indexOf('slot:20:tune-strip'))
   expect(k).toContain('ground')
 })
 
 test('Plätze: zweimal zusammenbauen verschachtelt nichts (Zeile wird beim Herausholen aufgelöst)', async () => {
   let t: RenderNode | null = mk(10, 'limit-bars')(null)
-  for (let i = 0; i < 3; i++) t = mk(20, 'spotify')(t)
+  for (let i = 0; i < 3; i++) t = mk(20, 'tune-strip')(t)
   const rows = keysOf(t as Node).filter((x) => x === 'band-row')
   expect(rows.length).toBe(1)
-  expect(order(t).filter((x) => x === 'spotify').length).toBe(3) // drei gleiche Plätze bleiben drei; die Mods zeichnen je Aufruf nur einen
+  expect(order(t).filter((x) => x === 'tune-strip').length).toBe(3) // drei gleiche Plätze bleiben drei; die Mods zeichnen je Aufruf nur einen
 })
 
 // ---------- Zeichnung ----------
@@ -326,8 +326,8 @@ test('Desktop: Cover als Svg und Knöpfe mit Schlüsseln, fremder Inhalt bleibt'
   for (const b of ['prev', 'toggle', 'next']) expect(k).toContain(b)
   for (const b of ['back', 'forward', 'shuffle', 'repeat']) expect(k).not.toContain(b) // nur mit extraButtons
   // Volle Stufe = eigene Leiste über allen Mods, kein Platz in der Zeile
-  expect(k).toContain('layer:40:spotify')
-  expect(k).not.toContain('slot:20:spotify')
+  expect(k).toContain('layer:40:tune-strip')
+  expect(k).not.toContain('slot:20:tune-strip')
   await ui.unmount()
 })
 
@@ -350,11 +350,11 @@ test('Desktop: Knöpfe zeigen nur Symbole (kein ausgeschriebener label, den der 
     expect(textOf(b)).toMatch(/^[ ⏮⏸▶⏭⇄↻−+0-9]+$/u)
   }
   await ui.unmount()
-  // Ebenen: spotify (40) steht vor quick-replies (20) und sidekick (30) in der Wurzel
+  // Ebenen: tune-strip (40) steht vor quick-replies (20) und sidekick (30) in der Wurzel
   const lay = (n: number, name: string) => layer(n, name, key(name))
-  const joined = joinBand([lay(20, 'quick-replies'), lay(30, 'sidekick'), layer(40, 'spotify', key('s'))], key('ground'), [])
+  const joined = joinBand([lay(20, 'quick-replies'), lay(30, 'sidekick'), layer(40, 'tune-strip', key('s'))], key('ground'), [])
   const k = keysOf(joined as Node)
-  expect(k.indexOf('layer:40:spotify')).toBeLessThan(k.indexOf('layer:30:sidekick'))
+  expect(k.indexOf('layer:40:tune-strip')).toBeLessThan(k.indexOf('layer:30:sidekick'))
   expect(k.indexOf('layer:30:sidekick')).toBeLessThan(k.indexOf('layer:20:quick-replies'))
 })
 
@@ -395,7 +395,7 @@ test('Keine Spotify-Sitzung: nichts gezeichnet, kein Fehler; das Band erscheint,
   await ui.unmount()
 })
 
-test('Stufen im Desktop: fest gewählt per /spotify size; auto ohne bekannte Breite = voll', DE, async ($, on) => {
+test('Stufen im Desktop: fest gewählt per /tune size; auto ohne bekannte Breite = voll', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
   const k = async () => {
@@ -404,20 +404,20 @@ test('Stufen im Desktop: fest gewählt per /spotify size; auto ohne bekannte Bre
     await ui.unmount()
     return out
   }
-  expect(await k()).toContain('layer:40:spotify')
-  await $.command.run({ command: 'spotify', args: 'size compact' } as never)
+  expect(await k()).toContain('layer:40:tune-strip')
+  await $.command.run({ command: 'tune', args: 'size compact' } as never)
   expect(w.saved.get('settings')).toEqual({ size: 'compact', enabled: true })
   let keys = await k()
   expect(keys).toContain('toggle')
   expect(keys).not.toContain('back')
-  expect(keys).toContain('slot:20:spotify') // kompakt = Platz in der Zeile, keine Leiste
-  expect(keys).not.toContain('layer:40:spotify')
-  await $.command.run({ command: 'spotify', args: 'size mini' } as never)
+  expect(keys).toContain('slot:20:tune-strip') // kompakt = Platz in der Zeile, keine Leiste
+  expect(keys).not.toContain('layer:40:tune-strip')
+  await $.command.run({ command: 'tune', args: 'size mini' } as never)
   keys = await k()
   expect(keys).toContain('toggle')
   expect(keys).not.toContain('prev')
-  await $.command.run({ command: 'spotify', args: 'size auto' } as never)
-  expect(await k()).toContain('layer:40:spotify')
+  await $.command.run({ command: 'tune', args: 'size auto' } as never)
+  expect(await k()).toContain('layer:40:tune-strip')
 })
 
 test('Terminal: schmal wird die Zeile erst mini, dann weg', DE, async ($, on) => {
@@ -494,7 +494,7 @@ test('Jeder Knopf löst genau einen Steuer-Aufruf aus; der Befehl geht nur über
   await ui.unmount()
 })
 
-test('Zurück: über 3 s an den Anfang, dann zum vorigen Titel; `/spotify prev` geht immer zum vorigen', DE, async ($, on) => {
+test('Zurück: über 3 s an den Anfang, dann zum vorigen Titel; `/tune prev` geht immer zum vorigen', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
   const ui = await $.ui.mount(band('desktop', 120))
@@ -514,7 +514,7 @@ test('Zurück: über 3 s an den Anfang, dann zum vorigen Titel; `/spotify prev` 
   await w.clock.settle()
   expect(ctl().map((r) => r.env?.SP_CMD)).toEqual(['seek', 'prev'])
   await ui.unmount()
-  await $.command.run({ command: 'spotify', args: 'prev' } as never)
+  await $.command.run({ command: 'tune', args: 'prev' } as never)
   expect(ctl().at(-1)?.env?.SP_CMD).toBe('prev')
 })
 
@@ -534,10 +534,10 @@ test('Zeichnen: Zeit und Balken höchstens alle 5 s neu, nicht jede Sekunde', DE
   await ui.unmount()
 })
 
-test('/spotify: Antworten, Spulen aus dem letzten Stand, Fehler', DE, async ($, on) => {
+test('/tune: Antworten, Spulen aus dem letzten Stand, Fehler', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
-  const run = async (args = '') => (await $.command.run({ command: 'spotify', args } as never)).text as string
+  const run = async (args = '') => (await $.command.run({ command: 'tune', args } as never)).text as string
   expect(await run('')).toContain('Hey Jude – The Beatles')
   expect(await run('pause')).toBe('pausiert')
   expect(w.runs.filter((r) => r.kind === 'control').at(-1)?.env?.SP_CMD).toBe('pause')
@@ -548,7 +548,7 @@ test('/spotify: Antworten, Spulen aus dem letzten Stand, Fehler', DE, async ($, 
   w.state.ctl = 'nosession'
   expect(await run('next')).toContain('keine Spotify-Sitzung')
   expect(await run('volume 5')).toContain('unbekannt')
-  expect(await run('volume 5')).toContain('/spotify help')
+  expect(await run('volume 5')).toContain('/tune help')
   expect(await run('size gigantisch')).toContain('passt nicht')
   // Steuern geht auch bei ausgeblendetem Band
   w.state.ctl = 'ok'
@@ -559,13 +559,13 @@ test('/spotify: Antworten, Spulen aus dem letzten Stand, Fehler', DE, async ($, 
   expect(w.count('control')).toBe(before + 1)
 })
 
-test('/spotify off blendet das Band aus und stoppt den Takt; on bringt es zurück', DE, async ($, on) => {
+test('/tune off blendet das Band aus und stoppt den Takt; on bringt es zurück', DE, async ($, on) => {
   const w = world(on, { inner: 'text' })
   await w.start($)
   let ui = await $.ui.mount(band('desktop', 120))
   expect(seen((await ui.drawn()) as Node)).toContain('Hey Jude')
   await ui.unmount()
-  await $.command.run({ command: 'spotify', args: 'off' } as never)
+  await $.command.run({ command: 'tune', args: 'off' } as never)
   ui = await $.ui.mount(band('desktop', 120))
   expect(textOf((await ui.drawn()) as Node)).toBe('von anderen')
   await ui.unmount()
@@ -573,26 +573,26 @@ test('/spotify off blendet das Band aus und stoppt den Takt; on bringt es zurüc
   await w.clock.advance(60000)
   await w.clock.settle()
   expect(w.count('query')).toBe(runs) // aus: kein PowerShell mehr im Takt
-  await $.command.run({ command: 'spotify', args: 'on' } as never)
+  await $.command.run({ command: 'tune', args: 'on' } as never)
   ui = await $.ui.mount(band('desktop', 120))
   expect(seen((await ui.drawn()) as Node)).toContain('Hey Jude')
   await ui.unmount()
 })
 
-test('/spotify help: Tabelle mit Kennung, Markdown als Fallback, Nebenwörter zeichnen sie nicht', DE, async ($, on) => {
+test('/tune help: Tabelle mit Kennung, Markdown als Fallback, Nebenwörter zeichnen sie nicht', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
-  const text = (await $.command.run({ command: 'spotify', args: 'help' } as never)).text as string
+  const text = (await $.command.run({ command: 'tune', args: 'help' } as never)).text as string
   expect(text).toMatch(/#[0-9a-z]{5,}/)
-  expect(text).toContain('/spotify size')
+  expect(text).toContain('/tune size')
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ plugin: 'spotify', component: 'CommandOutput', requestId: 'c1', surface, viewport: { columns: 100, rows: 30 }, props: { command: 'spotify', args: 'help', text, isErrored: false } } as never)
-    expect(await ui.find({ key: 'spotify-help' })).toBeDefined()
+    const ui = await $.ui.mount({ plugin: 'tune-strip', component: 'CommandOutput', requestId: 'c1', surface, viewport: { columns: 100, rows: 30 }, props: { command: 'tune', args: 'help', text, isErrored: false } } as never)
+    expect(await ui.find({ key: 'tune-strip-help' })).toBeDefined()
     await ui.unmount()
   }
   // Fremde Argumente zeichnen keine Tabelle
-  const ui = await $.ui.mount({ plugin: 'spotify', component: 'CommandOutput', requestId: 'c2', surface: 'desktop', viewport: { columns: 100, rows: 30 }, props: { command: 'spotify', args: 'volume #1', text, isErrored: false } } as never)
-  expect(await ui.find({ key: 'spotify-help' })).toBeUndefined()
+  const ui = await $.ui.mount({ plugin: 'tune-strip', component: 'CommandOutput', requestId: 'c2', surface: 'desktop', viewport: { columns: 100, rows: 30 }, props: { command: 'tune', args: 'volume #1', text, isErrored: false } } as never)
+  expect(await ui.find({ key: 'tune-strip-help' })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -621,7 +621,7 @@ for (const bad of ['deny', 'empty', 'broken', 'text']) {
     const ui = await $.ui.mount(band('desktop', 120))
     expect(textOf((await ui.drawn()) as Node)).toBe('von anderen')
     await ui.unmount()
-    expect(typeof ((await $.command.run({ command: 'spotify', args: '' } as never)).text as string)).toBe('string')
+    expect(typeof ((await $.command.run({ command: 'tune', args: '' } as never)).text as string)).toBe('string')
     for (let i = 0; i < 12; i++) await w.clock.advance(4000)
     await w.clock.settle()
     const n = w.count('query')
@@ -641,7 +641,7 @@ test('Kaputtes Cover: der Titel wird trotzdem gezeigt, das Cover bleibt der Plat
   await ui.unmount()
 })
 
-test('Nicht Windows: nichts gezeichnet, kein PowerShell, /spotify sagt es', DE, async ($, on) => {
+test('Nicht Windows: nichts gezeichnet, kein PowerShell, /tune sagt es', DE, async ($, on) => {
   const w = world(on, { inner: 'text', cwd: '/home/x' })
   await w.start($)
   await w.clock.advance(20000)
@@ -650,22 +650,22 @@ test('Nicht Windows: nichts gezeichnet, kein PowerShell, /spotify sagt es', DE, 
   expect(textOf((await ui.drawn()) as Node)).toBe('von anderen')
   await ui.unmount()
   expect(w.count('query')).toBe(0)
-  expect(((await $.command.run({ command: 'spotify', args: 'play' } as never)).text as string)).toContain('Windows')
+  expect(((await $.command.run({ command: 'tune', args: 'play' } as never)).text as string)).toContain('Windows')
   expect(w.count('control')).toBe(0)
 })
 
 test('Englisch ist der Standard', async ($, on) => {
   const w = world(on)
   await w.start($)
-  const text = (await $.command.run({ command: 'spotify', args: 'volume 5' } as never)).text as string
+  const text = (await $.command.run({ command: 'tune', args: 'volume 5' } as never)).text as string
   expect(text).toContain('unknown')
 })
 
-test('/spotify beim ersten Zeichnen: wartet auf die laufende Abfrage statt „keine Sitzung“ zu melden', DE, async ($, on) => {
+test('/tune beim ersten Zeichnen: wartet auf die laufende Abfrage statt „keine Sitzung“ zu melden', DE, async ($, on) => {
   const w = world(on)
   await w.start($, 'terminal')
   const ui = await $.ui.mount(band('terminal', 120)) // startet die erste Abfrage
-  const text = (await $.command.run({ command: 'spotify', args: '' } as never)).text as string
+  const text = (await $.command.run({ command: 'tune', args: '' } as never)).text as string
   expect(text).toContain('Hey Jude')
   await ui.unmount()
 })
@@ -709,9 +709,9 @@ test('Leiste: Hinweis je Knopf beim Überfahren (Hover-Gruppe), Absatz vor Zufal
   await ui.unmount()
 })
 
-// ---------- 0.3.0: spotify.playing für clawd-buddy ----------
+// ---------- 0.3.0: tune-strip.playing für clawd-buddy ----------
 
-test('0.3.0: spotify.playing meldet nur „spielt ja/nein“, außerhalb des Zeichnens; Pause, aus und nach /clear stimmt er wieder; Ablehnung wird wiederholt', DE, async ($, on) => {
+test('0.3.0: tune-strip.playing meldet nur „spielt ja/nein“, außerhalb des Zeichnens; Pause, aus und nach /clear stimmt er wieder; Ablehnung wird wiederholt', DE, async ($, on) => {
   const w = world(on, { inner: 'text' })
   const writes: unknown[] = []
   let stored: unknown = undefined
@@ -755,13 +755,13 @@ test('0.3.0: spotify.playing meldet nur „spielt ja/nein“, außerhalb des Zei
   await w.clock.advance(6000)
   await w.clock.settle()
   expect(stored).toEqual({ playing: true })
-  // /spotify off: null
-  await $.command.run({ command: 'spotify', args: 'off' } as never)
+  // /tune off: null
+  await $.command.run({ command: 'tune', args: 'off' } as never)
   expect(writes.at(-1)).toBeNull()
   await ui.unmount()
 })
 
-test('0.3.1: nach /clear, /resume und /branch steht spotify.playing sofort wieder da (classic.SessionStart), nicht nach Start oder Komprimieren', DE, async ($, on) => {
+test('0.3.1: nach /clear, /resume und /branch steht tune-strip.playing sofort wieder da (classic.SessionStart), nicht nach Start oder Komprimieren', DE, async ($, on) => {
   const w = world(on, { inner: 'text' })
   let stored: unknown = undefined
   let sets = 0

@@ -1083,7 +1083,7 @@ test('Kontext im Mod: neue Stufe zeigt er am Turn-Ende, jede Stufe einmal; nach 
   await ui.unmount()
 })
 
-// ---- 0.8.0: Platz 30 der Grund-Zeile und Breitenmeldung für spotify (docs/BAND.md)
+// ---- 0.8.0: Platz 30 der Grund-Zeile und Breitenmeldung für tune-strip (docs/BAND.md)
 
 test('0.8.0: Clawd ist Platz 30 (rechts) neben den anderen Plätzen; fremde Plätze und Ebenen bleiben', async ($, on) => {
   mock.clock(on)
@@ -1094,20 +1094,20 @@ test('0.8.0: Clawd ist Platz 30 (rechts) neben den anderen Plätzen; fremde Plä
     return { value: undefined }
   })
   on('ui.log', () => ({ value: undefined }))
-  // Weiter innen: limit-bars (Platz 10) und spotify (Platz 20)
+  // Weiter innen: limit-bars (Platz 10) und tune-strip (Platz 20)
   const slot = (key: string) => ({ type: 'Box', props: { key, flexShrink: 0 }, children: [key] })
-  on('ui.render', () => ({ type: 'Box', props: { key: 'band-row', flexDirection: 'row' }, children: [slot('slot:20:spotify'), slot('slot:10:limit-bars'), { type: 'Box', props: { key: 'band-rest', flexGrow: 1 }, children: [{ type: 'engine', ref: 0 }] }] }))
+  on('ui.render', () => ({ type: 'Box', props: { key: 'band-row', flexDirection: 'row' }, children: [slot('slot:20:tune-strip'), slot('slot:10:limit-bars'), { type: 'Box', props: { key: 'band-rest', flexGrow: 1 }, children: [{ type: 'engine', ref: 0 }] }] }))
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface })
     const tree = (await ui.drawn()) as any
     expect(tree.props.key).toBe('band-row')
     const keys = tree.children.map((c: any) => c.props.key)
-    expect(keys).toEqual(['slot:10:limit-bars', 'slot:20:spotify', 'band-rest', 'slot:30:clawd-buddy:right'])
+    expect(keys).toEqual(['slot:10:limit-bars', 'slot:20:tune-strip', 'band-rest', 'slot:30:clawd-buddy:right'])
     await ui.unmount()
   }
 })
 
-test('0.8.0: die Platzbreite geht als $.state clawd-buddy.band an spotify: 400 px im Desktop, null im Terminal und wenn Clawd aus ist', async ($, on) => {
+test('0.8.0: die Platzbreite geht als $.state clawd-buddy.band an tune-strip: 400 px im Desktop, null im Terminal und wenn Clawd aus ist', async ($, on) => {
   mock.clock(on)
   const store = new Map<string, unknown>()
   const writes: unknown[] = []
@@ -1133,7 +1133,7 @@ test('0.8.0: die Platzbreite geht als $.state clawd-buddy.band an spotify: 400 p
 
 // ---- 0.8.1: Zurückspringen im Desktop, wenn ein anderer Band-Mod neu zeichnet (Fynn, 2026-11-03)
 
-test('0.8.1: spotify zeichnet jede Sekunde neu (ohne neuen Clip): Clawd setzt jedes Mal am gezeigten Bild fort, Platz und key bleiben, keine eigene Bitte', async ($, on) => {
+test('0.8.1: tune-strip zeichnet jede Sekunde neu (ohne neuen Clip): Clawd setzt jedes Mal am gezeigten Bild fort, Platz und key bleiben, keine eigene Bitte', async ($, on) => {
   const clock = mock.clock(on)
   const store = new Map<string, unknown>()
   on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
@@ -1147,12 +1147,12 @@ test('0.8.1: spotify zeichnet jede Sekunde neu (ohne neuen Clip): Clawd setzt je
     invalidates++
     return { value: undefined }
   })
-  // Weiter innen: spotify spielt, sein Platz 20 zeigt die laufende Zeit (jede Zeichnung ein anderer Text), limit-bars Platz 10
+  // Weiter innen: tune-strip spielt, sein Platz 20 zeigt die laufende Zeit (jede Zeichnung ein anderer Text), limit-bars Platz 10
   let secs = 0
   const box = (key: string, kids: unknown[]) => ({ type: 'Box', props: { key, flexShrink: 0 }, children: kids })
   on('ui.render', () => ({
     type: 'Box', props: { key: 'band-row', flexDirection: 'row' },
-    children: [box('slot:10:limit-bars', ['5h 40 %']), box('slot:20:spotify', [`Titel 0:${String(secs).padStart(2, '0')}`])],
+    children: [box('slot:10:limit-bars', ['5h 40 %']), box('slot:20:tune-strip', [`Titel 0:${String(secs).padStart(2, '0')}`])],
   }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   // Er schlendert nach links und zurück (wie in Fynns Meldung, „läuft von links nach rechts“)
@@ -1167,7 +1167,7 @@ test('0.8.1: spotify zeichnet jede Sekunde neu (ohne neuen Clip): Clawd setzt je
     secs += 1
     await ui.redraw()
     const tree = (await ui.drawn()) as any
-    expect(tree.children.map((c: any) => c.props.key), `Sekunde ${i + 1}: Plätze`).toEqual(['slot:10:limit-bars', 'slot:20:spotify', 'band-rest', 'slot:30:clawd-buddy:right'])
+    expect(tree.children.map((c: any) => c.props.key), `Sekunde ${i + 1}: Plätze`).toEqual(['slot:10:limit-bars', 'slot:20:tune-strip', 'band-rest', 'slot:30:clawd-buddy:right'])
     expect((await ui.find({ type: 'Box', key: 'buddy' }))?.props.flexShrink).toBe(0)
     const next = await svgOf(ui)
     // Was die App zeigt, wenn sie SMIL beim Neuzeichnen neu startet: den Anfang des neuen Svg. Das muss das Bild sein, das das vorige
@@ -1179,23 +1179,23 @@ test('0.8.1: spotify zeichnet jede Sekunde neu (ohne neuen Clip): Clawd setzt je
   // Gegenprobe: in dieser Zeit hat er sich bewegt, ein Weitergeben des alten Svg wäre sichtbar zurückgesprungen
   expect(wouldJump).toBeGreaterThan(5)
   expect(prev).toMatch(/<animate [^>]*begin="-0\.\d{3}s"/)
-  // Clawd selbst bittet in den 20 s um keine Zeichnung (das tat nur spotify)
+  // Clawd selbst bittet in den 20 s um keine Zeichnung (das tat nur tune-strip)
   expect(invalidates - k).toBe(0)
   const st = await $.command.run({ command: 'clawd', args: 'status' })
   expect(st.text).toMatch(/\b\d+ of them only for other mods/)
   await ui.unmount()
 })
 
-// ---- 0.9.0: Mitwippen zur Musik (spotify.playing)
+// ---- 0.9.0: Mitwippen zur Musik (tune-strip.playing)
 
-test('0.9.0: Clawd liest spotify.playing beim Zeichnen: nur { playing: true } zählt; im Desktop rechnet ein Wechsel sofort neu; ohne spotify bleibt es aus', async ($, on) => {
+test('0.9.0: Clawd liest tune-strip.playing beim Zeichnen: nur { playing: true } zählt; im Desktop rechnet ein Wechsel sofort neu; ohne tune-strip bleibt es aus', async ($, on) => {
   const clock = mock.clock(on)
   const { logs } = stubs(on)
   let sp: unknown = { playing: true }
   let refuse = false
   on('state.get', ($: unknown, e: any) => {
-    if (e.plugin === 'spotify' && refuse) return { deny: 'nicht lesbar' } as never
-    return { value: e.plugin === 'spotify' && e.key === 'playing' ? { value: sp, version: 1 } : { value: undefined, version: 0 } }
+    if (e.plugin === 'tune-strip' && refuse) return { deny: 'nicht lesbar' } as never
+    return { value: e.plugin === 'tune-strip' && e.key === 'playing' ? { value: sp, version: 1 } : { value: undefined, version: 0 } }
   })
   const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect((await clientProps(term)).facts.music, logs.join(' | ')).toBe(true)
@@ -1203,7 +1203,7 @@ test('0.9.0: Clawd liest spotify.playing beim Zeichnen: nur { playing: true } z�
   await term.redraw()
   expect((await clientProps(term)).facts.music).toBe(false)
   await term.unmount()
-  // Desktop: Musik geht an, ohne dass sich die Stimmung ändert; das nächste Zeichnen (spotify schreibt, die App zeichnet) rechnet neu
+  // Desktop: Musik geht an, ohne dass sich die Stimmung ändert; das nächste Zeichnen (tune-strip schreibt, die App zeichnet) rechnet neu
   const desk = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const quiet = await svgOf(desk)
   await clock.advance(750)
@@ -1216,7 +1216,7 @@ test('0.9.0: Clawd liest spotify.playing beim Zeichnen: nur { playing: true } z�
   await clock.advance(750)
   await desk.redraw()
   expect((await desk.findAll({ type: 'Svg' })).length).toBe(1)
-  expect(logs.some((l) => /spotify state not read/.test(l))).toBe(true)
+  expect(logs.some((l) => /tune-strip state not read/.test(l))).toBe(true)
   await desk.unmount()
 })
 

@@ -1073,7 +1073,7 @@ test('0.8.1: Mit einem Helfer bleibt „fertig“ abwechslungsreich (vorher imme
   expect(starts.filter((n) => n === 'wave_helper').length, starts.slice(0, 12).join(' > ')).toBeLessThanOrEqual(1)
 })
 
-// ---- 0.9.0: Mitwippen zur Musik (spotify.playing)
+// ---- 0.9.0: Mitwippen zur Musik (tune-strip.playing)
 
 /** Welche Clips laufen in `ticks` Takten (Namen in Startreihenfolge). */
 function clipsOver(e: ReturnType<typeof newEngine>, ticks: number): string[] {

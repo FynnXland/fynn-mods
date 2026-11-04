@@ -32,7 +32,7 @@ policy:
 - **Running commands:** sidekick and limit-bars run Claude Code commands only on your click or choice, from the set
   described in their READMEs.
 - **Processes:** two mods start Windows PowerShell, each with two fixed scripts. limit-bars only with `storagePath`
-  set (read-only scripts; the drive path is passed as an environment variable, never as part of the script). spotify
+  set (read-only scripts; the drive path is passed as an environment variable, never as part of the script). tune-strip
   reads and controls the Spotify session of the Windows media controls (the control command is passed as an
   environment variable; the scripts write no files and open no connections).
 - **Stored data:** each mod keeps its data in its own plugin store, a JSON file under `~/.claude/plugins/store/` on

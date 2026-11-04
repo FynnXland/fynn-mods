@@ -1,5 +1,5 @@
-// clawd-buddy: Clips der Gruppe "music" (0.9.0, Fynn 2026-11-03: „Mitwippen zur Musik“). Sie kommen nur in die Auswahl, wenn spotify
-// meldet, dass Musik läuft (`spotify.playing`), und Clawd Zeit hat: im Leerlauf, während du tippst und beim langen Warten
+// clawd-buddy: Clips der Gruppe "music" (0.9.0, Fynn 2026-11-03: „Mitwippen zur Musik“). Sie kommen nur in die Auswahl, wenn tune-strip
+// meldet, dass Musik läuft (`tune-strip.playing`), und Clawd Zeit hat: im Leerlauf, während du tippst und beim langen Warten
 // (engine.ts → MUSIC_MOODS). Bei Arbeit bleibt er bei seiner Arbeit.
 //
 // Einen Takt liefert die Mediensteuerung nicht; er wippt in festem Tempo (BEAT, ~115 Schläge pro Minute), nachts halb so schnell.

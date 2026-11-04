@@ -1,4 +1,4 @@
-// spotify: Hooks-Modul. Ein Spotify-Regler im Band über dem Prompt (AbovePrompt): Cover, Titel, Interpret, Position, klickbare Knöpfe.
+// tune-strip: Hooks-Modul. Ein Spotify-Regler im Band über dem Prompt (AbovePrompt): Cover, Titel, Interpret, Position, klickbare Knöpfe.
 // Quelle ist die Windows-Mediensteuerung per Windows PowerShell 5.1 (`$.process.run`, ps.ts): kein Login, keine Tokens, kein Netzwerk,
 // keine Datei. Der Takt (`$.clock.every`) läuft nur, solange das Band gezeichnet wird; keine Zeichnung → er beendet sich selbst.
 // Das Band ist ein Platz (Nr. 20) in der Grund-Zeile (band.ts, docs/BAND.md): zwischen limit-bars (10) und clawd-buddy (30).
@@ -10,7 +10,7 @@ import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import { T, langOf } from './i18n.ts'
 import type { Lang } from './i18n.ts'
-import { actionFor, desktopRoom, desktopStage, fmtTime, parseSpotify, pickStage, pollInterval, positionNow, SIZES } from './model.ts'
+import { actionFor, desktopRoom, desktopStage, fmtTime, parseTune, pickStage, pollInterval, positionNow, SIZES } from './model.ts'
 import type { Action, ControlWord, Size, Stage } from './model.ts'
 import { CONTROL_SCRIPT, PS_ABS, PS_ARGS, QUERY_SCRIPT, REPEAT_MODES, parseQuery, trackKey } from './ps.ts'
 import type { Query, Track } from './ps.ts'
@@ -28,7 +28,7 @@ let lang: Lang = 'en'
 let optSize: Size | 'off' = 'auto'
 let pollSeconds = 4
 let extraButtons = false
-// Einstellungen aus `$.store` (`/spotify size|on|off`), gelten in allen offenen Chats
+// Einstellungen aus `$.store` (`/tune size|on|off`), gelten in allen offenen Chats
 type Saved = { size?: Size; enabled?: boolean }
 let saved: Saved = {}
 
@@ -234,8 +234,8 @@ function ensureTimer($: EngineInterface, now: number): void {
 }
 
 /**
- * Ob gerade Musik läuft, für clawd-buddy (0.3.0, `$.state` `spotify.playing`, types/index.d.ts): `{ playing }` aus dem Status der
- * Mediensteuerung, `null` ohne Spotify-Sitzung oder wenn spotify aus ist; außerhalb von Windows wird nie geschrieben (bleibt leer). Kein Titel.
+ * Ob gerade Musik läuft, für clawd-buddy (0.3.0, `$.state` `tune-strip.playing`, types/index.d.ts): `{ playing }` aus dem Status der
+ * Mediensteuerung, `null` ohne Spotify-Sitzung oder wenn tune-strip aus ist; außerhalb von Windows wird nie geschrieben (bleibt leer). Kein Titel.
  */
 const playingNow = (): { playing: boolean } | null => (enabled() && isWindows && track ? { playing: track.status === 'Playing' } : null)
 let publishedPlaying = '' // zuletzt geschriebener Wert als JSON ('' = noch keiner oder Schreiben gescheitert)
@@ -243,7 +243,7 @@ let playingCheckedAt = 0
 const PLAYING_RECHECK = 30_000 // so oft den eigenen Wert lesen: /clear, /resume und /branch setzen `$.state` zurück
 
 /**
- * `spotify.playing` schreiben, wenn sich der Wert geändert hat (nie beim Zeichnen, types@2.1.295:3405: dort abgelehnt). Ein Schreiben
+ * `tune-strip.playing` schreiben, wenn sich der Wert geändert hat (nie beim Zeichnen, types@2.1.295:3405: dort abgelehnt). Ein Schreiben
  * zeichnet die Stellen neu, die den Wert lesen (Clawd). Scheitert es, versucht es der nächste Takt wieder.
  */
 async function publishPlaying($: EngineInterface, now: number): Promise<void> {
@@ -252,11 +252,11 @@ async function publishPlaying($: EngineInterface, now: number): Promise<void> {
     if (want === publishedPlaying && now - playingCheckedAt < PLAYING_RECHECK) return
     playingCheckedAt = now
     if (want === publishedPlaying) {
-      const cur = await $.state.get({ plugin: 'spotify', key: 'playing' })
+      const cur = await $.state.get({ plugin: 'tune-strip', key: 'playing' })
       if (JSON.stringify(cur.value ?? null) === want) return
     }
     publishedPlaying = ''
-    await $.state.set({ plugin: 'spotify', key: 'playing' }, playingNow())
+    await $.state.set({ plugin: 'tune-strip', key: 'playing' }, playingNow())
     publishedPlaying = want
   } catch {
     publishedPlaying = ''
@@ -286,7 +286,7 @@ async function tick($: EngineInterface, getLast: () => number, setLast: (v: numb
 
 /**
  * Pixel je Spalte von `bodyColumns` im Desktop. [UNKLAR] bis Phase 0 (3) gemessen ist, ob `bodyColumns` die Fensterbreite abbildet;
- * solange `undefined`, weicht Spotify im Desktop nicht von selbst (nur per `/spotify size`).
+ * solange `undefined`, weicht Spotify im Desktop nicht von selbst (nur per `/tune size`).
  */
 const PX_PER_COLUMN: number | undefined = undefined
 
@@ -334,24 +334,24 @@ function helpData(): HelpData {
   const h = t.help
   const sizeLabel = sizeNow() === 'auto' ? t.auto : sizeNow()
   return {
-    mod: 'spotify',
+    mod: 'tune-strip',
     lang,
     intro: h.intro,
     commands: [
-      { cmd: '/spotify', does: h.status },
-      { cmd: '/spotify play|pause|toggle', does: h.toggle },
-      { cmd: '/spotify next|prev', does: h.next },
-      { cmd: '/spotify back|forward', does: h.back },
-      { cmd: '/spotify shuffle [on|off]', does: h.shuffle },
-      { cmd: '/spotify repeat [off|all|track]', does: h.repeat },
-      { cmd: '/spotify size auto|full|compact|mini', does: h.size },
-      { cmd: '/spotify on|off', does: h.onOff },
-      { cmd: '/spotify help', does: h.help },
+      { cmd: '/tune', does: h.status },
+      { cmd: '/tune play|pause|toggle', does: h.toggle },
+      { cmd: '/tune next|prev', does: h.next },
+      { cmd: '/tune back|forward', does: h.back },
+      { cmd: '/tune shuffle [on|off]', does: h.shuffle },
+      { cmd: '/tune repeat [off|all|track]', does: h.repeat },
+      { cmd: '/tune size auto|full|compact|mini', does: h.size },
+      { cmd: '/tune on|off', does: h.onOff },
+      { cmd: '/tune help', does: h.help },
     ],
     controls: [{ cmd: h.ctlMain, does: h.ctlMainDoes }, ...(extraButtons ? [{ cmd: h.ctlSeek, does: h.ctlSeekDoes }, { cmd: h.ctlMode, does: h.ctlModeDoes }] : [])],
     features: [
-      { name: h.featBand, state: { kind: enabled() ? 'on' : 'off' }, toggle: enabled() ? '/spotify off' : '/spotify on' },
-      { name: h.featSize, state: { kind: 'value', text: sizeLabel, isDefault: sizeNow() === 'auto' }, toggle: '/spotify size auto|full|compact|mini' },
+      { name: h.featBand, state: { kind: enabled() ? 'on' : 'off' }, toggle: enabled() ? '/tune off' : '/tune on' },
+      { name: h.featSize, state: { kind: 'value', text: sizeLabel, isDefault: sizeNow() === 'auto' }, toggle: '/tune size auto|full|compact|mini' },
     ],
     settings: [
       { title: h.settings.language, value: lang, isDefault: lang === 'en' },
@@ -388,7 +388,7 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
   extraButtons = options?.extraButtons === true
 
   // /clear, /resume und /branch setzen $.state zurück, ohne dass session.start erneut feuert (docs/raw/en/troubleshoot.md:260-264):
-  // spotify.playing sofort wieder melden statt erst beim 30-s-Abgleich (docs/raw/en/interface.md:818-846; Review 0.3.0 S1, Fynn 2026-11-03)
+  // tune-strip.playing sofort wieder melden statt erst beim 30-s-Abgleich (docs/raw/en/interface.md:818-846; Review 0.3.0 S1, Fynn 2026-11-03)
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     // Nur nach session.start auf einer echten Oberfläche unter Windows (bei --resume ist die Reihenfolge der beiden Hooks nicht
     // dokumentiert; vorher stünde isWindows noch auf dem Startwert; Review 0.3.1 K2)
@@ -410,16 +410,16 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
     await loadSaved($)
     try {
       const t = T[lang]
-      await $.command.register({ name: 'spotify', description: t.help.intro, argumentHint: T[lang].hint })
+      await $.command.register({ name: 'tune', description: t.help.intro, argumentHint: T[lang].hint })
     } catch {
       // Befehl nicht registriert: das Band läuft trotzdem
     }
     return next(e)
   })
 
-  on('command.run', { command: 'spotify' }, async ($, e) => {
+  on('command.run', { command: 'tune' }, async ($, e) => {
     const t = T[lang]
-    const p = parseSpotify(e.args)
+    const p = parseTune(e.args)
     if (!isWindows) return { text: t.windowsOnly }
     if (p.kind === 'help') {
       const data = helpData()
@@ -454,8 +454,8 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
     return { text: t.did[p.word] ?? p.word }
   })
 
-  // ---- /spotify help als Tabelle an der Stelle der Befehlsausgabe (HELP-SPEC §3)
-  on('ui.render', { component: 'CommandOutput', props: { command: 'spotify' } }, async ($, e, next) => {
+  // ---- /tune help als Tabelle an der Stelle der Befehlsausgabe (HELP-SPEC §3)
+  on('ui.render', { component: 'CommandOutput', props: { command: 'tune' } }, async ($, e, next) => {
     if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
     if (!HELP_WORDS.includes(String(e.props.args ?? '').trim().toLowerCase())) return next(e)
     const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
@@ -472,7 +472,7 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
       if (e.props.hasSurvey || !isWindows) return theirs
       awaitingRender = false
       if (!enabled()) {
-        // Aus: auch der Takt hält an (Review 0.3.0, K1); `/spotify off` hat `spotify.playing` schon auf null gesetzt, `on` zeichnet und startet ihn neu
+        // Aus: auch der Takt hält an (Review 0.3.0, K1); `/tune off` hat `tune-strip.playing` schon auf null gesetzt, `on` zeichnet und startet ihn neu
         timer?.cancel()
         timer = null
         return theirs
@@ -500,8 +500,8 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
       const mine = (e.surface === 'desktop' ? desktopTree(els, handlers, input) : terminalTree(els, handlers, input)) as unknown as RenderNode
       const { layers, slots, base } = splitBand(theirs)
       // Desktop, volle Stufe: eigene Leiste über allen Mods (kein Platz in der Zeile); sonst der Platz 20
-      if (e.surface === 'desktop' && stage === 'full') return joinBand([...layers, layer(BAR_LEVEL, 'spotify', mine)], base, slots)
-      return joinBand(layers, base, [...slots, slot(SLOTS.spotify, 'spotify', mine)])
+      if (e.surface === 'desktop' && stage === 'full') return joinBand([...layers, layer(BAR_LEVEL, 'tune-strip', mine)], base, slots)
+      return joinBand(layers, base, [...slots, slot(SLOTS.spotify, 'tune-strip', mine)])
     } catch {
       // Eigener Fehler (fail-open): ohne Anzeige, der Inhalt der anderen bleibt
       return theirs

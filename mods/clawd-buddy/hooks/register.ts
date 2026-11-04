@@ -29,7 +29,7 @@ let helpNo = 0
 
 // Flüchtiger Zustand dieses Moduls (wird aus Events neu abgeleitet; Reload setzt zurück)
 let enabled = true
-// Breite des Platzes im Desktop für spotify: `$.state` `clawd-buddy.band` (types/index.d.ts, docs/BAND.md „Platzbreite“). `undefined` =
+// Breite des Platzes im Desktop für tune-strip: `$.state` `clawd-buddy.band` (types/index.d.ts, docs/BAND.md „Platzbreite“). `undefined` =
 // noch nicht geschrieben; nie im Zeichnen, dort darf `$.state` nicht geschrieben werden.
 let isDesktop = false
 let publishedWidth: number | null | undefined = undefined
@@ -71,7 +71,7 @@ let seenPerf = -1e9
 // der Buddy an ist: `/clawd off` bricht ihn ab, und zeichnet die App auf die Bitte hin 2 s lang nicht, bricht er sich selbst ab; das
 // nächste Zeichnen startet ihn neu. Gezählt wird in Wächter-Runden, nicht in Echtzeit (im Test-Kit läuft nur die Uhr der Mods-API).
 const DESK_SCALE = 4 // CSS-Pixel je Figurpixel: Figur 68 × 40 px, Bühne 400 × 56 px
-const DESK_WIDTH = W * DESK_SCALE // Breite des Platzes im Desktop, wie sie an spotify gemeldet wird
+const DESK_WIDTH = W * DESK_SCALE // Breite des Platzes im Desktop, wie sie an tune-strip gemeldet wird
 const DESK_CHECK = 250 // ms je Wächter-Runde
 const DESK_LEAD = 1000 // so lange vor dem Ende der Animation um die nächste bitten
 const DESK_IDLE_CHECKS = 8 // ~2 s ohne Antwort auf die Bitte: Wächter beenden
@@ -109,7 +109,7 @@ let deskDiag = -1
 let deskDiagRounds = 0 // Wächter-Runden im Test; zeichnet die App nicht mehr (verdeckt), endet er danach von selbst
 // Springen (Fynn, 2026-10-06 und 2026-11-03: „springt immer wieder ein Stück zurück und wiederholt seine Animation“): Zeichnet die App das Band
 // neu, beginnt SMIL im Bild wieder bei 0, auch bei byte-gleichem `source` (Messung 0.8.1, SPEC). Bis 0.8.0 ging bei einer Zeichnung ohne neue
-// Fakten dasselbe Svg bis 5 s lang wieder hinaus; Clawd fiel damit bei jeder fremden Zeichnung an den Anfang dieses Svg zurück. Seit spotify
+// Fakten dasselbe Svg bis 5 s lang wieder hinaus; Clawd fiel damit bei jeder fremden Zeichnung an den Anfang dieses Svg zurück. Seit tune-strip
 // beim Abspielen jede Sekunde neu zeichnen lässt, geschah das ständig. Jetzt rechnet jede Zeichnung ab dem Bild, das gerade zu sehen ist,
 // neu (~5 ms); ein Neustart zeigt so genau das Bild, das ohnehin dran war. Der Rest unter einem Takt geht als SMIL-`begin` mit (desk.ts).
 // Ob eine Zeichnung neue Fakten zeigen muss (factsChanged, divergence), entscheidet weiter, ob Clawd selbst um eine Zeichnung bittet.
@@ -207,7 +207,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   const tx = T[lang]
 
   // /clear, /resume und /branch setzen $.state zurück, ohne dass session.start erneut feuert (docs/raw/en/troubleshoot.md:260-264):
-  // die Platzbreite für spotify sofort wieder melden (docs/raw/en/interface.md:818-846; Review 0.8.1 S1, Fynn 2026-11-03)
+  // die Platzbreite für tune-strip sofort wieder melden (docs/raw/en/interface.md:818-846; Review 0.8.1 S1, Fynn 2026-11-03)
   // Bei --resume ist die Reihenfolge zu session.start nicht dokumentiert [UNKLAR]: vorher nichts schreiben (isDesktop stünde noch auf false);
   // geschrieben wird in derselben Kette wie sonst, also in Aufrufreihenfolge (Review 0.9.1 K4)
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
@@ -634,13 +634,13 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       } catch (err) {
         $.ui.log(`clawd-buddy: sidekick state not read: ${String(err)}`, { to: 'debug' })
       }
-      // Schnittstelle zu spotify (0.9.0): spielt gerade Musik? Nur das Flag, kein Titel. Ohne spotify bleibt es aus.
+      // Schnittstelle zu tune-strip (0.9.0): spielt gerade Musik? Nur das Flag, kein Titel. Ohne tune-strip bleibt es aus.
       try {
-        const sp = await $.state.get({ plugin: 'spotify', key: 'playing' })
+        const sp = await $.state.get({ plugin: 'tune-strip', key: 'playing' })
         const m = musicValue(sp.value)
         if (m !== (facts.music ?? false)) facts = { ...facts, music: m }
       } catch (err) {
-        $.ui.log(`clawd-buddy: spotify state not read: ${String(err)}`, { to: 'debug' })
+        $.ui.log(`clawd-buddy: tune-strip state not read: ${String(err)}`, { to: 'debug' })
       }
       // Client-Props dürfen kein `undefined` enthalten (die Engine lehnt sie ab): leere Felder weglassen
       const f: Facts = JSON.parse(JSON.stringify(facts)) as Facts

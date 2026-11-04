@@ -90,7 +90,7 @@ export type EngineState = {
   nightEnd: number
   idleLimit: number
   reduced: boolean
-  /** Spielt gerade Musik (spotify.playing, 0.9.0)? */
+  /** Spielt gerade Musik (tune-strip.playing, 0.9.0)? */
   music: boolean
   lastClipName: string
   lastPose: Pose | null
@@ -245,7 +245,7 @@ export function createEngine(opts: EngineOpts) {
   /** Tageszeit-Abschnitt für `daypart`: 0 Morgen (5–11), 1 Mittag (11–17), 2 Abend (17 bis Nachtbeginn), 3 Nacht. */
   const daypartIndex = (): number => (isNight() ? 3 : S.hour >= 5 && S.hour < 11 ? 0 : S.hour >= 11 && S.hour < 17 ? 1 : 2)
   /**
-   * Musik (0.9.0, Fynn: mitwippen, „wenn er Zeit hat“): Spielt spotify, kommen die Clips der Gruppe `music` in den Leerlauf, zum Mitlesen
+   * Musik (0.9.0, Fynn: mitwippen, „wenn er Zeit hat“): Spielt tune-strip, kommen die Clips der Gruppe `music` in den Leerlauf, zum Mitlesen
    * beim Tippen und zum langen Warten dazu; bei Arbeit bleibt er bei seiner Arbeit.
    */
   const musicIn = (mood: string): boolean => S.music && MUSIC_MOODS.has(mood)

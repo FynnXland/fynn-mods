@@ -254,7 +254,7 @@ export function createDesk(o: DeskOpts): Desk {
       if (!drawn || (facts.backAt ?? 0) !== (drawn.facts.backAt ?? 0)) return 0
       // Die Laune (Gewichte der Clips) ist mit den Fakten gezeichnet; hat sie sich geändert, gleich neu (Review 2, K1)
       if (strainNow !== drawn.strain) return 0
-      // Musik an oder aus (spotify.playing, 0.9.0): die Stimmung bleibt, die Auswahl aber nicht
+      // Musik an oder aus (tune-strip.playing, 0.9.0): die Stimmung bleibt, die Auswahl aber nicht
       if ((facts.music ?? false) !== (drawn.facts.music ?? false)) return 0
       const end = drawn.at + drawn.ticks * TICK
       for (let t = now; t <= end; t += TICK) {

@@ -1,0 +1,4 @@
+{
+  "description": "tune-strip – hooks module",
+  "modules": ["./register.ts"]
+}

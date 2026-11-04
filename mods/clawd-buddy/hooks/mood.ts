@@ -62,7 +62,7 @@ export type Facts = {
   compactSince?: number
   /** Zeitpunkt (ms), an dem zuletzt ein Skill startete (skill.prompt): kurz `skill`. */
   skillAt?: number
-  /** Spielt spotify gerade Musik? Aus dessen `$.state`-Wert `spotify.playing` (types/index.d.ts, 0.9.0). Ohne spotify leer. */
+  /** Spielt tune-strip gerade Musik? Aus dessen `$.state`-Wert `tune-strip.playing` (types/index.d.ts, 0.9.0). Ohne tune-strip leer. */
   music?: boolean
   /**
    * Zeitpunkt (ms), an dem er zeigt, dass das Kontextfenster voll wird (eine Stufe aus CTX_WARN überschritten; gezeigt am Turn-Ende,
@@ -234,7 +234,7 @@ export const SK_FRESH_MS = 6_000
  * höchstens (ms). Die Prüfung dauert sonst 1–6 s, der Dialog wartet auf Fynn, die Übergabe braucht bis ~45 s.
  */
 export const SK_MAX_MS = { check: 30_000, stop: 10 * 60_000, handoff: 3 * 60_000, fresh: SK_FRESH_MS } as const
-/** Wert `spotify.playing` prüfen (ein fremder Mod könnte ihn umschreiben): nur `{ playing: true }` heißt Musik. */
+/** Wert `tune-strip.playing` prüfen (ein fremder Mod könnte ihn umschreiben): nur `{ playing: true }` heißt Musik. */
 export function musicValue(v: unknown): boolean {
   return !!v && typeof v === 'object' && (v as { playing?: unknown }).playing === true
 }

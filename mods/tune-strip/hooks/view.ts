@@ -1,4 +1,4 @@
-// spotify: Zeichnung des Plays im Band, ohne `$`-Aufrufe (die Elementkonstruktoren kommen aus `$.ui.resolve(e)` und werden übergeben).
+// tune-strip: Zeichnung des Plays im Band, ohne `$`-Aufrufe (die Elementkonstruktoren kommen aus `$.ui.resolve(e)` und werden übergeben).
 // Desktop: volle Stufe als eigene Leiste (Ebene), kompakt und mini als Platz in der Zeile; Cover als Svg (<image> mit data:-URL), Knöpfe nur mit Symbol. Terminal: eine Zeile.
 import type { StageWidths, Stage } from './model.ts'
 import { fmtTime, ratio } from './model.ts'
@@ -117,12 +117,12 @@ export function desktopTree(els: Els, h: Handlers, v: ViewInput) {
   const title = Text({ wrap: 'truncate-end', children: [Text({ bold: true, children: [v.track.title] }), ...(v.track.artist ? [Text({ dimColor: true, children: [` – ${v.track.artist}`] })] : [])] })
   if (v.stage === 'mini') {
     const cover = Svg({ source: coverSvg(v.cover), alt: t.alt.cover(titleOf(v.track)), width: COVER_PX, height: COVER_PX })
-    return Box({ key: 'spotify', flexDirection: 'row', alignItems: 'flex-end', columnGap: 1, flexShrink: 0, children: [cover, toggle] })
+    return Box({ key: 'tune-strip', flexDirection: 'row', alignItems: 'flex-end', columnGap: 1, flexShrink: 0, children: [cover, toggle] })
   }
   if (v.stage === 'compact') {
     const cover = Svg({ source: coverSvg(v.cover), alt: t.alt.cover(titleOf(v.track)), width: COVER_PX, height: COVER_PX })
     return Box({
-      key: 'spotify',
+      key: 'tune-strip',
       flexDirection: 'row',
       alignItems: 'flex-end',
       columnGap: 2,
@@ -187,7 +187,7 @@ export function desktopTree(els: Els, h: Handlers, v: ViewInput) {
   const hints = Box({ flexGrow: 1, flexShrink: 1, flexDirection: 'row', justifyContent: 'flex-end', marginRight: 2, children: [...parts, ...modeParts].map((x) => x.hint) })
   const sep = Box({ width: '100%', overflow: 'hidden', flexShrink: 0, children: [Svg({ source: sepSvg(), alt: t.alt.sep, width: SEP_W, height: SEP_H })] })
   return Box({
-    key: 'spotify',
+    key: 'tune-strip',
     flexDirection: 'column',
     children: [
       Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, paddingLeft: 1, children: [cover, info, hints, controls] }),
@@ -204,9 +204,9 @@ export function terminalTree(els: Els, h: Handlers, v: ViewInput) {
   const btn = (key: string, glyph: string, name: string, word: Parameters<Handlers['press']>[0]) =>
     Button({ key, label: name, children: [glyph], plain: true, onPress: () => h.press(word) })
   const play = btn('toggle', playing ? '⏸' : '▶', playing ? t.label.pause : t.label.play, 'toggle')
-  if (v.stage === 'mini') return Box({ key: 'spotify', flexDirection: 'row', columnGap: 1, flexShrink: 0, children: [Text({ children: ['♪'] }), play] })
+  if (v.stage === 'mini') return Box({ key: 'tune-strip', flexDirection: 'row', columnGap: 1, flexShrink: 0, children: [Text({ children: ['♪'] }), play] })
   return Box({
-    key: 'spotify',
+    key: 'tune-strip',
     flexDirection: 'row',
     columnGap: 1,
     flexShrink: 1,

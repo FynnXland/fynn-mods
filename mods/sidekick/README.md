@@ -165,7 +165,7 @@ Maintenance lines have their own buttons since 0.16.0 (**Insert in prompt** / **
 - **clawd-buddy** shows what sidekick does: while it checks your message, holds it back with a question, or starts a new chat. sidekick writes only the kind of state and a timestamp to `$.state` (`sidekick.buddy`), which clawd-buddy reads. Neither mod needs the other.
 - **limit-bars** stays a display. To avoid two dialogs in a row, turn off its cold-cache warning once: **`/cache warn off`** (the German `/cache warnung aus` works too). sidekick's question replaces it.
 - Claude Code's built-in plugin **`cc-plugin-you-should-know`** (off by default, availability depends on your organization) does what sidekick's **Good to know** does. Use one of them: with both on, every check runs twice. `/savings` only includes sidekick's own.
-- **spotify** (since 0.15.2): in the desktop app, the handoff box and the Good-to-know note stand above the full Spotify bar, with a thin blue line below them that disappears with them. In the terminal nothing changed.
+- **tune-strip** (since 0.15.2): in the desktop app, the handoff box and the Good-to-know note stand above the full tune-strip bar, with a thin blue line below them that disappears with them. In the terminal nothing changed.
 - **quick-replies:** its suggestions use the digits 1, 2, 3 … after a turn; a Good-to-know note only carries digits while Claude is working, so they never clash.
 
 ## Stored data

@@ -125,7 +125,7 @@ No file system access of its own (no `$.fs`), no network, no environment variabl
 
 In plain language:
 
-- `$.state.set`: tells the spotify mod how wide the bars are (`limit-bars.band`, a width in pixels), so spotify can make room for them. Written at session start and when the display changes, never while drawing. Nothing else reads it.
+- `$.state.set`: tells the tune-strip mod how wide the bars are (`limit-bars.band`, a width in pixels), so tune-strip can make room for them. Written at session start and when the display changes, never while drawing. Nothing else reads it.
 - `$.session.usage`: limits, context size and session cost at start and on every tick (without `breakdown`, free)
 - Hook `session.measure`: takes the percentage and reset time of `five_hour` and `seven_day` after every measurement
 - Hook `turn.step`: reads, for every request of the main loop, how much was read from the cache and how much was written; changes nothing

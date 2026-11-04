@@ -37,5 +37,5 @@ export const CAT_LABEL: Readonly<Record<string, string>> = {
   wait10: 'Warten (> 10 s)', wait60: 'Warten (> 60 s)', waitUser: 'Wartet auf dich', watching: 'Du tippst',
   sk_check: 'sidekick prüft deine Nachricht', sk_stop: 'sidekick hält deine Nachricht an', sk_handoff: 'sidekick baut einen neuen Chat', sk_fresh: 'Neuer Chat ist da',
   compact: 'Komprimiert den Verlauf', skill: 'Skill startet', ctx_full: 'Kontext fast voll', done_long: 'Langer Turn geschafft',
-  music: 'Musik (spotify spielt)', done: 'Fertig', oops: 'Fehler', night: 'Nacht', morning: 'Morgen', mouse: 'Maus', transition: 'Übergänge',
+  music: 'Musik (tune-strip spielt)', done: 'Fertig', oops: 'Fehler', night: 'Nacht', morning: 'Morgen', mouse: 'Maus', transition: 'Übergänge',
 }

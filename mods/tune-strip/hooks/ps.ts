@@ -1,4 +1,4 @@
-// spotify: die zwei festen PowerShell-Skripte (Windows PowerShell 5.1) und das Lesen ihrer Antworten, ohne `$`.
+// tune-strip: die zwei festen PowerShell-Skripte (Windows PowerShell 5.1) und das Lesen ihrer Antworten, ohne `$`.
 // Quelle ist die Windows-Mediensteuerung (GlobalSystemMediaTransportControlsSessionManager), kein Spotify-Login, keine Tokens,
 // kein Netzwerk. Nur die Sitzung `Spotify*` wird gelesen oder gesteuert; Browser, Riot Client usw. meldet die Mediensteuerung
 // auch, sie werden nie angezeigt (SPEC „Fehlerverhalten“). Befehl und Argument gehen nur über die Umgebung (SP_CMD, SP_ARG,
