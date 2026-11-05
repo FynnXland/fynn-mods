@@ -8,7 +8,7 @@
 import type { EngineInterface, On, Timer } from 'claude-code'
 import { joinBand, nameOf, slot, SLOTS, splitBand } from './band.ts'
 import { ALL_CLIPS } from './library.ts'
-import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, musicValue, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
+import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, beatValue, musicValue, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
 import type { Strain } from './mood.ts'
 import { createDesk, DESK_TICK, stillSource } from './desk.ts'
 import { T, clipLabel, langOf, num as fmt } from './i18n.ts'
@@ -16,6 +16,7 @@ import { ACCENT, SUBCOMMANDS, clawdHelp, isHelp } from './clawdhelp.ts'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import type { Lang } from './i18n.ts'
+import { isLanguage, languageCommand } from './language.ts'
 import { H, W } from './stage.ts'
 import type { Desk } from './desk.ts'
 import type { Facts, ToolKind } from './mood.ts'
@@ -72,6 +73,9 @@ let seenPerf = -1e9
 // nächste Zeichnen startet ihn neu. Gezählt wird in Wächter-Runden, nicht in Echtzeit (im Test-Kit läuft nur die Uhr der Mods-API).
 const DESK_SCALE = 4 // CSS-Pixel je Figurpixel: Figur 68 × 40 px, Bühne 400 × 56 px
 const DESK_WIDTH = W * DESK_SCALE // Breite des Platzes im Desktop, wie sie an tune-strip gemeldet wird
+const BACK_SLOT = 0 // 0.12.1: Platz der Bühne hinter der Zeile, vor allen anderen Plätzen (docs/BAND.md)
+// Durchsichtiger Halter für die Höhe der Bühne (Platz 30), 1 × 56 px
+const ROOM_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 ${H * DESK_SCALE}" width="1" height="${H * DESK_SCALE}"></svg>`
 const DESK_CHECK = 250 // ms je Wächter-Runde
 const DESK_LEAD = 1000 // so lange vor dem Ende der Animation um die nächste bitten
 const DESK_IDLE_CHECKS = 8 // ~2 s ohne Antwort auf die Bitte: Wächter beenden
@@ -233,7 +237,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
     publishBand($)
     try {
-      await $.command.register({ name: 'clawd', description: tx.description, argumentHint: 'on | off | list | demo <animation> | nap | boop | status | flicker | help' })
+      await $.command.register({ name: 'clawd', description: tx.description, argumentHint: 'on | off | list | demo <animation> | nap | boop | status | flicker | language | help' })
     } catch (err) {
       $.ui.log(`/clawd not registered: ${String(err)}`, { to: 'debug' })
     }
@@ -486,6 +490,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   // ---- /clawd
   on('command.run', { command: 'clawd' }, async ($, e) => {
+    // Sprache aller fynn-mods (docs/LANGUAGE-SPEC.md §6 Punkt 2), vor allem anderen: liest weder Speicher noch Uhr; fängt Fehler selbst ab
+    if (isLanguage(e.args)) return { text: await languageCommand($, { mod: 'clawd-buddy', cmd: 'clawd', lang }, e.args) }
     // Hilfe: nur `help` oder `?` als einziges Wort (docs/HELP-SPEC.md §2)
     if (isHelp(e.args)) {
       const data = clawdHelp({ lang, enabled, nightStart, nightEnd, idleSeconds, reduced, side: flip ? 'left' : 'right', birthday })
@@ -591,9 +597,11 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       const t = deriveTemper(strain, now)
       const m = tx.mood
       const mood = t.temper <= -0.6 ? m.veryGrumpy : t.temper <= -0.2 ? m.grumpy : t.temper >= 0.5 ? m.great : t.temper >= 0.2 ? m.good : m.even
+      const fb = facts.beat
+      const beatText = tx.beat(fb ? { bpm: fmt(lang, fb.bpm, 1), group: tx.groups[fb.group ?? 'none'], sure: fb.sure } : null)
       const deskInfo = meterText(lang, meter, performance.now())
       meter = newMeter()
-      const text = tx.status({ on: enabled, mood, temper: fmt(lang, t.temper, 2), tired: Math.round(t.tired * 100), annoy, desk: deskInfo })
+      const text = tx.status({ on: enabled, mood, temper: fmt(lang, t.temper, 2), tired: Math.round(t.tired * 100), annoy, desk: deskInfo, beat: beatText })
       return { text: `${text} ${tx.help}` }
     }
     // Nicht erreichbar, solange jeder Eintrag von SUBCOMMANDS oben einen Zweig hat; Schutz, falls beide auseinanderlaufen
@@ -641,6 +649,18 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         if (m !== (facts.music ?? false)) facts = { ...facts, music: m }
       } catch (err) {
         $.ui.log(`clawd-buddy: tune-strip state not read: ${String(err)}`, { to: 'debug' })
+      }
+      // Takt und Gruppe des Songs (0.11.0, tune-strip.beat): streng geprüft, Unsinn heißt „ohne Takt“. Abonniert wie `playing`
+      try {
+        const sb = await $.state.get({ plugin: 'tune-strip', key: 'beat' })
+        const b = beatValue(sb.value)
+        if (JSON.stringify(b ?? null) !== JSON.stringify(facts.beat ?? null)) {
+          facts = { ...facts }
+          if (b) facts.beat = b
+          else delete facts.beat
+        }
+      } catch (err) {
+        $.ui.log(`clawd-buddy: tune-strip beat not read: ${String(err)}`, { to: 'debug' })
       }
       // Client-Props dürfen kein `undefined` enthalten (die Engine lehnt sie ab): leere Felder weglassen
       const f: Facts = JSON.parse(JSON.stringify(facts)) as Facts
@@ -726,19 +746,31 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           })
         }
         const { Svg } = $.ui.resolve(e)
-        // Clawd ist Platz 30 der Grund-Zeile (rechts; `side: left` setzt ihn links, aber weiter hinter Spotify), die Zeile baut band.ts
-        const deskBand = (source: string, frame?: true) => joinBand(layers, base, [...slots, slot(SLOTS.clawdBuddy, 'clawd-buddy',
-            Box({
-              key: 'buddy',
-              flexDirection: 'column',
-              justifyContent: 'flex-end',
-              // Nie zusammendrücken: sonst schneidet ein schmales Band (Seitenbereich offen) das 400-px-Bild rechts ab, und mit ihm die Hand
-              // (Fynn, 2026-10-06). Schmaler wird die linke Seite mit flexGrow.
-              flexShrink: 0,
-              // Als Bild (ohne isInteractive): SMIL läuft, und beim Wechsel bleibt das alte stehen, bis das neue fertig ist. Den Rahmen
-              // (`frame`) gibt es nur noch im Flacker-Test zum Vergleich.
-              children: [Svg({ source, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, ...(frame ? { isInteractive: frame } : {}) })],
-            }), flip ? 'left' : 'right')])
+        // 0.12.1: Clawd liegt HINTER der Zeile (Fynn, 2026-11-04: limit-bars 0.13.0 ist breiter geworden und schob ihn weg; „nicht den
+        // Raum kleiner machen, sondern dahinter legen“). Seine Bühne steht als Platz 0 vorn in der Zeile, aus dem Fluss genommen
+        // (`position: absolute`, types:946-958: kein Platz unter den Geschwistern) und am Rand der Zeile festgemacht. Was später kommt
+        // (limit-bars, tune-strip), wird darüber gemalt. Platz 30 bleibt als 1 px schmaler Halter für die Höhe, sonst schneidet das Band
+        // die 56 px hohe Bühne ab, wenn die anderen flacher sind. Die gemeldete Breite (400 px) bleibt, damit tune-strip weiter weicht.
+        // Nur rechts und ohne Umfrage (Review 0.12.1 S2, S3): links läge die Bühne fast ganz unter limit-bars, und eine Umfrage der
+        // App steht im Rest der Zeile rechtsbündig, also genau unter der Bühne. Dann wie bis 0.12.0 als Platz 30 im Fluss.
+        const behind = !flip && !e.props.hasSurvey
+        const stage = (source: string, frame?: true) => Box({
+          key: 'buddy',
+          flexDirection: 'column',
+          justifyContent: 'flex-end',
+          // Nie zusammendrücken: sonst schneidet ein schmales Band das 400-px-Bild ab, und mit ihm die Hand (Fynn, 2026-10-06)
+          flexShrink: 0,
+          // Als Bild (ohne isInteractive): SMIL läuft, und beim Wechsel bleibt das alte stehen, bis das neue fertig ist. Den Rahmen
+          // (`frame`) gibt es nur noch im Flacker-Test zum Vergleich.
+          children: [Svg({ source, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, ...(frame ? { isInteractive: frame } : {}) })],
+        })
+        const deskBand = (source: string, frame?: true) => joinBand(layers, base, behind
+          ? [
+              ...slots,
+              Box({ key: `slot:${BACK_SLOT}:clawd-buddy`, position: 'absolute', bottom: 0, right: 0, flexDirection: 'column', justifyContent: 'flex-end', children: [stage(source, frame)] }),
+              slot(SLOTS.clawdBuddy, 'clawd-buddy', Box({ key: 'buddy-room', flexShrink: 0, children: [Svg({ source: ROOM_SVG, alt: '', width: 1, height: H * DESK_SCALE })] }), 'right'),
+            ]
+          : [...slots, slot(SLOTS.clawdBuddy, 'clawd-buddy', stage(source, frame), flip ? 'left' : 'right')])
         if (deskDiag !== -1) {
           if (deskDiag === -2) deskDiag = now
           const t = now - deskDiag

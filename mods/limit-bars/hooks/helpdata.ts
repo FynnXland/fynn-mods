@@ -7,6 +7,7 @@ import type { Display, Overrides, Part, Style } from './display.ts'
 import type { HelpData, HelpFeature, HelpSetting } from './help.ts'
 import { T, hhmm } from './i18n.ts'
 import type { Lang } from './i18n.ts'
+import { languageHelp } from './language.ts'
 
 /**
  * Akzent der Hilfe: Theme-Key `warning` (Gelb), folgt dem Theme hell und dunkel (HELP-SPEC §4, geändert 2026-10-09;
@@ -34,6 +35,10 @@ export type HelpInput = {
   styleByCommand: boolean
   /** Das Abo meldet kein 5h-Fenster: die obere Zeile zeigt das Wochen-Tempo */
   noFive: boolean
+  /** cost-ledger liefert `cost-ledger.here` (Ausbau 0.12.0); ohne Angabe: ja */
+  hasCost?: boolean
+  /** Windows (Säulen möglich); ohne Angabe: ja */
+  isWindows?: boolean
 }
 
 // Standards aus plugin.json (userConfig `default`)
@@ -45,10 +50,12 @@ const DEFAULTS: Readonly<Record<string, string | number | boolean>> = {
   showWeekly: true,
   showCache: true,
   showStorage: true,
+  showCost: true,
+  showSystem: false,
   onlyFiveHour: false,
   style: 'bar',
 }
-const SETTING_KEYS = ['language', 'resetStyle', 'highlightAt', 'showFiveHour', 'showWeekly', 'showCache', 'showStorage', 'onlyFiveHour', 'style', 'storagePath'] as const
+const SETTING_KEYS = ['language', 'resetStyle', 'highlightAt', 'showFiveHour', 'showWeekly', 'showCache', 'showStorage', 'showCost', 'showSystem', 'onlyFiveHour', 'style', 'storagePath'] as const
 
 
 export function barsHelpData(i: HelpInput): HelpData {
@@ -65,6 +72,10 @@ export function barsHelpData(i: HelpInput): HelpData {
       if (!on) return { name, state: { kind: 'off', text: `${onOff(false)} · ${by}` }, toggle: h.setPath }
       return { name, state: { kind: 'off', text: i.storagePath ? h.noDrive : h.noPath }, toggle: h.setPath }
     }
+    // Säulen nur unter Windows: dort hilft kein /bars (Ausbau 0.12.0)
+    if (p === 'system' && i.isWindows === false) return { name, state: { kind: 'off', text: `${onOff(on)} · ${by}` }, toggle: h.noWindows }
+    // Kostenring an, aber cost-ledger liefert nichts: an, wartet
+    if (p === 'cost' && on && i.hasCost === false) return { name, state: { kind: 'on', text: `${onOff(true)} · ${h.costWait} · ${by}` }, toggle: '/bars cost off' }
     // Ohne 5h-Fenster zeigt der Schalter 5h das Tempo (Ausbau 0.10.0)
     const what = p === 'fiveHour' && on && i.noFive ? `${onOff(true)} · ${h.noFive}` : onOff(on)
     return { name, state: { kind: on ? 'on' : 'off', text: `${what} · ${by}` }, toggle: `/bars ${PART_ARG[p]} ${on ? 'off' : 'on'}` }
@@ -90,9 +101,10 @@ export function barsHelpData(i: HelpInput): HelpData {
     intro: h.intro,
     commands: [
       { cmd: '/bars', does: h.bars },
-      { cmd: '/bars show 5h|week|cache|storage on|off', does: h.barsShow },
+      { cmd: '/bars show 5h|week|cache|storage|cost|cpu on|off', does: h.barsShow },
       { cmd: '/bars style bar|ring', does: h.barsStyle },
       { cmd: '/bars reset', does: h.barsReset },
+      languageHelp('bars', i.lang), // docs/LANGUAGE-SPEC.md §6 Punkt 4
       { cmd: '/bars help', does: h.barsHelp },
       { cmd: '/cache', does: h.cache },
       { cmd: '/cache ttl 5|60|auto', does: h.cacheTtl },
@@ -113,6 +125,8 @@ export function barsHelpData(i: HelpInput): HelpData {
       part('weekly', h.weekly),
       part('cache', h.cacheRing),
       part('storage', h.storageRing),
+      part('cost', h.costRing),
+      part('system', h.systemCols),
       {
         name: h.style,
         state: { kind: 'value', text: `${t.styleName[i.style]} · ${i.styleByCommand ? h.byCommand : h.bySetting}`, isDefault: !i.styleByCommand && i.style === DEFAULTS.style },

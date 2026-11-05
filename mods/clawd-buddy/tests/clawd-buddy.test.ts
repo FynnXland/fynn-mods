@@ -4,6 +4,7 @@ import { LONG_TURN_MS, NO_FACTS, NO_STRAIN, SETBACK, addHit, ctxLevel, deriveMoo
 import { ALL_CLIPS } from '../hooks/library.ts'
 import { CLIP_EN, T, clipLabel, langOf, num } from '../hooks/i18n.ts'
 import type { Facts, Strain } from '../hooks/mood.ts'
+import { joinBand, layer, slot as bandSlot, splitBand } from '../hooks/band.ts'
 
 const BAND = {
   plugin: 'clawd-buddy',
@@ -46,6 +47,9 @@ async function clientProps(ui: any): Promise<any> {
   return c?.props.props
 }
 
+// 0.12.1: Svgs der Figur; der durchsichtige Höhen-Halter (alt leer) zählt nicht
+const figures = async (u: any): Promise<any[]> => (await u.findAll({ type: 'Svg' })).filter((s: any) => s.props.alt !== '')
+
 test('Band: Terminal zeigt die Figur in Halbblock-Auflösung (Client), fremder Inhalt bleibt', async ($, on) => {
   mock.clock(on)
   stubs(on)
@@ -86,7 +90,7 @@ function frameAt(svg: string, ms: number): string {
 
 /** Quelle des einen Svg im Band. */
 async function svgOf(ui: { findAll: (q: { type: string }) => Promise<{ props: Record<string, unknown> }[]> }): Promise<string> {
-  const els = await ui.findAll({ type: 'Svg' })
+  const els = await figures(ui)
   expect(els.length, 'genau ein Svg').toBe(1)
   return els[0].props.source as string
 }
@@ -103,7 +107,7 @@ test('Band: Desktop zeigt die Figur als animiertes Svg (SMIL im Bild) und zeichn
   expect(await ui.find({ type: 'Text', text: 'von anderen' })).toBeDefined()
   expect(await ui.find({ type: 'Client' })).toBeUndefined()
   // Ein einziges Svg, als Bild (ohne isInteractive): ein Rahmen lüde bei jedem Wechsel neu und blinkte (0.6.6)
-  const els = await ui.findAll({ type: 'Svg' })
+  const els = await figures(ui)
   expect(els.length).toBe(1)
   expect(els[0].props.isInteractive).toBeUndefined()
   const first = await svgOf(ui)
@@ -447,7 +451,11 @@ test('Fakten: tool.check ask → wartet auf dich, bis das Tool endet; AskUserQue
   const clock = mock.clock(on)
   stubs(on)
   on('turn.start', ($: unknown, e: any) => ({ turnId: e.turnId }))
-  on('tool.check', () => ({ decision: 'ask', reason: 'test' }))
+  // Test-Kit 2.1.318: `$.tool.call` prüft selbst vorab, und ein `ask` ohne jemanden, der antworten kann, wird dort zur
+  // Ablehnung (der Aufruf endet sofort). Deshalb lässt die Vorab-Prüfung den Aufruf zu, und die Rückfrage kommt aus
+  // einer zweiten Prüfung desselben Aufrufs, solange er läuft. Geprüft wird dieselbe Logik: `ask` gilt, bis das Tool endet.
+  let ask = false
+  on('tool.check', () => (ask ? { decision: 'ask', reason: 'test' } : { decision: 'allow' }))
   on('tool.call', async () => {
     await clock.sleep(4000)
     return { result: 'ok' }
@@ -455,6 +463,8 @@ test('Fakten: tool.check ask → wartet auf dich, bis das Tool endet; AskUserQue
   await $.turn.start({ text: 'x', turnId: 't' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const call = $.tool.call({ tool: 'Bash', tool_use_id: 'c', command: 'rm x' } as any)
+  await clock.advance(100)
+  ask = true
   const chk = $.tool.check({ tool: 'Bash', input: { command: 'rm x' }, tool_use_id: 'c' })
   await clock.advance(500)
   await chk
@@ -497,7 +507,8 @@ test('Beobachtend: alle Event-Hooks reichen unverändert weiter (Ergebnis des St
   stubs(on)
   on('turn.start', () => ({ turnId: 'EXAKT' }))
   on('turn.complete', () => ({ text: 'EXAKT' }))
-  on('tool.check', () => ({ decision: 'deny', reason: 'EXAKT' }))
+  // Test-Kit 2.1.318: `$.tool.call` prüft vorab selbst; abgelehnt wird deshalb nur die Abfrage ohne `tool_use_id`
+  on('tool.check', ($: unknown, e: any) => (e.tool_use_id ? { decision: 'allow' } : { decision: 'deny', reason: 'EXAKT' }))
   on('tool.call', () => ({ result: 'EXAKT' }))
   expect((await $.turn.start({ text: 'a', turnId: 'x' })).turnId).toBe('EXAKT')
   expect((await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, reason: 'answer', turnId: 'x' })).text).toBe('EXAKT')
@@ -889,7 +900,7 @@ test('Sprache en (Standard): Befehle, Status und alt-Text englisch; Suche findet
   expect((await $.command.run({ command: 'clawd', args: 'demo Jonglieren' })).text).toBe('playing: juggle (Juggling)')
   expect((await $.command.run({ command: 'clawd', args: 'nap' })).text).toMatch(/getting sleepy/)
   const st = (await $.command.run({ command: 'clawd', args: 'status' })).text
-  expect(st).toMatch(/^clawd-buddy: on, calm \(0\.00\), tiredness 0%, annoyance 0\. Desktop drawing/)
+  expect(st).toMatch(/^clawd-buddy: on, calm \(0\.00\), tiredness 0%, annoyance 0\. No beat from tune-strip\. Desktop drawing/)
   expect(st).toMatch(/Commands: on \| off/)
   expect((await $.command.run({ command: 'clawd', args: 'xyz' })).text).toMatch(/^unknown: xyz\. Commands:/)
   await ui.unmount()
@@ -904,7 +915,7 @@ test('Sprache de: Befehle, Status und alt-Text deutsch wie bisher; Suche findet 
   expect((await $.command.run({ command: 'clawd', args: 'demo Juggling' })).text).toBe('spielt: juggle (Jonglieren)')
   expect((await $.command.run({ command: 'clawd', args: 'demo' })).text).toMatch(/Mit \/clawd list/)
   const st = (await $.command.run({ command: 'clawd', args: 'status' })).text
-  expect(st).toMatch(/^clawd-buddy: an, ausgeglichen \(0,00\), Müdigkeit 0 %, Ärger 0\. Desktop-Zeichnung/)
+  expect(st).toMatch(/^clawd-buddy: an, ausgeglichen \(0,00\), Müdigkeit 0 %, Ärger 0\. Kein Takt von tune-strip\. Desktop-Zeichnung/)
   expect((await $.command.run({ command: 'clawd', args: 'off' })).text).toBe('clawd-buddy: aus')
   await ui.unmount()
 })
@@ -1102,9 +1113,86 @@ test('0.8.0: Clawd ist Platz 30 (rechts) neben den anderen Plätzen; fremde Plä
     const tree = (await ui.drawn()) as any
     expect(tree.props.key).toBe('band-row')
     const keys = tree.children.map((c: any) => c.props.key)
-    expect(keys).toEqual(['slot:10:limit-bars', 'slot:20:tune-strip', 'band-rest', 'slot:30:clawd-buddy:right'])
+    // Desktop (0.12.1): die Bühne liegt als Platz 0 hinter der Zeile, Platz 30 hält nur die Höhe
+    expect(keys).toEqual(surface === 'desktop' ? ['slot:0:clawd-buddy', 'slot:10:limit-bars', 'slot:20:tune-strip', 'band-rest', 'slot:30:clawd-buddy:right'] : ['slot:10:limit-bars', 'slot:20:tune-strip', 'band-rest', 'slot:30:clawd-buddy:right'])
     await ui.unmount()
   }
+})
+
+test('0.12.1: Desktop: die Bühne liegt hinter der Zeile (Platz 0, aus dem Fluss, am rechten Rand), Platz 30 hält nur 1 px', async ($, on) => {
+  mock.clock(on)
+  const store = new Map<string, unknown>()
+  on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
+  on('store.set', ($: unknown, e: any) => {
+    store.set(e.key, e.value)
+    return { value: undefined }
+  })
+  on('ui.log', () => ({ value: undefined }))
+  on('command.register', () => ({ value: undefined }))
+  // limit-bars 0.13.0 ist breit (Systemwerte): sein Platz darf Clawd nicht mehr wegschieben
+  const wide = { type: 'Box', props: { key: 'slot:10:limit-bars', flexShrink: 0 }, children: [{ type: 'Box', props: { key: 'limit-bars', position: 'relative', width: 900 }, children: ['5h 40 %'] }] }
+  on('ui.render', () => ({ type: 'Box', props: { key: 'band-row', flexDirection: 'row' }, children: [wide] }))
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const row = (await ui.drawn()) as any
+  const back = row.children[0]
+  expect(back.props.key).toBe('slot:0:clawd-buddy')
+  expect(back.props).toMatchObject({ position: 'absolute', right: 0, bottom: 0 })
+  expect(back.props.left).toBeUndefined()
+  // Die Figur steckt in der Bühne hinter der Zeile, in voller Breite
+  const fig = back.children[0]
+  expect(fig.props.key).toBe('buddy')
+  expect(fig.children[0].props).toMatchObject({ width: 400, height: 56 })
+  // Platz 30: nur der durchsichtige Halter, 1 px breit und so hoch wie die Bühne
+  const room = row.children.at(-1)
+  expect(room.props.key).toBe('slot:30:clawd-buddy:right')
+  expect(room.children[0].children[0].props).toMatchObject({ width: 1, height: 56, alt: '' })
+  // limit-bars folgt erst danach und wird damit über Clawd gemalt
+  expect(row.children.map((c: any) => c.props.key).indexOf('slot:10:limit-bars')).toBeGreaterThan(0)
+  await ui.unmount()
+})
+
+test('0.12.1: Desktop gespiegelt (side: left): wie bis 0.12.0 im Fluss als Platz 30 links, keine Bühne hinter der Zeile (Review S2)', { options: { side: 'left' } }, async ($, on) => {
+  mock.clock(on)
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.render', () => ({ type: 'Box', props: { key: 'band-row', flexDirection: 'row' }, children: [{ type: 'Box', props: { key: 'slot:10:limit-bars', flexShrink: 0 }, children: ['5h 40 %'] }] }))
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const row = (await ui.drawn()) as any
+  expect(row.children.map((c: any) => c.props.key)).toEqual(['slot:10:limit-bars', 'slot:30:clawd-buddy', 'band-rest'])
+  expect(row.children[1].children[0].props.key).toBe('buddy')
+  await ui.unmount()
+})
+
+test('0.12.1: Desktop mit Umfrage (hasSurvey): Clawd im Fluss als Platz 30 rechts, damit die Umfrage im Rest nicht unter der Bühne liegt (Review S3)', async ($, on) => {
+  mock.clock(on)
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.render', () => ({ type: 'engine', ref: 0 }))
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop', props: { ...BAND.props, hasSurvey: true } })
+  const row = (await ui.drawn()) as any
+  expect(row.children.map((c: any) => c.props.key)).toEqual(['band-rest', 'slot:30:clawd-buddy:right'])
+  expect(row.children[1].children[0].props.key).toBe('buddy')
+  await ui.unmount()
+})
+
+test('0.12.1: ein äußerer Band-Mod (splitBand/joinBand) behält die Bühne zuerst, samt Lage; mit Ebene steckt sie in band-base → band-row (Review K2)', async ($, on) => {
+  mock.clock(on)
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.render', () => ({ type: 'engine', ref: 0 }))
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const mine = (await ui.drawn()) as any
+  await ui.unmount()
+  // So macht es ein äußerer Mod: zerlegen, eigenen Platz und eine Ebene dazu, neu bauen
+  const sp = splitBand(mine)
+  const outer = joinBand([...sp.layers, layer(20, 'quick-replies', 'Pille')], sp.base, [...sp.slots, bandSlot(10, 'limit-bars', 'Balken')]) as any
+  const row = outer.children.find((c: any) => c.props.key === 'band-base').children[0].children[0]
+  expect(row.props.key).toBe('band-row')
+  expect(row.children.map((c: any) => c.props.key)).toEqual(['slot:0:clawd-buddy', 'slot:10:limit-bars', 'band-rest', 'slot:30:clawd-buddy:right'])
+  expect(row.children[0].props).toMatchObject({ position: 'absolute', right: 0, bottom: 0 })
 })
 
 test('0.8.0: die Platzbreite geht als $.state clawd-buddy.band an tune-strip: 400 px im Desktop, null im Terminal und wenn Clawd aus ist', async ($, on) => {
@@ -1167,7 +1255,7 @@ test('0.8.1: tune-strip zeichnet jede Sekunde neu (ohne neuen Clip): Clawd setzt
     secs += 1
     await ui.redraw()
     const tree = (await ui.drawn()) as any
-    expect(tree.children.map((c: any) => c.props.key), `Sekunde ${i + 1}: Plätze`).toEqual(['slot:10:limit-bars', 'slot:20:tune-strip', 'band-rest', 'slot:30:clawd-buddy:right'])
+    expect(tree.children.map((c: any) => c.props.key), `Sekunde ${i + 1}: Plätze`).toEqual(['slot:0:clawd-buddy', 'slot:10:limit-bars', 'slot:20:tune-strip', 'band-rest', 'slot:30:clawd-buddy:right'])
     expect((await ui.find({ type: 'Box', key: 'buddy' }))?.props.flexShrink).toBe(0)
     const next = await svgOf(ui)
     // Was die App zeigt, wenn sie SMIL beim Neuzeichnen neu startet: den Anfang des neuen Svg. Das muss das Bild sein, das das vorige
@@ -1215,7 +1303,7 @@ test('0.9.0: Clawd liest tune-strip.playing beim Zeichnen: nur { playing: true }
   refuse = true
   await clock.advance(750)
   await desk.redraw()
-  expect((await desk.findAll({ type: 'Svg' })).length).toBe(1)
+  expect((await figures(desk)).length).toBe(1)
   expect(logs.some((l) => /tune-strip state not read/.test(l))).toBe(true)
   await desk.unmount()
 })
@@ -1278,4 +1366,30 @@ test('0.9.1: /clear mit abgelehntem state.set: der Hook geht durch, nichts wirft
   const before = tries
   await $.classic.SessionStart({ source: 'clear' })
   expect(tries).toBe(before + 1)
+})
+
+// ---- 0.10.0 language: /clawd language de|en (docs/LANGUAGE-SPEC.md; Kernfälle in tests/language.test.ts)
+
+test('0.10.0 language: Wort im argumentHint, Zeile in der Hilfe (en) vor help', async ($, on) => {
+  mock.clock(on)
+  stubs(on)
+  let hint = ''
+  on('command.register', ($: unknown, e: any) => {
+    if (e.name === 'clawd') hint = e.argumentHint
+    return { value: undefined }
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  expect(hint).toBe('on | off | list | demo <animation> | nap | boop | status | flicker | language | help')
+  const en = String((await $.command.run({ command: 'clawd', args: 'help' } as any)).text).split('\n')
+  expect(en).toContain('- `/clawd language de|en`: Switch the language of all fynn-mods')
+  const order = en.filter((l) => l.startsWith('- `/clawd')).map((l) => /^- `([^`]+)`/.exec(l)![1])
+  expect(order.slice(-2)).toEqual(['/clawd language de|en', '/clawd help'])
+})
+
+test('0.10.0 language: Zeile in der Hilfe (de)', { options: { language: 'de' } }, async ($, on) => {
+  mock.clock(on)
+  stubs(on)
+  const de = String((await $.command.run({ command: 'clawd', args: 'help' } as any)).text).split('\n')
+  expect(de).toContain('- `/clawd language de|en`: Sprache aller fynn-mods umstellen')
 })

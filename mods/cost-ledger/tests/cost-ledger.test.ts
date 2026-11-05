@@ -44,6 +44,7 @@ import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel
 import { THEME_HEX, donutSvg, familyColors, modelColors, stackedBar } from '../hooks/view.ts'
 import { arcPath, bigUsd, hereBar, hereSvg, hereText, shareOf, shareText } from '../hooks/here.ts'
 import { helpMarkdown, helpTree, stateText } from '../hooks/help.ts'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
 import type { Rec } from '../hooks/logic.ts'
 
 const NOW = new Date(2026, 9, 6, 12, 0).getTime() // 06.10.2026 12:00 lokal
@@ -85,6 +86,7 @@ function world(on: On, o: W = {}) {
     fs: [] as [string, string][], // jeder $.fs-Aufruf: [op, Pfad]
     listFails: false,
     writeFails: false,
+    registered: [] as { name: string; argumentHint?: string }[],
   }
   // Dateisystem im Speicher; ein Ordner „gibt es“, sobald eine Datei darin liegt (wie nach $.fs.write)
   const files = o.files ?? new Map<string, string>()
@@ -136,7 +138,10 @@ function world(on: On, o: W = {}) {
     st.logs.push(e.text)
     return { value: undefined }
   })
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', ($, e) => {
+    st.registered.push(e as never)
+    return { value: undefined }
+  })
   on('tool.call', ($, e) => {
     if (e.tool !== 'AskUserQuestion') return { result: '' }
     const q = (e as unknown as { questions: { question: string; options: { label: string }[] }[] }).questions[0]!
@@ -1992,7 +1997,7 @@ test('0.6.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht al
     const notes = tokens((d.notes ?? []).join(' '))
     const row = (cmd: string) => d.commands.find((c) => c.cmd === cmd)!
     // Erstes Wort: Ansichten, plan, reset, help stehen als Befehl; '?' und deutsche Aliase in Wirkung bzw. Notiz
-    for (const w of [...VIEW_WORDS, 'plan', 'reset', 'help', SYNC_WORD, NAME_WORD]) expect(cmds.has(w), `${lang}: ${w}`).toBe(true)
+    for (const w of [...VIEW_WORDS, 'plan', 'reset', 'help', SYNC_WORD, NAME_WORD, LANGUAGE_WORD, ...LANGUAGES]) expect(cmds.has(w), `${lang}: ${w}`).toBe(true)
     expect(row('/ledger help').does.includes('?'), lang).toBe(true)
     // Englische Wörter im Befehl, deutsche Aliase in der Notiz
     const english = (list: readonly string[]) => list.filter((w) => /^[a-z]+$/.test(w) && !notes.has(w))
@@ -2785,4 +2790,227 @@ test('0.8.2 donutSvg: die Zahl in der Mitte passt in den Ring, auch fünf- und s
     expect(fs < 14, s).toBe(true)
     expect(s.length * 0.6 * fs <= 58, s).toBe(true) // Innenraum: 2 × (40 − 7) − 8 px
   }
+})
+
+// ---------- 0.9.0: /ledger language (docs/LANGUAGE-SPEC.md; Kernfälle in tests/language.test.ts) ----------
+
+test('0.9.0 language: Zeile in der Hilfe (en, de) vor reset, Wort im argumentHint', async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  expect(w.st.registered.find((c) => c.name === 'ledger')?.argumentHint).toBe('[here|weeks|chats|projects|models|limits|plan|sync|language|reset|help]')
+  const en = (await w.ledger($, 'help')).split('\n')
+  expect(en).toContain('- `/ledger language de|en`: Switch the language of all fynn-mods')
+  const order = en.filter((l) => l.startsWith('- `/ledger')).map((l) => /^- `([^`]+)`/.exec(l)![1])
+  expect(order.slice(-3)).toEqual(['/ledger language de|en', '/ledger reset', '/ledger help'])
+})
+
+test('0.9.0 language: Zeile in der Hilfe (de)', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  expect((await w.ledger($, 'hilfe')).split('\n')).toContain('- `/ledger language de|en`: Sprache aller fynn-mods umstellen')
+})
+
+// ---------- 0.10.0: $.state `cost-ledger.here` für den Kostenring von limit-bars (SPEC Nachtrag 0.10.0) ----------
+
+type HereValue = { chatUsd: number; projectUsd: number | null; project: string | null; since: string; devices: number } | null
+
+/** Fängt jedes Schreiben von `cost-ledger.here` ab; `deny` lehnt es ab (wie aus einem Zeichnen heraus). */
+function hereWrites(on: On, o: { deny?: boolean } = {}) {
+  const writes: HereValue[] = []
+  let tries = 0
+  on('state.set', ($, e) => {
+    const x = e as unknown as { plugin: string; key: string; value: unknown }
+    if (x.plugin !== 'cost-ledger' || x.key !== 'here') return { value: undefined } as never
+    tries++
+    if (o.deny) return { deny: 'abgelehnt' } as never
+    writes.push(JSON.parse(JSON.stringify(x.value)))
+    return { value: undefined } as never
+  })
+  return { writes, tries: () => tries, last: () => writes.at(-1) }
+}
+
+/** Projekt- und Chatbetrag aus der Zeile von `/ledger here all` (Deutsch). */
+function hereAmounts(text: string): { project: number; chat: number } {
+  const m = /^\*\*Projekt [^*]+\*\*: ([\d.,]+) \$ API-Wert .*, dieser Chat ([\d.,]+) \$ /.exec(text)
+  expect(!!m, text).toBe(true)
+  const num = (s: string) => Number(s.replace(/\./g, '').replace(',', '.'))
+  return { project: num(m![1]!), chat: num(m![2]!) }
+}
+
+const cents = (v: number) => Math.round(v * 100) / 100
+/** Das Lesen beim Start und nach Reset läuft im Hintergrund: abwarten, bis die Kette leer ist. */
+const settle = async () => {
+  for (let i = 0; i < 500; i++) await Promise.resolve()
+}
+
+test('0.10.0 here-State: nach Start, Turn, Mod-Aufruf und /clear; dieselben Zahlen wie /ledger here all', { plugins: [sidekick], ...DE }, async ($, on) => {
+  const w = world(on, { saved: hereSaved(), root: WT_ROOT })
+  const s = hereWrites(on)
+  on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_OUT } as never }))
+  await w.start($)
+  await settle()
+  // Start: A 10 + 20 + 1 (Mod) + B 3 = 34; Fleech und der Skript-Lauf zählen nicht; Ordnername des Hauptordners, nicht des Worktrees
+  expect(s.last()).toEqual({ chatUsd: 0, projectUsd: 34, project: 'ClaudeMods', since: TODAY, devices: 1 })
+  await w.turn($, 5)
+  expect(s.last()).toEqual({ chatUsd: 5, projectUsd: 39, project: 'ClaudeMods', since: TODAY, devices: 1 })
+  // Mod-Aufruf eines anderen Mods zählt zum Chat
+  expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:OK')
+  await settle() // nach Mod-Aufrufen ohne Warten geschrieben (Review 0.10.0 K2)
+  const v = s.last()!
+  expect(v.chatUsd > 5 && v.projectUsd! > 39, JSON.stringify(v)).toBe(true)
+  near(v.projectUsd! - v.chatUsd, 34)
+  const a = hereAmounts(await w.ledger($, 'here all'))
+  expect([a.chat, a.project]).toEqual([v.chatUsd, v.projectUsd])
+  // /clear: neue Session ab 0; der alte Chat zählt jetzt zu den anderen Chats des Projekts
+  const before = s.writes.length
+  await $.session.end({ reason: 'clear' } as never)
+  expect(s.writes.length).toBe(before) // session.end schreibt nicht (Budget 1,5 s)
+  w.st.cost = 0
+  await $.classic.SessionStart({ source: 'clear', session_id: 'S2' })
+  expect(s.last()).toEqual({ chatUsd: 0, projectUsd: v.projectUsd, project: 'ClaudeMods', since: TODAY, devices: 1 })
+  await w.turn($, 0.25)
+  expect(s.last()).toMatchObject({ chatUsd: 0.25, projectUsd: cents(v.projectUsd! + 0.25) })
+  const b = hereAmounts(await w.ledger($, 'here all'))
+  expect([b.chat, b.project]).toEqual([0.25, s.last()!.projectUsd])
+})
+
+test('0.10.0 here-State: kein Schreiben bei gleichem Cent-Betrag; Reset schreibt neu', { options: { language: 'de' } }, async ($, on) => {
+  const w = world(on, { answer: 'Löschen' })
+  const s = hereWrites(on)
+  await w.start($)
+  await settle()
+  await w.turn($, 1)
+  const n = s.writes.length
+  await w.turn($, 1.001)
+  await w.turn($, 1.004)
+  expect(s.writes.length).toBe(n) // 1,00 $ bleibt 1,00 $
+  await w.ledger($, 'chats') // /ledger liest neu, Betrag gleich: kein Schreiben
+  expect(s.writes.length).toBe(n)
+  await w.turn($, 1.011)
+  expect(s.writes.length).toBe(n + 1)
+  expect(s.last()).toMatchObject({ chatUsd: 1.01, projectUsd: 1.01 })
+  await w.ledger($, 'reset')
+  await settle()
+  expect(s.last()).toMatchObject({ chatUsd: 0, projectUsd: 0 })
+})
+
+test('0.10.0 here-State: abgelehntes set bricht die Buchung nicht ab; der nächste Turn versucht es erneut', DE, async ($, on) => {
+  const w = world(on)
+  const s = hereWrites(on, { deny: true })
+  await w.start($)
+  await settle()
+  const r = await w.turn($, 0.4)
+  expect(r).toEqual({ text: 'ENGINE' })
+  near(w.sum(), 0.4)
+  const tries = s.tries()
+  expect(tries >= 2).toBe(true) // Start und Turn
+  expect(w.st.logs.some((l) => /^cost-ledger: \$\.state here: /.test(l))).toBe(true)
+  await w.turn($, 0.4) // gleicher Betrag, aber noch nie geschrieben: neuer Versuch
+  expect(s.tries()).toBe(tries + 1)
+  expect(await w.ledger($, 'here')).toMatch(/dieser Chat 0,40 \$/)
+})
+
+test('0.10.0 here-State: Skript-Lauf ohne Projekt → projectUsd und project null; ohne Session-ID kein Wert', DE, async ($, on) => {
+  const w = world(on, { saved: hereSaved(), surfaces: [] })
+  const s = hereWrites(on)
+  await $.session.start({ surface: 'terminal', isInteractive: false, cwd: '/work' } as never) // keine Session-ID (Modul-Reload, -p ohne ID)
+  expect(s.writes).toHaveLength(0)
+  await settle()
+  await $.classic.UserPromptSubmit({ session_id: 'S1', prompt: 'hi' } as never) // bindet die Session
+  expect(s.last()).toEqual({ chatUsd: 0, projectUsd: null, project: null, since: TODAY, devices: 1 })
+  await w.turn($, 1) // nach einem Modul-Reload ist der erste Zählerstand die Basis (bisheriges Verhalten)
+  await w.turn($, 3)
+  expect(s.last()).toEqual({ chatUsd: 2, projectUsd: null, project: null, since: TODAY, devices: 1 })
+})
+
+test('0.10.0 here-State: Benutzerordner gibt keinen Ordnernamen preis (wie das Sync-Feld proj)', DE, async ($, on) => {
+  const w = world(on, { root: WIN ? `${WIN_HOME}\\bob` : '/home/bob' })
+  const s = hereWrites(on)
+  await w.start($)
+  await settle()
+  await w.turn($, 1)
+  expect(s.last()).toEqual({ chatUsd: 1, projectUsd: 1, project: null, since: TODAY, devices: 1 })
+})
+
+test('0.10.0 here-State: Sync-Datensatz mit gleichem Ordnernamen → Summe und devices 2 nach /ledger', DE, async ($, on) => {
+  const files = new Map<string, string>()
+  const w = world(on, { root: WT_ROOT, files })
+  const s = hereWrites(on)
+  await w.start($)
+  await settle()
+  await w.turn($, 1)
+  await w.ledger($, `sync ${SYNC}`)
+  // Der Laptop schreibt danach seine Datei: ClaudeMods (anders geschrieben) zählt mit, Anderes nicht
+  files.set(
+    inDir(SYNC, fileName('ab12cd34')),
+    buildFile({ id: 'ab12cd34', name: 'Laptop' }, NOW - 30 * DAY, [
+      { id: 'L1', rec: { ...peerRec({ days: { [TODAY]: 4 } }), root: `${WIN_HOME}\\bob\\Code\\claudemods` } },
+      { id: 'L2', rec: { ...peerRec({ days: { [TODAY]: 2 } }), root: `${WIN_HOME}\\bob\\Code\\Anderes` } },
+    ], NOW - H, usersIn([`${WIN_HOME}\\bob\\Code`])),
+  )
+  expect(s.last()).toMatchObject({ projectUsd: 1 })
+  await w.ledger($, 'here')
+  expect(s.last()).toEqual({ chatUsd: 1, projectUsd: 5, project: 'ClaudeMods', since: dayKey(NOW - 30 * DAY), devices: 2 })
+  const a = hereAmounts(await w.ledger($, 'here all'))
+  expect([a.chat, a.project]).toEqual([1, 5])
+})
+
+test('0.10.0 here-State: neuer Chat liest die Gerätedateien einmal beim Start, danach nur bei /ledger', DE, async ($, on) => {
+  const files = new Map<string, string>()
+  files.set(
+    inDir(SYNC, fileName('ab12cd34')),
+    buildFile({ id: 'ab12cd34', name: 'Laptop' }, NOW - 30 * DAY, [{ id: 'L1', rec: { ...peerRec({ days: { [TODAY]: 4 } }), root: `${WIN_HOME}\\bob\\Code\\ClaudeMods` } }], NOW - H, usersIn([`${WIN_HOME}\\bob\\Code`])),
+  )
+  const saved = new Map<string, unknown>([
+    ['meta:sync', { v: 1, dir: SYNC, at: NOW - DAY }],
+    ['meta:device', { id: '11aa22bb', name: 'PC' }],
+    ['meta:syncAt', NOW - 60 * 1000], // eigene Datei frisch: syncAfterTurn schreibt nicht
+    ['s:A', recOf('ClaudeMods', { [TODAY]: 3 })],
+  ])
+  const w = world(on, { saved, files, root: WT_ROOT })
+  const s = hereWrites(on)
+  await w.start($)
+  await settle()
+  await w.turn($, 1) // wartet in der Kette auf das Lesen beim Start
+  expect(s.last()).toEqual({ chatUsd: 1, projectUsd: 8, project: 'ClaudeMods', since: dayKey(NOW - 30 * DAY), devices: 2 })
+  const reads = () => w.st.fs.filter(([op]) => op === 'read').length
+  const n = reads()
+  expect(n >= 1).toBe(true)
+  // Ein anderer Chat dieses Geräts bucht: erst nach 15 Minuten neu gelesen (im Hintergrund), nie die Gerätedateien
+  w.saved.set('s:B', recOf('ClaudeMods', { [TODAY]: 2 }))
+  await w.clock.advance(6 * 60 * 1000)
+  await w.turn($, 1.5)
+  await settle()
+  expect(s.last()).toMatchObject({ chatUsd: 1.5, projectUsd: 8.5, devices: 2 })
+  await w.clock.advance(10 * 60 * 1000)
+  await w.turn($, 1.5)
+  await settle()
+  expect(s.last()).toMatchObject({ chatUsd: 1.5, projectUsd: 10.5, devices: 2 })
+  expect(reads()).toBe(n)
+})
+
+test('0.10.0 here-State: /resume und /branch (neue Session-ID) schreiben neu; der vorige Chat zählt zum Projekt', DE, async ($, on) => {
+  const saved = new Map<string, unknown>([['s:R', { ...recOf('ClaudeMods', { [TODAY]: 2 }), root: ROOT }]])
+  const w = world(on, { saved, root: WT_ROOT })
+  const s = hereWrites(on)
+  await w.start($)
+  await settle()
+  await w.turn($, 1)
+  expect(s.last()).toMatchObject({ chatUsd: 1, projectUsd: 3 })
+  for (const [source, id] of [['resume', 'R'], ['fork', 'F']] as const) {
+    const n = s.writes.length
+    await $.classic.SessionStart({ source, session_id: id })
+    expect(s.writes.length, source).toBe(n + 1) // $.state ist nach dem Wechsel leer: auch ein gleicher Wert wird geschrieben
+  }
+  // Nach resume R und fork F: dieser Chat F (noch nichts), S1 1 $ und R 2 $ sind die anderen
+  expect(s.last()).toMatchObject({ chatUsd: 0, projectUsd: 3 })
+})
+
+test('0.10.0 here-State: Reset während eines laufenden Lesens: das alte Ergebnis wird verworfen (Review K1)', { options: { language: 'de' } }, async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['s:A', recOf('ClaudeMods', { [TODAY]: 9 })]]), answer: 'Löschen' })
+  const s = hereWrites(on)
+  await w.start($) // Lesen im Hintergrund läuft noch
+  await w.ledger($, 'reset')
+  await settle()
+  expect(s.last()).toMatchObject({ projectUsd: 0 })
 })

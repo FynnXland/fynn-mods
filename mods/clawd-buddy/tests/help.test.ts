@@ -2,6 +2,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { ACCENT, DEFAULTS, HELP_WORDS, SUBCOMMANDS, clawdHelp, isHelp } from '../hooks/clawdhelp.ts'
 import { stateText } from '../hooks/help.ts'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
 
 const DE = { options: { language: 'de' } }
 
@@ -93,7 +94,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect((await ui.find({ type: 'Text', text: 'clawd-buddy · Hilfe' }))?.props).toMatchObject({ color: ACCENT, bold: true })
     for (const h of ['BEFEHLE', 'BEDIENUNG', 'FUNKTIONEN', 'STATUS', 'UMSCHALTEN', 'EINSTELLUNGEN (/plugin)', 'WERT'])
       expect((await ui.find({ type: 'Text', text: h }))?.props.color, h).toBe(ACCENT)
-    for (const cmd of ['/clawd [status]', '/clawd on', '/clawd off', '/clawd list', '/clawd demo <animation>', '/clawd nap', '/clawd boop', '/clawd flicker', '/clawd help', 'Klick auf Clawd'])
+    for (const cmd of ['/clawd [status]', '/clawd on', '/clawd off', '/clawd list', '/clawd demo <animation>', '/clawd nap', '/clawd boop', '/clawd flicker', '/clawd language de|en', '/clawd help', 'Klick auf Clawd'])
       expect((await ui.find({ type: 'Text', text: cmd }))?.props.color, cmd).toBe(ACCENT)
     expect((await ui.find({ type: 'Text', text: /^Ein animiertes Pixel-Maskottchen/ }))?.props.color).toBeUndefined()
     expect((await ui.find({ type: 'Text', text: /^Blendet Clawd aus/ }))?.props.color).toBeUndefined()
@@ -209,9 +210,12 @@ test('Hilfe Vollständigkeit: jeder Unterbefehl und jedes Hilfe-Wort, das der Pa
   for (const lang of ['en', 'de'] as const) {
     const d = clawdHelp({ ...DEFAULTS, lang, enabled: true, side: 'right' })
     const cmds = d.commands.map((c) => c.cmd)
-    // Als ganze Wörter (Tokens), nicht als Teilstring: sonst steckt `on` in „configure“ (templates/help/README.md)
-    const cmdTokens = new Set(cmds.flatMap((c) => c.split(/[\s[\]]+/).filter(Boolean)))
-    for (const word of SUBCOMMANDS) expect(cmdTokens.has(word), `${lang}: ${word}`).toBe(true)
+    // Als ganze Wörter (Tokens), nicht als Teilstring: sonst steckt `on` in „configure“ (templates/help/README.md); `|` trennt `de|en`
+    const cmdTokens = new Set(cmds.flatMap((c) => c.split(/[\s[\]|]+/).filter(Boolean)))
+    for (const word of [...SUBCOMMANDS, LANGUAGE_WORD, ...LANGUAGES]) expect(cmdTokens.has(word), `${lang}: ${word}`).toBe(true)
+    // Reihenfolge (0.10.0): language direkt vor help, help zuletzt
+    expect(cmds.slice(-2), lang).toEqual(['/clawd language de|en', '/clawd help'])
+    expect(cmds.length, lang).toBe(SUBCOMMANDS.length + 2)
     const helpTokens = new Set(d.commands.flatMap((c) => `${c.cmd} ${c.does}`.split(/[\s()[\]]+/).filter(Boolean)))
     for (const word of HELP_WORDS) expect(helpTokens.has(word), `${lang}: ${word}`).toBe(true)
     // Jede Einstellung aus plugin.json steht da (sieben Felder)

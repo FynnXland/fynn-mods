@@ -29,6 +29,7 @@ const SEG = 3
 const SEG_H = 8
 const INFO_W = 340 // Balken (176), Fuge, Zeit; der Titel darf bis zur vollen Breite gehen
 const INFO_H = 32
+const AHEAD_S = 15 // so viele Sekunden läuft die Zeit nach einer Zeichnung von allein weiter (Zeichnungen kommen alle 5 s, mit Reserve)
 const CHAR_PX = 7.2 // Breite eines Zeichens der Mono-Schrift bei 12 px, großzügig gerechnet
 const SEP_W = 2400 // die Trennlinie ist breiter als jedes Fenster; ihre Box schneidet sie ab
 const SEP_H = 26
@@ -60,14 +61,46 @@ export function clip(text: string, max: number): string {
  * Titel und Position im Stil der Stats-Leiste von limit-bars: oben der Titel in Orange mit dem Interpreten in Grau, darunter ein
  * Segmentbalken (grün, Rest dunkelgrau) und rechts die Zeit (verstrichen grün, Länge grau).
  */
-export function infoSvg(title: string, artist: string, pos: number, end: number): string {
+export function infoSvg(title: string, artist: string, pos: number, end: number, run = false): string {
   const max = Math.floor(INFO_W / CHAR_PX)
   const t = clip(title, max)
   const a = artist ? clip(` – ${artist}`, Math.max(0, max - [...t].length)) : ''
   const on = Math.round(ratio(pos, end) * SEGMENTS)
+  // Voranimation (0.8.0): Das Band zeichnet nur alle paar Sekunden neu (öfter flackert es), die Zeit soll aber jede Sekunde weiterlaufen.
+  // Darum liegt für jede der nächsten Sekunden eine eigene Zeitangabe im Bild, und SMIL blendet sie im Sekundentakt um; der Beginn
+  // liegt `frac` Sekunden in der Vergangenheit (negatives `begin`, wie bei clawd-buddy), damit der Sprung genau auf die volle Sekunde fällt.
+  const first = Math.floor(Math.max(0, pos))
+  const frac = Math.max(0, pos) - first
+  const last = end > 0 ? Math.floor(end) : Infinity
+  const n = run ? Math.max(1, Math.min(AHEAD_S, last - first) + 1) : 1 // Zeitangaben im Bild
+  const dur = `${n}s`
+  const kt = (k: number) => String(+(k / n).toFixed(5))
+  const begin = ` begin="-${frac.toFixed(3)}s"`
   let segs = ''
-  for (let i = 0; i < SEGMENTS; i++) segs += `<rect x="${i * PITCH}" y="20" width="${SEG}" height="${SEG_H}" rx="0.5" fill="${i < on ? GREEN : EMPTY}"/>`
-  const time = `<text x="${SEGMENTS * PITCH + 8}" y="28" font-family="${FONT}" font-size="12"><tspan fill="${GREEN}">${fmtTime(pos)}</tspan><tspan fill="${GREY}"> / ${fmtTime(end)}</tspan></text>`
+  for (let i = 0; i < SEGMENTS; i++) {
+    let anim = ''
+    // Ein leeres Segment wird grün, sobald der gerundete Anteil über i steht: bei Position (i + ½) / 44 · Länge
+    if (run && end > 0 && i >= on) {
+      const at = ((i + 0.5) / SEGMENTS) * end - pos
+      if (at > 0 && at < n - frac) {
+        anim = `<animate attributeName="fill" calcMode="discrete" begin="${at.toFixed(3)}s" dur="0.02s" fill="freeze" values="${EMPTY};${GREEN}" keyTimes="0;0.5"/>`
+      }
+    }
+    segs += `<rect x="${i * PITCH}" y="20" width="${SEG}" height="${SEG_H}" rx="0.5" fill="${i < on ? GREEN : EMPTY}">${anim}</rect>`
+  }
+  let time = ''
+  for (let k = 0; k < n; k++) {
+    const shown = `<text x="${SEGMENTS * PITCH + 8}" y="28" font-family="${FONT}" font-size="12"`
+    const body = `<tspan fill="${GREEN}">${fmtTime(first + k)}</tspan><tspan fill="${GREY}"> / ${fmtTime(end)}</tspan></text>`
+    if (n === 1) {
+      time = `${shown}>${body}`
+      break
+    }
+    // Sichtbar von Sekunde k bis k + 1 der Zeitleiste; die letzte bleibt stehen (fill="freeze")
+    const keys = k === 0 ? [0, k + 1] : k === n - 1 ? [0, k] : [0, k, k + 1]
+    const vals = k === 0 ? ['visible', 'hidden'] : k === n - 1 ? ['hidden', 'visible'] : ['hidden', 'visible', 'hidden']
+    time += `${shown} visibility="${vals[0]}"><animate attributeName="visibility" calcMode="discrete"${begin} dur="${dur}" fill="freeze" values="${vals.join(';')}" keyTimes="${keys.map(kt).join(';')}"/>${body}`
+  }
   const head = `<text x="0" y="12" font-family="${FONT}" font-size="12"><tspan fill="${ORANGE}" font-weight="700">${esc(t)}</tspan>${a ? `<tspan fill="${GREY}">${esc(a)}</tspan>` : ''}</text>`
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${INFO_W}" height="${INFO_H}" viewBox="0 0 ${INFO_W} ${INFO_H}">${head}${segs}${time}</svg>`
 }
@@ -90,6 +123,8 @@ export type ViewInput = {
   pos: number
   /** Desktop-Leiste: zusätzlich −15 s, +15 s, Zufall und Wiederholen. */
   extraButtons: boolean
+  /** Desktop-Leiste: orange Trennlinie unten; nur, wenn darunter andere Mods zeichnen (sonst gäbe sie nichts zu trennen). */
+  sep: boolean
 }
 
 function titleOf(t: Track): string {
@@ -141,7 +176,7 @@ export function desktopTree(els: Els, h: Handlers, v: ViewInput) {
   // Leiste: Cover | Titel und Balken im Stil von limit-bars | Hinweiszeile und Knöpfe rechts; darunter die orange Trennlinie
   const cover = Svg({ source: coverSvg(v.cover, BAR_COVER_PX), alt: t.alt.cover(titleOf(v.track)), width: BAR_COVER_PX, height: BAR_COVER_PX })
   const info = Svg({
-    source: infoSvg(v.track.title, v.track.artist, v.pos, v.track.end),
+    source: infoSvg(v.track.title, v.track.artist, v.pos, v.track.end, playing),
     alt: `${titleOf(v.track)}, ${t.alt.bar(fmtTime(v.pos), fmtTime(v.track.end))}`,
     width: INFO_W,
     height: INFO_H,
@@ -191,7 +226,7 @@ export function desktopTree(els: Els, h: Handlers, v: ViewInput) {
     flexDirection: 'column',
     children: [
       Box({ flexDirection: 'row', alignItems: 'center', columnGap: 2, paddingLeft: 1, children: [cover, info, hints, controls] }),
-      sep,
+      ...(v.sep ? [sep] : []),
     ],
   })
 }

@@ -5,7 +5,7 @@ for Spotify (Windows) and a cost ledger.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.295_tested-D97757)](https://code.claude.com/docs/en/plugins/mods/overview)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.318_tested-D97757)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![Mods](https://img.shields.io/badge/mods-6-555)](#the-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#the-mods)
 
@@ -26,14 +26,15 @@ tuned to work side by side, but each one is a separate plugin you can install on
 This repository is a Claude Code plugin marketplace named `fynn-mods`.
 
 > **English or German.** Every mod speaks English by default: buttons, messages, dialogs and the answers of the model
-> calls some mods make. Each mod has a `language` option (`en` or `de`); set it to `de` for German with
-> `/plugin configure <mod>@fynn-mods` in a session. The pictures below show the English default. They are rebuilt
+> calls some mods make. Each mod has a `language` option (`en` or `de`). `/clawd language de` (or the same with
+> `/bars`, `/sidekick`, `/replies`, `/tune`, `/ledger`) switches all installed fynn-mods at once; for one mod only,
+> use `/plugin configure <mod>@fynn-mods`. The pictures below show the English default. They are rebuilt
 > from the mods' own drawing code with an invented sample project, so no real chats, paths or costs appear.
 
 | Mod | In one line |
 |---|---|
 | [clawd-buddy](#clawd-buddy) | Animated pixel mascot above the prompt that reacts to what Claude is doing |
-| [limit-bars](#limit-bars) | 5-hour and weekly limit bars, plus a ring showing how long the prompt cache stays warm |
+| [limit-bars](#limit-bars) | 5-hour and weekly limit bars, a ring showing how long the prompt cache stays warm, optional cost ring and system values |
 | [sidekick](#sidekick) | Checks your message before it is sent: cold-cache costs, wrong chat, better wording, due maintenance |
 | [quick-replies](#quick-replies) | Claude Code's next-message suggestion as a one-click button |
 | [tune-strip](#tune-strip) | Music bar for Spotify above the prompt with cover, position and controls (Windows only) |
@@ -45,12 +46,12 @@ In `claude -p` and VS Code you get the same as short text.
 
 ## Requirements
 
-- Claude Code with mods. Mods need **v2.1.287 or later**; this set is tested with **v2.1.295**. Check with
+- Claude Code **v2.1.309 or later** (older versions refuse to load these mods); tested with **v2.1.318**. Check with
   `claude --version`.
 - Runs in the terminal and in the Code tab of the Claude desktop app. In `claude -p`, the Agent SDK, VS Code and on
   mobile most mods draw nothing; see each mod's README.
 - tune-strip needs Windows and the Spotify desktop app. The other five are not tied to one system (used daily on
-  Windows, tested on Linux in CI); limit-bars' optional storage ring is Windows only.
+  Windows, tested on Linux in CI); limit-bars' optional storage ring and system values are Windows only.
 - The mods API can change between Claude Code releases. If a mod breaks after an update, please open an issue.
 
 ## Installation
@@ -113,10 +114,16 @@ laptop while Claude edits, waits with an hourglass during long tool runs, celebr
 grumpy when errors pile up. When idle he passes the time depending on the hour, and at night he falls asleep.
 Subagents show up as small helpers next to him.
 
+With [tune-strip](#tune-strip) playing, he nods on the actual beat of the song and picks his moves by its sound: he
+sways to calm songs, snaps his fingers to groove and hip-hop, plays air guitar to hard songs and waves a lighter to sad
+ballads. In the desktop app he walks behind the row of the band, so wide limit bars don't push him aside.
+
 - **Commands:** `/clawd` (status), `/clawd on|off`, `/clawd list`, `/clawd demo <name>`, `/clawd nap`, `/clawd boop`,
-  `/clawd help`
+  `/clawd language de|en`, `/clawd help`
 - **Rights in short:** observes events and passes them on unchanged; draws only its own `/clawd help` table;
-  remembers on/off and a few counters in its own plugin store. No files, processes, network or model calls.
+  remembers on/off and a few counters in its own plugin store; reads from tune-strip whether music is playing, the
+  tempo and the group of the song, never the title. Besides that only the [language switch](#rights-and-trust). No
+  files, network or model calls.
 - **Details:** [mods/clawd-buddy](mods/clawd-buddy/README.md)
 
 ### limit-bars
@@ -128,26 +135,33 @@ Subagents show up as small helpers next to him.
 Two slim bars left of Clawd show how much of the 5-hour and the weekly limit you've used and when each resets; in the
 desktop app `/bars style ring` draws them as rings instead. A ring next to them shows how long this chat's prompt
 cache stays warm, and the context size. On plans that report only a weekly limit, the top line shows your weekly
-pace instead (`5h ∞ · +12% over pace`, `lasts until Fri 14:00`), and a line on the weekly bar marks even use. The cache guard asks before
+pace instead (`5h ∞ · +12% pace`, `lasts until Fri 14:00`), and a line on the weekly bar marks even use. The cache guard asks before
 you send into a large chat with a cold cache, which would re-write the whole context.
 
 An optional third ring shows how full a drive is, split by file type (programs, media, AI models, code …), with
 `/disk` for the details. It is **off by default** and Windows only for now: set `storagePath` in `/config` to turn it on.
 
-**Make it yours:** every part (5-hour bar, weekly bar, cache ring, storage ring) can be hidden on its own, with
-`/bars show cache off` (applies to all open chats right away) or permanently with `showFiveHour`, `showWeekly`,
-`showCache` and `showStorage` in `/config`. Hiding the cache ring keeps the cold-send question; turn that off with
+With [cost-ledger](#cost-ledger) installed, a cost ring shows what this chat cost as a share of the whole project, in
+API value. `/bars show cpu on` adds live system values (CPU, RAM, GPU load and GPU memory, one reading per second, each
+with a trend arrow); they are **off by default** and Windows only, and the GPU lines need an NVIDIA card.
+
+**Make it yours:** every part (5-hour bar, weekly bar, cache ring, storage ring, cost ring, system values) can be hidden
+on its own, with `/bars show cache off` (applies to all open chats right away) or permanently with `showFiveHour`,
+`showWeekly`, `showCache`, `showStorage`, `showCost` and `showSystem` in `/config`. Hiding the cache ring keeps the cold-send question; turn that off with
 `/cache warn off`.
 
 Every open chat on the same computer shares the newest limit reading and checks it every 2 s, so the bars follow along
 without flicker.
 
 - **Commands:** `/cache` (overview and settings), `/handoff [continue|show]` (write a handoff and continue in a fresh
-  chat), `/keepwarm [hours|off]`, `/disk [refresh]`, `/bars [show <part> on|off | style bar|ring | reset]`, `/bars help`
+  chat), `/keepwarm [hours|off]`, `/disk [refresh]`, `/bars [show <part> on|off | style bar|ring | reset]`,
+  `/bars language de|en`, `/bars help`
 - **Rights in short:** reads limits, context size and cache statistics; can hold a message back to ask you first; runs
   `/clear` and `/compact` and sends a handoff only after you choose so; `$.model.fork` only while `/keepwarm` runs;
   only with `storagePath` set, runs Windows PowerShell with two fixed, read-only scripts (drive size, sizes by file
-  extension); tells tune-strip only how wide the bars are (`$.state`). No files, network or environment variables.
+  extension); only with the system values on, one Windows PowerShell process with a fixed, read-only script (and
+  `nvidia-smi`); reads the chat and project cost from cost-ledger and tells tune-strip only how wide the bars are
+  (`$.state`). Besides that only the [language switch](#rights-and-trust). No files, network or environment variables.
 - **Details:** [mods/limit-bars](mods/limit-bars/README.md)
 
 ### sidekick
@@ -178,12 +192,15 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
 - **Good to know (optional, off by default):** with `/sidekick notes on`, sidekick asks during a longer task whether
   you very likely missed something with consequences, and shows it above the prompt with *Explain*, *Know this* and
   *Later*. Most of the time nothing appears.
+- **Model tip:** on the first message of a chat on Opus or Fable, sidekick asks whether a simple task should run on
+  Sonnet 5.5 or Haiku 5.5. With `/sidekick tips auto on` (off by default) it also switches built-in subagents and
+  chats Claude starts when Haiku rates their task simple. `/savings` shows the savings as a marked estimate.
 
 If a check fails or times out, your message goes through unchanged.
 
 - **Commands:** `/sidekick` (status and settings), `/sidekick off|cache|guide|on`,
-  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick help`, `/savings [today|week|all]`,
-  `/savings detail`
+  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick tips …`, `/sidekick language de|en`, `/sidekick help`,
+  `/savings [today|week|all]`, `/savings detail`
 - **Rights in short:** reads your message before it is sent; holds it back or replaces it only after your choice in
   the dialog; Haiku 5.5 and Sonnet 5.5 via `$.model.complete` with a short running summary, your last 3 messages and the end of Claude's last reply, never the whole
   history; only with Good to know on, one question via `$.model.fork` to your session's own model over the
@@ -191,7 +208,10 @@ If a check fails or times out, your message goes through unchanged.
   `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`); draws its label in the prompt footer; fills
   the empty prompt with a maintenance command on *Insert in prompt* or if a command is refused; copies it to the
   clipboard on *Copy* (`$.ui.copy`); reads the project root path; tells clawd-buddy via `$.state` only the kind of
-  event and the time, never your message. No files, environment, network or settings.
+  event and the time, never your message. For the model tip it reads the main model (`$.session.model`), changes the
+  model per request only in a chat where you picked a cheaper one, and, with `tips auto` on, sets the model of
+  built-in subagents (`agent.spawn`) and of `start_session` and shows a line in the agent's window (`$.ui.notice`).
+  Besides that only the [language switch](#rights-and-trust). No files, environment or network.
 - **Details:** [mods/sidekick](mods/sidekick/README.md)
 
 ### quick-replies
@@ -202,9 +222,11 @@ Claude Code often suggests your next message as grey text in the prompt. quick-r
 own pill above Clawd. Click it, or type `1` into the empty prompt, and it's sent as your message. With
 `/replies more on` a fork of the session fills up to four places in total; Claude Code's own stays on `1`.
 
-- **Commands:** `/replies` (status), `/replies on|off`, `/replies more on|off`, `/replies help`
+- **Commands:** `/replies` (status), `/replies on|off`, `/replies more on|off`, `/replies language de|en`,
+  `/replies help`
 - **Rights in short:** reads Claude Code's suggestion; sends a suggestion as your message only on click or key, never
-  automatically; `$.model.fork` only with `more` on. No files, processes or network.
+  automatically; `$.model.fork` only with `more` on; tells tune-strip only whether the pill is up (`$.state`), never
+  its text. Besides that only the [language switch](#rights-and-trust). No files or network.
 - **Details:** [mods/quick-replies](mods/quick-replies/README.md)
 
 ### tune-strip
@@ -218,13 +240,20 @@ players are ignored. In the desktop app it gets its own bar on top of the band; 
 (`♪ Title – Artist 1:23/3:45 ⏮ ⏯ ⏭`) that shrinks when the window gets narrow. With `extraButtons` the bar adds
 −15 s, +15 s, shuffle and repeat.
 
+**Beat for Clawd:** while Spotify plays, tune-strip finds the tempo and the beats of the song and whether it sounds
+calm, groove/hip-hop, hard or sad, so [Clawd](#clawd-buddy) can move in time. Only Spotify's own audio is listened to
+(Windows process loopback), never the rest of the system sound. **It is analysed locally for tempo only; nothing is
+recorded, stored or sent.** `/tune beat off` turns it off, `/tune beat offset <ms>` shifts the beat for headphones.
+
 - **Commands:** `/tune` (now playing), `/tune play|pause|toggle|next|prev`, `/tune back|forward`,
   `/tune shuffle [on|off]`, `/tune repeat [off|all|track]`, `/tune size auto|full|compact|mini`,
-  `/tune on|off`, `/tune help`
+  `/tune on|off`, `/tune beat [on|off|offset <ms>]`, `/tune language de|en`, `/tune help`
 - **Rights in short:** starts Windows PowerShell 5.1 with two fixed scripts (read the Spotify session; send a control
-  command), with the command passed only as an environment variable; tells clawd-buddy via `$.state` only whether
-  music is playing, no title or artist; reads how wide limit-bars and Clawd are. No files, network, tokens or model
-  calls.
+  command), with the command passed only as an environment variable; while Spotify plays and the band is on screen,
+  one beat helper (PowerShell with a fixed text, only numbers on its output); tells clawd-buddy via `$.state` whether
+  music is playing, the tempo, the beat time and the group, no title or artist; reads how wide limit-bars and Clawd
+  are and whether quick-replies shows its pill. Besides that only the [language switch](#rights-and-trust). No files,
+  network, tokens or model calls.
 - **Renamed:** up to 0.3.1 this mod was called `spotify` with the command `/spotify`. To switch, run
   `claude plugin marketplace update fynn-mods` and then once `claude plugin install tune-strip@fynn-mods`; the
   marketplace maps the old name to the new one, so your settings move over.
@@ -253,10 +282,13 @@ paths do not work. Only numbers and each project’s folder name go into the fol
 troubleshooting: [Sync between devices](mods/cost-ledger/README.md#sync-between-devices).
 
 - **Commands:** `/ledger`, `/ledger here`, `/ledger weeks`, `/ledger chats|projects|models [7|30|all]`, `/ledger limits`,
-  `/ledger plan <plan> <day|today> [price]`, `/ledger sync [<folder>|name <name>|off]`, `/ledger reset`, `/ledger help`
+  `/ledger plan <plan> <day|today> [price]`, `/ledger sync [<folder>|name <name>|off]`, `/ledger reset`,
+  `/ledger language de|en`, `/ledger help`
 - **Rights in short:** reads the session's cost, usage and limit windows; observes other mods' model calls and passes
   them on unchanged; stores the project name, the git remote as `host/owner/repo`, the first 50 characters of a chat's
-  first message and your plan setting in its local plugin store. Makes no model calls, processes or network access. Files only for the optional sync (`$.fs`, limited to the folder you set and to its own `cost-ledger-<id>.json` files).
+  first message and your plan setting in its local plugin store; shares this chat's and this project's cost with
+  limit-bars (`$.state`, amounts and the folder name only). Besides that only the [language switch](#rights-and-trust).
+  Makes no model calls or network access. Files only for the optional sync (`$.fs`, limited to the folder you set and to its own `cost-ledger-<id>.json` files).
 - **Details:** [mods/cost-ledger](mods/cost-ledger/README.md)
 
 ## How they work together
@@ -264,10 +296,15 @@ troubleshooting: [Sync between devices](mods/cost-ledger/README.md#sync-between-
 - **One band above the prompt.** clawd-buddy, limit-bars, quick-replies, tune-strip and sidekick all draw into the band
   above the prompt and share a small layout convention: the limit bars and cache ring sit left of Clawd, the
   quick-replies pill sits above both, tune-strip's bar sits on top in the desktop app (in the terminal it takes a place
-  between the bars and Clawd), and sidekick's boxes appear there only while it has something to show. Each mod also
-  works alone.
-- **Clawd bobs along to your music.** With tune-strip playing, Clawd nods to the beat when he has time and sometimes
-  puts on headphones. tune-strip tells him only *that* music is playing, never what.
+  between the bars and Clawd), and sidekick's boxes appear there only while it has something to show. In the desktop
+  app Clawd walks behind the row, and the bars and tune-strip are drawn on top of him. Each mod also works alone.
+- **Clawd moves to your music.** With tune-strip playing, Clawd nods on the beat of the song when he has time, picks
+  his moves by how it sounds and sometimes puts on headphones. tune-strip tells him only that music is playing, the
+  tempo and the group (calm, groove, hard, sad), never what is playing.
+- **cost-ledger feeds limit-bars.** With both installed, limit-bars draws a cost ring with what this chat and this
+  project cost, the same numbers as `/ledger here all`.
+- **One language switch for all.** `/<command> language de|en` in any of the six mods switches every installed
+  fynn-mod at once.
 - **limit-bars and sidekick both guard against cold sends.** If you use both, turn off limit-bars' warning once with
   `/cache warn off`, so you don't get two dialogs in a row; sidekick's question replaces it.
 - **Clawd acts out what sidekick does.** With both installed, Clawd holds a magnifying glass to the input while
@@ -280,19 +317,28 @@ troubleshooting: [Sync between devices](mods/cost-ledger/README.md#sync-between-
 A mod is code that runs inside Claude Code with your permissions. Every mod here declares what it hooks into and which
 API calls it makes; `claude plugin validate mods/<mod>` prints the exact list, and each README explains in plain
 language what they are for. None of these mods reads or stores login data or tokens, none has network access of its own, and
-none writes anywhere but its own plugin store, with one exception: cost-ledger writes its own file into the folder you choose, but only if you turn on `/ledger sync`. Two mods start processes, both only Windows PowerShell with fixed
-scripts: tune-strip, to read and control the Spotify session of the Windows media controls (no files, no network), and
-limit-bars, only for its optional storage ring. That ring is also the only thing that looks at your drive: it reads
-sizes, never file contents. Found a security problem? See [SECURITY.md](SECURITY.md).
+none writes anywhere but its own plugin store, with two exceptions: cost-ledger writes its own file into the folder you
+choose, but only if you turn on `/ledger sync`; and the language switch changes the `language` setting of the six
+fynn-mods, nothing else.
+
+**Language switch:** `/<command> language de|en` reads the plugin settings and changes only the `language` field of
+the six fynn-mods (`$.config`). In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it runs
+the `claude` CLI instead, only `claude plugin list --json` and `claude plugin configure <mod>@fynn-mods` for the six
+fynn-mods. That is the only process clawd-buddy, cost-ledger, quick-replies and sidekick ever start.
+
+**Other processes,** all Windows PowerShell with fixed scripts: tune-strip, to read and control the Spotify session of
+the Windows media controls and, for the beat, to listen to Spotify's audio only (tempo only, nothing recorded, no files,
+no network); limit-bars, only for its optional storage ring and system values. The storage ring is also the only thing
+that looks at your drive: it reads sizes, never file contents. Found a security problem? See [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---|---|
-| A mod draws nothing | Check `claude --version` (mods need v2.1.287 or later) and that `/plugin` lists the mod as `mod active`. A newly installed mod loads in the next session or after `/reload-plugins`. In `claude -p`, the Agent SDK, VS Code and on mobile most mods draw nothing. |
+| A mod draws nothing | Check `claude --version` (these mods need v2.1.309 or later) and that `/plugin` lists the mod as `mod active`. A newly installed mod loads in the next session or after `/reload-plugins`. In `claude -p`, the Agent SDK, VS Code and on mobile most mods draw nothing. |
 | A mod broke after a Claude Code update | Update the mods (`claude plugin marketplace update fynn-mods`, then `claude plugin update <mod>@fynn-mods`). If that doesn't help, please open an issue. |
 | Two questions in a row before a cold send | limit-bars and sidekick both guard against cold sends. Turn off limit-bars' question with `/cache warn off`. |
-| Everything is in English | Set the `language` option to `de` with `/plugin configure <mod>@fynn-mods`. |
+| Everything is in English | `/clawd language de` (or any other mod's command) switches all fynn-mods; for one mod, set `language` to `de` with `/plugin configure <mod>@fynn-mods`. In the desktop app it applies from the next chat, or at once after `/reload-plugins`. |
 | tune-strip shows nothing | It is Windows only and needs the Spotify desktop app (the web player is not recognized). While Spotify is closed it draws nothing; `/tune` tells you what it sees. `/tune on` if you turned it off. |
 | The storage ring is missing or empty | It is Windows only and off by default: set `storagePath` (for example `D:\`) in `/config`, and check that `/bars show storage on` is set. If it stays empty, `/disk` shows the error. |
 | cost-ledger shows a Haiku 5.5 chat at about ten times its cost | Claude Code v2.1.291 priced Haiku 5.5 like Haiku 4.5 in `/cost`, and cost-ledger books that value for the chat. Update Claude Code; v2.1.295 prices it correctly. Model calls of the mods use cost-ledger's own prices. |

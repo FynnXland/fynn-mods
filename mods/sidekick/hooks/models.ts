@@ -12,6 +12,19 @@ import { priceFor } from './cache.ts'
  */
 export const CHECK = { model: 'claude-haiku-5-5', effort: 'medium', maxTokens: 2000, timeoutMs: 6000 } as const
 
+/**
+ * Modell-Tipp (Ausbau 0.18.0, Verhalten 3 und 4): Urteil über einen Auftrag an einen Subagenten oder einen neuen Chat, ob er auf
+ * einem günstigeren Modell laufen kann. Haiku 5.5 wie CHECK, effort nach Probe P1 (Bau 0.18.0 in SPEC.md).
+ */
+export const RATE = { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 800, timeoutMs: 6000 } as const
+
+/** Zielmodelle des Modell-Tipps (E3): Alias für `agent.spawn` (types:299-312), volle ID für `start_session`. */
+export const TIP_TARGETS = {
+  haiku: { alias: 'haiku', id: 'claude-haiku-5-5' },
+  sonnet: { alias: 'sonnet', id: 'claude-sonnet-5-5' },
+} as const
+export type TipTarget = keyof typeof TIP_TARGETS
+
 /** Übergabe für „Neuer Chat mit Übergabe“ (Probe 2026-10-06: 8 s, 781 Ausgabe-Tokens). */
 export const HANDOFF = { model: 'claude-sonnet-5-5', effort: 'medium', maxTokens: 3000, timeoutMs: 45000 } as const
 

@@ -73,6 +73,24 @@ export function hereOf(
   return { now: o.now, range: o.range, project, projectUsd, projectChats, chatUsd: chat.usd, chatDays: chat.days.size, booked, since: o.since, devices: o.devices, notes: o.notes ?? [] }
 }
 
+/** Der Wert `cost-ledger.here` für limit-bars (SPEC Nachtrag 0.10.0, Vertrag in types/index.d.ts). */
+export type HereState = { chatUsd: number; projectUsd: number | null; project: string | null; since: string; devices: number }
+
+/**
+ * Aus denselben Zahlen wie `/ledger here all` (`hereOf` mit `range` 0). `folder`: letzter Ordnername wie das Sync-Feld `proj`
+ * (leer, wenn er nicht geteilt werden darf); ohne Projekt bleibt er weg. Beträge auf den Cent gerundet: Genauer zeigt sie keiner.
+ */
+export function hereState(h: Here, folder: string): HereState {
+  const cent = (v: number) => Math.round(v * 100) / 100
+  return {
+    chatUsd: cent(h.chatUsd),
+    projectUsd: h.project ? cent(h.projectUsd) : null,
+    project: h.project && folder ? folder : null,
+    since: dayKey(h.since ?? h.now),
+    devices: Math.max(1, h.devices?.length ?? 1),
+  }
+}
+
 /** Anteil des Chats am Projekt (0–1); `null` ohne Projekt oder ohne Projektkosten. */
 export function shareOf(h: Here): number | null {
   if (!h.project || !(h.projectUsd > 0)) return null

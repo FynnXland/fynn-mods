@@ -1,7 +1,7 @@
 {
   "name": "limit-bars",
-  "version": "0.10.4",
-  "description": "Bars or rings for the 5-hour and weekly usage limits above the prompt (weekly pace when there is no 5-hour limit), a ring showing how long the prompt cache stays warm, and an optional ring for drive usage by file type. Cache guard: asks before an expensive cold send; /cache, /handoff, /keepwarm, /disk, /bars. Every part of the display can be hidden.",
+  "version": "0.13.1",
+  "description": "Bars or rings for the 5-hour and weekly usage limits above the prompt (weekly pace when there is no 5-hour limit), a ring showing how long the prompt cache stays warm, an optional ring for drive usage by file type, a cost ring with this chat's share of the project (from cost-ledger) and optional system values (CPU, RAM, GPU and GPU memory, live, Windows). Cache guard: asks before an expensive cold send; /cache, /handoff, /keepwarm, /disk, /bars. Every part of the display can be hidden.",
   "author": {
     "name": "Fynn Hansen"
   },
@@ -70,6 +70,18 @@
       "title": "Show storage ring",
       "description": "Ring for drive usage. Only shown when storagePath is set; off by default because storagePath is empty.",
       "default": true
+    },
+    "showCost": {
+      "type": "boolean",
+      "title": "Show cost ring",
+      "description": "Ring with this chat's share of the project's API value, from cost-ledger. Only shown when cost-ledger is installed and has booked something. /bars overrides this in all open chats.",
+      "default": true
+    },
+    "showSystem": {
+      "type": "boolean",
+      "title": "Show system values",
+      "description": "Up to four lines: CPU, RAM, GPU load and GPU memory (NVIDIA), each with a trend arrow, measured every second by a fixed PowerShell process while the band is drawn (Windows only). /bars overrides this in all open chats.",
+      "default": false
     },
     "onlyFiveHour": {
       "type": "boolean",

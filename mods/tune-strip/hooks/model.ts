@@ -47,8 +47,14 @@ export type Parsed =
   | { kind: 'control'; word: ControlWord; arg?: string }
   | { kind: 'size'; size: Size }
   | { kind: 'enabled'; value: boolean }
+  | { kind: 'beat' }
+  | { kind: 'beatOn'; value: boolean }
+  | { kind: 'beatOffset'; ms: number }
   | { kind: 'unknown'; word: string }
   | { kind: 'badArg'; word: string; arg: string }
+
+/** Grenzen des Versatzes für Kopfhörer (SPEC Nachtrag 0.6.0). */
+export const OFFSET_MAX = 400
 
 /** Wörter, die zu einem Steuerbefehl führen; `back`/`forward` sind ±15 s, `prev` der vorige Titel. */
 export const CONTROL_WORDS = ['play', 'pause', 'toggle', 'next', 'prev', 'back', 'forward', 'shuffle', 'repeat'] as const
@@ -68,6 +74,15 @@ export function parseTune(args: string): Parsed {
     const size = SIZES.find((s) => s === second)
     if (second === 'off') return { kind: 'enabled', value: false }
     return size && w.length === 2 ? { kind: 'size', size } : { kind: 'badArg', word: first, arg: w.slice(1).join(' ') }
+  }
+  if (first === 'beat') {
+    if (second === undefined) return { kind: 'beat' }
+    if ((second === 'on' || second === 'off') && w.length === 2) return { kind: 'beatOn', value: ON_OFF[second]! }
+    if (second === 'offset' && w.length === 3 && /^[+-]?\d{1,4}$/.test(w[2]!)) {
+      const ms = Number(w[2])
+      if (Math.abs(ms) <= OFFSET_MAX) return { kind: 'beatOffset', ms }
+    }
+    return { kind: 'badArg', word: first, arg: w.slice(1).join(' ') }
   }
   const word = CONTROL_WORDS.find((c) => c === first)
   if (!word) return { kind: 'unknown', word: first }

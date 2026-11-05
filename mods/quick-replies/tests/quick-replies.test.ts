@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { joinBand, layer, LEVEL, levelOf, nameOf, splitBand } from '../hooks/band.ts'
 import { HELP_WORDS, MORE_WORD, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from '../hooks/logic.ts'
 import { T } from '../hooks/i18n.ts'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
 
 type Over = { isWorking?: boolean; hasSurvey?: boolean }
 type Surface = 'terminal' | 'desktop'
@@ -885,7 +886,7 @@ const mountHelp = ($: Engine, text: string, surface: string, columns = 120, isEr
 test('0.5.0 Hilfe: help, ? und HELP liefern Markdown mit Kennung; argumentHint und Nutzung nennen help; weitere Wörter sind unbekannt', async ($, on) => {
   const w = world(on)
   await boot($)
-  expect(w.hints[0]).toBe('[status|on|off|more on|more off|help]')
+  expect(w.hints[0]).toBe('[status|on|off|more on|more off|language|help]')
   // Nutzungszeile und argumentHint laufen nicht auseinander (beide Sprachen)
   for (const lang of ['en', 'de'] as const) expect(T[lang].usage, lang).toContain(`/replies ${w.hints[0]}`)
   for (const word of ['help', '?', 'HELP', ' help ']) {
@@ -896,7 +897,7 @@ test('0.5.0 Hilfe: help, ? und HELP liefern Markdown mit Kennung; argumentHint u
   // jede Hilfe bekommt eine eigene Kennung
   expect((await replies($, 'help')).split('\n')[0]).not.toBe((await replies($, 'help')).split('\n')[0])
   for (const bad of ['help me', 'quatsch', 'status x'])
-    expect(await replies($, bad), bad).toBe('Usage: /replies [status|on|off|more on|more off|help] · All commands: /replies help')
+    expect(await replies($, bad), bad).toBe('Usage: /replies [status|on|off|more on|more off|language|help] · All commands: /replies help')
 })
 
 test('0.5.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstellungen und Terminal-Fußzeile', DE, async ($, on) => {
@@ -914,7 +915,7 @@ test('0.5.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstellun
   expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Vorschläge ● an \(\/replies off\) · Mehr per Fork ○ aus \(\/replies more on\) · Anordnung auto \(Standard\) \(Einstellung\)$/m)
   expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Mehr Vorschläge per Fork aus \(Standard\) · Anordnung auto \(Standard\)$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure quick-replies · Mod abschalten: /plugin disable quick-replies')
-  expect(await replies($, 'quatsch')).toBe('Nutzung: /replies [status|on|off|more on|more off|help] · Alle Befehle: /replies help')
+  expect(await replies($, 'quatsch')).toBe('Nutzung: /replies [status|on|off|more on|more off|language|help] · Alle Befehle: /replies help')
 })
 
 for (const surface of ['terminal', 'desktop'] as const)
@@ -928,7 +929,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect((await ui.find({ type: 'Text', text: 'quick-replies · Hilfe' }))?.props).toMatchObject({ color: ACCENT, bold: true })
     for (const h of ['BEFEHLE', 'BEDIENUNG', 'FUNKTIONEN', 'STATUS', 'UMSCHALTEN', 'EINSTELLUNGEN (/plugin)', 'WERT'])
       expect((await ui.find({ type: 'Text', text: h }))?.props.color, h).toBe(ACCENT)
-    for (const cmd of ['/replies status', '/replies on', '/replies off', '/replies more on', '/replies more off', '/replies help', 'Klick auf einen Vorschlag', '1–4 im leeren Prompt', 'Nur 1–4 abschicken'])
+    for (const cmd of ['/replies status', '/replies on', '/replies off', '/replies more on', '/replies more off', '/replies language de|en', '/replies help', 'Klick auf einen Vorschlag', '1–4 im leeren Prompt', 'Nur 1–4 abschicken'])
       expect((await ui.find({ type: 'Text', text: cmd }))?.props.color, cmd).toBe(ACCENT)
     // Akzentfarbe nur für Titel, Überschriften und Befehle, nie für Fließtext
     expect((await ui.find({ type: 'Text', text: /^Zeigt den Vorschlag/ }))?.props.color).toBeUndefined()
@@ -1053,7 +1054,8 @@ test('0.5.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht in
     // ganze Wörter, keine Teilstrings: sonst steckt „on“ in „configure“ (templates/help/README.md, Tests)
     const words = (s: string) => s.split(/[^\p{L}\p{N}?]+/u).filter(Boolean)
     const help = new Set([...d.commands.flatMap((c) => [c.cmd, c.does]), ...(d.notes ?? [])].flatMap(words))
-    for (const word of [...STATUS_WORDS, ...TOGGLE_WORDS, MORE_WORD, ...HELP_WORDS]) expect(help.has(word), `${lang}: ${word}`).toBe(true)
+    for (const word of [...STATUS_WORDS, ...TOGGLE_WORDS, MORE_WORD, ...HELP_WORDS, LANGUAGE_WORD, ...LANGUAGES]) expect(help.has(word), `${lang}: ${word}`).toBe(true)
+    expect(cmds, lang).toContain(`/replies ${LANGUAGE_WORD} de|en`)
     for (const word of STATUS_WORDS) expect(cmds, `${lang}: ${word}`).toContain(`/replies ${word}`)
     expect(cmds, lang).toContain(`/replies ${HELP_WORDS[0]}`)
     // Aliase der Hilfe stehen als eigenes Wort in ihrer Zeile
@@ -1106,3 +1108,80 @@ for (const tier of ['append'] as const) {
     }
   })
 }
+
+// ---------- 0.6.0: /replies language (docs/LANGUAGE-SPEC.md; Kernfälle in tests/language.test.ts) ----------
+
+test('0.6.0 language: Wort im argumentHint, Zeile in der Hilfe (en) direkt vor help', async ($, on) => {
+  const w = world(on)
+  await boot($)
+  expect(w.hints[0]).toContain('|language|')
+  const en = (await replies($, 'help')).split('\n')
+  expect(en).toContain('- `/replies language de|en`: Switch the language of all fynn-mods')
+  const order = en.filter((l) => l.startsWith('- `/replies')).map((l) => /^- `([^`]+)`/.exec(l)![1])
+  expect(order.slice(-2)).toEqual(['/replies language de|en', '/replies help'])
+})
+
+test('0.6.0 language: Zeile in der Hilfe (de)', DE, async ($, on) => {
+  world(on)
+  await boot($)
+  expect((await replies($, 'help')).split('\n')).toContain('- `/replies language de|en`: Sprache aller fynn-mods umstellen')
+})
+
+// ---------- 0.6.2: $.state quick-replies.band für die Trennlinie von tune-strip ----------
+
+test('0.6.2: quick-replies.band meldet die Pille außerhalb des Zeichnens, hält beim Tippen und nimmt sie mit dem Senden zurück', async ($, on) => {
+  const w = world(on)
+  const writes: unknown[] = []
+  on('state.set', ($, e) => {
+    writes.push(e.value)
+    return { value: { isSet: true, version: writes.length } } as never
+  })
+  const ui = await boot($)
+  await w.clock.settle()
+  // Sitzungsstart: nichts zu zeigen, das schreibt einmal null
+  expect(writes).toEqual([null])
+  await finish($)
+  await suggest($, 'Committe das')
+  await w.clock.settle()
+  expect(writes.at(-1)).toEqual({ shown: true })
+  // Tippen blendet die Pille aus, die Meldung bleibt (die Linie von tune-strip soll nicht flackern)
+  const n = writes.length
+  await type($, '', 'a')
+  await w.clock.settle()
+  expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+  expect(writes.length).toBe(n)
+  await clear($, 'a')
+  await ui.press({ key: 'reply-1' })
+  await w.clock.settle()
+  expect(writes.at(-1)).toBeNull()
+  expect(writes).toEqual([null, { shown: true }, null])
+  await ui.unmount()
+})
+
+test('0.6.2: quick-replies.band: ein abgelehntes Schreiben wird beim nächsten Neuzeichnen wiederholt; /replies off nimmt die Meldung zurück', async ($, on) => {
+  const w = world(on)
+  const writes: unknown[] = []
+  let refuse = 1
+  on('state.set', ($, e) => {
+    if (refuse > 0 && e.value !== null) {
+      refuse -= 1
+      return { deny: 'beim Zeichnen abgelehnt' } as never
+    }
+    writes.push(e.value)
+    return { value: { isSet: true, version: writes.length } } as never
+  })
+  const ui = await boot($)
+  await w.clock.settle()
+  await finish($)
+  await suggest($, 'Committe das')
+  await w.clock.settle()
+  expect(writes.filter((x) => x !== null)).toEqual([])
+  await type($, '', 'a')
+  await clear($, 'a')
+  await w.clock.settle()
+  expect(writes.at(-1)).toEqual({ shown: true })
+  await $.command.run({ command: 'replies', args: 'off' })
+  await w.clock.settle()
+  expect(writes.at(-1)).toBeNull()
+  await ui.unmount()
+})

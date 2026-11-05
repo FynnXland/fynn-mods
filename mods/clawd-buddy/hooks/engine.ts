@@ -40,9 +40,18 @@ type Play = {
   phase: Phase
   fi: number
   tick: number
+  /** Dauer des laufenden Bilds in Ticks, beim ersten Takt des Bilds festgelegt (mit Takt aus dem Schlagraster, sonst `t`). */
+  dur?: number
   /** true, wenn der Clip mitten im Ablauf verlassen wurde: dann landet die Figur in der Ausgangspose (`from`). */
   interrupted: boolean
 }
+
+/**
+ * Schlagraster des laufenden Songs in Ticks (0.11.0): bei Tick `t0` (Bruchteile erlaubt) liegt ein Schlag, alle `per` Ticks der
+ * nächste. Der Client bzw. der Desktop-Antrieb rechnet es aus `tune-strip.beat` und der Uhr um; die Engine bleibt uhrfrei.
+ */
+export type BeatGrid = { t0: number; per: number }
+export type MusicGroup = 'calm' | 'groove' | 'hard' | 'sad'
 
 type Drag = {
   /** press: gedrückt gehalten, noch nicht hochgehoben (erst nach HOLD_TICKS); lift: hängt am Zeiger; arm: Arm wird gezogen. */
@@ -92,6 +101,9 @@ export type EngineState = {
   reduced: boolean
   /** Spielt gerade Musik (tune-strip.playing, 0.9.0)? */
   music: boolean
+  /** Schlagraster (nur mit sicherem Takt, 0.11.0) und Gruppe des Songs (`null` = offen); ohne Raster gilt die Spalte „ohne Takt“. */
+  beat: BeatGrid | null
+  group: MusicGroup | null
   lastClipName: string
   lastPose: Pose | null
   /** Kanonische Pose, in der die Figur gerade steht bzw. nach dem laufenden Clip steht. */
@@ -188,6 +200,7 @@ export function createEngine(opts: EngineOpts) {
     nightStart: opts.nightStart ?? 23, nightEnd: opts.nightEnd ?? 6, idleLimit: ((opts.idleSeconds ?? 45) * 1000) / TICK,
     reduced: opts.reduced ?? false, lastClipName: '', lastPose: null, landing: 'stand', carry: null, pendingClick: false,
     temper: 0, tired: 0, moodWant: null, clipStart: 0, playedAt: {}, realStart: -1, shortRun: 0, holdUntil: 0, askCutAt: -1e9, agents: 0, mates: [], special: '', welcome: false, music: false,
+    beat: null, group: null,
   }
 
   // ---- Begleiter (Subagenten): je laufendem Subagenten (max. 12, ab 7 in zweiter Reihe) steht ein kleiner Helfer auf seinem Platz. Er steigt einmal von
@@ -266,6 +279,12 @@ export function createEngine(opts: EngineOpts) {
     // Tageszeit (Zeitvertreib verändert sich über den Tag) und besondere Tage (dann bevorzugt)
     if (c.daypart) cool *= c.daypart[daypartIndex()]
     if (c.special) cool *= 5
+    // Musik-Clips (0.11.0): Gewicht nach der Gruppe des Songs; bei offener Gruppe die Spalte „ohne Takt“
+    if (c.music) {
+      if (c.music.notBad && bad > 0) return 0
+      // 0.12.0: die Gruppe zählt auch ohne sicheren Takt (traurige Songs haben oft einen schwachen Schlag); dann wippt er im festen Tempo
+      return c.music[S.group ?? 'none'] * (1 - 0.5 * Math.max(bad, good)) * cool
+    }
     if (c.temper === 'bad') return c.weight * 4 * bad * cool
     if (c.temper === 'good') return c.weight * 3 * good * cool
     if (c.temper === 'tired') return c.weight * 3 * Math.max(0, S.tired - 0.2) * cool
@@ -430,7 +449,7 @@ export function createEngine(opts: EngineOpts) {
       // Mit Begleitern (Subagenten links) spielt er seine eigenen Clips gespiegelt, also rechts von sich (Fynn); Begleiter-Clips nie
       const m = S.carry ? S.carry.mirror : c.companion || c.minMates ? false : S.mates.length ? freeSide(c) === 1 : c.mirror !== false && !S.reduced && rng() < 0.5 && mirrorFits(c)
       if (m) {
-        const mm = (l: Resolved[]) => l.map((f) => ({ p: { ...f.p, mirror: true }, t: f.t }))
+        const mm = (l: Resolved[]) => l.map((f) => ({ ...f, p: { ...f.p, mirror: true } }))
         r = { intro: mm(r.intro), body: mm(r.body), outro: mm(r.outro) }
       }
       if (!skipIntro) intro = smooth(r.intro, S.lastPose)
@@ -566,6 +585,7 @@ export function createEngine(opts: EngineOpts) {
     if (pl.outro.length && pl.phase !== 'outro') {
       pl.phase = 'outro'
       pl.fi = 0
+      pl.dur = undefined
       pl.tick = 0
     } else endClip()
   }
@@ -671,15 +691,46 @@ export function createEngine(opts: EngineOpts) {
     return p.armL === base.armL && p.armR === base.armR
   }
 
+  /**
+   * Dauer eines Bilds in Ticks, das bei Tick `start` begann (0.11.0). Ohne Raster (kein sicherer Takt) und in `/clawd demo` gilt `t`.
+   * Ein Schlag-Bild endet auf dem Tick, der seiner Schlaggrenze am nächsten liegt: Die Grenze wird jedes Mal aus dem Raster neu
+   * gerechnet (keine Drift), die Lage im Schlag (`bf`) bleibt. Ein neues Tempo oder eine neue Phase gleicht so am nächsten Bild an;
+   * ein Bild wird dafür höchstens 25 % länger oder kürzer (SPEC Nachtrag 0.11.0). Ein Bild ohne Schlag vor einem Schlag-Bild (Einstieg)
+   * bleibt stehen, bis dessen Schlag kommt (höchstens ein Schlag länger).
+   */
+  function frameDur(pl: Play, list: readonly Resolved[], fi: number, start: number): number {
+    const fr = list[fi]
+    const g = S.beat
+    if (!g || S.gallery) return fr.t
+    if (fr.b) {
+      const bf = fr.bf ?? 0
+      const s = bf + Math.round((start - g.t0) / g.per - bf)
+      const nom = fr.b * g.per
+      const lo = Math.min(Math.floor(nom), nom * 0.75)
+      const hi = Math.max(Math.ceil(nom), nom * 1.25)
+      return Math.max(1, Math.round(Math.min(hi, Math.max(lo, Math.round(g.t0 + (s + fr.b) * g.per) - start))))
+    }
+    const nx = fi + 1 < list.length ? list[fi + 1] : pl.phase === 'intro' ? pl.body[0] : pl.phase === 'body' && pl.clip.loop ? pl.body[0] : undefined
+    if (!nx?.b) return fr.t
+    const bf = nx.bf ?? 0
+    // Der nächste passende Schlag ab dem Ende dieses Bilds (liegt er höchstens einen halben Tick zurück, gilt er noch)
+    const s = bf + Math.ceil((start + fr.t - g.t0) / g.per - bf - 0.5 / g.per)
+    return Math.max(fr.t, Math.round(g.t0 + s * g.per) - start)
+  }
+
   function advance() {
     const pl = S.play
     if (!pl || pl.phase === 'end') return nextFromQueue()
     const list = pl[pl.phase]
     pl.tick++
     const fr = list[pl.fi]
-    if (fr && pl.tick < fr.t) return
+    if (fr) {
+      if (pl.dur === undefined) pl.dur = frameDur(pl, list, pl.fi, S.ticks - pl.tick)
+      if (pl.tick < pl.dur) return
+    }
     pl.fi++
     pl.tick = 0
+    pl.dur = undefined
     if (pl.fi >= list.length) return phaseEnd(pl)
     if (pl.phase === 'intro' && S.pending && S.pendingUrgent && !held() && !stillFits(pl) && rewindIntro(pl)) return
     if (pl.phase !== 'body' || !S.pending) return
@@ -691,6 +742,7 @@ export function createEngine(opts: EngineOpts) {
     if (pl.phase === 'intro') {
       pl.phase = 'body'
       pl.fi = 0
+      pl.dur = undefined
       if (!pl.body.length) phaseEnd(pl)
       return
     }
@@ -700,13 +752,15 @@ export function createEngine(opts: EngineOpts) {
         // Schleifengrenze = Ausgangspose: weiterlaufen oder weich aussteigen. Ohne Stimmungswechsel bleibt er bei seiner Schleife und
         // wählt erst nach LOOP_STAY eine Variante (Fynn: nicht ständig zwischen den Denk-Clips springen).
         pl.fi = 0
+        pl.dur = undefined
         if (held()) return
         // (Im Leerlauf wählt die Grundpose an jeder Schleifengrenze neu, sonst käme Zeitvertreib zu spät.)
         // Ein Ersatz-Clip aus einer anderen Gruppe (z. B. atmen, während du tippst) bleibt nur einen Durchgang (Review 2, K4)
         if (!S.pending && !S.queue.length && S.mood !== 'idle' && pl.clip.cat === S.mood && (S.ticks - S.clipStart < LOOP_STAY || S.gallery)) return
         if (!S.pending && !S.queue.length && S.gallery) return
         // Musik-Schleifen bleiben, solange die Musik läuft und er Zeit hat (sonst holte er z. B. die Kopfhörer an jeder Schleifengrenze neu)
-        if (!S.pending && !S.queue.length && pl.clip.cat === 'music' && musicIn(S.mood) && when(pl.clip) && S.ticks - S.clipStart < LOOP_STAY) return
+        // (0.11.0: nur, solange der Clip zur Gruppe des Songs noch passt; nach einem Wechsel auf „hart“ schunkelt er nicht 25 s weiter)
+        if (!S.pending && !S.queue.length && pl.clip.cat === 'music' && musicIn(S.mood) && when(pl.clip) && weightOf(pl.clip) > 0 && S.ticks - S.clipStart < LOOP_STAY) return
         const want = S.queue.length ? null : chooseForMood()
         if (!S.pending && want === pl.clip.name) return
         return leaveClip(want)
@@ -714,6 +768,7 @@ export function createEngine(opts: EngineOpts) {
       if (pl.outro.length) {
         pl.phase = 'outro'
         pl.fi = 0
+        pl.dur = undefined
         return
       }
     }
@@ -1032,9 +1087,14 @@ export function createEngine(opts: EngineOpts) {
     isNight,
     isMorning,
     poolOf,
-    set(o: { hour?: number; nightStart?: number; nightEnd?: number; idleSeconds?: number; reduced?: boolean; temper?: number; tired?: number; agents?: number; special?: '' | 'birthday' | 'newyear'; music?: boolean }) {
+    set(o: {
+      hour?: number; nightStart?: number; nightEnd?: number; idleSeconds?: number; reduced?: boolean; temper?: number; tired?: number; agents?: number
+      special?: '' | 'birthday' | 'newyear'; music?: boolean; beat?: BeatGrid | null; group?: MusicGroup | null
+    }) {
       if (o.agents !== undefined) S.agents = Math.max(0, o.agents)
       if (o.music !== undefined) S.music = o.music
+      if (o.beat !== undefined) S.beat = o.beat
+      if (o.group !== undefined) S.group = o.group
       if (o.special !== undefined) S.special = o.special
       if (o.temper !== undefined) S.temper = Math.max(-1, Math.min(1, o.temper))
       if (o.tired !== undefined) S.tired = Math.max(0, Math.min(1, o.tired))

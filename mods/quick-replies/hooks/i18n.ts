@@ -35,7 +35,7 @@ export type Position = 'alone' | 'inner' | 'outer'
 export const T = {
   en: {
     description: 'Reply suggestions above Clawd: status, on/off, more suggestions via fork, help',
-    usage: 'Usage: /replies [status|on|off|more on|more off|help] · All commands: /replies help',
+    usage: 'Usage: /replies [status|on|off|more on|more off|language|help] · All commands: /replies help',
     on: 'on',
     off: 'off',
     yes: 'yes',
@@ -101,7 +101,7 @@ export const T = {
   },
   de: {
     description: 'Antwort-Vorschläge über Clawd: Status, an/aus, weitere Vorschläge per Fork, Hilfe',
-    usage: 'Nutzung: /replies [status|on|off|more on|more off|help] · Alle Befehle: /replies help',
+    usage: 'Nutzung: /replies [status|on|off|more on|more off|language|help] · Alle Befehle: /replies help',
     on: 'an',
     off: 'aus',
     yes: 'ja',

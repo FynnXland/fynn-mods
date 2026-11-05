@@ -49,10 +49,11 @@ import { savingsTree } from '../hooks/view.ts'
 import { IGNORE_AFTER, NOTE_MAX, NOTES_EVERY, NOTES_KEEP, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, normTopic, notesPrompt, parseNote, shouldCheck, skipAfter } from '../hooks/notes.ts'
 import type { Note } from '../hooks/notes.ts'
 import { NOTES_WORDS } from '../hooks/notes.ts'
-import { HELP_WORDS, SAVINGS_WORDS, SETTING_WORDS, TTL_WORDS } from '../hooks/logic.ts'
+import { HELP_WORDS, SAVINGS_WORDS, SETTING_WORDS, TIPS_FORMS, TTL_WORDS } from '../hooks/logic.ts'
 import { HINTS_WORDS, RULE_IDS } from '../hooks/wartung.ts'
 import { sidekickHelp } from '../hooks/helpdata.ts'
 import type { HelpFacts } from '../hooks/helpdata.ts'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
 
 // Die bisherigen Tests prüfen die deutschen Texte (language: de, Fynns Einstellung); eigene Tests unten prüfen Englisch.
 const DE = { options: { language: 'de' } }
@@ -95,13 +96,14 @@ deTest('Ignorierter Hinweis-Typ kommt erst nach +50k oder einem Commit wieder', 
   expect(isSuppressed(ign, 'skill', 110000, 2)).toBe(false)
 })
 
-deTest('Antwort der Prüfung: Zäune, ungültiges JSON, modell nur bei (a), Skill nur aus der Liste, anhalten ohne Aktion → hinweis', async () => {
+deTest('Antwort der Prüfung: Zäune, ungültiges JSON, modell nie (seit 0.18.0), Skill nur aus der Liste, anhalten ohne Aktion → hinweis', async () => {
   expect(parseVerdict(verdict({ urteil: 'hinweis', art: 'skill', skill: '/code-review', zeile: 'Diff prüfen?' }), 'b', ['code-review'])?.urteil).toBe('hinweis')
   expect(parseVerdict('kein json', 'b', [])).toBe(null)
   expect(parseVerdict('{"urteil": "vielleicht"}', 'b', [])).toBe(null)
   expect(parseVerdict('{kaputt', 'b', [])).toBe(null)
   expect(parseVerdict(verdict({ urteil: 'hinweis', art: 'modell', zeile: 'Sonnet reicht' }), 'b', [])?.urteil).toBe('durch')
-  expect(parseVerdict(verdict({ urteil: 'hinweis', art: 'modell', zeile: 'Sonnet reicht' }), 'a', [])?.urteil).toBe('hinweis')
+  // Ausbau 0.18.0: Die Art modell gibt es nicht mehr, auch nicht bei der ersten Nachricht (dafür das Feld aufwand)
+  expect(parseVerdict(verdict({ urteil: 'hinweis', art: 'modell', zeile: 'Sonnet reicht' }), 'a', [])?.urteil).toBe('durch')
   // Erste Nachricht: nie „neuer Chat“
   expect(parseVerdict(verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), 'a', [])?.urteil).toBe('durch')
   expect(parseVerdict(verdict({ urteil: 'hinweis', art: 'skill', skill: 'erfunden', zeile: 'x' }), 'b', ['code-review'])?.urteil).toBe('durch')
@@ -379,7 +381,11 @@ function world(on: On, o: W = {}) {
     toasts.push(e.text)
     return { value: undefined }
   })
-  on('command.register', () => ({ value: undefined }))
+  const registered: { name: string; argumentHint?: string }[] = [] // angemeldete Befehle (0.17.0 language)
+  on('command.register', ($, e) => {
+    registered.push(e as never)
+    return { value: undefined }
+  })
   // „Gut zu wissen“ (Nachtrag 0.13.0): Fork und Eingabefeld
   const forks: string[] = []
   let forkReply: unknown = { isAnswered: true, text: '{"thema": null}', usage: FORK_USAGE }
@@ -498,6 +504,7 @@ function world(on: On, o: W = {}) {
     setPromptText: (s: string) => (promptText = s),
     setId: (s: string) => (id = s),
     submitOrigins,
+    registered,
   }
 }
 
@@ -3682,7 +3689,7 @@ const mountHelp = ($: Engine, text: string, surface = 'terminal', columns = 100,
     viewport: { columns, rows: 40 },
     props: { command: 'sidekick', args, text, isErrored },
   } as never)
-const FACTS: HelpFacts = { settings: DEFAULT_SETTINGS, ttl: { min: 60, source: 'default' }, hints: { on: true, off: [] }, known: 0 }
+const FACTS: HelpFacts = { settings: DEFAULT_SETTINGS, ttl: { min: 60, source: 'default' }, hints: { on: true, off: [] }, known: 0, now: NOW }
 
 test('0.14.0 Hilfe: help, ? und HELP liefern Markdown mit Kennung (en); help mit weiterem Wort ist unbekannt', async ($, on) => {
   setLang('en')
@@ -3844,8 +3851,12 @@ test('0.14.0 Hilfe Vollständigkeit: jedes Wort, das die Parser annehmen, steht 
     setLang(l)
     const d = sidekickHelp(FACTS)
     const help = [...d.commands.map((c) => c.cmd), ...(d.notes ?? [])].join('\n')
-    const words = [...SETTING_WORDS, ...TTL_WORDS, ...HELP_WORDS, ...SAVINGS_WORDS, ...HINTS_WORDS, ...RULE_IDS, ...NOTES_WORDS, 'status', 'hints', 'notes', '/savings']
+    const words = [...SETTING_WORDS, ...TTL_WORDS, ...HELP_WORDS, ...SAVINGS_WORDS, ...HINTS_WORDS, ...RULE_IDS, ...NOTES_WORDS, LANGUAGE_WORD, ...LANGUAGES, 'status', 'hints', 'notes', 'tips', '/savings']
     for (const word of words) expect(new RegExp(`(^|[^a-z0-9-])${esc(word)}([^a-z0-9-]|$)`, 'm').test(help), `${l}: ${word}`).toBe(true)
+    // Ausbau 0.18.0: jede Form von /sidekick tips steht ausgeschrieben in der Hilfe
+    const row: Record<string, string> = { '': '[status]', status: '[status]', on: 'on|off', off: 'on|off', 'auto on': 'auto on|off', 'auto off': 'auto on|off', 'haiku on': 'haiku on|off', 'haiku off': 'haiku on|off', stop: 'stop' }
+    const cmds = d.commands.map((c) => c.cmd)
+    for (const form of TIPS_FORMS) expect(cmds.includes(`/sidekick tips ${row[form]}`), `${l}: tips ${form}`).toBe(true)
   }
   // Die Parser nehmen nichts außerhalb der Listen an
   expect(applySetting(DEFAULT_SETTINGS, 'verbose on')).toBe(null)
@@ -4117,4 +4128,50 @@ deTest('0.16.0 Review S2: solange ein Hinweis offen ist, keine zweite Messung, a
   await w.clock.advance(5 * MIN)
   await $.prompt.submit(userPrompt('dritte Nachricht'))
   expect(await lineUnder($, 'dritte Nachricht', 'o3')).toContain('Memory-Index')
+})
+
+// ---------- 0.17.0 language: /sidekick language (docs/LANGUAGE-SPEC.md; Kernfälle in tests/language.test.ts) ----------
+
+test('0.17.0 language: Wort im argumentHint von /sidekick, nicht in /savings', async ($, on) => {
+  setLang('en')
+  const w = world(on)
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await flush(200)
+  const hint = (name: string) => w.registered.find((c) => c.name === name)?.argumentHint ?? ''
+  expect(hint('sidekick')).toBe('[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|language|help]')
+  expect(hint('savings')).not.toContain('language')
+})
+
+test('0.17.0 language: Zeile in der Hilfe (en) direkt vor /sidekick help', async ($, on) => {
+  setLang('en')
+  world(on)
+  const lines = (await helpRun($)).split('\n')
+  expect(lines).toContain('- `/sidekick language de|en`: Switch the language of all fynn-mods')
+  const order = lines.filter((l) => l.startsWith('- `/sidekick')).map((l) => /^- `([^`]+)`/.exec(l)![1])
+  expect(order.slice(-2)).toEqual(['/sidekick language de|en', '/sidekick help'])
+})
+
+deTest('0.17.0 language: Zeile in der Hilfe (de)', async ($, on) => {
+  world(on)
+  expect((await helpRun($)).split('\n')).toContain('- `/sidekick language de|en`: Sprache aller fynn-mods umstellen')
+})
+
+deTest('0.17.0 language: /sidekick language ist kein unbekanntes Argument und ändert keine sidekick-Einstellung', async ($, on) => {
+  const w = world(on)
+  let lists = 0
+  on('config.list', () => {
+    lists++
+    return { value: [] as never } // wie in -p und SDK: keine Plugin-Zeilen
+  })
+  for (const a of ['language', 'language de', 'LANGUAGE en']) {
+    const text = await helpRun($, a)
+    expect(text, a).not.toContain('Unbekannt')
+    expect(text, a).toContain('Hier zeigt Claude Code keine Plugin-Einstellungen')
+  }
+  expect(lists).toBe(3)
+  expect(w.saved.has('settings')).toBe(false)
+  // Unbekannte Wörter bleiben unbekannt, die Liste darunter nennt language
+  expect(await helpRun($, 'languages')).toContain('Unbekannt: „languages“')
+  expect(await helpRun($, 'languages')).toContain('`language de|en`')
 })

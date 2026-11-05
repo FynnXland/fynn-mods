@@ -2,6 +2,7 @@
 import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
 import type { Lang } from './i18n.ts'
 import type { HelpData } from './help.ts'
+import { languageHelp } from './language.ts'
 
 export const DAY = 24 * 60 * 60 * 1000
 
@@ -1249,6 +1250,7 @@ export function ledgerHelp(s: Settings, info: HelpInfo): HelpData {
       { cmd: t.helpSyncSetCmd, does: t.helpSyncSet },
       { cmd: t.helpSyncNameCmd, does: t.helpSyncName },
       { cmd: '/ledger sync off', does: t.helpSyncOff },
+      languageHelp('ledger', lang), // docs/LANGUAGE-SPEC.md §6 Punkt 4
       { cmd: '/ledger reset', does: t.helpReset },
       { cmd: '/ledger help', does: t.helpHelp },
     ],

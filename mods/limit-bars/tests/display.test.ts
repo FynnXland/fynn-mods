@@ -79,10 +79,10 @@ const svg = async (ui: any) => (await ui.find({ type: 'Svg' })) as { props: { al
 // ---------- reine Logik ----------
 
 test('Einstellungen: Standard wie bisher, onlyFiveHour schaltet die Woche weiter aus', async () => {
-  expect(displayFromOptions({})).toEqual({ fiveHour: true, weekly: true, cache: true, storage: true })
+  expect(displayFromOptions({})).toEqual({ fiveHour: true, weekly: true, cache: true, storage: true, cost: true, system: false })
   expect(displayFromOptions({ onlyFiveHour: true }).weekly).toBe(false)
   expect(displayFromOptions({ showWeekly: true, onlyFiveHour: true }).weekly).toBe(false)
-  expect(displayFromOptions({ showCache: false, showFiveHour: false })).toEqual({ fiveHour: false, weekly: true, cache: false, storage: true })
+  expect(displayFromOptions({ showCache: false, showFiveHour: false })).toEqual({ fiveHour: false, weekly: true, cache: false, storage: true, cost: true, system: false })
 })
 
 test('Vorrang: ein per /bars gesetzter Wert schlägt die Einstellung; Unsinn im Store zählt nicht', async () => {

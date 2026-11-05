@@ -5,6 +5,7 @@
 import type { HelpData } from './help.ts'
 import type { Lang } from './i18n.ts'
 import { T } from './i18n.ts'
+import { languageHelp } from './language.ts'
 
 export type Source = 'engine' | 'fork'
 export type Reply = { text: string; source: Source }
@@ -141,6 +142,7 @@ export function repliesHelp(s: HelpInput): HelpData {
       { cmd: '/replies off', does: t.helpOff },
       { cmd: '/replies more on', does: t.helpMoreOn },
       { cmd: '/replies more off', does: t.helpMoreOff },
+      languageHelp('replies', s.lang), // docs/LANGUAGE-SPEC.md §6 Punkt 4
       { cmd: '/replies help', does: t.helpHelp },
     ],
     notes: [t.helpForkCost, t.helpMoreOverrides],

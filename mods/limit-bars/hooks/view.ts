@@ -189,7 +189,8 @@ export function paceShown(week: Win, now: number, lang: Lang): { top: Shown; mar
   // Terminal, eine Zeile: deutlich über dem Plan die kurze Form der Spec (`+12 % · reicht bis Fr 14:00`), sonst derselbe Kopf wie
   // im Desktop (`im Plan · reicht bis …`, Review 0.10.0 K4)
   const d = Math.round(pc.delta)
-  const lead = pc.kind === 'over' && Math.abs(pc.delta) > TOLERANCE ? t.pct(`+${d}`) : head
+  // Ohne Leerzeichen vor %, in beiden Sprachen (Ausbau 0.13.0, 5.)
+  const lead = pc.kind === 'over' && Math.abs(pc.delta) > TOLERANCE ? `+${d}%` : head
   const long = [lead, sub].filter(Boolean).join(' · ')
   return {
     top: {
@@ -324,7 +325,7 @@ export function shownWindows(wins: readonly Win[], now: number, opts: Opts): Sho
         strong: false,
         fresh: true,
         ratio: 0,
-        pct: { long: zero, short: '0%', alt: zero },
+        pct: { long: '0%', short: '0%', alt: zero },
         reset: { long: t.fresh, short: t.fresh, alt: t.freshAlt },
       })
       continue
@@ -348,7 +349,8 @@ export function shownWindows(wins: readonly Win[], now: number, opts: Opts): Sho
       strong: full || p >= opts.highlightAt,
       fresh: false,
       ratio: full ? 1 : Math.max(0, Math.min(1, p / 100)),
-      pct: full ? { long: t.full, short: t.full, alt: t.full } : { long: t.pct(n), short: `${n}%`, alt: t.pct(n) },
+      // Prozentzeichen direkt hinter der Zahl, auch auf Deutsch (Ausbau 0.13.0, 5.); `alt` bleibt in der Schreibweise der Sprache
+      pct: full ? { long: t.full, short: t.full, alt: t.full } : { long: `${n}%`, short: `${n}%`, alt: t.pct(n) },
       reset,
     })
   }
@@ -363,6 +365,8 @@ const GAP = 2
 
 /** `bare`: nur Kürzel und Wert (`5h ∞`), die letzte Stufe der Tempo-Zeile. */
 function block(s: Shown, short: boolean, bare = false): Block {
+  // Ohne Auffüllen auf `100%`: Im Terminal kostete das eine Spalte, und neben beiden Langformen passte dann nichts mehr in die
+  // 44 Spalten. Den festen Abstand hinter der Prozentzahl hat nur das Desktop-Bild (svg.ts `dotX`, Ausbau 0.13.0, 5.)
   const pct = short ? s.pct.short : s.pct.long
   const rest = s.reset && !bare ? (short ? ` ${s.reset.short}` : ` · ${s.reset.long}`) : ''
   return { shown: s, pct, rest, width: Math.max(MIN_BLOCK, s.tag.length + 1 + pct.length + rest.length) }
@@ -374,14 +378,16 @@ function block(s: Shown, short: boolean, bare = false): Block {
  * Stufen: lang mit Cache-Block (`extra`, z. B. `◔ 42m`) → lang → kurz → nur das erste Fenster (lang, dann kurz) → nichts.
  * Ohne Fenster steht der Cache-Block allein, sofern er passt.
  */
-export function layoutTerminal(shown: readonly Shown[], bodyColumns: number, extra?: string): TermLayout | null {
+export function layoutTerminal(shown: readonly Shown[], bodyColumns: number, extra?: string, o: { extraW?: number } = {}): TermLayout | null {
+  // Ab 0.12.0: `extraW` = Breite aller Zusätze (Text hinter dem Cache-Block und die CPU/RAM-Gruppen); ohne Angabe die Länge von `extra`
   const avail = Math.min(44, bodyColumns - 40)
+  const xw = o.extraW ?? extra?.length ?? 0
   if (avail < MIN_BLOCK + 1) return null
-  if (shown.length === 0) return extra && extra.length + 1 <= avail ? { blocks: [], width: extra.length + 1, extra } : null
-  if (shown[0]?.pace) return layoutPace(shown, avail, extra)
+  if (shown.length === 0) return extra && xw + 1 <= avail ? { blocks: [], width: xw + 1, extra } : null
+  if (shown[0]?.pace) return layoutPace(shown, avail, extra, xw)
   if (extra) {
     const blocks = shown.map((s) => block(s, false))
-    const used = blocks.reduce((a, b) => a + b.width, 0) + GAP * blocks.length + extra.length
+    const used = blocks.reduce((a, b) => a + b.width, 0) + GAP * blocks.length + xw
     if (used + 1 <= avail) return { blocks, width: used + 1, extra }
   }
   // Langform zuerst, wird es eng die Kurzform
@@ -399,7 +405,7 @@ export function layoutTerminal(shown: readonly Shown[], bodyColumns: number, ext
  * Tempo-Zeile kleiner (lang → `5h ∞ +12% Fr14h` → `5h ∞` → weg), erst dann fällt die Woche weg. Der Cache-Block steht in jeder
  * Stufe dabei, solange er passt; die Langform passt neben der Woche ohnehin nie in 44 Spalten.
  */
-function layoutPace(shown: readonly Shown[], avail: number, extra?: string): TermLayout | null {
+function layoutPace(shown: readonly Shown[], avail: number, extra?: string, xw = extra?.length ?? 0): TermLayout | null {
   const [top, ...rest] = shown
   const long = rest.map((s) => block(s, false))
   const short = rest.map((s) => block(s, true))
@@ -409,7 +415,7 @@ function layoutPace(shown: readonly Shown[], avail: number, extra?: string): Ter
     [block(top!, true, true), ...short],
     ...(short.length > 0 ? [short] : []),
   ]
-  const width = (blocks: Block[], x?: string) => blocks.reduce((a, b) => a + b.width, 0) + GAP * (blocks.length - 1) + (x ? GAP + x.length : 0) + 1
+  const width = (blocks: Block[], x?: string) => blocks.reduce((a, b) => a + b.width, 0) + GAP * (blocks.length - 1) + (x ? GAP + xw : 0) + 1
   for (const blocks of stages) {
     if (extra && width(blocks, extra) <= avail) return { blocks, width: width(blocks, extra), extra }
     if (width(blocks) <= avail) return { blocks, width: width(blocks) }

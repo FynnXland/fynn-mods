@@ -23,7 +23,10 @@ type Texts = {
   demoMore: (names: string) => string
   nap: string
   unknown: (sub: string) => string
-  status: (o: { on: boolean; mood: string; temper: string; tired: number; annoy: number; desk: string }) => string
+  status: (o: { on: boolean; mood: string; temper: string; tired: number; annoy: number; desk: string; beat: string }) => string
+  /** Takt aus tune-strip für /clawd status (0.11.0) */
+  beat: (o: { bpm: string; group: string; sure: boolean } | null) => string
+  groups: { calm: string; groove: string; hard: string; sad: string; none: string }
   mood: { veryGrumpy: string; grumpy: string; great: string; good: string; even: string }
   deskNone: string
   desk: (o: { secs: string; draws: number; foreign: number; perMin: string; planSecs: string; changes: string; kb: string; calcAvg: string; calcMax: string; drawAvg: string; drawMax: string; others: string }) => string
@@ -72,7 +75,9 @@ export const T: Readonly<Record<Lang, Texts>> = {
     demoMore: (names) => `, more matches: ${names}`,
     nap: 'clawd-buddy: getting sleepy …',
     unknown: (sub) => `unknown: ${sub}.`,
-    status: (o) => `clawd-buddy: ${o.on ? 'on' : 'off'}, ${o.mood} (${o.temper}), tiredness ${o.tired}%, annoyance ${o.annoy}. ${o.desk}.`,
+    status: (o) => `clawd-buddy: ${o.on ? 'on' : 'off'}, ${o.mood} (${o.temper}), tiredness ${o.tired}%, annoyance ${o.annoy}. ${o.beat}. ${o.desk}.`,
+    beat: (o) => (o ? `Beat ${o.bpm} bpm, ${o.group}, ${o.sure ? 'sure' : 'unsure'}` : 'No beat from tune-strip'),
+    groups: { calm: 'calm', groove: 'groove/hip-hop', hard: 'hard', sad: 'sad', none: 'group open' },
     mood: { veryGrumpy: 'very grumpy', grumpy: 'grumpy', great: 'in a great mood', good: 'in a good mood', even: 'calm' },
     deskNone: 'Desktop drawing: no data (only runs in the desktop app while the band is drawn)',
     desk: (o) =>
@@ -135,7 +140,9 @@ export const T: Readonly<Record<Lang, Texts>> = {
     demoMore: (names) => `, weitere Treffer: ${names}`,
     nap: 'clawd-buddy: wird müde …',
     unknown: (sub) => `unbekannt: ${sub}.`,
-    status: (o) => `clawd-buddy: ${o.on ? 'an' : 'aus'}, ${o.mood} (${o.temper}), Müdigkeit ${o.tired} %, Ärger ${o.annoy}. ${o.desk}.`,
+    status: (o) => `clawd-buddy: ${o.on ? 'an' : 'aus'}, ${o.mood} (${o.temper}), Müdigkeit ${o.tired} %, Ärger ${o.annoy}. ${o.beat}. ${o.desk}.`,
+    beat: (o) => (o ? `Takt ${o.bpm} bpm, ${o.group}, ${o.sure ? 'sicher' : 'unsicher'}` : 'Kein Takt von tune-strip'),
+    groups: { calm: 'ruhig', groove: 'Groove/Hip-Hop', hard: 'hart', sad: 'traurig', none: 'Gruppe offen' },
     mood: { veryGrumpy: 'sehr gereizt', grumpy: 'gereizt', great: 'bester Laune', good: 'gut gelaunt', even: 'ausgeglichen' },
     deskNone: 'Desktop-Zeichnung: keine Daten (läuft nur im Desktop, während das Band gezeichnet wird)',
     desk: (o) =>
@@ -215,6 +222,12 @@ export const CLIP_EN: Readonly<Record<string, string>> = {
   music_bob: 'Bobs to the music',
   music_phones: 'Listens with headphones',
   music_airguitar: 'Plays air guitar',
+  music_sway: 'Sways to the music',
+  music_vibe: 'Nods along to the groove',
+  music_headbang: 'Headbangs',
+  music_lighter: 'Waves a lighter',
+  music_chin: 'Rests his chin on his hand, sadly',
+  music_hug: 'Sways with his arms crossed',
   music_nod_night: 'Nods quietly to the music at night',
   ny_fireworks: 'Fireworks',
   ny_sparkler: 'Sparkler',

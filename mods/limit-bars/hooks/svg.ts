@@ -7,6 +7,10 @@ import { FONT, MARK, RING_H, darker, RING_SIZE, esc, limitRingSvg, ringSvg } fro
 import type { RingView } from './ring.ts'
 import { DISK_W, diskRingSvg } from './storage.ts'
 import type { DiskView } from './storage.ts'
+import { COST_W, costRingSvg } from './cost.ts'
+import type { CostView } from './cost.ts'
+import { SYS_W, sysSvg } from './system.ts'
+import type { SysView } from './system.ts'
 import { EMPTY, GREY, ORANGE } from './view.ts'
 import type { Shown } from './view.ts'
 
@@ -25,29 +29,44 @@ const CHAR = 0.6
 const MARK_ABOVE = 4 // Strich: so weit über den Balken hinaus (5 stieß an die Textzeile, 0.10.4)
 const MARK_BELOW = 2 // und so weit darunter
 
+/** Breite eines Zeichens der 12-px-Zeilen in px (Monospace, 0,6 em). */
+const CW = 12 * CHAR
+
+/**
+ * Fester Trennpunkt (Nachtrag 0.12.0, Ausbau 0.13.0): Der `·` steht in jeder Zeile an derselben x-Position, hinter einem Feld
+ * so breit wie `100%`/`voll`. Von `5%` auf `10%` oder `100%` verschiebt sich dahinter nichts, und ohne 5h-Fenster steht der
+ * Punkt der Tempo-Zeile genau über dem der 7d-Zeile. Das `∞` steht links im Feld wie die Prozente.
+ */
+export const PCT_FIELD = 4
+export function dotX(tag: string, field = PCT_FIELD): number {
+  return Math.round((tag.length + 1 + field + 1) * CW * 10) / 10
+}
+
 /** Tempo-Zeile im Balken-Stil: oben `5h ∞ · +12 % über Tempo`, darunter klein, wo der Balken stünde, `reicht bis Fr 14:00`. */
-function paceGroup(s: Shown, top: number): string {
+function paceGroup(s: Shown, top: number, dot?: number): string {
   const p = s.pace!
+  const sep = dot === undefined ? `<tspan fill="${p.color}"> &#183; ${esc(p.head)}</tspan>` : `<tspan x="${dot}" fill="${p.color}">&#183; ${esc(p.head)}</tspan>`
   let out =
     `<text x="0" y="${top + 11}" font-family="${FONT}" font-size="12">` +
     `<tspan fill="${ORANGE}">5h</tspan><tspan fill="${GREY}" opacity="0.7"> ∞</tspan>` +
-    (p.head ? `<tspan fill="${p.color}"> &#183; ${esc(p.head)}</tspan>` : '') +
+    (p.head ? sep : '') +
     `</text>`
   if (p.sub) out += `<text x="0" y="${top + 23}" font-family="${FONT}" font-size="10" fill="${GREY}">${esc(p.sub)}</text>`
   return out
 }
 
-function group(s: Shown, top: number): string {
-  if (s.pace) return paceGroup(s, top)
+function group(s: Shown, top: number, dot?: number): string {
+  if (s.pace) return paceGroup(s, top, dot)
   const dim = s.fresh ? ' opacity="0.55"' : ''
   const w = s.strong ? ' font-weight="700"' : ''
   const rest = s.reset ? ` · ${s.reset.long}` : ''
+  const restSpan = !rest ? '' : dot === undefined ? `<tspan fill="${GREY}">${esc(rest)}</tspan>` : `<tspan x="${dot}" fill="${GREY}">${esc(`· ${s.reset!.long}`)}</tspan>`
   const text =
     // Mit Strich steht die Zeile 1 px höher, damit der Strich darunter Luft hat (0.10.4)
     `<text x="0" y="${top + 11 - (s.mark !== undefined ? 1 : 0)}" font-family="${FONT}" font-size="12"${dim}>` +
     `<tspan fill="${ORANGE}"${w}>${s.tag}</tspan>` +
     `<tspan fill="${s.fresh ? GREY : s.color}"${w}> ${esc(s.pct.long)}</tspan>` +
-    (rest ? `<tspan fill="${GREY}">${esc(rest)}</tspan>` : '') +
+    restSpan +
     `</text>`
   const on = Math.max(0, Math.min(SEGMENTS, Math.round(s.ratio * SEGMENTS)))
   let segs = ''
@@ -87,9 +106,12 @@ function paceColumn(s: Shown, x: number, y: number): string {
 const PAD_LEFT = 10
 const RING_GAP = 8 // Abstand zwischen Balken bzw. Ringen
 
+/** Kostenring fürs Bild: Ansicht und gefüllte Segmente (cost.ts `costFilled`). */
+export type CostPart = { view: CostView; filled: number }
+
 /**
- * Das Bild für bis zu zwei Fenster, optional den Cache-Ring und den Speicher-Ring rechts daneben (zwischen Limits und
- * Clawd). Balken: Höhe ohne Ring 24 (ein Fenster) bzw. 56 (zwei); mit einem Ring immer 56, die Balken dann unten bündig.
+ * Das Bild für bis zu zwei Fenster, optional den Cache-Ring, den Speicher-Ring, den Kostenring und die CPU/RAM-Säulen rechts
+ * daneben (zwischen Limits und Clawd; Reihenfolge SPEC Ausbau 0.12.0, 3.). Balken: Höhe ohne Ring 24 (ein Fenster) bzw. 56 (zwei); mit einem Ring immer 56, die Balken dann unten bündig.
  * Ringe: immer 56 hoch.
  */
 export function desktopSvg(
@@ -97,6 +119,8 @@ export function desktopSvg(
   ring?: RingView,
   disk?: DiskView,
   style: Style = 'bar',
+  cost?: CostPart,
+  sys?: SysView,
 ): { source: string; width: number; height: number; alt: string } {
   const list = shown.slice(0, 2)
   const rings = style === 'ring'
@@ -104,7 +128,8 @@ export function desktopSvg(
   // im Abstand nach oben (Höhe bleibt 56), bei einem Fenster wird das Bild entsprechend höher
   const lift = list.length > 0 && list[list.length - 1]!.mark !== undefined ? MARK_BELOW : 0
   const barsH = list.length > 0 ? list.length * GROUP + (list.length - 1) * GROUP_GAP + (list.length === 1 ? lift : 0) : 0
-  const height = ring || disk || (rings && list.length > 0) ? Math.max(RING_H, rings ? 0 : barsH) : barsH
+  const tall = !!(ring || disk || cost || sys)
+  const height = tall || (rings && list.length > 0) ? Math.max(RING_H, rings ? 0 : barsH) : barsH
   let x = 0
   const place = (w: number) => {
     const at = x > 0 ? x + RING_GAP : 0
@@ -116,15 +141,22 @@ export function desktopSvg(
     for (const s of list) body += s.pace ? paceColumn(s, place(paceColumnW(s)), height - RING_H) : limitRingSvg(s, place(RING_SIZE), height - RING_H)
   } else if (list.length > 0) {
     const dy = height - barsH
-    body = list.map((s, i) => group(s, dy + i * (GROUP + GROUP_GAP) - (i === list.length - 1 && list.length > 1 ? lift : 0))).join('')
-    x = BAR_W
+    // Trennpunkt aller Zeilen an derselben Stelle (Kürzel sind immer zwei Zeichen: 5h, 7d)
+    const dot = dotX('5h')
+    body = list.map((s, i) => group(s, dy + i * (GROUP + GROUP_GAP) - (i === list.length - 1 && list.length > 1 ? lift : 0), dot)).join('')
+    // Mit bündigem Punkt kann die Tempo-Zeile über die Balkenbreite reichen (`5h ∞    · 25 % unter Tempo`): dann rückt der
+    // Cache-Ring nach, auf 4 px gerundet, statt dass die Zeile in sein Kürzel läuft
+    const paceEnd = list[0]?.pace?.head ? dot + (2 + list[0].pace.head.length) * CW : 0
+    x = Math.max(BAR_W, Math.ceil(paceEnd / 4) * 4)
   }
   if (ring) body += ringSvg(ring, place(RING_SIZE), height - RING_H)
   if (disk) body += diskRingSvg(disk, place(DISK_W), height - RING_H)
+  if (cost) body += costRingSvg(cost.view, cost.filled, place(COST_W), height - RING_H)
+  if (sys) body += sysSvg(sys, place(SYS_W), height - RING_H)
   // Etwas Luft zum linken Rand des Bands (Fynn): der Inhalt rückt im Bild um PAD_LEFT nach rechts
   const width = PAD_LEFT + x + SPACE_RIGHT
   const source = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><g transform="translate(${PAD_LEFT} 0)">${body}</g></svg>`
   const altOf = (s: Shown) => (s.pace ? s.pace.alt : `${s.name} ${s.pct.alt}${s.reset ? `, ${s.reset.alt}` : ''}`)
-  const alt = [...list.map(altOf), ...(ring ? [ring.alt] : []), ...(disk ? [disk.alt] : [])].join('; ')
+  const alt = [...list.map(altOf), ...(ring ? [ring.alt] : []), ...(disk ? [disk.alt] : []), ...(cost ? [cost.view.alt] : []), ...(sys ? [sys.alt] : [])].join('; ')
   return { source, width, height, alt }
 }

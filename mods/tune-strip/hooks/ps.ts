@@ -50,9 +50,11 @@ const QUERY_BODY = [
   "if([string]$pb.PlaybackStatus -eq 'Playing'){ $pos+=([DateTimeOffset]::UtcNow-$tl.LastUpdatedTime).TotalSeconds }",
   'if($pos -gt $end){ $pos=$end }; if($pos -lt 0){ $pos=0 }',
   '$key=$p.Title+[char]9+$p.Artist+[char]9+$p.AlbumTitle',
+  // 0.6.0: Prozess-ID der Spotify-App für den Takt-Helfer (der zuerst gestartete Spotify-Prozess ist der Hauptprozess, sein Baum spielt den Ton)
+  '$sp=0; try { $sp=[int](Get-Process -Name Spotify -ErrorAction SilentlyContinue | Sort-Object StartTime | Select-Object -First 1).Id } catch { }',
   "$j='{'+(J 'ok')+':'+(B $true)+','+(J 'title')+':'+(J $p.Title)+','+(J 'artist')+':'+(J $p.Artist)+','+(J 'album')+':'+(J $p.AlbumTitle)+','+(J 'status')+':'+(J $pb.PlaybackStatus)" +
     "+','+(J 'pos')+':'+([Math]::Round($pos,1).ToString($inv))+','+(J 'end')+':'+([Math]::Round($end,1).ToString($inv))+','+(J 'shuffle')+':'+(B $pb.IsShuffleActive)+','+(J 'repeat')+':'+(J $pb.AutoRepeatMode)" +
-    "+','+(J 'can')+':{'+(J 'seek')+':'+(B $c.IsPlaybackPositionEnabled)+','+(J 'shuffle')+':'+(B $c.IsShuffleEnabled)+','+(J 'repeat')+':'+(B $c.IsRepeatEnabled)+'}}'",
+    "+','+(J 'pid')+':'+$sp+','+(J 'can')+':{'+(J 'seek')+':'+(B $c.IsPlaybackPositionEnabled)+','+(J 'shuffle')+':'+(B $c.IsShuffleEnabled)+','+(J 'repeat')+':'+(B $c.IsRepeatEnabled)+'}}'",
   '$j',
   // Cover nur bei neuem Titel; Fehler beim Cover lassen die Textzeile unberührt
   "if($key -ne $env:SP_KEY -and $null -ne $p.Thumbnail){ try { " +
@@ -121,7 +123,8 @@ export type Track = {
   canRepeat: boolean
 }
 
-export type Query = { track: Track | null; cover?: string }
+/** `pid`: Prozess-ID der Spotify-App für den Takt-Helfer (0.6.0); fehlt, wenn sie nicht lesbar war. */
+export type Query = { track: Track | null; cover?: string; pid?: number }
 
 const TEXT_MAX = 200
 const COVER_MAX = 40000 // Base64 eines 112-px-JPEG liegt bei ~5 KB; das Svg-Limit ist 131 072 (types:12276)
@@ -162,7 +165,9 @@ export function parseQuery(stdout: string): Query | undefined {
   const b64 = c?.slice(6).trim()
   // Nur plausibles Base64 durchlassen: es landet in einer data:-URL im Svg
   const cover = b64 && b64.length <= COVER_MAX && /^[A-Za-z0-9+/]+=*$/.test(b64) ? b64 : undefined
-  return cover ? { track, cover } : { track }
+  const out: Query = cover ? { track, cover } : { track }
+  if (typeof o.pid === 'number' && Number.isInteger(o.pid) && o.pid > 0 && o.pid < 10_000_000) out.pid = o.pid
+  return out
 }
 
 /** Schlüssel für `SP_KEY`: ändert er sich, liefert die Abfrage ein neues Cover. */

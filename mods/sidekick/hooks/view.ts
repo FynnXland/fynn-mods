@@ -4,7 +4,7 @@
 // ganzzahliger Prozentbreite (Kommaprozente verwirft er, cost-ledger-Befund), im Terminal dünne `▄`.
 import type { RenderElement, RenderNode } from 'claude-code'
 import { tokensText, t, usdFine, usdText } from './i18n.ts'
-import { ARTS, ROLES, active, compareNote, dayModels, dayRows, factorText, keyDate, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf } from './logic.ts'
+import { ARTS, ROLES, active, compareNote, dayModels, dayRows, factorText, hasTipp, keyDate, missShare, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf, stufenSpread, tipRuns, tipSaved, tipsRows } from './logic.ts'
 import type { Day, Period, Span } from './logic.ts'
 import { modelLabel } from './models.ts'
 import { RULE_IDS } from './wartung.ts'
@@ -62,6 +62,8 @@ function savingsBlock(d: Day, sf: Surface, inner: number, full: boolean): Render
   const items = [
     { label: x.vColdAvoided, n: d.kaltVermieden.n, usd: d.kaltVermieden.usd },
     { label: x.vWarmNew, n: d.neuWarm.n, usd: d.neuWarm.usd },
+    // Modell-Tipps (Ausbau 0.18.0): eigene Zeile, als Schätzung gekennzeichnet
+    ...(hasTipp(d) ? [{ label: x.vTipsItem, n: tipRuns(d), usd: tipSaved(d) }] : []),
   ]
   const nameW = Math.min(28, Math.max(14, ...items.map((i) => i.label.length + 1)))
   const cells = Math.max(6, Math.min(32, inner - nameW - 12 - 6 - 1))
@@ -137,6 +139,27 @@ function wartungBlock(d: Day): RenderElement | null {
     heading(x.vWartungHead),
     tableRow('', [c.gezeigt, c.angenommen], w0, true),
     ...ws.map((id) => tableRow(x.rule[id], [d.wartung[id]!.gezeigt, d.wartung[id]!.angenommen], w0)),
+  ])
+}
+
+/** Modell-Tipps (Ausbau 0.18.0, `/savings detail`): je Weg Läufe, Ersparnis, je Lauf, gestrichen; Urteile, Rückblick, Rechenweise. */
+function tipsBlock(d: Day): RenderElement | null {
+  if (!hasTipp(d)) return null
+  const x = t()
+  const rows = tipsRows(d)
+  const w0 = Math.min(42, Math.max(14, ...rows.map((r) => r.name.length + 1)))
+  const c = x.tipsCols.split('|').map((y) => y.trim()).filter(Boolean)
+  const m = d.modelltipp
+  return col({}, [
+    heading(plain(x.tipsHead)),
+    tableRow(c[0] ?? '', c.slice(1), w0, true),
+    ...rows.map((r) => tableRow(r.name, [r.n, usdText(r.usd), r.n ? usdFine(r.per) : '–', r.miss === null ? '–' : r.miss], w0)),
+    el('Box', { marginTop: 1, flexDirection: 'column' }, [
+      dim(x.tipsJudged(m.urteile.n, usdText(m.urteile.usd), secsText(m.urteile.ms, m.urteile.n), stufenSpread(d))),
+      dim(x.tipsReview(m.opus.n, usdText(m.opus.usd))),
+      dim(x.tipsMiss(missShare(d))),
+      dim(x.tipsFormula),
+    ]),
   ])
 }
 
@@ -247,6 +270,7 @@ export function savingsTree(d: Day, p: Period, now: number, columns: number, sur
   }
   const span = spanOf(days, active)
   const nodes = [
+    tipsBlock(d),
     compareBlock(d, days, surface, inner),
     daysBlock(days, surface, inner),
     hintsBlock(d),

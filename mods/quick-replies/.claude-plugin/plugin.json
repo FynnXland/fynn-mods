@@ -1,11 +1,12 @@
 {
   "name": "quick-replies",
-  "version": "0.5.3",
+  "version": "0.6.2",
   "description": "Claude Code's own next-message suggestion as a button above Clawd; click it, type 1 in the empty prompt, or send just 1 to send it. With /replies more on, a fork of the session fills up to four places in total. /replies help shows all commands and settings as a table.",
   "author": {
     "name": "Fynn Hansen"
   },
   "license": "MIT",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "language": {
       "type": "string",

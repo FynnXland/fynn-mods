@@ -1087,7 +1087,7 @@ function clipsOver(e: ReturnType<typeof newEngine>, ticks: number): string[] {
   }
   return seen
 }
-const MUSIC = new Set(['music_bob', 'music_phones', 'music_airguitar', 'music_nod_night'])
+const MUSIC = new Set(['music_bob', 'music_phones', 'music_sway', 'music_vibe', 'music_airguitar', 'music_headbang', 'music_lighter', 'music_chin', 'music_hug', 'music_nod_night'])
 
 test('0.9.0: Musik im Leerlauf: meist Musik-Clips, ohne Musik nie; bei Arbeit nie; beim Tippen und langen Warten mit dabei', { timeoutMs: 120000 }, () => {
   const count = (music: boolean, mood: string, seed: number) => {
@@ -1148,13 +1148,14 @@ test('0.9.0: Kopfhörer bleiben auf, solange die Musik läuft; hört sie auf, ni
   expect(e.pose().props.some((p) => p[0].startsWith('music_phones')), 'Kopfhörer weggepackt').toBe(false)
 })
 
-test('0.9.0: Musik-Clips: Lint ohne Befund (nichts taucht auf, alles geräumt), Luftgitarre nur bei guter Laune, der erste ist der ruhigste', { timeoutMs: 120000 }, () => {
+test('0.9.0/0.11.0: Musik-Clips: Lint ohne Befund (nichts taucht auf, alles geräumt), Luftgitarre und Headbangen nur bei harten Songs, der erste ist der ruhigste', { timeoutMs: 120000 }, () => {
   for (const name of MUSIC) {
     for (const seed of [1, 2]) expect(lintFrames(captureClip(LIB, name, { seed, hour: name === 'music_nod_night' ? 1 : 15 }), ALL_PROPS), `${name} Seed ${seed}`).toEqual([])
   }
   const music = ALL_CLIPS.filter((c) => c.cat === 'music')
   expect(music[0].name).toBe('music_bob')
-  expect(music.find((c) => c.name === 'music_airguitar')?.temper).toBe('good')
+  // 0.11.0: statt „gute Laune“ die Gruppe (SPEC Nachtrag 0.11.0); nicht bei schlechter Laune
+  for (const n of ['music_airguitar', 'music_headbang']) expect(music.find((c) => c.name === n)?.music).toEqual({ calm: 0, groove: 0, hard: n === 'music_airguitar' ? 3 : 2.5, sad: 0, none: 0, notBad: true })
   expect(music.filter((c) => c.when === 'night').map((c) => c.name)).toEqual(['music_nod_night'])
 })
 

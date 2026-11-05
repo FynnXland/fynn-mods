@@ -1,7 +1,7 @@
 {
   "name": "tune-strip",
-  "version": "0.4.0",
-  "description": "Windows only. Music bar for Spotify above the prompt: album cover, title, artist, position and clickable controls (restart/previous, play/pause, next). Reads the Windows media controls, no login, no network.",
+  "version": "0.8.1",
+  "description": "Windows only. Music bar for Spotify above the prompt: album cover, title, artist, position and clickable controls (restart/previous, play/pause, next). Reads the Windows media controls, no login, no network. Finds the beat of the song locally for clawd-buddy (listens to Spotify only, nothing recorded or sent).",
   "author": {
     "name": "Fynn Hansen"
   },

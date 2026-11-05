@@ -4,7 +4,7 @@ A cost ledger across all your chats. After every answer, cost-ledger records wha
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.8.2** · Requires Claude Code v2.1.287 or later (mods)
+Tested with Claude Code **v2.1.318** · Plugin version **0.10.0** · Requires Claude Code v2.1.309 or later
 
 ## Usage
 
@@ -23,6 +23,7 @@ Tested with Claude Code **v2.1.295** · Plugin version **0.8.2** · Requires Cla
 | `/ledger sync` | Sync state: folder, this device's name and ID, the other devices with the time of their last update |
 | `/ledger sync name <name>` | Name this device (up to 30 characters); the other devices show its chats under this name. Default: “Device 1a2b” from a random ID |
 | `/ledger sync off` | Turn sync off. This device's file stays in the folder; cost-ledger never deletes files |
+| `/ledger language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.9.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/ledger reset` | Delete everything on this device, after a confirmation (**Cancel** is recommended and listed first). The plan and sync settings stay; other devices keep their entries |
 | `/ledger help` | Help as a table: all commands, the current state (plan, sync, storage used, recording since) and your settings with their values, plus how to change them and how to turn the mod off. Also `/ledger ?` |
 
@@ -169,6 +170,20 @@ Sync uses the rights `$.fs.list`, `$.fs.read` and `$.fs.write`, only inside the 
 
 **Runs in:** terminal and the desktop Code tab (its own rendering at the command line, colors from the theme). Terminal verified with 0.3.x; desktop verified with 0.3.1 on 2026-10-06 (0.3.0 fell back to the Markdown summary there, fixed in 0.3.1). The 0.5.0 views (`/ledger limits`, the limit line) are covered by rendering tests for both surfaces; a visual check is pending. The help table (0.6.0) was checked in the terminal. Sync (0.7.0) was verified with `claude -p` in a real session; its views are covered by rendering tests for both surfaces. `/ledger here` and the reworked overview (0.8.0) were checked in the terminal; the desktop ring is drawn as an image (`Svg`) and was checked in the desktop app on 2026-11-03 (dark theme). The `/ledger models` ring (0.8.1) was checked in the desktop app on 2026-11-04 (dark theme); 0.8.2 fits large totals inside it. In `claude -p` and other surfaces you get the Markdown summary. Claude only reads that summary (at most 10 lines for the views, about 15 for the help), not the rendering.
 
+## Working with limit-bars
+
+Since 0.10.0, cost-ledger shares two numbers with [limit-bars](../limit-bars/README.md), which draws them as a small cost ring in the band above the prompt: what this chat cost and what this project cost, the same numbers as `/ledger here all`. It does so through a session value (`$.state` `cost-ledger.here`) that only cost-ledger writes and any mod may read:
+
+| Field | Meaning |
+|---|---|
+| `chatUsd` | This chat, including the model calls of other mods made in it |
+| `projectUsd` | This project since recording began, including synced devices; `null` when the project is unknown (script run, no folder) |
+| `project` | Only the last folder name, as in the sync file (`null` if it would reveal a user name); nothing else of the path |
+| `since` | First day of the recording, `YYYY-MM-DD` |
+| `devices` | `1` = this device only, `2` or more with sync |
+
+The value is written after every booking (answers, mod calls), at the start of a chat and after `/clear`, `/resume` or a branch, and only when an amount changed by at least a cent; never while drawing. It lives as long as the chat (Claude Code clears it with `/clear`, `/resume` and branching, and cost-ledger writes it again). Reading every chat for the project total takes a while with a large ledger, so cost-ledger reads it once in the background when the chat starts (with sync, also the other devices' files, once) and then adds this chat's bookings; other chats on this computer are picked up every 15 minutes and on every `/ledger`. Without limit-bars nothing reads the value. It is the API value of the usage, not a bill.
+
 ## Configuration
 
 `/plugin` → cost-ledger → settings (`userConfig`):
@@ -182,7 +197,7 @@ Sync uses the rights `$.fs.list`, `$.fs.read` and `$.fs.write`, only inside the 
 
 ## Language
 
-`language` switches all texts the mod shows: the `/ledger` overview and its views, the Markdown summary Claude reads, the help, the reset confirmation, and the formats (`en`: `$14.44`, `Oct 6`, `W41`; `de`: `14,44 $`, `06.10.`, `KW 41`). The default is `en`; set it to `de` for German. A change applies to the next `/ledger`. Stored data does not depend on the language.
+`language` switches all texts the mod shows: the `/ledger` overview and its views, the Markdown summary Claude reads, the help, the reset confirmation, and the formats (`en`: `$14.44`, `Oct 6`, `W41`; `de`: `14,44 $`, `06.10.`, `KW 41`). The default is `en`; set it to `de` for German, or run `/ledger language de` in a terminal session to switch all fynn-mods at once. A change applies to the next `/ledger`. Stored data does not depend on the language.
 
 ## Rights
 
@@ -190,7 +205,8 @@ Sync uses the rights `$.fs.list`, `$.fs.read` and `$.fs.write`, only inside the 
 
 ```text
 hooks: session.start, classic.SessionStart, classic.UserPromptSubmit, turn.complete, model.complete, model.fork, model.classify, session.end, command.run{command=ledger}, ui.render{component=CommandOutput, props has {command=ledger}}
-calls: $.clock.now, $.command.register, $.fs.list, $.fs.read, $.fs.write, $.session.repo, $.session.root, $.session.surfaces, $.session.usage, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.log
+calls: $.clock.now, $.command.register, $.config.list, $.config.set, $.fs.list, $.fs.read, $.fs.write, $.process.run, $.session.repo, $.session.root, $.session.surfaces, $.session.usage, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.log
+state writes: cost-ledger.here
 ```
 
 In plain language, the hooks:
@@ -214,9 +230,12 @@ And the calls:
 - `$.ui.ask`: confirmation before `/ledger reset`.
 - `$.ui.log`: errors go to the debug log (`{to:'debug'}`), never into the transcript.
 - `$.clock.now`: current date and timestamps.
+- `$.config.list`, `$.config.set`: only for `/ledger language` (since 0.9.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone.
+- `$.process.run`: for `/ledger language` in the desktop app and `claude -p` (since 0.9.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `cost-ledger@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `cost-ledger@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
+- `$.state.set` (`state writes: cost-ledger.here`, since 0.10.0): the chat and project cost for limit-bars, see [Working with limit-bars](#working-with-limit-bars). Amounts, the first day of recording, the number of devices and the last folder name; no paths, titles or chat contents.
 - `$.fs.list`, `$.fs.read`, `$.fs.write`: sync between devices (since 0.7.0). Only inside the folder you set with `/ledger sync <folder>`, and only files named `cost-ledger-<id>.json`: it lists that folder, reads the other devices' files and writes its own. Nothing happens with these rights until you turn sync on. Claude Code cannot restrict these rights to a folder, so cost-ledger enforces it itself, and tests check every path.
 
-The `model.*` hooks only read the result of a call (usage, origin) and pass it on unchanged. No model calls, no processes or network targets; files only for sync, as above.
+The `model.*` hooks only read the result of a call (usage, origin) and pass it on unchanged. No model calls, no network targets; files only for sync, as above. The only process is the `claude` CLI (`claude plugin list` / `claude plugin configure`) for `/ledger language` in the desktop app and `claude -p`.
 
 ## Installation
 
@@ -251,7 +270,8 @@ claude --plugin-dir <path-to-clone>/mods/cost-ledger
 - **Only numbers from installation on.** Older chats are missing.
 - **If the desktop app closes a chat hard** (without `session.end`), the remainder since the last answer is missing. If the chat is resumed later, cost-ledger books that remainder then.
 - **`/resume` in the middle of a session** is only covered by a test, not verified in a real session (it cannot be triggered in `-p`). Assumption: `usage().cost` afterwards reflects the resumed chat (as when starting with `--resume`, which is verified). If the counter instead kept running per process, the previous chat's cost would be booked twice onto the resumed one.
-- **After the mod reloads** (a module file saved, settings changed), cost-ledger only recognizes the session again with the next prompt. Costs in between are booked then; mod calls from that window are missing.
+- **The cost ring in limit-bars lags behind other chats.** Its project total adds this chat's bookings at once, but costs booked by other chats on this computer show up within 15 minutes (or at the next `/ledger`), and the other devices' costs are read when the chat starts and at every `/ledger`. In a fresh chat the ring appears once cost-ledger has read the ledger in the background, a few seconds with many chats.
+- **After the mod reloads** (a module file saved, settings changed, `/ledger language`), cost-ledger only recognizes the session again with the next prompt. Costs in between are booked then; mod calls from that window are missing.
 - **Mod amounts are estimates:** tokens × price table; cache writes are priced as 5-minute TTL. Calls that are denied (`deny`) do not count. Haiku 5.5 is priced by prompt length: above 100,000 prompt tokens (input + cache reads + cache writes) the whole call costs five times as much. cost-ledger applies this only to single mod calls (`model.complete`). A chat turn and a `fork` report their responses summed, so their per-model estimate always uses the lower Haiku 5.5 rate and can be too low when a single request in them was over 100,000 tokens.
 - **The alias `haiku`:** a mod that calls `$.model.complete({ model: 'haiku' })` gets Claude Haiku 5.5 on Claude Code v2.1.293 and later (verified with v2.1.295), Haiku 4.5 before. The call's result does not say which model answered, so cost-ledger prices `haiku` as Haiku 5.5. On an older Claude Code such calls are booked about ten times too low, and if you point `haiku` elsewhere with `ANTHROPIC_DEFAULT_HAIKU_MODEL`, they are still priced as Haiku 5.5.
 - **Haiku 5.5 as the chat model:** the chat amount is Claude Code's own `/cost` value. Claude Code v2.1.291 still priced Haiku 5.5 like Haiku 4.5 (about ten times too much); v2.1.295 prices it correctly.

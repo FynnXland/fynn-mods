@@ -22,7 +22,7 @@ import { createEngine } from './engine.ts'
 import type { Engine } from './engine.ts'
 import { seededRng } from './capture.ts'
 import { ALL_CLIPS, ALL_PROPS } from './library.ts'
-import { WELCOME_WINDOW_MS, activeAgents, deriveMood, deriveTemper, specialDay } from './mood.ts'
+import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, specialDay } from './mood.ts'
 import type { Facts, Strain } from './mood.ts'
 import { H, PAL, POSES, TICK, W, compose } from './stage.ts'
 
@@ -111,7 +111,11 @@ export function createDesk(o: DeskOpts): Desk {
       D.seenBack = back
       if (back && now - back < WELCOME_WINDOW_MS) engine.welcome()
     }
-    engine.set({ agents: activeAgents(facts, now), music: !!facts.music })
+    // Takt (0.11.0): Das Bild dieses Takts ist zur Uhrzeit `now` zu sehen; daraus und aus `tune-strip.beat` das Raster in Ticks
+    engine.set({
+      agents: activeAgents(facts, now), music: !!facts.music,
+      beat: beatGrid(facts.beat, now, engine.S.ticks + 1, TICK), group: beatGroup(facts.beat),
+    })
     const m = deriveMood(facts, now)
     if (m !== D.mood) {
       D.mood = m
@@ -256,6 +260,8 @@ export function createDesk(o: DeskOpts): Desk {
       if (strainNow !== drawn.strain) return 0
       // Musik an oder aus (tune-strip.playing, 0.9.0): die Stimmung bleibt, die Auswahl aber nicht
       if ((facts.music ?? false) !== (drawn.facts.music ?? false)) return 0
+      // Neuer Takt (tune-strip.beat, 0.11.0; tune-strip schreibt nur bei deutlicher Änderung): ab dem gezeigten Bild neu rechnen
+      if (JSON.stringify(facts.beat ?? null) !== JSON.stringify(drawn.facts.beat ?? null)) return 0
       const end = drawn.at + drawn.ticks * TICK
       for (let t = now; t <= end; t += TICK) {
         if (deriveMood(facts, t) !== deriveMood(drawn.facts, t) || activeAgents(facts, t) !== activeAgents(drawn.facts, t)) return t - now

@@ -3,13 +3,14 @@
 // `/bars` (in `$.store` unter `display`, wirkt in allen offenen Chats). Vorrang: ein per Befehl gesetzter Wert, sonst die
 // Einstellung. Abgeschaltet wird nur die Anzeige; Rückfrage, Hinweise und Befehle des Caches bleiben (Fynn, 2026-10-06).
 
-export const PARTS = ['fiveHour', 'weekly', 'cache', 'storage'] as const
+// Seit 0.12.0 auch der Kostenring (`cost`) und die CPU/RAM-Säulen (`system`); Reihenfolge wie im Band (SPEC Ausbau 0.12.0, 3.)
+export const PARTS = ['fiveHour', 'weekly', 'cache', 'storage', 'cost', 'system'] as const
 export type Part = (typeof PARTS)[number]
 export type Display = Record<Part, boolean>
 export type Overrides = Partial<Display>
 
 /** Englischer Name je Teil, wie er in `/bars` steht. */
-export const PART_ARG: Readonly<Record<Part, string>> = { fiveHour: '5h', weekly: 'week', cache: 'cache', storage: 'storage' }
+export const PART_ARG: Readonly<Record<Part, string>> = { fiveHour: '5h', weekly: 'week', cache: 'cache', storage: 'storage', cost: 'cost', system: 'cpu' }
 
 const bool = (v: unknown, fallback: boolean) => (typeof v === 'boolean' ? v : fallback)
 
@@ -23,10 +24,13 @@ export function displayFromOptions(options: Readonly<Record<string, unknown>>): 
     weekly: bool(options.showWeekly, true) && options.onlyFiveHour !== true,
     cache: bool(options.showCache, true),
     storage: bool(options.showStorage, true),
+    // Kostenring an (erscheint nur, wenn cost-ledger den Wert liefert), Säulen aus (SPEC Ausbau 0.12.0, Entscheidung 4)
+    cost: bool(options.showCost, true),
+    system: bool(options.showSystem, false),
   }
 }
 
-/** Gespeicherte `/bars`-Werte; nur echte Booleans der vier Teile zählen. */
+/** Gespeicherte `/bars`-Werte; nur echte Booleans der Teile zählen. */
 export function cleanOverrides(v: unknown): Overrides {
   const out: Overrides = {}
   if (!v || typeof v !== 'object') return out
@@ -39,7 +43,14 @@ export function cleanOverrides(v: unknown): Overrides {
 
 /** Was gilt: der Befehl schlägt die Einstellung. */
 export function effectiveDisplay(base: Display, ov: Overrides): Display {
-  return { fiveHour: ov.fiveHour ?? base.fiveHour, weekly: ov.weekly ?? base.weekly, cache: ov.cache ?? base.cache, storage: ov.storage ?? base.storage }
+  return {
+    fiveHour: ov.fiveHour ?? base.fiveHour,
+    weekly: ov.weekly ?? base.weekly,
+    cache: ov.cache ?? base.cache,
+    storage: ov.storage ?? base.storage,
+    cost: ov.cost ?? base.cost,
+    system: ov.system ?? base.system,
+  }
 }
 
 const PART_ALIASES: ReadonlyArray<[Part, readonly string[]]> = [
@@ -47,6 +58,8 @@ const PART_ALIASES: ReadonlyArray<[Part, readonly string[]]> = [
   ['weekly', ['week', 'weekly', '7d', 'woche', 'wochenlimit']],
   ['cache', ['cache']],
   ['storage', ['storage', 'disk', 'speicher']],
+  ['cost', ['cost', 'kosten']],
+  ['system', ['cpu', 'system', 'ram']],
 ]
 
 /** Teil aus einem Argument, in beiden Sprachen (release/I18N.md §3). */

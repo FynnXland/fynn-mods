@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { MIN, cacheState, emptyMem, inputCost, observeStep, textBar, parseTokens, pingMissed, priceFor, readCost, rewriteCost, ringFor, terminalBlock } from '../hooks/cache.ts'
 import { RING_H, RING_SEGMENTS, ringFilled } from '../hooks/ring.ts'
 import { desktopSvg } from '../hooks/svg.ts'
+import { cleanKeep } from '../hooks/register.ts'
 import { layoutTerminal, shownWindows } from '../hooks/view.ts'
 
 const NOW = new Date(2026, 9, 5, 10, 0, 0).getTime()
@@ -253,7 +254,8 @@ test('Restzeit läuft mit der Uhr ohne Turn weiter (Takt), wird gelb und kalt', 
   await ui.unmount()
 })
 
-test('Vorwarnung: großer Chat in der gelben Phase → ein Hinweis mit /handoff und /keepwarm, nur einmal', DE, async ($, on) => {
+// Lange simulierte Zeit: unter Last knapp am 5-s-Standard des Test-Kits (Review Variante B, S2)
+test('Vorwarnung: großer Chat in der gelben Phase → ein Hinweis mit /handoff und /keepwarm, nur einmal', { ...DE, timeoutMs: 30_000 }, async ($, on) => {
   const w = world(on)
   await w.step($, usage(300000, 5000))
   const ui = await $.ui.mount(band('desktop'))
@@ -281,6 +283,55 @@ test('Persistenz: Stand in $.store, nach Neustart lädt session.start ihn; alte 
   // Neue Anfrage speichert
   await w.step($, usage(412000, 1000))
   expect((saved.get('cache:sess-1') as { lastActivity: number }).lastActivity).toBe(NOW)
+})
+
+test('0.11.0 /keepwarm übersteht einen Reload: Stand in $.store, session.start nimmt ihn wieder auf', DE, async ($, on) => {
+  // Nach `/… language` lädt die Engine limit-bars neu; die neue Instanz sieht nur noch $.store (SPEC Nachtrag 0.11.0)
+  const saved = new Map<string, unknown>([
+    ['cache:sess-1', { lastActivity: NOW - 10 * MIN, ttl: 60, ttlSource: 'gemessen', ctx: 412000, model: 'claude-opus-5-5', savedAt: NOW - 10 * MIN }],
+    ['keep:sess-1', { until: NOW + 90 * MIN, pings: 2, usd: 0.16 }],
+    ['keep:alt', { until: NOW - MIN, pings: 1, usd: 0.08 }],
+    ['keep:kaputt', { until: 'morgen' }],
+  ])
+  const w = world(on, { saved })
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await w.clock.settle()
+  // Abgelaufene und ungültige Stände räumt der Start auf, der eigene bleibt
+  expect(saved.has('keep:alt')).toBe(false)
+  expect(saved.has('keep:kaputt')).toBe(false)
+  expect((await $.command.run({ command: 'cache', args: '' } as never)).text).toContain('| **Warmhalten** | an bis 11:30 · 2 Ping(s)')
+  // Der Takt läuft wieder: kurz vor Ablauf (8 min vor 60 min) pingt er
+  await w.clock.advance(43 * MIN)
+  expect(w.forks).toBe(1)
+  expect((saved.get('keep:sess-1') as { pings: number }).pings).toBe(3)
+  // Aus: Eintrag weg
+  expect((await $.command.run({ command: 'keepwarm', args: 'off' } as never)).text).toBe('Warmhalten aus.')
+  expect(saved.has('keep:sess-1')).toBe(false)
+})
+
+test('0.11.0 /keepwarm speichert seinen Stand; abgelaufen wird er nach einem Reload nicht wieder aufgenommen', DE, async ($, on) => {
+  const w = world(on)
+  await w.step($, usage(400000, 5000))
+  await $.command.run({ command: 'keepwarm', args: '1' } as never)
+  expect(w.saved.get('keep:sess-1')).toEqual({ until: NOW + 60 * MIN, pings: 0, usd: 0 })
+  expect(cleanKeep(w.saved.get('keep:sess-1'), NOW + 61 * MIN)).toBeNull()
+  expect(cleanKeep({ until: NOW + 5 * 60 * MIN, pings: 0, usd: 0 }, NOW)).toBeNull() // länger als 4 h: ungültig
+  expect(cleanKeep({ until: NOW + MIN, pings: 1, usd: 0.1 }, NOW)).toEqual({ until: NOW + MIN, pings: 1, usd: 0.1 })
+})
+
+test('0.11.0 /keepwarm beim Chatwechsel: Eintrag des alten Chats weg, kein Ping im neuen Chat (Review S2)', DE, async ($, on) => {
+  const w = world(on)
+  await w.step($, usage(400000, 5000))
+  await $.command.run({ command: 'keepwarm', args: '2' } as never)
+  expect(w.saved.has('keep:sess-1')).toBe(true)
+  w.setId('sess-2')
+  await w.step($, usage(0, 20000))
+  expect(w.saved.has('keep:sess-1')).toBe(false)
+  expect(w.saved.has('keep:sess-2')).toBe(false)
+  expect(w.toasts.some((t) => t.startsWith('Warmhalten aus (neuer Chat'))).toBe(true)
+  await w.clock.advance(120 * MIN)
+  expect(w.forks).toBe(0)
 })
 
 test('Neuer Chat (/clear → neue Session-ID): Ring wieder unbekannt', DE, async ($, on) => {

@@ -52,6 +52,7 @@ import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import { HELP_ACCENT, barsHelpData } from './helpdata.ts'
 import type { Lang } from './i18n.ts'
+import { isLanguage, languageCommand } from './language.ts'
 import { ringFilled } from './ring.ts'
 import {
   PROBE_SCRIPT,
@@ -68,6 +69,10 @@ import {
 } from './storage.ts'
 import type { Drive, Scan, StorageReport } from './storage.ts'
 import { desktopSvg } from './svg.ts'
+import { cleanHere, costBlock, costFilled, costText, costView } from './cost.ts'
+import type { Here } from './cost.ts'
+import { CELL_W, SYS_SCRIPT, cellText, levelColor, parseSample, sysTermWidth, sysView, takeLines, termColumns } from './system.ts'
+import type { Sample } from './system.ts'
 import {
   GREY,
   NO_FIVE_AFTER,
@@ -145,6 +150,10 @@ let alerted = 0 // lastActivity, für die der Hinweis „läuft bald ab“ schon
 // Warmhalten: Standard aus, eigener 30-s-Takt nur solange an (es muss auch laufen, wenn das Band nicht gezeichnet wird)
 let keep: KeepWarm | null = null
 let keepTimer: Timer | null = null
+// Chat, zu dem `keep` gehört. `keep` liegt zusätzlich in `$.store` unter `keep:<sessionId>`: Ändert `/… language` (aus
+// irgendeiner fynn-mod) die Einstellungen, lädt die Engine limit-bars neu, Modul-Variablen und Takt sind dann weg.
+// `session.start` der neuen Instanz nimmt das Warmhalten wieder auf (SPEC Nachtrag 0.11.0).
+let keepFor = ''
 let pinging = false
 let forking = false // ein Warmhalte-Ping ist unterwegs
 // Übergabe: /handoff startet den Skill, turn.complete fängt dessen Antwort ab
@@ -165,6 +174,28 @@ const SCAN_MAX_AGE = 60 * 60000 // /disk scannt neu, wenn der letzte Scan älter
 const SCAN_LOCK = 5 * 60000 // ein Scan, der in einer anderen Sitzung gerade läuft, gilt so lange als laufend
 const SCAN_PAUSE = 24 * 60 * 60000 // nach einem gescheiterten Scan keine automatischen Scans (/disk refresh geht immer)
 // Daten der /disk-Ansichten für das Zeichnen der Befehlszeile (Kennung im Text, wie cost-ledger /ledger)
+// Kostenring (Ausbau 0.12.0): zuletzt gelesener Wert von `cost-ledger.here`; null = keiner (cost-ledger fehlt oder schrieb nichts)
+let costHere: Here | null = null
+// CPU/RAM-Säulen (Ausbau 0.12.0): nur Windows (Laufwerksbuchstabe im Arbeitsordner der Sitzung oder in storagePath)
+let isWindows = false
+// Systemwerte (Ausbau 0.13.0): ein dauerhafter PowerShell-Prozess je Chat, solange das Band gezeichnet wird und die Liste an ist
+let sysCur: Sample | undefined // letzte Messung
+let sysPrev: Sample | undefined // die davor, für den Trendpfeil
+let sysStream: { return: (v?: never) => Promise<unknown> } | null = null
+let sysStartedAt = 0 // Start des laufenden Prozesses, für den Wächter
+// Im Terminal passt die Liste neben langen Limits nicht in die 44 Spalten: dann kein Prozess und kein Neuzeichnen für sie
+// (Review 0.13.0 S2). Gesetzt beim Zeichnen; `undefined` = noch nicht gezeichnet
+let sysVisible: boolean | undefined
+const SYS_STALL = 30_000 // so lange ohne neue Zeile: Prozess hängt, beenden (Review 0.13.0 S3)
+let sysFails = 0 // Fehlstarts in Folge (Prozess endet ohne eine Messung)
+let sysPausedUntil = 0
+let sysErr = ''
+let sysErrAt = 0
+let lastRenderAt = 0 // letztes Zeichnen des Bands: ohne Zeichnen endet der Prozess
+const SYS_FAILS = 3
+const SYS_PAUSE = 60 * 60_000
+const SYS_IDLE = 15_000 // so lange ohne Zeichnen, dann endet der Prozess
+
 const reports = new Map<string, StorageReport>()
 let reportNo = 0
 // /bars help: Schnappschuss je Aufruf, höchstens 10 (docs/HELP-SPEC.md §3, templates/help/README.md)
@@ -314,8 +345,10 @@ async function pollStep($: EngineInterface): Promise<void> {
     // abgelehnt: es bleibt beim letzten eigenen Stand
   }
   await readShared($)
+  await readCostState($)
   alertStep($, now)
   refresh($, now)
+  sysStep($, now)
   // Speicher-Ring: Gesamt/frei alle 10 min (nur solange gezeichnet wird, wie der ganze Takt)
   if (probedAt > 0 && now - probedAt >= PROBE_MS && driveOf(storagePath) && shownParts().storage) {
     probedAt = now
@@ -341,12 +374,33 @@ async function bindSession($: EngineInterface): Promise<void> {
   if (switched) {
     cold = { count: 0, usd: 0 }
     stopKeep($, T[lang].whyNewChat)
+    // /clear, /resume, /branch leeren $.state (interface.md:760): die Breite beim nächsten Takt neu melden (Review 0.12.0 S2)
+    publishedWidth = undefined
+    publishedKey = ''
   }
   try {
     const saved = cleanMem(await $.store.get(`cache:${id}`))
     if (saved) mem = { lastActivity: saved.lastActivity, ttl: saved.ttl, ttlSource: saved.ttlSource, ctx: saved.ctx, model: saved.model }
   } catch {
     // ohne gespeicherten Stand: unbekannt bis zur ersten Anfrage
+  }
+  // Warmhalten nach einem Reload wieder aufnehmen (z. B. nach `/… language`); abgelaufen oder ungültig: Eintrag löschen
+  if (keep) return
+  try {
+    const raw = await $.store.get(`keep:${id}`)
+    if (raw === undefined) return
+    const k = cleanKeep(raw, await $.clock.now())
+    if (!k) {
+      await $.store.delete(`keep:${id}`)
+      return
+    }
+    keep = k
+    keepFor = id
+    keepTimer?.cancel()
+    keepTimer = $.clock.every(30000, () => keepStep($))
+    $.ui.invalidate('ui.render')
+  } catch {
+    // ohne gespeicherten Stand bleibt Warmhalten aus
   }
 }
 
@@ -357,11 +411,33 @@ function persist($: EngineInterface, now: number) {
 
 /** Einträge älter als 7 Tage aufräumen (SPEC, Persistenz). */
 async function cleanup($: EngineInterface, now: number) {
-  const keys = (await $.store.keys()).filter((k) => k.startsWith('cache:')).slice(0, 200)
+  const all = await $.store.keys()
+  const keys = all.filter((k) => k.startsWith('cache:')).slice(0, 200)
   for (const k of keys) {
     const m = cleanMem(await $.store.get(k))
     if (!m || now - m.savedAt > 7 * 24 * 60 * MIN) await $.store.delete(k)
   }
+  // Warmhalte-Stände abgelaufener Chats (Prozess beendet, bevor das Warmhalten endete); der eigene laufende bleibt
+  for (const k of all.filter((x) => x.startsWith('keep:')).slice(0, 200)) {
+    if (k === `keep:${keepFor}` && keep) continue
+    if (!cleanKeep(await $.store.get(k), now)) await $.store.delete(k)
+  }
+}
+
+/** Warmhalte-Stand des Chats speichern bzw. löschen; Fehler nur schlucken (ohne Eintrag endet es mit einem Reload). */
+function saveKeep($: EngineInterface) {
+  if (!keepFor) return
+  const key = `keep:${keepFor}`
+  const done = keep ? $.store.set(key, { ...keep }) : $.store.delete(key)
+  done.catch(() => {})
+}
+
+/** Gespeicherter Warmhalte-Stand, nur wenn er gültig ist und noch läuft. */
+export function cleanKeep(v: unknown, now: number): KeepWarm | null {
+  const k = v as Partial<KeepWarm> | null | undefined
+  if (!k || typeof k.until !== 'number' || typeof k.pings !== 'number' || typeof k.usd !== 'number') return null
+  if (!(k.until > now) || k.until - now > KEEP_MAX_H * 60 * MIN || k.pings < 0 || k.usd < 0) return null
+  return { until: k.until, pings: k.pings, usd: k.usd }
 }
 
 function stopKeep($: EngineInterface, why: string) {
@@ -370,6 +446,8 @@ function stopKeep($: EngineInterface, why: string) {
   keep = null
   keepTimer?.cancel()
   keepTimer = null
+  saveKeep($)
+  keepFor = ''
   $.ui.toast(T[lang].keepOff(why, String(k.pings), usd(k.usd, lang)), { timeoutMs: 10000 })
   $.ui.invalidate('ui.render')
 }
@@ -397,6 +475,7 @@ function keepStep($: EngineInterface) {
       if (u) {
         keep.pings += 1
         keep.usd += inputCost(u, mem.model, ttl)
+        saveKeep($)
       }
       // `usage` kommt auch bei einem gescheiterten Fork (api-error, aborted), dann meist mit Nullen (types@2.1.289:5976-5977):
       // nur eine Antwort, die wirklich aus dem Cache las, zählt als Warmhalten (Review S1)
@@ -514,6 +593,7 @@ function snapshot(now: number) {
   const big = mem.ctx >= settings.bigTokens
   const drive = driveOf(storagePath)
   const dv = sh.storage && drive && disk.d ? diskView(drive, disk.d, disk.scan, lang) : undefined
+  const cv = sh.cost && costHere ? costView(costHere, lang) : undefined
   return {
     style: styleNow(),
     shown,
@@ -523,6 +603,10 @@ function snapshot(now: number) {
     block: sh.cache ? terminalBlock(st, big, lang) : null,
     disk: dv,
     diskBlock: dv ? `${dv.label} ${dv.main}${dv.sub}` : undefined,
+    cost: cv && costHere ? { view: cv, filled: costFilled(cv, costHere.chatUsd) } : undefined,
+    costBlock: cv ? costBlock(cv) : undefined,
+    // Säulen schon vor der ersten Messung (gedimmt, „–“), damit die Breite im Band nicht springt
+    sys: sh.system && isWindows ? sysView(sysCur, sysPrev, now, lang) : undefined,
   }
 }
 
@@ -547,6 +631,9 @@ function keyOf(v: ReturnType<typeof snapshot>): string {
     r ? [r.main, r.sub ?? '', r.subColor ?? '', r.color, r.mainColor, ringFilled(r.fill), r.kept] : null,
     v.block?.text ?? '',
     v.disk ? [v.disk.main, v.disk.sub, v.disk.arcs.map((a) => [a.color, Math.round(a.to * 360)])] : null,
+    // Kosten auf den Cent bzw. die Kurzform, Säulen auf ganze Prozent (SPEC Ausbau 0.12.0, Tests „keyOf“)
+    v.cost ? [v.cost.view.main, v.cost.view.sub, v.cost.filled, v.cost.view.grey] : null,
+    v.sys && sysVisible !== false ? v.sys.rows.map((r) => [r.tag, r.pct, r.trend]) : null,
   ])
 }
 
@@ -708,6 +795,102 @@ function maybeStartDisk($: EngineInterface): void {
   later($, 2000, () => void startDisk($).catch(() => {}))
 }
 
+/**
+ * `cost-ledger.here` lesen (Ausbau 0.12.0). Im Zeichnen abonniert das den Wert: Schreibt cost-ledger neu, zeichnet die Engine
+ * neu (types:3525-3529). Im Takt gelesen, damit die Breitenmeldung den Ring mitzählt. Kostenring aus: kein Lesen.
+ */
+async function readCostState($: EngineInterface): Promise<void> {
+  if (!shownParts().cost) {
+    costHere = null
+    return
+  }
+  try {
+    // `plugin` und `key` als Literale (validate listet sie: state reads)
+    costHere = cleanHere((await $.state.get({ plugin: 'cost-ledger', key: 'here' })).value)
+  } catch {
+    // bisheriger Stand
+  }
+}
+
+/** Den Messprozess beenden (`return()` auf den Strom beendet das Kind, types `$.process.spawn`). */
+function stopSys(): void {
+  const s = sysStream
+  sysStream = null
+  try {
+    s?.return().catch(() => {}) // ein Reject wäre sonst unbehandelt (Review 0.13.0 K1)
+  } catch {
+    // schon zu Ende
+  }
+}
+
+/** Im Takt: Prozess starten, wenn die Liste gezeigt wird, unter Windows, ohne Pause; sonst beenden. Wächter gegen Hänger. */
+function sysStep($: EngineInterface, now: number): void {
+  if (!isWindows || !shownParts().system || sysVisible === false) return stopSys()
+  // Liefert der Prozess 30 s lang keine Zeile (WMI oder nvidia-smi hängt), beenden; der nächste Takt startet neu
+  if (sysStream && now - Math.max(sysStartedAt, sysCur?.at ?? 0) > SYS_STALL) stopSys()
+  if (sysStream || now < sysPausedUntil) return
+  // Nach einem Fehlstart erst in einer Minute wieder (wie 0.12.0, Review K4)
+  if (sysErrAt && now >= sysErrAt && now - sysErrAt < 60_000) return
+  sysStartedAt = now
+  startSys($)
+}
+
+/**
+ * Den festen Messprozess starten und seine Zeilen lesen. Jede Zeile ist eine Messung; neu gezeichnet wird nur bei sichtbarer
+ * Änderung (`refresh`). Endet der Prozess ohne eine Messung, zählt das als Fehlstart; nach drei in Folge 1 h Pause.
+ */
+function startSys($: EngineInterface): void {
+  // Fest: absoluter Pfad und dasselbe Skript, keine Argumente oder Umgebung von außen (README „Rights“)
+  const stream = $.process.spawn({ argv: [PS_ABS, '-NoProfile', '-NonInteractive', '-Command', SYS_SCRIPT] })
+  sysStream = stream
+  void (async () => {
+    let buf = ''
+    let got = false
+    let err = ''
+    try {
+      for await (const c of stream) {
+        if (c.stream === 'stderr') {
+          err = c.text.trim().slice(0, 120) || err
+          continue
+        }
+        const r = takeLines(buf, c.text)
+        buf = r.rest
+        for (const line of r.lines) {
+          const now = await $.clock.now()
+          const sample = parseSample(line, now)
+          if (!sample) continue
+          got = true
+          sysFails = 0
+          sysPrev = sysCur
+          sysCur = sample
+          refresh($, now)
+          // Neuzeichnen angefordert, aber 15 s keins gekommen (Chat verdeckt, Band eingeklappt): beenden; das nächste Zeichnen
+          // startet neu. Nur mit offener Anforderung: Bei gleichbleibenden Werten zeichnet ohnehin nichts neu (Review 0.13.0 S1)
+          if (awaitingRender && now - lastRenderAt > SYS_IDLE) stopSys()
+        }
+        if (sysStream !== stream) break
+      }
+      if (sysStream === stream && !got) {
+        const res = await stream.result
+        throw new Error(`exit ${res.code}${err ? `: ${err}` : ''}`)
+      }
+    } catch (e) {
+      // Nur ein Ende, das nicht von hier kam, ist ein Fehler
+      if (sysStream === stream) {
+        sysFails += 1
+        sysErr = msg(e)
+        sysErrAt = await $.clock.now().catch(() => lastTick)
+        if (sysFails >= SYS_FAILS) {
+          sysFails = 0
+          sysPausedUntil = sysErrAt + SYS_PAUSE
+        }
+      }
+    } finally {
+      if (sysStream === stream) sysStream = null
+    }
+  })()
+}
+
 // Breite des Platzes im Desktop (Pixel) für spotify: `$.state` `limit-bars.band` (types/index.d.ts, docs/BAND.md „Platzbreite“).
 // `undefined` = noch nie geschrieben (der nächste Aufruf schreibt sicher, auch `null`). Nie im Zeichnen: ui.render darf nicht schreiben.
 let publishedWidth: number | null | undefined = undefined
@@ -716,7 +899,7 @@ let publishChain: Promise<unknown> = Promise.resolve()
 function publishBand($: EngineInterface, v: ReturnType<typeof snapshot>, key = keyOf(v)) {
   if (key === publishedKey) return
   publishedKey = key
-  const width = v.bars.length > 0 || v.ring || v.disk ? desktopSvg(v.bars, v.ring, v.disk, v.style).width : null
+  const width = v.bars.length > 0 || v.ring || v.disk || v.cost || v.sys ? desktopSvg(v.bars, v.ring, v.disk, v.style, v.cost, v.sys).width : null
   if (width === publishedWidth) return
   publishedWidth = width
   // Schreibvorgänge nacheinander; Beiwerk: ein Fehler ändert nichts an den Balken. Abgelehnt (etwa aus einem Zeichnen heraus,
@@ -754,11 +937,14 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     lang,
   }
   storagePath = typeof options.storagePath === 'string' ? options.storagePath.trim() : ''
+  isWindows = isWindows || !!driveOf(storagePath)
   baseDisplay = displayFromOptions(options)
   baseStyle = styleFromOptions(options)
   rawOptions = options
 
   on('session.start', async ($, e, next) => {
+    // Windows: Laufwerksbuchstabe im Arbeitsordner (SessionStartInput.cwd, absolut) oder in storagePath; ohne neues Recht
+    isWindows = /^[A-Za-z]:[\\/]/.test(e.cwd ?? '') || !!driveOf(storagePath)
     // Nur wo das Band gezeichnet wird (types@2.1.288:9576); `-p`/SDK liefern null, VS Code und mobil zeichnen kein Band
     if (e.surface === 'terminal' || e.surface === 'desktop') {
       lastSurface = e.surface
@@ -1013,6 +1199,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     if (st.kind === 'cold') return { text: t.keepCold }
     const hours = Math.min(KEEP_MAX_H, h)
     keep = { until: now + hours * 60 * MIN, pings: 0, usd: 0 }
+    keepFor = sessionId
+    saveKeep($)
     keepTimer?.cancel()
     keepTimer = $.clock.every(30000, () => keepStep($))
     $.ui.invalidate('ui.render')
@@ -1031,11 +1219,14 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   // /bars: Teile der Anzeige ein- und ausblenden (SPEC.md, Ausbau v0.6.0). Gespeichert in `$.store` unter `display`, damit es
   // in allen offenen Chats gilt (der Takt liest neu); vor dem Schreiben neu lesen, wie bei den /cache-Einstellungen.
   on('command.run', { command: 'bars' }, async ($, e) => {
+    // Sprache aller fynn-mods (docs/LANGUAGE-SPEC.md §6 Punkt 2), vor allem, was Store, Uhr oder Zustand liest; fängt Fehler selbst ab
+    if (isLanguage(e.args)) return { text: await languageCommand($, { mod: 'limit-bars', cmd: 'bars', lang }, e.args) }
     const t = T[lang]
     const c = parseBars(e.args)
     if (c.kind === 'bad') return { text: t.unknownArg(e.args.trim(), BARS_HINT) }
     await readDisplay($)
     if (c.kind === 'help') {
+      await readCostState($)
       // Stand beim Aufruf (HELP-SPEC §3 Punkt 3): Einstellungen frisch aus dem Store, wie /cache
       try {
         settings = cleanSettings(await $.store.get('settings'))
@@ -1057,6 +1248,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         style: styleNow(),
         styleByCommand: styleOverride !== undefined,
         noFive: noFiveHour(),
+        hasCost: !!costHere,
+        isWindows,
       })
       return { text: helpMarkdown(data, rememberHelp(await $.clock.now(), data)) }
     }
@@ -1074,6 +1267,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } else if (c.kind === 'set') {
       // Speicher-Ring ohne Laufwerk: nichts speichern, sondern sagen, wo der Pfad hingehört
       if (c.part === 'storage' && c.on && !driveOf(storagePath)) return { text: storagePath ? t.storageWindowsOnly : t.storageOff }
+      // Säulen nur unter Windows: nichts speichern, sondern es sagen (SPEC Ausbau 0.12.0, 2.)
+      if (c.part === 'system' && c.on && !isWindows) return { text: t.sysWindowsOnly }
+      if (c.part === 'system' && !c.on) stopSys()
       overrides = { ...overrides, [c.part]: c.on }
       try {
         await $.store.set('display', displayValue())
@@ -1092,6 +1288,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         note = t.barsSaveFailed(msg(err))
       }
     }
+    await readCostState($)
     try {
       refresh($, await $.clock.now())
       maybeStartDisk($)
@@ -1102,6 +1299,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const rows = PARTS.map((p) => {
       let state = t.barsOff
       if (sh[p] && p === 'fiveHour' && noFiveHour()) state = t.barsNoFive
+      else if (sh[p] && p === 'cost') state = costHere ? t.barsOn : t.costWaiting
+      else if (sh[p] && p === 'system') state = isWindows ? t.barsOn : t.sysNotWindows
       else if (sh[p]) state = p !== 'storage' || driveOf(storagePath) ? t.barsOn : storagePath ? t.barsNotWindows : t.barsNoPath
       return `| ${t.barsPart[p]} | ${state} | ${overrides[p] !== undefined ? t.barsByCommand : t.barsBySetting} |`
     })
@@ -1113,6 +1312,18 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     lines.push(t.barsTitle, '', t.barsHead, '|---|---|---|', ...rows, '', t.barsUsage)
     // Cache-Ring aus heißt nur: Anzeige weg (Fynn); Rückfrage und Hinweise bleiben
     if (c.kind === 'set' && c.part === 'cache' && !c.on) lines.push(t.barsCacheNote)
+    // Kosten und CPU/RAM: Stand, letzte Messung, Fehler (SPEC Ausbau 0.12.0)
+    const extra: string[] = []
+    if (sh.cost) extra.push(costHere ? t.costLine(costText(costHere, lang)) : t.costNone)
+    if (sh.system && isWindows) {
+      const now = await $.clock.now()
+      if (now < sysPausedUntil) extra.push(t.sysPaused(hhmm(sysPausedUntil)))
+      const v = sysView(sysCur, sysPrev, now, lang)
+      if (sysCur && v.rows[0]!.pct !== null) extra.push(t.sysLine(hhmm(sysCur.at), v.rows.map((r) => `${r.tag} ${r.pct}%`).join(' · ')))
+      else extra.push(t.sysNone)
+      if (sysErr && sysErrAt > (sysCur?.at ?? 0)) extra.push(t.sysFailed(hhmm(sysErrAt), sysErr))
+    }
+    if (extra.length) lines.push('', ...extra)
     if (note) lines.push('', note)
     return { text: lines.join('\n') }
   })
@@ -1236,8 +1447,11 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         await loadWindows($)
       }
       maybeStartDisk($)
+      // Kostenring: im Zeichnen lesen, das abonniert den Wert (ein Schreiben von cost-ledger zeichnet neu)
+      await readCostState($)
       const now = await $.clock.now()
       awaitingRender = false
+      lastRenderAt = now
       // Eine abgelehnte Periode beendet das Intervall still: bleiben zwei Ticks aus, wird der Takt neu gestartet. Gemessen ab dem
       // letzten Tick, nicht ab dem Start: Jede Periode dauert etwas länger als TICK, über Stunden summierte sich das sonst auf.
       if (timer && now - lastTick >= 2 * TICK) {
@@ -1252,6 +1466,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           if (awaitingRender) {
             timer?.cancel()
             timer = null
+            stopSys() // ohne Zeichnen auch kein Messprozess
             return
           }
           pollStep($).catch(() => {
@@ -1265,7 +1480,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       drawnKey = keyOf(view)
       // Alles ausgeblendet: nichts Eigenes und kein freigehaltener Platz (bodyColumns unverändert); der Takt läuft weiter,
       // damit ein `/bars` aus einem anderen Chat und die Hinweise vor Ablauf hier ankommen
-      if (view.bars.length === 0 && !view.ring && !view.disk) return await pass(e)
+      if (view.bars.length === 0 && !view.ring && !view.disk && !view.cost && !view.sys) return await pass(e)
       const { Box, Text } = $.ui.resolve(e)
       let mine: RenderNode
       let stack = false
@@ -1275,20 +1490,46 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         theirs = await pass(e)
         const { Svg } = $.ui.resolve(e)
         // Ohne Limits stehen Platzhalter da (5h –, 7d –), damit die Balken wie der Ring sofort sichtbar sind
-        const pic = desktopSvg(view.bars, view.ring, view.disk, view.style)
+        const pic = desktopSvg(view.bars, view.ring, view.disk, view.style, view.cost, view.sys)
+        if (view.sys) sysVisible = true
         // Unten bündig mit Clawds Füßen, auch wenn die Desktop-App alignItems der äußeren Zeile nicht umsetzt (Spalte + flex-end)
-        mine = Box({ key: 'limit-bars', flexShrink: 0, flexDirection: 'column', justifyContent: 'flex-end', children: [Svg({ source: pic.source, alt: pic.alt, width: pic.width, height: pic.height })] })
+        // 0.13.1: `position: relative`, damit die Balken über Clawd gemalt werden, der seit clawd-buddy 0.12.1 hinter der Zeile liegt
+        // (Platz 0, absolut; Fynn, 2026-11-04: „dahinter legen“). Ohne Versatz verschiebt es nichts (types:958).
+        mine = Box({ key: 'limit-bars', position: 'relative', flexShrink: 0, flexDirection: 'column', justifyContent: 'flex-end', children: [Svg({ source: pic.source, alt: pic.alt, width: pic.width, height: pic.height })] })
       } else {
-        // Hinter den Balken: Cache-Block, dahinter der Speicher-Block; wird es eng, fällt der Speicher-Block zuerst weg
-        const cacheP = view.block ? [{ text: view.block.text, color: view.block.color, dim: false }] : []
-        const diskP = view.diskBlock ? [{ text: view.diskBlock, color: undefined, dim: true }] : []
-        let parts = [...cacheP, ...diskP]
-        const joined = (p: typeof parts) => (p.length > 0 ? p.map((x) => x.text).join('  ') : undefined)
-        let lay = layoutTerminal(view.shown, e.props.bodyColumns, joined(parts))
-        if (diskP.length > 0 && !lay?.extra) {
-          parts = cacheP
-          lay = layoutTerminal(view.shown, e.props.bodyColumns, joined(parts))
+        // Hinter den Balken: Cache-Block, Speicher-Block, Kosten-Block, dahinter die CPU/RAM-Gruppen. Wird es eng, fallen zuerst
+        // CPU/RAM weg, dann der Speicher, dann die Kosten, dann der Cache; die Limits werden erst danach kürzer (SPEC 0.12.0, 3.)
+        type Part = { text: string; color: string | undefined; dim: boolean }
+        const cacheP: Part[] = view.block ? [{ text: view.block.text, color: view.block.color, dim: false }] : []
+        const diskP: Part[] = view.diskBlock ? [{ text: view.diskBlock, color: undefined, dim: true }] : []
+        const costP: Part[] = view.costBlock ? [{ text: view.costBlock, color: undefined, dim: true }] : []
+        const sysCols = view.sys ? termColumns(view.sys).filter((c) => c.length) : []
+        const sysW = view.sys ? sysTermWidth(view.sys) : 0
+        const combos: { parts: Part[]; sys: boolean }[] = []
+        for (const c of [
+          { parts: [...cacheP, ...diskP, ...costP], sys: sysCols.length > 0 },
+          { parts: [...cacheP, ...diskP, ...costP], sys: false },
+          { parts: [...cacheP, ...costP], sys: false },
+          { parts: cacheP, sys: false },
+        ])
+          if ((c.parts.length || c.sys) && !combos.some((x) => x.sys === c.sys && x.parts.length === c.parts.length)) combos.push(c)
+        let lay: ReturnType<typeof layoutTerminal> = null
+        let parts: Part[] = []
+        let withSys = false
+        for (const c of combos) {
+          const text = c.parts.map((x) => x.text).join('  ')
+          const extraW = text.length + (c.sys ? (text ? 2 : 0) + sysW : 0)
+          // Alles zusammen höchstens 44 Spalten wie bisher: clawd-buddy außen gibt dem Grund fest 44 (Fynn 2026-11-04, Review S1)
+          const l = layoutTerminal(view.shown, e.props.bodyColumns, text || ' ', { extraW })
+          if (l?.extra) {
+            lay = l
+            parts = c.parts
+            withSys = c.sys
+            break
+          }
         }
+        lay ??= layoutTerminal(view.shown, e.props.bodyColumns)
+        if (view.sys) sysVisible = withSys
         if (!lay) return await pass(e)
         if (noRewrite) {
           theirs = await pass(e)
@@ -1348,7 +1589,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
             ],
           })
         })
-        // Cache- und Speicher-Block hinter den Balken, auf der Zeile der Beschriftungen
+        // Cache-, Speicher- und Kosten-Block hinter den Balken, auf der Zeile der Beschriftungen
         if (lay.extra && parts.length > 0) {
           const line = parts.flatMap((p, i) => [
             ...(i > 0 ? [Text({ children: ['  '] })] : []),
@@ -1356,6 +1597,31 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           ])
           children.push(Box({ key: 'cache', flexDirection: 'column', flexShrink: 0, children: [Box({ flexDirection: 'row', children: line }), Text({ children: [' '] })] }))
         }
+        // Systemwerte: Spalten zu je zwei Zeilen (CPU über GPU, RAM über VRAM), Zahlen in jeder Zeile an derselben Stelle
+        if (lay.extra && withSys)
+          sysCols.forEach((col, i) =>
+            children.push(
+              Box({
+                key: `sys-${i}`,
+                flexDirection: 'column',
+                width: CELL_W,
+                flexShrink: 0,
+                children: [0, 1].map((k) => {
+                  const r = col[k]
+                  if (!r) return Text({ children: [' '] })
+                  const c = cellText(r)
+                  return Box({
+                    flexDirection: 'row',
+                    children: [
+                      Text({ color: ORANGE, children: [c.tag] }),
+                      r.pct === null ? Text({ dimColor: true, children: [c.value] }) : Text({ color: levelColor(r.pct), children: [c.value] }),
+                      Text({ dimColor: true, children: [c.arrow] }),
+                    ],
+                  })
+                }),
+              }),
+            ),
+          )
         mine = Box({
           key: 'limit-bars',
           width: lay.width,

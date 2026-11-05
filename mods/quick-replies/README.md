@@ -4,7 +4,7 @@ After Claude answers, Claude Code often suggests your next message itself (the g
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.5.3**
+Tested with Claude Code **v2.1.318** · Plugin version **0.6.2**
 
 ## Display
 
@@ -45,6 +45,7 @@ The fork only runs after a normal answer of at least 40 characters, not for suba
 | `/replies` or `/replies status` | On/off, `more` on/off, the current suggestions with their source, fork state, the fork calls in this chat with their estimated cost, how often Claude Code supplied a suggestion in this session, surface, band width, layout and position in the band |
 | `/replies on` · `/replies off` | Turn the mod on or off |
 | `/replies more on` · `/replies more off` | Turn the extra fork suggestions on or off |
+| `/replies language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.6.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/replies help` | Help as a table: all commands, how to send a suggestion (click, key, lone digit), the current state of the suggestions and the fork, and your settings with their values, plus how to change them and how to turn the mod off. Also `/replies ?` |
 
 **Help:** `/replies help` draws a table in the terminal and the desktop app (accent violet, the theme's auto-accept color, so it adapts to light and dark), with the state as of the moment you ran it; run it again to see a change. Everywhere else (`claude -p`, the Agent SDK, VS Code, mobile) you get a short Markdown version, which is also what Claude reads. Unknown arguments answer with the usage line and a pointer to `/replies help`.
@@ -63,7 +64,7 @@ The fork only runs after a normal answer of at least 40 characters, not for suba
 
 ### Language
 
-`language` switches everything the mod writes: the `/replies` output, the help, the command description and the toast. With `more` on, it also sets the language the fork writes its suggestions in. The fork's question itself is always English. Claude Code's own suggestion is not affected; it comes in whatever language Claude Code uses. Default is `en`; set `de` for German, e.g. in `/config` → quick-replies. Commands and arguments (`on`, `off`, `more on|off`, `status`, `help`) are English in both languages.
+`language` switches everything the mod writes: the `/replies` output, the help, the command description and the toast. With `more` on, it also sets the language the fork writes its suggestions in. The fork's question itself is always English. Claude Code's own suggestion is not affected; it comes in whatever language Claude Code uses. Default is `en`; set `de` for German, e.g. in `/config` → quick-replies, or run `/replies language de` in a terminal session to switch all fynn-mods at once. Commands and arguments (`on`, `off`, `more on|off`, `language`, `status`, `help`) are English in both languages.
 
 ## Rights
 
@@ -71,7 +72,8 @@ The fork only runs after a normal answer of at least 40 characters, not for suba
 
 ```text
 hooks: session.start, turn.start, turn.complete, prompt.suggest, prompt.edit, prompt.submit, command.run{command=replies}, ui.render{component=CommandOutput, props has {command=replies}}, ui.render{component=AbovePrompt}
-calls: $.clock.every, $.command.register, $.model.fork, $.prompt.submit, $.session.id, $.store.get, $.store.set, $.ui.invalidate, $.ui.log, $.ui.resolve, $.ui.toast
+calls: $.clock.every, $.command.register, $.config.list, $.config.set, $.model.fork, $.process.run, $.prompt.submit, $.session.id, $.state.set, $.store.get, $.store.set, $.ui.invalidate, $.ui.log, $.ui.resolve, $.ui.toast
+state writes: quick-replies.band
 ```
 
 In plain language:
@@ -87,10 +89,13 @@ In plain language:
 - `$.model.fork`: the extra suggestions, only with `more` on (off by default).
 - `$.clock.every`: one-shot timers to start the fork outside the hook and for the 2-s quiet period after input.
 - `$.session.id`: suggestions per session; detects `/clear`.
+- `$.state.set` (`quick-replies.band`, since 0.6.2): tells tune-strip only whether the suggestion pill is up (`{ shown: true }` or null), so tune-strip knows whether to draw its separator line. No suggestion text. Written outside drawing, only on change.
 - `$.store.get`, `$.store.set`: the on/off settings.
+- `$.config.list`, `$.config.set`: only for `/replies language` (since 0.6.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone.
+- `$.process.run`: for `/replies language` in the desktop app and `claude -p` (since 0.6.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `quick-replies@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `quick-replies@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
 - `$.ui.resolve`, `$.ui.invalidate`: draw and redraw the pill. `$.ui.toast`: message when sending fails. `$.ui.log`: errors to the debug log.
 
-No file system, no processes, no network, no environment variables, no tokens or credentials. Every event hook passes the result of the chain on unchanged; errors in its own drawing leave the band as it was.
+No file system, no network, no environment variables, no tokens or credentials. The only process is the `claude` CLI (`claude plugin list` / `claude plugin configure`) for `/replies language` in the desktop app and `claude -p`. Every event hook passes the result of the chain on unchanged; errors in its own drawing leave the band as it was.
 
 ## Installation
 
@@ -119,6 +124,7 @@ claude --plugin-dir <path-to-clone>/mods/quick-replies
 ## Known limitations
 
 - **No suggestion, no pill.** Claude Code does not always provide a suggestion (for example on the first turn or with a cold cache). Then there is no pill, unless `more` is on and the fork delivers something. `/replies status` shows how often Claude Code supplied one in this session.
+- **After the mod reloads** (`/replies language`, a settings change in `/config`): the current suggestions and a running fork are dropped (the pill is back with the next answer), and the fork calls, their cost and the Claude Code suggestion count in `/replies status` start over. Earlier `/replies help` tables may show as plain text when redrawn. `/replies on|off` and `more on|off` are kept.
 - **Language switch and the command description:** after changing `language` in `/config`, the `/replies` output and the toast switch right away; the description of `/replies` in the command list may only switch in the next session.
 - **Messages starting with a digit:** while the pill shows, a message cannot start with a digit from `1` to the number of suggestions; typing it sends the suggestion instead. This also applies to the same digit repeated, whether a held key repeats it or `11` is pasted. A digit after other text, a higher digit, or a digit pasted together with other characters (`12`) stays normal text. Likewise, a message that is only such a digit (or repeated digit) is sent as the suggestion, not as the digit; this also applies when Claude offered numbered options in its answer. Write `1.` or `option 1` to send the number itself.
 - **Same digit right after sending:** after a digit has sent a suggestion, the same digit is ignored as the first character of the prompt until about 1.2 s after its last repeat, so a held key does not fill the prompt. The delay is chosen for the longest key-repeat delay Windows offers (1 s); with a longer delay on another system, a repeat may still land in the prompt.

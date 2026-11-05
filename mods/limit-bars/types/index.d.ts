@@ -3,11 +3,23 @@
 // Desktop, `null`, wenn limit-bars nichts zeichnet. Geschrieben wird beim Sitzungsstart und bei jeder Änderung der Anzeige,
 // nie beim Zeichnen. spotify deklariert denselben Wert in seinem eigenen Vertrag (mods/spotify/types/index.d.ts); beide Fassungen
 // müssen gleich bleiben.
+// Seit 0.12.0 liest limit-bars `cost-ledger.here` für den Kostenring (SPEC Ausbau 0.12.0). Ohne Abhängigkeit in plugin.json kennt
+// dieser Vertrag den von cost-ledger nicht; deshalb steht der Wert hier noch einmal und muss mit mods/cost-ledger/types/index.d.ts
+// übereinstimmen. `validate` meldet ihn als „state of other plugins, not checked“.
 
 declare module 'claude-code' {
   interface PluginState {
     'limit-bars': {
       band: { width: number } | null
+    }
+    'cost-ledger': {
+      here: {
+        chatUsd: number
+        projectUsd: number | null
+        project: string | null
+        since: string
+        devices: number
+      } | null
     }
   }
 }

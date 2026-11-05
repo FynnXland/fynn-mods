@@ -1,7 +1,8 @@
 // sidekick: Inhalt von `/sidekick help` (SPEC Nachtrag 0.14.0, docs/HELP-SPEC.md §5 „sidekick 0.14.0“). Aus Einstellungen und
 // Zustand beim Aufruf ein Schnappschuss `HelpData`; gezeichnet wird er von help.ts (Kopie von templates/help/help.ts). Rein, ohne `$`.
 import type { HelpCommand, HelpData, HelpFeature } from './help.ts'
-import { lang, t, tokensText } from './i18n.ts'
+import { lang, shortDate, t, tokensText } from './i18n.ts'
+import { languageHelp } from './language.ts'
 import { DEFAULT_SETTINGS, LEVELS } from './logic.ts'
 import type { Settings } from './logic.ts'
 import { RULE_IDS } from './wartung.ts'
@@ -15,6 +16,8 @@ export type HelpFacts = {
   hints: { on: boolean; off: readonly string[] }
   /** Zahl der Themen in `notes:known` */
   known: number
+  /** Jetzt (ms), für „Modell-Tipp ruht bis …“ (Ausbau 0.18.0) */
+  now: number
 }
 
 /** Die Zeilen unter BEFEHLE. `cmd` englisch und so, wie die Parser es annehmen (Test „Vollständigkeit“). */
@@ -38,6 +41,12 @@ function commands(): HelpCommand[] {
     { cmd: '/sidekick notes [status]', does: h.notes },
     { cmd: '/sidekick notes on|off', does: h.notesOnOff },
     { cmd: '/sidekick notes forget', does: h.notesForget },
+    { cmd: '/sidekick tips [status]', does: h.tips },
+    { cmd: '/sidekick tips on|off', does: h.tipsOnOff },
+    { cmd: '/sidekick tips auto on|off', does: h.tipsAuto },
+    { cmd: '/sidekick tips haiku on|off', does: h.tipsHaiku },
+    { cmd: '/sidekick tips stop', does: h.tipsStop },
+    languageHelp('sidekick', lang()), // docs/LANGUAGE-SPEC.md §6 Punkt 4
     { cmd: '/sidekick help', does: h.help },
     { cmd: '/savings [today|week|all]', does: h.savings },
     { cmd: '/savings detail [today|week|all]', does: h.savingsDetail },
@@ -73,6 +82,11 @@ function features(f: HelpFacts): HelpFeature[] {
   const notes: HelpFeature = s.notes
     ? { name: h.fNotes, state: { kind: 'on', text: s.level === 'off' ? h.notesRests : h.notesOn(f.known) }, toggle: '/sidekick notes off' }
     : { name: h.fNotes, state: { kind: 'off', text: h.notesOff }, toggle: '/sidekick notes on' }
+  const tp = s.tips
+  const tips: HelpFeature = !tp.first
+    ? { name: h.fTips, state: { kind: 'off' }, toggle: '/sidekick tips on' }
+    : { name: h.fTips, state: { kind: 'on', ...(f.now < tp.restUntil ? { text: h.tipsRestState(shortDate(tp.restUntil)) } : {}) }, toggle: '/sidekick tips off' }
+  const auto: HelpFeature = tp.auto ? { name: h.fTipsAuto, state: { kind: 'on' }, toggle: '/sidekick tips auto off' } : { name: h.fTipsAuto, state: { kind: 'off' }, toggle: '/sidekick tips auto on' }
   return [
     { name: h.fLevel, state: { kind: 'value', text: x.level[s.level], isDefault: s.level === D.level }, toggle: '/sidekick off|cache|guide' },
     { name: h.fThreshold, state: { kind: 'value', text: tokensText(s.threshold), isDefault: s.threshold === D.threshold }, toggle: '/sidekick threshold <n>' },
@@ -83,6 +97,8 @@ function features(f: HelpFacts): HelpFeature[] {
       ? { name: h.fHints, state: { kind: 'on', ...(f.hints.off.length ? { text: h.hintsSomeOff(f.hints.off.join(', ')) } : {}) }, toggle: '/sidekick hints off' }
       : { name: h.fHints, state: { kind: 'off' }, toggle: '/sidekick hints on' },
     notes,
+    tips,
+    auto,
   ]
 }
 

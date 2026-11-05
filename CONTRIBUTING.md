@@ -18,7 +18,7 @@ instead of being merged.
 
 ## Setup
 
-You need Claude Code v2.1.287 or later (`claude --version`); mods run in the terminal and in the Code tab of the
+You need Claude Code v2.1.309 or later (`claude --version`); mods run in the terminal and in the Code tab of the
 desktop app. There is nothing to install: Claude Code runs the TypeScript hooks itself.
 
 ```bash

@@ -3,7 +3,8 @@
 import type { On, RenderNode } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { joinBand, layer, slot, splitBand } from '../hooks/band.ts'
-import { actionFor, desktopRoom, desktopStage, fmtTime, nextRepeat, parseTune, pickStage, pollInterval, positionNow, ratio } from '../hooks/model.ts'
+import { CONTROL_WORDS, SIZES, actionFor, desktopRoom, desktopStage, fmtTime, nextRepeat, parseTune, pickStage, pollInterval, positionNow, ratio } from '../hooks/model.ts'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
 import { CONTROL_SCRIPT, PS_ABS, QUERY_SCRIPT, parseQuery, trackKey } from '../hooks/ps.ts'
 import type { Track } from '../hooks/ps.ts'
 import { DESKTOP_WIDTHS, TERMINAL_WIDTHS, clip, coverSvg, infoSvg, sepSvg } from '../hooks/view.ts'
@@ -49,7 +50,7 @@ const NO_SESSION = JSON.stringify({ ok: false })
 
 type Run = { kind: 'query' | 'control' | '?'; argv: readonly string[]; env: Record<string, string> | undefined }
 
-function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: Map<string, unknown>; inner?: 'engine' | 'text'; cwd?: string } = {}) {
+function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: Map<string, unknown>; inner?: 'engine' | 'text' | 'layer' | 'above' | 'slot'; cwd?: string } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
   const runs: Run[] = []
@@ -59,7 +60,11 @@ function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: 
     saved.set(e.key, e.value)
     return { value: undefined }
   })
-  on('command.register', () => ({ value: undefined }))
+  const registered: { name: string; argumentHint?: string }[] = []
+  on('command.register', ($, e) => {
+    registered.push(e as never)
+    return { value: undefined }
+  })
   const cwd = o.cwd ?? 'C:\\work'
   on('session.start', () => ({ cwd }))
   on('process.run', ($, e) => {
@@ -78,7 +83,13 @@ function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: 
       ? { type: 'Text', props: {}, children: [`ENGINE:${String((e.props as { text?: string }).text ?? '')}`] }
       : o.inner === 'text'
         ? { type: 'Text', props: {}, children: ['von anderen'] }
-        : { type: 'engine', ref: 0 }
+        : o.inner === 'layer'
+          ? layer(20, 'quick-replies', { type: 'Text', props: {}, children: ['Vorschlag'] } as RenderNode)
+          : o.inner === 'above'
+            ? layer(50, 'sidekick', { type: 'Text', props: {}, children: ['Übergabe'] } as RenderNode)
+            : o.inner === 'slot'
+            ? slot(10, 'limit-bars', { type: 'Text', props: {}, children: ['Balken'] } as RenderNode)
+            : { type: 'engine', ref: 0 }
   })
   const count = (k: Run['kind']) => runs.filter((r) => r.kind === k).length
   return {
@@ -87,6 +98,7 @@ function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: 
     runs,
     state,
     count,
+    registered,
     async start($: any, surface: 'desktop' | 'terminal' = 'desktop') {
       await $.session.start({ cwd, surface, isInteractive: true })
       await clock.advance(10)
@@ -395,6 +407,34 @@ test('Keine Spotify-Sitzung: nichts gezeichnet, kein Fehler; das Band erscheint,
   await ui.unmount()
 })
 
+test('Titelwechsel: meldet Windows kurz keine Sitzung, bleibt die Leiste stehen und klappt nicht zu; nach 10 s verschwindet sie', DE, async ($, on) => {
+  const w = world(on, { inner: 'text' })
+  await w.start($)
+  const drawn = async () => {
+    const ui = await $.ui.mount(band('desktop', 120))
+    const tree = (await ui.drawn()) as Node
+    await ui.unmount()
+    return tree
+  }
+  expect(keysOf(await drawn())).toContain('layer:40:tune-strip')
+  w.state.out = NO_SESSION
+  await w.clock.advance(5000) // zwei Abfragen ohne Sitzung, noch innerhalb der Haltezeit
+  await w.clock.settle()
+  expect(w.count('query')).toBeGreaterThan(1)
+  expect(keysOf(await drawn())).toContain('layer:40:tune-strip')
+  w.state.out = q({ title: 'Let It Be', pos: 0 }, true) // der neue Titel ist da: Leiste zeigt ihn ohne Lücke
+  await w.clock.advance(5000)
+  await w.clock.settle()
+  expect(seen(await drawn())).toContain('Let It Be')
+  w.state.out = NO_SESSION // Spotify wirklich weg; das Band wird laufend gezeichnet und hält den Takt am Leben
+  for (let i = 0; i < 4; i++) {
+    await w.clock.advance(4000)
+    await w.clock.settle()
+    await drawn()
+  }
+  expect(textOf(await drawn())).toBe('von anderen')
+})
+
 test('Stufen im Desktop: fest gewählt per /tune size; auto ohne bekannte Breite = voll', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
@@ -412,6 +452,12 @@ test('Stufen im Desktop: fest gewählt per /tune size; auto ohne bekannte Breite
   expect(keys).not.toContain('back')
   expect(keys).toContain('slot:20:tune-strip') // kompakt = Platz in der Zeile, keine Leiste
   expect(keys).not.toContain('layer:40:tune-strip')
+  // 0.8.1: der Platz liegt über Clawd, der seit clawd-buddy 0.12.1 hinter der Zeile liegt
+  {
+    const ui = await $.ui.mount(band('desktop', 120))
+    expect((await ui.find({ type: 'Box', key: 'tune-strip-front' }))?.props.position).toBe('relative')
+    await ui.unmount()
+  }
   await $.command.run({ command: 'tune', args: 'size mini' } as never)
   keys = await k()
   expect(keys).toContain('toggle')
@@ -690,7 +736,35 @@ test('Leiste: Segmentbalken wie bei limit-bars (44 × 3 px mit 1 px Fuge), Titel
   expect(sepSvg().length).toBeLessThan(1000)
 })
 
-test('Leiste: Hinweis je Knopf beim Überfahren (Hover-Gruppe), Absatz vor Zufall/Wiederholen, orange Trennlinie unten', DE_EXTRA, async ($, on) => {
+test('Leiste: beim Abspielen läuft die Zeit per SMIL jede Sekunde weiter (Voranimation), Pause und Ende ohne Animation', () => {
+  const still = infoSvg('T', 'A', 50.25, 200)
+  expect(still).not.toContain('<animate') // Pause: nichts bewegt sich
+  const run = infoSvg('T', 'A', 50.25, 200, true)
+  // 15 s Vorlauf: 16 Zeitangaben, 0:50 sichtbar, 1:05 zuletzt
+  for (const s of ['0:50', '0:51', '0:52', '1:04', '1:05']) expect(run).toContain(`>${s}</tspan>`)
+  expect(run).not.toContain('>1:06</tspan>')
+  expect((run.match(/y="28"/g) ?? []).length).toBe(16)
+  expect(run).toContain('begin="-0.250s"') // die laufende Sekunde hat schon 0,25 s hinter sich
+  expect(run).toContain('dur="16s"')
+  // erste Angabe sichtbar bis 1 − 0,25 s, letzte bleibt stehen
+  expect(run).toContain('values="visible;hidden" keyTimes="0;0.0625"')
+  expect(run).toContain('values="hidden;visible" keyTimes="0;0.9375"')
+  // Segmente: bei 25 % (11 an) wird Segment 11 bei (11,5/44)·200 = 52,27 s grün, also in 2,02 s; jedes weitere 4,545 s später
+  expect(run).toContain('begin="2.023s"')
+  expect(run).toContain('begin="6.568s"')
+  expect(run).not.toContain('begin="17')
+  // kurz vor dem Ende: nur so viele Zeitangaben, wie es noch ganze Sekunden gibt
+  const endSvg = infoSvg('T', 'A', 198.5, 200, true)
+  expect((endSvg.match(/y="28"/g) ?? []).length).toBe(3) // 3:18, 3:19, 3:20
+  expect(endSvg).not.toContain('3:21')
+  // Länge unbekannt: Zeit läuft trotzdem, der Balken bleibt leer
+  const open = infoSvg('T', 'A', 5, 0, true)
+  expect((open.match(/y="28"/g) ?? []).length).toBe(16)
+  expect(open).not.toContain('fill="freeze" values="#4A4A4A')
+  expect(run.length).toBeLessThan(20000)
+})
+
+test('Leiste: Hinweis je Knopf beim Überfahren (Hover-Gruppe), Absatz vor Zufall/Wiederholen, Trennlinie nur mit Mods darunter', DE_EXTRA, async ($, on) => {
   const w = world(on, { inner: 'text' })
   await w.start($)
   const ui = await $.ui.mount(band('desktop', 120))
@@ -704,9 +778,54 @@ test('Leiste: Hinweis je Knopf beim Überfahren (Hover-Gruppe), Absatz vor Zufal
   expect(json).toContain('Pause') // läuft gerade: der Hinweis des mittleren Knopfs heißt Pause
   expect(json).toContain('"display":"none"')
   expect(json).toContain('"marginLeft":2') // der Absatz vor den Zustandsknöpfen
-  expect(seen(tree)).toContain('Trennlinie')
-  expect(json).toContain('height=\\"2\\" fill=\\"#D77757\\"') // die Linie im Bild, JSON-maskiert
+  // Allein im Band (nur Fremdtext als Grund, keine Ebene, kein Platz) gibt es nichts zu trennen: keine Linie
+  expect(seen(tree)).not.toContain('Trennlinie')
+  expect(json).not.toContain('height=\\"2\\" fill=\\"#D77757\\"')
   await ui.unmount()
+})
+
+for (const inner of ['layer', 'slot'] as const) {
+  test(`Trennlinie: steht unter der Leiste, wenn darunter ${inner === 'layer' ? 'eine Ebene (quick-replies)' : 'ein Platz (limit-bars)'} zeichnet`, DE, async ($, on) => {
+    const w = world(on, { inner })
+    await w.start($)
+    const ui = await $.ui.mount(band('desktop', 120))
+    const tree = (await ui.drawn()) as Node
+    expect(seen(tree)).toContain('Trennlinie')
+    expect(JSON.stringify(tree)).toContain('height=\\"2\\" fill=\\"#D77757\\"')
+    await ui.unmount()
+  })
+}
+
+// 0.7.1: die Ebene von sidekick (50) liegt über der Leiste und trennt nichts; quick-replies meldet seine Pille, weil es in der Kette außen liegen kann
+test('Trennlinie 0.7.1: eine Ebene über der Leiste (sidekick) zählt nicht als „darunter“', DE, async ($, on) => {
+  const w = world(on, { inner: 'above' })
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop', 120))
+  const tree = (await ui.drawn()) as Node
+  expect(seen(tree)).not.toContain('Trennlinie')
+  expect(seen(tree)).toContain('Übergabe') // die Ebene selbst bleibt erhalten
+  await ui.unmount()
+})
+
+test('Trennlinie 0.7.1: quick-replies.band steht und fällt mit der Linie, auch wenn die Pille in der Kette außen liegt', DE, async ($, on) => {
+  const w = world(on, { inner: 'above' })
+  let shown: { shown: true } | null = null
+  const reads: string[] = []
+  on('state.get', ($: unknown, e: any) => {
+    reads.push(`${e.plugin}.${e.key}`)
+    return { value: { value: e.plugin === 'quick-replies' ? shown : undefined, version: 1 } } as never
+  })
+  on('state.set', () => ({ value: { isSet: true, version: 1 } }) as never)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop', 120))
+  expect(seen((await ui.drawn()) as Node)).not.toContain('Trennlinie')
+  // jedes Zeichnen liest alle drei Werte (Lesen abonniert), auch wenn schon etwas anderes darunter steht
+  for (const k of ['limit-bars.band', 'clawd-buddy.band', 'quick-replies.band']) expect(reads).toContain(k)
+  await ui.unmount()
+  shown = { shown: true }
+  const ui2 = await $.ui.mount(band('desktop', 120))
+  expect(seen((await ui2.drawn()) as Node)).toContain('Trennlinie')
+  await ui2.unmount()
 })
 
 // ---------- 0.3.0: tune-strip.playing für clawd-buddy ----------
@@ -718,6 +837,7 @@ test('0.3.0: tune-strip.playing meldet nur „spielt ja/nein“, außerhalb des 
   let refuse = 0
   on('state.get', ($: unknown, e: any) => ({ value: { value: e.key === 'playing' ? stored : undefined, version: 1 } }) as never)
   on('state.set', ($: unknown, e: any) => {
+    if (e.key !== 'playing') return { value: { isSet: true, version: 1 } } as never // tune-strip.beat (0.6.0) prüft ein eigener Test
     if (refuse > 0) {
       refuse -= 1
       return { deny: 'beim Zeichnen abgelehnt' } as never
@@ -767,6 +887,7 @@ test('0.3.1: nach /clear, /resume und /branch steht tune-strip.playing sofort wi
   let sets = 0
   on('state.get', ($: unknown, e: any) => ({ value: { value: e.key === 'playing' ? stored : undefined, version: 1 } }) as never)
   on('state.set', ($: unknown, e: any) => {
+    if (e.key !== 'playing') return { value: { isSet: true, version: 1 } } as never
     stored = e.value
     sets += 1
     return { value: { isSet: true, version: sets } } as never
@@ -794,10 +915,60 @@ test('0.3.1: classic.SessionStart vor session.start (z. B. --resume) schreibt ni
   let sets = 0
   on('state.get', () => ({ value: { value: undefined, version: 0 } }) as never)
   on('state.set', () => {
-    sets += 1
+    sets += 1 // auch tune-strip.beat: vor session.start schreibt der Hook gar nichts
     return { value: { isSet: true, version: sets } } as never
   })
   on('classic.SessionStart', () => ({}) as never)
   await ($ as any).classic.SessionStart({ source: 'resume' })
   expect(sets).toBe(0)
+})
+
+// ---------- 0.5.0 language: /tune language (docs/LANGUAGE-SPEC.md; Kernfälle in tests/language.test.ts) ----------
+
+const helpCmds = (text: string) => text.split('\n').filter((l) => l.startsWith('- `/tune')).map((l) => /^- `([^`]+)`/.exec(l)![1])
+
+test('0.5.0 language: Wort im argumentHint (en, de), Hilfezeile (en) direkt vor help', async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  expect(w.registered.find((c) => c.name === 'tune')?.argumentHint).toBe('play|pause|toggle|next|prev|back|forward|shuffle|repeat|size|beat|on|off|language|help')
+  const text = (await $.command.run({ command: 'tune', args: 'help' } as never)).text as string
+  expect(text.split('\n')).toContain('- `/tune language de|en`: Switch the language of all fynn-mods')
+  const cmds = helpCmds(text)
+  expect(cmds).toHaveLength(13) // 0.6.0: drei Takt-Befehle
+  expect(cmds.slice(-2)).toEqual(['/tune language de|en', '/tune help'])
+})
+
+test('0.5.0 language: Hilfezeile (de), argumentHint (de)', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  expect(w.registered.find((c) => c.name === 'tune')?.argumentHint).toContain('|language|')
+  const text = (await $.command.run({ command: 'tune', args: 'help' } as never)).text as string
+  expect(text.split('\n')).toContain('- `/tune language de|en`: Sprache aller fynn-mods umstellen')
+  expect(helpCmds(text).slice(-2)).toEqual(['/tune language de|en', '/tune help'])
+})
+
+test('0.5.0 language: Hilfe nennt jedes Wort, das der Parser annimmt, dazu language, de und en', async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const words = new Set(helpCmds((await $.command.run({ command: 'tune', args: 'help' } as never)).text as string).flatMap((c) => c.replace(/[[\]]/g, ' ').split(/[\s|]+/)))
+  for (const x of [...CONTROL_WORDS, ...SIZES, 'on', 'off', 'help', LANGUAGE_WORD, ...LANGUAGES]) expect(words.has(x), x).toBe(true)
+})
+
+test('0.5.0 language: kommt vor allem anderen an, auch außerhalb von Windows; kein PowerShell', DE, async ($, on) => {
+  const w = world(on, { cwd: '/home/x' })
+  let lists = 0
+  on('config.list', () => {
+    lists += 1
+    return { value: [] }
+  })
+  await w.start($)
+  const queries = w.count('query')
+  const text = (await $.command.run({ command: 'tune', args: 'LANGUAGE de' } as never)).text as string
+  expect(lists).toBe(1)
+  expect(text).toContain('Hier zeigt Claude Code keine Plugin-Einstellungen')
+  // Ohne Plugin-Zeilen versucht es `claude plugin` (Weg 2, LANGUAGE-SPEC §10); der Stub hier liefert kein JSON
+  expect(text).toContain('`/tune language de`')
+  expect(text).not.toContain('nur unter Windows')
+  expect(w.count('query')).toBe(queries)
+  expect(w.count('control')).toBe(0)
 })

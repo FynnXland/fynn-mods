@@ -4,6 +4,7 @@ import { helpLabels } from './help.ts'
 import type { HelpData } from './help.ts'
 import { T } from './i18n.ts'
 import type { Lang } from './i18n.ts'
+import { languageHelp } from './language.ts'
 
 /** Akzent der Hilfe: Theme-Key claude (Orange), passt sich hell und dunkel an (HELP-SPEC §4, geändert 2026-10-09; vorher #D77757). */
 export const ACCENT = 'claude'
@@ -51,6 +52,7 @@ export function clawdHelp(o: HelpInput): HelpData {
       { cmd: '/clawd nap', does: x.nap },
       { cmd: '/clawd boop', does: x.boop },
       { cmd: '/clawd flicker', does: x.flicker },
+      languageHelp('clawd', o.lang), // docs/LANGUAGE-SPEC.md §6 Punkt 4
       { cmd: '/clawd help', does: x.help },
     ],
     controls: [

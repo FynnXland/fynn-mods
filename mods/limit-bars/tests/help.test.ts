@@ -7,6 +7,7 @@ import { stateText } from '../hooks/help.ts'
 import { HELP_ACCENT, barsHelpData } from '../hooks/helpdata.ts'
 import type { HelpInput } from '../hooks/helpdata.ts'
 import { T } from '../hooks/i18n.ts'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
 
 const NOW = new Date(2026, 9, 9, 10, 0, 0).getTime()
 const MIN = 60000
@@ -81,7 +82,7 @@ test('0.7.0 Hilfe: help, ?, HELP und Leerzeichen liefern Markdown mit Kennung (e
     expect(text, word).toMatch(/^\*\*limit-bars · Help\*\* · #[0-9a-z]{5,}\n\nUsage limits as bars or rings above the prompt/)
     expect(text.length < 10_000, word).toBe(true)
   }
-  expect(await bars($, 'help me')).toBe(T.en.unknownArg('help me', '[show 5h|week|cache|storage on|off] [style bar|ring] [reset] [help]'))
+  expect(await bars($, 'help me')).toBe(T.en.unknownArg('help me', '[show 5h|week|cache|storage on|off] [style bar|ring] [language de|en] [reset] [help]'))
   expect(await bars($, 'help me')).toContain('→ `/bars help`')
   expect(parseBars('?')).toEqual({ kind: 'help' })
   expect(parseBars('show help')).toEqual({ kind: 'bad' })
@@ -97,10 +98,10 @@ test('0.7.0 Hilfe (de): Markdown mit allen fünf Befehlen, Skill, Funktionen, Ei
   expect(lines[lines.indexOf('**BEFEHLE**') - 1]).toBe('')
   expect(lines[lines.findIndex((l) => l.startsWith('**FUNKTIONEN:**')) - 1]).toBe('')
   expect(lines[lines.length - 2]).toBe('')
-  for (const cmd of ['/bars', '/bars show 5h|week|cache|storage on|off', '/bars reset', '/bars help', '/cache', '/cache ttl 5|60|auto', '/cache warn on|off', '/cache hints on|off', '/cache big <n>', '/handoff', '/handoff show', '/handoff continue', '/keepwarm [stunden]', '/keepwarm off', '/disk [refresh]', 'Skill uebergabe'])
+  for (const cmd of ['/bars', '/bars show 5h|week|cache|storage|cost|cpu on|off', '/bars reset', '/bars language de|en', '/bars help', '/cache', '/cache ttl 5|60|auto', '/cache warn on|off', '/cache hints on|off', '/cache big <n>', '/handoff', '/handoff show', '/handoff continue', '/keepwarm [stunden]', '/keepwarm off', '/disk [refresh]', 'Skill uebergabe'])
     expect(lines.some((l) => l.startsWith(`- \`${cmd}\`: `)), cmd).toBe(true)
-  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* 5-Stunden-Balken ● an · per Einstellung \(\/bars 5h off\) · Wochen-Balken ● an · per Einstellung \(\/bars week off\) · Cache-Ring ● an · per Einstellung \(\/bars cache off\) · Speicher-Ring ○ ohne storagePath \(Einstellung storagePath\) · Stil Balken · per Einstellung \(Standard\) \(\/bars style ring\) · Rückfrage vor kaltem Senden ● an \(\/cache warn off\) · Hinweis vor Ablauf ● an \(\/cache hints off\) · Schwelle „groß“ 150k \(Standard\) \(\/cache big <n>\) · Cache-Dauer auto · 60 min \(Standard\) \(\/cache ttl 5\|60\|auto\) · Warmhalten ○ aus \(\/keepwarm \[stunden\]\)$/m)
-  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Reset-Anzeige mixed \(Standard\) · Hervorheben ab \(%\) 90 \(Standard\) · 5-Stunden-Balken zeigen an \(Standard\) · Wochen-Balken zeigen an \(Standard\) · Cache-Ring zeigen an \(Standard\) · Speicher-Ring zeigen an \(Standard\) · Nur 5-Stunden-Limit \(veraltet\) aus \(Standard\) · Stil bar \(Standard\) · Speicher-Laufwerk leer = aus \(Standard\)$/m)
+  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* 5-Stunden-Balken ● an · per Einstellung \(\/bars 5h off\) · Wochen-Balken ● an · per Einstellung \(\/bars week off\) · Cache-Ring ● an · per Einstellung \(\/bars cache off\) · Speicher-Ring ○ ohne storagePath \(Einstellung storagePath\) · Kosten-Ring ● an · wartet auf cost-ledger · per Einstellung \(\/bars cost off\) · Systemwerte ○ aus · per Einstellung \(nur Windows\) · Stil Balken · per Einstellung \(Standard\) \(\/bars style ring\) · Rückfrage vor kaltem Senden ● an \(\/cache warn off\) · Hinweis vor Ablauf ● an \(\/cache hints off\) · Schwelle „groß“ 150k \(Standard\) \(\/cache big <n>\) · Cache-Dauer auto · 60 min \(Standard\) \(\/cache ttl 5\|60\|auto\) · Warmhalten ○ aus \(\/keepwarm \[stunden\]\)$/m)
+  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Reset-Anzeige mixed \(Standard\) · Hervorheben ab \(%\) 90 \(Standard\) · 5-Stunden-Balken zeigen an \(Standard\) · Wochen-Balken zeigen an \(Standard\) · Cache-Ring zeigen an \(Standard\) · Speicher-Ring zeigen an \(Standard\) · Kosten-Ring zeigen an \(Standard\) · Systemwerte zeigen aus \(Standard\) · Nur 5-Stunden-Limit \(veraltet\) aus \(Standard\) · Stil bar \(Standard\) · Speicher-Laufwerk leer = aus \(Standard\)$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure limit-bars · Mod abschalten: /plugin disable limit-bars')
 })
 
@@ -125,7 +126,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     for (const h of ['BEFEHLE', 'FUNKTIONEN', 'STATUS', 'UMSCHALTEN', 'EINSTELLUNGEN (/plugin)', 'WERT'])
       expect((await ui.find({ type: 'Text', text: h }))?.props.color, h).toBe(ACCENT)
     expect(await has(ui, 'BEDIENUNG')).toBe(false) // keine Klicks oder Tasten
-    for (const cmd of ['/bars', '/bars show 5h|week|cache|storage on|off', '/cache warn on|off', '/handoff continue', '/keepwarm off', '/disk [refresh]', 'Skill uebergabe'])
+    for (const cmd of ['/bars', '/bars show 5h|week|cache|storage|cost|cpu on|off', '/cache warn on|off', '/handoff continue', '/keepwarm off', '/disk [refresh]', 'Skill uebergabe'])
       expect((await ui.find({ type: 'Text', text: cmd }))?.props.color, cmd).toBe(ACCENT)
     expect((await ui.find({ type: 'Text', text: /^Limits als Balken/ }))?.props.color).toBeUndefined()
     expect((await ui.find({ type: 'Text', text: /^Teil ein- oder ausblenden/ }))?.props.color).toBeUndefined()
@@ -208,7 +209,7 @@ for (const surface of ['terminal', 'desktop'] as const)
       for (const r of boxes.filter((b: any) => b.props.flexDirection === 'row'))
         expect((r as any).children.reduce((a: number, c: any) => a + (typeof c === 'object' && typeof c.props?.width === 'number' ? c.props.width : 0), 0) <= inner).toBe(true)
       if (columns < 60) expect(boxes.some((b: any) => b.props.flexDirection === 'row' && b.children?.some((c: any) => typeof c === 'object' && c.props?.width !== undefined))).toBe(false)
-      expect(await has(ui, '/bars show 5h|week|cache|storage on|off')).toBe(true)
+      expect(await has(ui, '/bars show 5h|week|cache|storage|cost|cpu on|off')).toBe(true)
       expect(await has(ui, 'Speicher-Laufwerk')).toBe(true)
       await ui.unmount()
     })
@@ -299,7 +300,7 @@ test('0.7.0 Unbekannte Argumente verweisen auf /bars help', DE, async ($, on) =>
 const input = (o: Partial<HelpInput> = {}): HelpInput => ({
   lang: 'de',
   options: {},
-  shown: { fiveHour: true, weekly: true, cache: true, storage: true },
+  shown: { fiveHour: true, weekly: true, cache: true, storage: true, cost: true, system: false },
   overrides: {},
   storagePath: '',
   hasDrive: false,
@@ -321,26 +322,58 @@ test('0.7.0 Hilfe Vollständigkeit: jedes Wort, das die Parser annehmen, steht i
     const d = barsHelpData(input({ lang }))
     // Ganze Wörter aus Befehlsspalte und Alias-Zeile, nicht Teilstrings (templates/help/README.md: sonst steckt `on` in „configure“)
     const tokens = new Set([...d.commands.map((c) => c.cmd), ...(d.notes ?? [])].join(' ').split(/[\s·,|=()[\]<>]+/).filter(Boolean))
-    for (const word of [...HELP_WORDS, ...STATUS_WORDS, ...RESET_WORDS, ...SHOW_WORDS, ...ON_OFF_WORDS, ...PART_WORDS, ...STYLE_WORDS, ...STYLE_VALUE_WORDS, ...SIDE, ...OTHER])
+    for (const word of [...HELP_WORDS, ...STATUS_WORDS, ...RESET_WORDS, ...SHOW_WORDS, ...ON_OFF_WORDS, ...PART_WORDS, ...STYLE_WORDS, ...STYLE_VALUE_WORDS, LANGUAGE_WORD, ...LANGUAGES, ...SIDE, ...OTHER])
       expect(tokens.has(word), `${lang}: ${word}`).toBe(true)
     expect(tokens.has('configure'), lang).toBe(false) // nur Befehle und Aliase, nicht die Fußzeile
-    // alle vier Teile und alle zehn Einstellungen
+    // die ersten vier Teile und alle zwölf Einstellungen
     expect(d.features.slice(0, 4).map((f) => f.toggle)).toEqual(['/bars 5h off', '/bars week off', '/bars cache off', lang === 'de' ? 'Einstellung storagePath' : 'setting storagePath'])
-    expect(d.settings.length).toBe(10)
+    expect(d.settings.length).toBe(12) // seit 0.12.0 mit showCost und showSystem
   }
 })
 
 test('0.7.0 Hilfe-Daten: Werte, Standard und Zustandstexte', () => {
-  const d = barsHelpData(input({ lang: 'en', overrides: { fiveHour: false }, shown: { fiveHour: false, weekly: true, cache: true, storage: true }, hasDrive: true, storagePath: 'E:\\', memTtlSource: 'gemessen', memTtl: 5 }))
+  const d = barsHelpData(input({ lang: 'en', overrides: { fiveHour: false }, shown: { fiveHour: false, weekly: true, cache: true, storage: true, cost: true, system: false }, hasDrive: true, storagePath: 'E:\\', memTtlSource: 'gemessen', memTtl: 5 }))
   expect(d.features[0]).toEqual({ name: '5-hour bar', state: { kind: 'off', text: 'off · by /bars' }, toggle: '/bars 5h on' })
   expect(d.features[3]).toEqual({ name: 'Storage ring', state: { kind: 'on', text: 'on · by setting' }, toggle: '/bars storage off' })
-  expect(d.features[8]!.state).toEqual({ kind: 'value', text: 'auto · 5 min measured', isDefault: false })
-  expect(d.features[9]).toEqual({ name: 'Keep-warm', state: { kind: 'off' }, toggle: '/keepwarm [hours]' })
+  expect(d.features[10]!.state).toEqual({ kind: 'value', text: 'auto · 5 min measured', isDefault: false })
+  expect(d.features[11]).toEqual({ name: 'Keep-warm', state: { kind: 'off' }, toggle: '/keepwarm [hours]' })
   expect(d.settings[0]).toEqual({ title: 'Language', value: 'en', isDefault: true })
-  expect(d.settings[9]).toEqual({ title: 'Storage drive', value: 'E:\\' })
+  expect(d.settings[11]).toEqual({ title: 'Storage drive', value: 'E:\\' })
   expect(stateText(d.features[0]!.state, 'en')).toBe('○ off · by /bars')
-  expect(stateText(d.features[8]!.state, 'en')).toBe('auto · 5 min measured')
+  expect(stateText(d.features[10]!.state, 'en')).toBe('auto · 5 min measured')
   // Speicher-Ring per /bars aus und ohne Laufwerk: Schalter ist storagePath, nicht /bars storage on (Review K4)
-  const off = barsHelpData(input({ lang: 'en', overrides: { storage: false }, shown: { fiveHour: true, weekly: true, cache: true, storage: false } }))
+  const off = barsHelpData(input({ lang: 'en', overrides: { storage: false }, shown: { fiveHour: true, weekly: true, cache: true, storage: false, cost: true, system: false } }))
   expect(off.features[3]).toEqual({ name: 'Storage ring', state: { kind: 'off', text: 'off · by /bars' }, toggle: 'setting storagePath' })
+})
+
+// ---------- 0.11.0 language: /bars language (docs/LANGUAGE-SPEC.md; Kernfälle in tests/language.test.ts) ----------
+
+test('0.11.0 language: Zeile in der Hilfe (en) zwischen /bars reset und /bars help', async ($, on) => {
+  world(on)
+  const en = (await bars($, 'help')).split('\n')
+  expect(en).toContain('- `/bars language de|en`: Switch the language of all fynn-mods')
+  const order = en.filter((l) => l.startsWith('- `/bars')).map((l) => /^- `([^`]+)`/.exec(l)![1])
+  expect(order.slice(-3)).toEqual(['/bars reset', '/bars language de|en', '/bars help'])
+})
+
+test('0.11.0 language: Zeile in der Hilfe (de)', DE, async ($, on) => {
+  world(on)
+  expect((await bars($, 'help')).split('\n')).toContain('- `/bars language de|en`: Sprache aller fynn-mods umstellen')
+})
+
+test('0.11.0 language: /bars language ist kein unbekanntes Argument mehr, auch nicht mit falschem Wert', async ($, on) => {
+  world(on)
+  let lists = 0
+  on('config.list', () => {
+    lists++
+    return { value: [] }
+  })
+  for (const args of ['language', 'LANGUAGE de', 'language en']) {
+    const text = await bars($, args)
+    expect(text.startsWith('Unknown: '), args).toBe(false)
+    expect(text, args).toContain("Claude Code doesn't list plugin settings here")
+  }
+  expect(lists).toBe(3)
+  expect(await bars($, 'language fr')).toBe('Unknown language “fr”. Valid: `/bars language de` or `/bars language en`.')
+  expect(lists).toBe(3) // falscher Wert: gar nicht erst gelesen
 })

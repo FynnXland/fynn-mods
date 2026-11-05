@@ -177,14 +177,14 @@ test('0.10.0 Tempo: < 6 h frisch, im Plan mit Prognose, über Tempo (rot, reicht
 
 test('0.10.0 Tempo-Texte de/en: lang, kurz, alt; Uhrzeit auf 15 min abgerundet; ohne resetsAt nur 5h ∞', () => {
   const de = paceShown(win(34), NOW, 'de')
-  expect(de.top.reset).toEqual({ long: '+14 % · reicht bis Fr 04:00', short: '+14% Fr4h', alt: '' })
+  expect(de.top.reset).toEqual({ long: '+14% · reicht bis Fr 04:00', short: '+14% Fr4h', alt: '' })
   expect(de.top.pace?.alt).toBe('Kein 5-Stunden-Limit, 14 Prozentpunkte über gleichmäßigem Verbrauch, reicht bis Freitag 04:00')
   expect(Math.round(de.mark! * 100)).toBe(20)
   const en = paceShown(win(10), NOW, 'en')
-  expect(en.top.reset?.long).toBe('10% under pace · forecast 51%')
+  expect(en.top.reset?.long).toBe('−10% pace · forecast 51%')
   expect(en.top.reset?.short).toBe('~51%')
   expect(en.top.pace?.alt).toBe('No 5-hour limit, 10 points below even use, about 51% at the reset')
-  expect(paceShown(win(19), NOW, 'de').top.reset?.long).toBe('im Plan · Prognose 97 %')
+  expect(paceShown(win(19), NOW, 'de').top.reset?.long).toBe('im Plan · Prognose 97%')
   expect(paceShown(win(3), START + 3 * H, 'de').top.reset?.long).toBe('Woche frisch')
   const none = paceShown(win(34, null), NOW, 'de')
   expect(none.top.reset).toBeUndefined()
@@ -216,7 +216,8 @@ test('0.10.0 Balken (Desktop): Tempo-Zeile statt 5h-Balken, Strich auf dem Woche
   await next(w, ui, week(34))
   const s = (await svg(ui)).props
   expect(s.source).toContain('<tspan fill="#9A9A9A" opacity="0.7"> ∞</tspan>')
-  expect(s.source).toContain(`<tspan fill="${RED}"> &#183; +14 % über Tempo</tspan>`)
+  // Seit 0.12.0 steht der Punkt bündig über dem der 7d-Zeile (`7d 34 % ·`: 8 Zeichen × 7,2 px)
+  expect(s.source).toContain(`<tspan x="57.6" fill="${RED}">&#183; +14% Tempo</tspan>`)
   expect(s.source).toContain('font-size="10" fill="#9A9A9A">reicht bis Fr 04:00</text>')
   // Strich bei 19,6 % von 174 px
   expect(s.source).toContain(`<rect x="33" y="42" width="4" height="14" fill="#833A31"/><rect x="34" y="42" width="2" height="14" fill="${RED}"/>`)
@@ -257,7 +258,7 @@ test('0.10.0 Balken (Terminal): Kurzformen bei 70/60/50 Spalten, Strich ┆ im W
 
 test('0.10.0 layoutTerminal: Langform → kurz → 5h ∞ → nichts', () => {
   const shown = withPace([], [win(34)], NOW, 'de', true)
-  expect(layoutTerminal(shown, 90)?.blocks.map((b) => b.pct + b.rest)).toEqual(['∞ · +14 % · reicht bis Fr 04:00'])
+  expect(layoutTerminal(shown, 90)?.blocks.map((b) => b.pct + b.rest)).toEqual(['∞ · +14% · reicht bis Fr 04:00'])
   expect(layoutTerminal(shown, 60)?.blocks.map((b) => b.pct + b.rest)).toEqual(['∞ +14% Fr4h'])
   expect(layoutTerminal(shown, 53)?.blocks.map((b) => b.pct + b.rest)).toEqual(['∞'])
   expect(layoutTerminal(shown, 52)).toBeNull()
@@ -329,7 +330,7 @@ test('0.10.0 Ring ohne 5h: Tempo als Text links, Wochen-Ring mit Kerbe; Breite w
   await w.clock.settle()
   await ui.redraw()
   const s = (await svg(ui)).props
-  expect(s.source).toContain('font-size="11" fill="#C9594B">+14 % über Tempo</text>')
+  expect(s.source).toContain('font-size="11" fill="#C9594B">+14% Tempo</text>')
   expect(s.source).toContain('font-size="10" fill="#9A9A9A">reicht bis Fr 04:00</text>')
   expect(s.source).toContain(`stroke="${RED}" stroke-width="2"/>`)
   expect(s.source).toContain('font-size="11" fill="#6CC070">34%</text>')
@@ -384,7 +385,7 @@ test('0.10.0 Englisch: Tempo-Zeile, Ring-Stil und /bars style', async ($, on) =>
   expect((await svg(ui)).props.alt).toContain('No 5-hour limit, 10 points below even use, about 51% at the reset; Weekly limit 10%')
   expect(await bars($, 'style ring')).toContain('Style: rings.')
   await ui.redraw()
-  expect((await svg(ui)).props.source).toContain('>10% under pace</text>')
+  expect((await svg(ui)).props.source).toContain('>−10% pace</text>')
   expect(await bars($)).toContain('| 5-hour bar | on · no limit (pace display) | settings |')
   await ui.unmount()
 })
@@ -392,7 +393,7 @@ test('0.10.0 Englisch: Tempo-Zeile, Ring-Stil und /bars style', async ($, on) =>
 test('0.10.0 Hilfe: Stil und Tempo stehen in den Funktionen', () => {
   const input = {
     options: {},
-    shown: { fiveHour: true, weekly: true, cache: true, storage: true },
+    shown: { fiveHour: true, weekly: true, cache: true, storage: true, cost: true, system: false },
     overrides: {},
     storagePath: '',
     hasDrive: false,
@@ -406,11 +407,11 @@ test('0.10.0 Hilfe: Stil und Tempo stehen in den Funktionen', () => {
   }
   const de = barsHelpData({ ...input, lang: 'de' })
   expect(de.features[0]!.state).toEqual({ kind: 'on', text: 'an · kein Limit, Tempo-Anzeige · per Einstellung' })
-  expect(de.features[4]).toEqual({ name: 'Stil', state: { kind: 'value', text: 'Ringe · per Befehl', isDefault: false }, toggle: '/bars style bar' })
+  expect(de.features[6]).toEqual({ name: 'Stil', state: { kind: 'value', text: 'Ringe · per Befehl', isDefault: false }, toggle: '/bars style bar' })
   expect(de.commands.some((c) => c.cmd === '/bars style bar|ring')).toBe(true)
   const en = barsHelpData({ ...input, lang: 'en', style: 'bar', styleByCommand: false, noFive: false })
   expect(en.features[0]!.state).toEqual({ kind: 'on', text: 'on · by setting' })
-  expect(en.features[4]).toEqual({ name: 'Style', state: { kind: 'value', text: 'bars · by setting', isDefault: true }, toggle: '/bars style ring' })
+  expect(en.features[6]).toEqual({ name: 'Style', state: { kind: 'value', text: 'bars · by setting', isDefault: true }, toggle: '/bars style ring' })
   expect(en.settings.find((s) => s.title === 'Style')).toEqual({ title: 'Style', value: 'bar', isDefault: true })
 })
 
@@ -491,4 +492,35 @@ test('0.10.4 Rand des Strichs: dunklere Fassung der Strichfarbe', () => {
   expect(darker('#D77757')).toBe('#8C4D39')
   expect(darker('#C9594B')).toBe('#833A31')
   expect(darker('kein')).toBe('kein')
+})
+
+// ---------- Nachtrag 0.12.0: bündiger Trennpunkt (Fynn 2026-11-04) ----------
+
+test('0.12.0 Trennpunkt ohne 5h: der · der Tempo-Zeile steht genau über dem · der 7d-Zeile (5 %, 18 %, voll; en und de)', () => {
+  const at = new Date(2026, 10, 4, 12, 0).getTime()
+  for (const lang of ['en', 'de'] as const)
+    for (const pct of [5, 18, 100]) {
+      const week: Win = { kind: 'seven_day', percentUsed: pct, resetsAt: at + 3 * 86400000 }
+      const list = withPace(shownWindows([week], at, { resetStyle: 'mixed', highlightAt: 90, onlyFiveHour: false, lang }), [week], at, lang, true)
+      expect(list.map((s) => s.tag), `${lang} ${pct}`).toEqual(['5h', '7d'])
+      const src = desktopSvg(list, undefined, undefined, 'bar').source
+      const xs = [...src.matchAll(/<tspan x="([\d.]+)"[^>]*>&#183; /g)].map((m) => Number(m[1]))
+      expect(xs.length, `${lang} ${pct}`).toBe(2)
+      expect(xs[0], `${lang} ${pct}`).toBe(xs[1])
+      // Seit 0.13.0 ein festes Feld für `100%`/`voll`: „7d“ + Leerzeichen + 4 Zeichen + Leerzeichen, 7,2 px je Zeichen
+      const field = list[1]!.pct.long
+      expect(xs[0]).toBe(57.6)
+      // Die Tempo-Zeile läuft nicht in den Ring daneben: das Bild reicht mindestens bis zu ihrem Ende
+      const end = xs[0]! + (2 + list[0]!.pace!.head.length) * 7.2
+      expect(desktopSvg(list, undefined, undefined, 'bar').width >= 10 + end + 8 - 0.01, `${lang} ${pct}`).toBe(true)
+      if (lang === 'de' && pct === 18) expect(field).toBe('18%')
+      if (pct === 100) expect(field).toBe(lang === 'de' ? 'voll' : 'full')
+    }
+  // Seit 0.13.0 auch mit 5h-Fenster: beide Punkte an derselben festen Stelle, egal ob 5 %, 41 % oder voll
+  const both: Win[] = [
+    { kind: 'five_hour', percentUsed: 41, resetsAt: at + 7200000 },
+    { kind: 'seven_day', percentUsed: 18, resetsAt: at + 3 * 86400000 },
+  ]
+  const plain = desktopSvg(shownWindows(both, at, { resetStyle: 'mixed', highlightAt: 90, onlyFiveHour: false, lang: 'de' }), undefined, undefined, 'bar').source
+  expect([...plain.matchAll(/<tspan x="([\d.]+)"/g)].map((m) => m[1])).toEqual(['57.6', '57.6'])
 })

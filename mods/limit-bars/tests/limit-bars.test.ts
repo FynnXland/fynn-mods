@@ -88,10 +88,10 @@ test('rateLimits leer (kein Abo): nichts Eigenes', DE, async ($, on) => {
 test('Stufen 0 / 50 / 95 / 100 % im Terminal: Text, Farbe, fett, voll', DE, async ($, on) => {
   world(on)
   const cases = [
-    { p: 0, text: /^0 ?%$/, color: GREEN, bold: false },
-    { p: 50, text: /^50 ?%$/, color: GREEN, bold: false },
-    { p: 72, text: /^72 ?%$/, color: YELLOW, bold: false },
-    { p: 95, text: /^95 ?%$/, color: RED, bold: true },
+    { p: 0, text: /^0%\s*$/, color: GREEN, bold: false },
+    { p: 50, text: /^50%\s*$/, color: GREEN, bold: false },
+    { p: 72, text: /^72%\s*$/, color: YELLOW, bold: false },
+    { p: 95, text: /^95%\s*$/, color: RED, bold: true },
     { p: 100, text: 'voll', color: RED, bold: true },
   ]
   for (const c of cases) {
@@ -117,6 +117,8 @@ test('Stufen auf dem Desktop: ein Svg mit alt, Höhe ≤ 56, Farben im Bild', DE
     const svg = await ui.find({ type: 'Svg' })
     expect(svg).toBeDefined()
     expect(String(svg?.props.alt)).toContain(`5-Stunden-Limit ${label}`)
+    // 0.13.1: die Balken liegen über Clawd, der seit clawd-buddy 0.12.1 hinter der Zeile liegt
+    expect((await ui.find({ key: 'limit-bars' }))?.props.position).toBe('relative')
     expect(String(svg?.props.alt)).toContain('Wochenlimit 18 %, Reset Mo 09:00')
     expect((svg?.props.height as number) <= 56).toBe(true)
     expect(String(svg?.props.source)).toContain(`fill="${color}"`)
@@ -141,7 +143,7 @@ test('99,6 % zeigt 99 % (nie 100 vor dem Ende), nicht voll', DE, async ($, on) =
   world(on)
   await measure($, limits(99.6, 10))
   const ui = await $.ui.mount(band('terminal'))
-  expect(await ui.find({ type: 'Text', text: /^99 ?%$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^99%\s*$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'voll' })).toBeUndefined()
 })
 
@@ -153,10 +155,10 @@ test('spend_limit und unbekannte kind werden ignoriert', DE, async ($, on) => {
     { kind: 'five_hour', percentUsed: 30, resetsAt: iso(FIVE_RESET) },
   ])
   const ui = await $.ui.mount(band('terminal'))
-  expect(await ui.find({ type: 'Text', text: /^30 ?%$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^30%\s*$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: '7d' })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: 'voll' })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /^20 ?%$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^20%\s*$/ })).toBeUndefined()
 })
 
 test('onlyFiveHour: nur das 5h-Fenster', { options: { language: 'de', onlyFiveHour: true } }, async ($, on) => {
@@ -189,8 +191,8 @@ test('Anfangsstand aus $.session.usage: Balken ohne session.measure', DE, async 
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
   expect(asked).toBe(1)
   const ui = await $.ui.mount(band('terminal'))
-  expect(await ui.find({ type: 'Text', text: /^42 ?%$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^7 ?%$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^42%\s*$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^7%\s*$/ })).toBeDefined()
   expect(asked).toBe(1)
 })
 
@@ -215,7 +217,7 @@ test('Fehlerpfad: usage abgelehnt → kein Wurf, nichts Eigenes; die nächste Me
   const ui = await $.ui.mount(band('terminal'))
   expect(await ui.find({ key: 'limit-bars' })).toBeUndefined()
   await measure($, limits(12, 3))
-  expect(await ui.find({ type: 'Text', text: /^12 ?%$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^12%\s*$/ })).toBeDefined()
 })
 
 test('Fehlerpfad: Uhr fällt aus → nichts Eigenes, fremder Text bleibt', DE, async ($, on) => {
@@ -229,7 +231,8 @@ test('Fehlerpfad: Uhr fällt aus → nichts Eigenes, fremder Text bleibt', DE, a
   expect(await ui.find({ type: 'Text', text: 'von anderen' })).toBeDefined()
 })
 
-test('Countdown läuft mit der Uhr: in 2 h 14 min → in 1 h 14 min', DE, async ($, on) => {
+// 60 min im 2-s-Takt sind 1 800 Ticks; mit dem Test-Kit 2.1.318 knapp über den 5 s Standard (wie der Test darunter)
+test('Countdown läuft mit der Uhr: in 2 h 14 min → in 1 h 14 min', { ...DE, timeoutMs: 30_000 }, async ($, on) => {
   const { clock } = world(on)
   await measure($, limits(71, 18))
   const ui = await $.ui.mount(band('terminal'))
@@ -248,11 +251,11 @@ test('Reset vergeht ohne neue Messung: 0 % gedimmt, frisch; aus voll wird nicht 
   await clock.advance(2 * 60 * MIN + 15 * MIN)
   await ui.redraw()
   expect(await ui.find({ type: 'Text', text: 'voll' })).toBeUndefined()
-  const zero = await ui.find({ type: 'Text', text: '0 %' })
+  const zero = await ui.find({ type: 'Text', text: /^0%\s*$/ })
   expect(zero?.props.dimColor).toBe(true)
   expect(await ui.find({ type: 'Text', text: ' · frisch' })).toBeDefined()
   // Die Woche läuft weiter
-  expect(await ui.find({ type: 'Text', text: /^30 ?%$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^30%\s*$/ })).toBeDefined()
 })
 
 test('Reset-Texte: gleicher Tag 14:30, anderer Tag Mo 09:00, Countdown ab 1 Tag', { options: { language: 'de', resetStyle: 'clock' } }, async ($, on) => {
@@ -296,8 +299,8 @@ test('Hervorhebung ab highlightAt', { options: { language: 'de', highlightAt: 70
   world(on)
   await measure($, limits(75, 65))
   const ui = await $.ui.mount(band('terminal'))
-  expect((await ui.find({ type: 'Text', text: /^75 ?%$/ }))?.props.bold).toBe(true)
-  expect((await ui.find({ type: 'Text', text: /^65 ?%$/ }))?.props.bold).toBe(false)
+  expect((await ui.find({ type: 'Text', text: /^75%\s*$/ }))?.props.bold).toBe(true)
+  expect((await ui.find({ type: 'Text', text: /^65%\s*$/ }))?.props.bold).toBe(false)
   expect((await ui.find({ type: 'Text', text: '5h' }))?.props.bold).toBe(true)
 })
 
@@ -332,7 +335,7 @@ test('Takt (2 s): fragt ab, zeichnet aber nur bei sichtbarer Änderung neu; ohne
   rateLimits = limits(25, 20)
   await clock.advance(TICK)
   expect(invalidates - i0).toBe(2)
-  expect(await ui.find({ type: 'Text', text: /^25 ?%$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^25%\s*$/ })).toBeDefined()
   await ui.unmount()
 
   // Nicht mehr gezeichnet: Die nächste Änderung fordert ein Neuzeichnen an, es kommt keins, der folgende Tick beendet den Takt
@@ -386,7 +389,7 @@ test('Takt: eine abgelehnte Periode beendet ihn still; zwei ausgebliebene Ticks 
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['von anderen'] }))
   await measure($, limits(20, 20))
   const ui = await $.ui.mount(band('terminal'))
-  expect(await ui.find({ type: 'Text', text: /^20 ?%$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^20%\s*$/ })).toBeDefined()
   const first = periods
   expect(first >= 1).toBe(true)
   // Weniger als zwei Takte: kein Neustart
@@ -443,8 +446,8 @@ test('schmal: 70 → Kurzformen, 60 → nur 5h, 50 → nichts (bodyColumns dann 
   const { seen } = world(on)
   await measure($, limits(71, 18))
   let ui = await $.ui.mount(band('terminal', 70))
-  expect(await ui.find({ type: 'Text', text: /^71 ?%$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^18 ?%$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^71%\s*$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^18%\s*$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: ' 2h14' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: ' Mo9:00' })).toBeDefined()
   await ui.unmount()

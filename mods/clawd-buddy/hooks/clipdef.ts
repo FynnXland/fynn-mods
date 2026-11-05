@@ -9,7 +9,14 @@
 import { NUM, POSES, STRUCT } from './stage.ts'
 import type { Pose, PropRef } from './stage.ts'
 
-export type Frame = Partial<Omit<Pose, 'props'>> & { t?: number; props?: readonly PropRef[] }
+/**
+ * `bt` (0.11.0): Länge des Bilds in Schlägen des laufenden Songs (0,5 = Ab- oder Aufschlag, 0,25 = Solo). Mit Takt (tune-strip.beat)
+ * richtet die Engine das Bild am Schlagraster aus, sonst gilt `t`. Ein Hauptteil mit `bt`-Bildern beginnt auf einem Schlag.
+ */
+export type Frame = Partial<Omit<Pose, 'props'>> & { t?: number; bt?: number; props?: readonly PropRef[] }
+
+/** Gewichte eines Musik-Clips je Gruppe des Songs (0.11.0); `none` gilt, solange die Gruppe offen ist (ohne Gruppe, ohne tune-strip). */
+export type MusicWeights = { calm: number; groove: number; hard: number; sad: number; none: number; notBad?: boolean }
 
 export type ClipDef = {
   name: string
@@ -25,6 +32,11 @@ export type ClipDef = {
   when: 'any' | 'night' | 'day'
   /** Gewicht bei der Zufallsauswahl innerhalb der Gruppe (Standard 1). */
   weight: number
+  /**
+   * Musik-Clips (0.11.0): Gewicht je Gruppe des Songs statt `weight` (SPEC Nachtrag 0.11.0, Tabelle); 0 = nie. `notBad`: nicht bei
+   * schlechter Laune (Luftgitarre, Headbangen).
+   */
+  music?: MusicWeights
   /**
    * Laune, zu der der Clip gehört (Engine gewichtet danach, siehe mood.ts → deriveTemper): 'bad' nur bei Frust (je stärker, desto
    * häufiger), 'good' nur bei guter Laune, 'tired' nur bei Müdigkeit. Ohne Angabe: immer möglich.
@@ -53,7 +65,8 @@ export type ClipDef = {
   outro: readonly Frame[]
 }
 
-export type Resolved = { p: Pose; t: number }
+/** `b`: Länge in Schlägen (aus `bt`), `bf`: Lage des Bildbeginns im Schlag (0 = auf dem Schlag, 0,5 = dazwischen), von `beatMarks`. */
+export type Resolved = { p: Pose; t: number; b?: number; bf?: number }
 export type ResolvedClip = { intro: Resolved[]; body: Resolved[]; outro: Resolved[] }
 
 /** Clip mit Voreinstellungen anlegen. `to` ist standardmäßig `from`. */
@@ -72,10 +85,23 @@ export function clip(
 /** Sticky-Merge ab einer Startpose über eine Frameliste. */
 export function mergeFrames(start: Pose, frames: readonly Frame[]): Resolved[] {
   let cur = start
-  return frames.map((f) => {
-    const { t, props, ...rest } = f
-    cur = { ...cur, ...rest, props: props !== undefined ? props : cur.props } as Pose
-    return { p: cur, t: Math.max(1, t || 1) }
+  return beatMarks(
+    frames.map((f) => {
+      const { t, bt, props, ...rest } = f
+      cur = { ...cur, ...rest, props: props !== undefined ? props : cur.props } as Pose
+      return bt ? { p: cur, t: Math.max(1, t || 1), b: bt } : { p: cur, t: Math.max(1, t || 1) }
+    }),
+  )
+}
+
+/** Lage jedes Schlag-Bilds im Schlag: Summe der Schlaglängen davor (die Liste beginnt auf einem Schlag), modulo 1. */
+export function beatMarks(list: Resolved[]): Resolved[] {
+  let pos = 0
+  return list.map((f) => {
+    if (!f.b) return f
+    const bf = ((pos % 1) + 1) % 1
+    pos += f.b
+    return { ...f, bf: Math.round(bf * 1000) / 1000 }
   })
 }
 
@@ -85,7 +111,7 @@ export function mergeFrames(start: Pose, frames: readonly Frame[]): Resolved[] {
  */
 export const SQUARE_EYES: Readonly<Record<string, string>> = { happy: 'closed', angry: 'half', sad: 'half', tight: 'closed', dizzy: 'wide' }
 const squareEyes = (l: Resolved[]): Resolved[] =>
-  l.map((f) => (SQUARE_EYES[f.p.eyes] ? { p: { ...f.p, eyes: SQUARE_EYES[f.p.eyes] }, t: f.t } : f))
+  l.map((f) => (SQUARE_EYES[f.p.eyes] ? { ...f, p: { ...f.p, eyes: SQUARE_EYES[f.p.eyes] } } : f))
 
 /** Clip auflösen: Intro, Hauptteil und Outro laufen auf derselben Sticky-Kette. */
 export function resolveClip(c: ClipDef): ResolvedClip {

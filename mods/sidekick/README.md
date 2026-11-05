@@ -4,7 +4,9 @@ Checks your message just before it is sent: first with fixed rules, and only whe
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.295** · Plugin version **0.16.0**
+Tested with Claude Code **v2.1.318** · Plugin version **0.18.1**
+
+**New in 0.18.0: Model tip.** On the first message of a chat that runs on Opus or Fable, sidekick asks before sending whether a simple task should run on Sonnet 5.5 or Haiku 5.5. Optionally (`/sidekick tips auto on`, off by default) it also switches subagents and chats that Claude starts to a cheaper model when their task is simple. `/savings` shows the savings as a marked estimate. See [Model tip](#model-tip-since-0180).
 
 **All commands at a glance:** `/sidekick help` (or `/sidekick ?`) draws a table of every command, the buttons, each feature with its current state and how to change it, and your settings.
 
@@ -102,6 +104,27 @@ While Claude works on a longer task, sidekick asks at step 6, 12, 18 … of a tu
 - **Cost (measured with 2.1.291, Opus 5.5):** about $0.04 per check at 110–170k context (about 1.5k tokens uncached, 70–500 out, the rest read from the cache), 2–14 s in the background. A long turn of 60 steps makes up to 10 checks. `/savings` lists these costs separately; they are not part of cost and ratio, which measure the message check against its savings.
 - **Where:** terminal and desktop app. Not in `claude -p` and other surfaces (no place to show it).
 
+## Model tip (since 0.18.0)
+
+Most work does not need the most expensive model. sidekick rates how demanding a task is and suggests (first message) or sets (subagents and chats Claude starts, with a switch) a cheaper model. Effort stays as it is.
+
+| Level | Example | Target |
+|---|---|---|
+| very simple | only read, search, look up, summarise, give an overview or answer a short question; no file changes | **Haiku 5.5** (with `/sidekick tips haiku off`: Sonnet 5.5) |
+| simple | the task says what to do, even across several steps or files: a component or change to a precise spec, a bug whose cause and place are given, docs, translations, a research report, a test run by a fixed procedure | **Sonnet 5.5** |
+| medium / hard | judgement where a mistake is costly (debugging without a lead, a review for hidden logic errors, legal or security questions, design with taste), a planning chat, continuing unknown work, building a feature or app | nothing changes |
+
+When in real doubt the higher level applies; without a rating nothing changes.
+
+- **First message (default on):** the check that runs on the first message anyway rates the task too. If your main model is Opus or Fable and the task looks simple, sidekick asks before sending: *Looks simple (reason). With Sonnet 5.5 ≈ 50 % of the price. Send with which model?* Answers, the recommended one first: **Send with Haiku 5.5** (only for very simple tasks) · **Send with Sonnet 5.5** · **Send with Opus 5.5** · **Don't ask again**. Your message always goes out unchanged. If you pick a cheaper model, every main request of this chat runs on it from then on; the footer label shows `→ Sonnet`. The model picker of the app keeps showing your main model, because sidekick changes the model per request and leaves your setting alone (`/model` from a mod would save the model as your default for new sessions). Back to the main model: `/sidekick tips stop`, `/model …`, or picking another model in the picker.
+- **Not asked:** at most once per chat and never mid-chat; not for commands, messages under 4 words or with an attachment, not when the check has its own question, not in chats another chat started (sidekick recognises the brief the desktop app puts in front, and long handoffs that start with `# `), and not on levels Off and Cache. Three times **Send with Opus** in a row: the tip pauses for 7 days and a notice says so once.
+- **Subagents (off by default, `/sidekick tips auto on`):** before a built-in subagent that takes the main model (`general-purpose`, `Explore`, `Plan`, `claude`, workflow agents) starts on Opus or Fable without a model, Haiku 5.5 rates its task (effort `low`, at most 6 s, about $0.001). For simple tasks sidekick sets `model: sonnet` or `haiku`, and a line in the agent's window says so (*sidekick: Haiku 5.5 instead of Opus 5.5 (reason)*). Forks, resumed agents, teammates, calls that already name a model, built-in agents with a model of their own (`claude-code-guide`, `statusline-setup`), and plugin or user agents (they may have their own model in their file, which sidekick cannot read) stay untouched. If the session forces one model on all subagents, nothing is booked.
+- **Chats Claude starts (desktop app, same switch):** the same rating for `start_session` without a model and not as a fork; sidekick passes `claude-sonnet-5-5` or `claude-haiku-5-5`. The new chat then asks no question and books its steps against the original model.
+- **Guideline (same switch):** once per chat, Claude gets one short paragraph it reads and you don't see: give the Agent tool `model: "sonnet"` for simple, clearly described tasks and `model: "haiku"` for pure reading. When Claude follows it, `/savings detail` lists that under *Claude chose itself (not counted)*.
+- **In `/savings`:** a line *Model tips ≈ $x (estimate) · n runs*, included in the savings total and the ratio. `/savings detail` has a section per way (first chat, subagents, chats by Claude, Claude chose itself) with runs, $ saved, per run and struck runs, plus the ratings (count, cost, average duration, levels), a look back at subagents that stayed on Opus, and the method.
+- **How it is computed (estimate):** for each step of a switched run, what the same tokens would have cost on the original model minus what they cost on the target model, with the same price table as sidekick's own bookings. Opus would have used other steps and thinking tokens, so the figure is an order of magnitude, not a measurement. **Check against reality:** going back to Opus or Fable in the same chat, a subagent that ends with an error or is aborted, or the same task started again on Opus within 30 minutes strikes the booking (*back* / *missed*); the share shows in `/savings detail`.
+- **Residual risk:** a task rated "simple" by mistake costs rework on a weaker model. The rating only sees the task, not the code. The probe before the build (60 real cases, 2026-11-04) agreed with the owner's own judgement in 16 of 20 and rated 6 of 41 large tasks (over 60 steps or edits in several files) as simple.
+
 ## Commands
 
 | Input | Effect |
@@ -121,6 +144,12 @@ While Claude works on a longer task, sidekick asks at step 6, 12, 18 … of a tu
 | `/sidekick notes` · `notes status` | Good to know: on or off, number of known topics, what it costs |
 | `/sidekick notes on` · `off` | Good to know on/off (default off; level Off pauses it too) |
 | `/sidekick notes forget` | forget the topics marked *Know this* or *Got it* |
+| `/sidekick tips` · `tips status` | Model tip: switches, this chat, the last 10 switches, savings this week (estimate). After a switch the first line says what changed, or that it was already set (since 0.18.1) |
+| `/sidekick tips on` · `off` | ask on the first message (default on) |
+| `/sidekick tips auto on` · `off` | switch subagents and chats Claude starts, plus the guideline (default off) |
+| `/sidekick tips haiku on` · `off` | Haiku as the target for very simple tasks; off: always Sonnet (default on) |
+| `/sidekick tips stop` | this chat back to the main model (the booking is struck) |
+| `/sidekick language [de\|en]` | switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language (since 0.17.0). Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.17.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/savings [today\|week\|all]` | short balance, default `week`: cost, savings, ratio and the savings items; drawn as a framed card in the terminal and the desktop app (like cost-ledger's `/ledger`), Markdown elsewhere |
 | `/savings detail [today\|week\|all]` | everything, default `all`: also how it is computed, models, checks compared per model, by day, hints and counts (`details` works too, words in any order) |
 | `/savings help` | points to `/sidekick help` |
@@ -135,7 +164,8 @@ An unknown argument to `/sidekick`, `/sidekick hints`, `/sidekick notes` or `/sa
   - *New chat on a warm large context:* first request: old context × read price − (read × read price + written × write price).
   - For both, from the second request on: (old context − context of the first request) × read price per request, never below 0. Both chats would grow by the same amount from there, so the gap stays. Runs until the new chat reaches the old size, at most 50 requests.
   - The handoff is not subtracted here; it is already in the cost.
-  - *Rewritten version, skill, model:* only counted, not valued in $.
+  - *Rewritten version, skill:* only counted, not valued in $. The model tip's question is counted under *Model tip*.
+  - *Model tips (estimate, since 0.18.0):* see [Model tip](#model-tip-since-0180).
 - **Models** (since 0.5.0): sidekick's own calls per model ID, e.g. *Haiku 5.5*, with a bar for its share of the cost; per role (check, handoff; older history may also show split) the number of calls, average duration and cost per call, plus tokens in and out. Useful when the model per role changes: old and new model stand side by side. Costs booked before 0.5.0 have no model and appear as *earlier*. Each model also shows the days it was used.
 - **Checks compared** (since 0.6.0, from two rows on): per model the number of checks, average price per check (4 decimals), average duration and a factor relative to the cheapest row; below, average tokens and the days used. Tokens are booked per model, not per role: with handoffs they are an average per call (check and handoff). *Earlier* (booked before 0.5.0: Haiku until 0.3, already Sonnet from 0.4) also contains the handoffs of that time, so its price per check is an upper bound (`≤`, rounded up); a factor against it is a lower bound (`≥`, rounded down).
 - **By day** (since 0.6.0): per day with activity, newest first (at most 14): cost with a bar, savings, checks and the models used with their calls.
@@ -174,7 +204,11 @@ Everything lives in the plugin's `$.store`:
 
 | Key | Content | Lifetime |
 |---|---|---|
-| `settings` | `level`, `lastOn`, `threshold`, `big`, `skills`, `ttl`, `notes` | permanent |
+| `settings` | `level`, `lastOn`, `threshold`, `big`, `skills`, `ttl`, `notes`, `tips` (since 0.18.0: `first`, `auto`, `haiku`, Opus answers in a row, pause until) | permanent |
+| `tip:<session>` | model tip of this chat: from, to, when, reason, estimated savings so far | 7 days |
+| `spawn:<agent>` | a watched subagent: from, to, reason, description, estimated savings | 2 days |
+| `brief:<hash>` | a brief Claude passed to a new chat: its first 200 characters, from and to model | 2 days or until the new chat starts |
+| `tips:recent` | the last 10 switches for `/sidekick tips` (time, way, models, task description) | until replaced |
 | `cache:<session>` | last activity, TTL, context, model | 7 days |
 | `sitzung:<session>` | summary, last 3 messages, ignored hints, hint lines, last commit, a maintenance hint not shown yet, the current Good-to-know note | 7 days |
 | `notes:seen`, `notes:known` | Good to know: the last 50 topics shown, and topics marked *Know this* or *Got it* (one sentence each) | permanent (`/sidekick notes forget` clears the known ones) |
@@ -201,15 +235,15 @@ Everything else goes through `/sidekick` and is stored in `$.store` (`settings`)
 
 ## Language
 
-Texts are English by default. For German, set `language` to `de`. Amounts then read `14,44 $` instead of `$14.44`, dates `06.10.` instead of `Oct 6`. Commands and their arguments are English in both languages. The rules that read text (rewrites that sound like a reply, typed maintenance commands) understand English and German regardless of the setting.
+Texts are English by default. For German, set `language` to `de`, or run `/sidekick language de` in a terminal session to switch all fynn-mods at once. Amounts then read `14,44 $` instead of `$14.44`, dates `06.10.` instead of `Oct 6`. Commands and their arguments are English in both languages. The rules that read text (rewrites that sound like a reply, typed maintenance commands) understand English and German regardless of the setting.
 
 ## Rights
 
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.step, tool.call{tool=Bash|PowerShell}, prompt.submit, skill.prompt, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, ui.render{component=SessionMode}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
-calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.model.complete, $.model.fork, $.prompt.fill, $.prompt.read, $.prompt.submit, $.session.id, $.session.messages, $.session.root, $.session.surfaces, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.copy, $.ui.invalidate, $.ui.resolve, $.ui.toast
+hooks: session.start, turn.step, agent.spawn, turn.complete, tool.call{tool=Bash|PowerShell|mcp__ccd_session__start_session}, prompt.submit, skill.prompt, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, ui.render{component=SessionMode}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
+calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.config.list, $.config.set, $.model.complete, $.model.fork, $.process.run, $.prompt.fill, $.prompt.read, $.prompt.submit, $.session.id, $.session.messages, $.session.model, $.session.root, $.session.surfaces, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.copy, $.ui.invalidate, $.ui.notice, $.ui.resolve, $.ui.toast
 state writes: sidekick.buddy, sidekick.status
 state reads: sidekick.status
 ```
@@ -217,7 +251,12 @@ state reads: sidekick.status
 In plain language:
 
 - `prompt.submit`: reads your message before sending; can hold it back (`drop`) or replace it with the rewritten version, **only after you choose so in the dialog**. Nothing is ever sent without asking. Detects typed maintenance commands as done.
-- `turn.step`: reads the token counts of each main-loop request (cache warm/cold, context, savings measurement). Read only. With Good to know on, it also starts the check at step 6, 12, 18 … in the background; the request itself is not changed or delayed.
+- `turn.step`: reads the token counts of each main-loop request (cache warm/cold, context, savings measurement). With Good to know on, it also starts the check at step 6, 12, 18 … in the background; the request itself is not delayed. Since 0.18.0 it changes one thing, and only in a chat where you picked a cheaper model in the model tip's question: the model of each main request (`→ Sonnet`). For subagents it reads the token counts of watched runs to estimate the savings.
+- `agent.spawn` (since 0.18.0, only with `/sidekick tips auto on`): sets the model of a built-in subagent without a model to Sonnet or Haiku when Haiku rated its task simple; everything else starts unchanged.
+- `turn.complete` (since 0.18.0): the end of a subagent's run, to book or strike its estimated savings. Read only.
+- `tool.call{…|mcp__ccd_session__start_session}` (since 0.18.0, only with `/sidekick tips auto on`): for a chat Claude starts without a model and not as a fork, passes `claude-sonnet-5-5` or `claude-haiku-5-5` when its task was rated simple, and remembers the first 200 characters of the brief for two days. The tool's name comes from the desktop app; if it changes, the hook silently stops firing.
+- `$.session.model` (since 0.18.0): your main model, so the check knows it on the first message and the tip only appears on Opus or Fable.
+- `$.ui.notice` (since 0.18.0): one line in the agent's window when sidekick switched a subagent or a new chat.
 - `$.model.fork` (Good to know, only after `/sidekick notes on`): one question to your session's own model over its own conversation, with every tool denied, answered as a short JSON. Nothing leaves your session's login; the answer is shown only to you.
 - `$.prompt.read`: *Discuss in chat* and **Insert in prompt** write only into an empty prompt box; if you have typed something, a notice says so instead.
 - `tool.call{tool=Bash|PowerShell}`: after the run, reads `gitOperation.commit` (commit hash). Changes nothing.
@@ -230,7 +269,8 @@ In plain language:
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=CommandOutput, props has {command=sidekick}}` (since 0.14.0): draws the output of `/sidekick help` as a table in the terminal and the desktop app. Display only; `/sidekick status`, other outputs and other surfaces stay Markdown.
 - `ui.render{component=AbovePrompt}`: only while a new chat is being started, a small blue box above the prompt shows progress and seconds; and, with Good to know on, the current note with its buttons. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
-- `$.model.complete`: Haiku 5.5 for the check (effort `medium`, full ID `claude-haiku-5-5`) and Sonnet 5.5 for the handoff (effort `medium`). The only model calls. Your messages reach the model only through your session's own login.
+- `$.model.complete`: Haiku 5.5 for the check (effort `medium`, full ID `claude-haiku-5-5`), Haiku 5.5 for the model tip's rating of a subagent's or new chat's task (effort `low`, since 0.18.0) and Sonnet 5.5 for the handoff (effort `medium`). The only model calls. Your messages and those tasks reach the model only through your session's own login; the rating prompt tells the model to judge the task and never follow instructions in it.
+- `prompt.submit` also attaches the model tip's guideline (since 0.18.0, only with `/sidekick tips auto on`, once per chat) as context the model reads and you don't see.
 - `$.session.messages`: beginning and end of the history for the handoff, the end of Claude's last reply for the check, and to detect the first message.
 - `$.session.usage`, `$.command.list`: context size, skill names and descriptions; for the maintenance hints, paths and token counts of instruction and memory files (no contents), size of the skill list, model, and whether a command exists.
 - `$.session.root`: project root as the key for maintenance hints, and as a fact in the handoff (since 0.12.0). The path only.
@@ -238,11 +278,13 @@ In plain language:
 - `$.session.id`: detects a new session after `/clear`.
 - `$.command.run`, `$.prompt.submit`: for "New chat with handoff" (`/clear`, then send). `$.command.run` also for the button, see above. `$.prompt.submit` also for **Send anyway** after writing the handoff failed (your message as typed), and for **Ask in chat** in the desktop app (the note and a short request to explain it, as a message from sidekick, only on that click).
 - `$.store.*`: settings, summary, cache measurement, balance.
+- `$.config.list`, `$.config.set`: only for `/sidekick language` (since 0.17.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone.
+- `$.process.run`: for `/sidekick language` in the desktop app and `claude -p` (since 0.17.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `sidekick@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `sidekick@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
 - `$.ui.ask`, `$.ui.toast`, `$.ui.invalidate`: question dialog, notices, redrawing the line.
 - `$.clock.*`: time and a one-off timer for `/clear` and for writing the handoff.
 - `ui.render{component=SessionMode}`: appends sidekick's label to the footer labels next to the model picker; other labels stay.
 - `$.state.get`: reads its own value `sidekick.status` while drawing that label, so the label redraws when the value changes.
-- `$.state.set`: writes `sidekick.status` (level and whether sidekick is busy, no text) for the footer label, and `sidekick.buddy` for clawd-buddy: only `check`, `stop`, `handoff` or `fresh` and a timestamp, never your message.
+- `$.state.set`: writes `sidekick.status` (level, whether sidekick is busy, and since 0.18.0 the name of the tip's target model, no text) for the footer label, and `sidekick.buddy` for clawd-buddy: only `check`, `stop`, `handoff` or `fresh` and a timestamp, never your message.
 
 Explicitly not used: `$.fs`, `$.env`, `$.http`, `$.settings`; no tokens or credentials.
 
@@ -276,6 +318,11 @@ claude --plugin-dir <path-to-clone>/mods/sidekick
 
 ## Known limitations
 
+- **Model tip (0.18.0):**
+  - Picking the same Opus again in the desktop app's model picker is not visible to a mod; to go back, use `/sidekick tips stop` or type `/model`.
+  - Chats Claude starts: the tool name `mcp__ccd_session__start_session` and the brief the app puts in front come from the desktop app, not from Claude Code's documentation. Whether the hook fires there and the agent-window line shows is not confirmed yet; if not, nothing is switched and nothing booked.
+  - A subagent's steps that run while the mod reloads (e.g. after `/sidekick language`) are not counted.
+  - On the first message the check gets slow when the API is busy (measured 2026-11-04: 13 to 28 of 30 long first messages within 6 s). Then it times out and the message goes through without a tip, as before 0.18.0.
 - **Desktop app** (observed with 2.1.286):
   - `PromptHint` (the line under the prompt) is not triggered there. That's why the hint appears under your message.
   - Typed messages carry `origin` `sdk` there. sidekick recognizes them via `$.session.surfaces()`.
@@ -297,7 +344,8 @@ claude --plugin-dir <path-to-clone>/mods/sidekick
   - Two concurrent chats in the same project can show a hint twice (store not atomic).
 - **Wrong chat** is only detected when the model check runs (triggers above). In a small chat below `threshold` nothing is checked, so a message in the wrong small chat goes through. `/sidekick threshold 30k` widens the check, at about $0.001 and 3 s per checked message. sidekick only knows the chat from its running summary, your last 3 messages and the end of Claude's last reply, so a chat that just started has little to compare against.
 - **Model alias `haiku` in `/savings`:** priced as Haiku 5.5 (what Claude Code resolves it to since v2.1.293). If you point the alias elsewhere with `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `/savings` does not know; sidekick's own calls always name the full model ID, so this only matters for entries booked under the bare alias.
-- **`/savings` card and `/sidekick help` table:** each drawing is kept in memory for the last 10 outputs; after a restart or `/reload-plugins`, older outputs show as Markdown. The help table shows the state at the time it was run and is not redrawn after a change.
+- **`/savings` card and `/sidekick help` table:** each drawing is kept in memory for the last 10 outputs; after a restart, `/reload-plugins` or `/sidekick language`, older outputs show as Markdown. The help table shows the state at the time it was run and is not redrawn after a change.
+- **After the mod reloads** (`/sidekick language`, `/reload-plugins`, settings changed): level, settings, the open hint and the Good-to-know note stay, since they are stored. Only things kept in memory reset: opened **?** explanations close, and a Good-to-know check running at that moment is dropped.
 - **Held-back text and Claude Code's limits:** Claude Code ignores a hold-back reason over 4,096 characters and sends the message anyway, and it shows only about 2,000 characters of a reason (found while building 0.9.0, not documented). sidekick keeps the text in the reason under 1,800 characters and stores longer messages in full for `/sidekick status`.
 - **Footer label:** the desktop app does not draw added mode labels; sidekick draws its own ● there (since 0.10.2, checked with desktop app 2.1.288). `/sidekick status` shows whether Claude Code asked for the label at all, on which surface, and whether reading its value failed (since 0.10.1). The engine redraws the label when the state changes (in the terminal, the color depends on the terminal font). Other surfaces show no label.
 - **Rewritten version:** a version over 600 characters is not offered (it would not fit into the question either); long dictations come close to that.

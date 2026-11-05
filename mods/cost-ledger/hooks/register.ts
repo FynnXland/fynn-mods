@@ -6,6 +6,7 @@ import type { EngineInterface, FsEntry, On } from 'claude-code'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import { T, dateTime, shortDate, usd } from './i18n.ts'
+import { isLanguage, languageCommand } from './language.ts'
 import {
   HELP_WORDS,
   HERE_WORDS,
@@ -35,6 +36,7 @@ import {
   dayKey,
   DAY,
   deltaOf,
+  folderOf,
   limitsOf,
   newRec,
   parsePlan,
@@ -48,10 +50,10 @@ import {
   tokensOf,
 } from './logic.ts'
 import type { Carry, HelpInfo, Kind, Limit, Plan, Rec, Settings, SyncInfo, TurnInfo, Usage } from './logic.ts'
-import { FILE_LIMIT, buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, usersIn, utf8Bytes, validDir } from './sync.ts'
+import { FILE_LIMIT, buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, safeProj, usersIn, utf8Bytes, validDir } from './sync.ts'
 import type { Device, SyncFile } from './sync.ts'
-import { hereLine, hereOf, hereText, hereTree } from './here.ts'
-import type { Here } from './here.ts'
+import { hereLine, hereOf, hereState, hereText, hereTree } from './here.ts'
+import type { Here, HereState } from './here.ts'
 import { ledgerTree } from './view.ts'
 import type { View } from './view.ts'
 
@@ -179,6 +181,8 @@ async function honorReset($: EngineInterface) {
  * (Resume, Branch, Reload) wird die Baseline beim nächsten Messen aus dem Datensatz gesetzt.
  */
 async function bind($: EngineInterface, id: string, source: string | undefined, newTitle: string | undefined) {
+  switchOthers(sessionId, rec, id) // der bisherige Chat zählt ab jetzt zu den anderen des Projekts
+  publishedHere = undefined // $.state gilt nur bis /clear, /resume, /branch (interface.md:760): neu schreiben
   sessionId = id
   rec = await load($, id)
   pendingGap = 0 // gehört zur bisherigen Session
@@ -459,6 +463,7 @@ async function syncRound($: EngineInterface, cfg: SyncCfg, own: { id: string; re
     info.error = msg(err)
   }
   const p = await readPeers($, cfg, entries)
+  lastPeers = p.peers
   info.unreadable = p.unreadable
   info.devices = 1 + p.peers.length
   info.names = [cfg.device.name, ...p.peers.map((f) => f.device.name)]
@@ -569,6 +574,124 @@ async function syncCommand($: EngineInterface, rest: string): Promise<string> {
   return `${t.syncOn(dir, device.name, n, renewed)}\n\n${t.syncPrivacy}`
 }
 
+// ---------- $.state `cost-ledger.here` für limit-bars (SPEC Nachtrag 0.10.0) ----------
+// Dieselbe Rechnung wie `/ledger here all` (`hereOf`). Die Projektsumme braucht alle Datensätze. Das Lesen kostet je Schlüssel
+// einen Aufruf (Probe 2026-11-04: 58 Schlüssel 180 ms, Fynns Speicher hat 512), deshalb nie im Weg einer Buchung: Die anderen
+// Datensätze dieses Projekts (lokal und von den Gerätedateien) liegen hier im Modul, die eigenen Beträge kommen aus `rec`.
+// Neu gelesen wird im Hintergrund: beim Start (mit Sync samt Gerätedateien, Fynn 2026-11-04), nach `/ledger reset` und nach
+// einem Turn, wenn der Stand 15 Minuten alt ist (Buchungen anderer Chats). `/ledger` liefert ohnehin einen frischen Stand.
+
+type Others = { recs: { id: string; rec: Rec }[]; since: number | null; devices: string[] | null; at: number }
+let others: Others | null = null
+let lastPeers: SyncFile[] | null = null // fremde Gerätedateien vom letzten Lesen (Start oder /ledger)
+let scanning = false
+let scanGen = 0 // Reset und /ledger erhöhen ihn: Ein Lesen, das davor begann, verwirft sein Ergebnis (Review 0.10.0 K1)
+let publishedHere: string | undefined // Wert beim letzten erfolgreichen Schreiben; `undefined` = sicher neu schreiben
+let hereChain: Promise<unknown> = Promise.resolve()
+const HERE_RESCAN = 15 * 60 * 1000
+
+/** Nur die anderen Datensätze dieses Projekts behalten; der eigene kommt beim Schreiben aus `rec`. */
+function keepOthers(recs: { id: string; rec: Rec }[], since: number | null, devices: string[] | null, now: number, gen = scanGen) {
+  if (gen !== scanGen) return
+  others = { recs: recs.filter((x) => x.id !== sessionId && x.rec.project === meta.project), since, devices, at: now }
+}
+
+/**
+ * Sessionwechsel mitten im Prozess (/clear, /resume, /branch): Der bisherige Chat zählt ab jetzt zu den anderen, der neue
+ * kommt aus `rec`. So stimmt die Summe sofort, ohne den Speicher neu zu lesen.
+ */
+function switchOthers(oldId: string, oldRec: Rec | null, newId: string) {
+  if (!others) return
+  const recs = others.recs.filter((x) => x.id !== oldId && x.id !== newId)
+  if (oldId && oldRec && oldRec.project === meta.project) recs.push({ id: oldId, rec: oldRec })
+  others = { ...others, recs }
+}
+
+/** Speicher (ohne Aufräumen) und, mit `files` und Sync, die fremden Gerätedateien lesen; Grenze `keepDays` wie bei `/ledger`. */
+async function scanOthers($: EngineInterface, files: boolean) {
+  const gen = scanGen
+  const now = await $.clock.now()
+  // Skript-Lauf: kein Projekt, also keine anderen Datensätze nötig (projectUsd bleibt null; Review 0.10.0 K3)
+  if (meta.kind === 'script') return keepOthers([], null, null, now, gen)
+  const cutoff = now - settings.keepDays * DAY
+  const own: { id: string; rec: Rec }[] = []
+  const keys = await $.store.keys()
+  for (const key of keys) {
+    if (!key.startsWith('s:')) continue
+    const r = cleanRec(await $.store.get(key))
+    if (r && r.lastAt >= cutoff) own.push({ id: key.slice(2), rec: r })
+  }
+  const s = await $.store.get('meta:since')
+  let since = typeof s === 'number' ? s : null
+  // Rechenaufwand der Projektsumme (SPEC Nachtrag 0.10.0): Dauer im Debug-Log
+  log($, `here: ${keys.length} Schlüssel in ${(await $.clock.now()) - now} ms gelesen`)
+  const cfg = await syncConfig($)
+  if (!cfg) return keepOthers(own, since, null, now, gen)
+  if (files)
+    try {
+      lastPeers = (await readPeers($, cfg, await $.fs.list(cfg.dir))).peers
+    } catch (err) {
+      log($, `Sync lesen für here: ${msg(err)}`)
+    }
+  const peers = lastPeers ?? []
+  const starts = [since, ...peers.map((f) => f.since)].filter((x): x is number => typeof x === 'number')
+  since = starts.length ? Math.min(...starts) : null
+  keepOthers(mergeRecs(own, peers, cutoff, { root: meta.root, project: meta.project }), since, [cfg.device.name, ...peers.map((f) => f.device.name)], now, gen)
+}
+
+/**
+ * Im Hintergrund neu lesen und danach schreiben; läuft schon ein Lesen, nichts. Niemand wartet darauf: Der Aufruf kehrt sofort
+ * zurück (Start, Turn), Fehler gehen ins Debug-Log.
+ */
+function rescan($: EngineInterface, files = false) {
+  if (scanning) return
+  scanning = true
+  void scanOthers($, files)
+    .catch((err) => log($, `here lesen: ${msg(err)}`))
+    .then(() => {
+      scanning = false
+      return publish($)
+    })
+}
+
+/** Ist der Stand der anderen Chats alt (oder fehlt er), im Hintergrund neu lesen. */
+async function rescanIfOld($: EngineInterface) {
+  const now = await $.clock.now()
+  if (!others || now - others.at >= HERE_RESCAN || now < others.at) rescan($)
+}
+
+/** `cost-ledger.here` schreiben, wenn sich etwas auf den Cent geändert hat. Ohne Session-ID oder vor dem ersten Lesen nichts. */
+async function publishHere($: EngineInterface) {
+  if (!sessionId || !others) return
+  const now = await $.clock.now()
+  const o = others
+  const h = hereOf([...o.recs, ...(rec ? [{ id: sessionId, rec }] : [])], {
+    now,
+    range: 0,
+    sessionId,
+    project: meta.project,
+    kind: meta.kind,
+    since: o.since,
+    devices: o.devices,
+  })
+  const value: HereState = hereState(h, meta.kind === 'script' ? '' : safeProj(folderOf(meta.root), usersIn([meta.root])))
+  const key = JSON.stringify(value)
+  if (key === publishedHere) return
+  // Nie aus ui.render heraus (dort abgelehnt, types:3549-3552); `plugin` und `key` als Literale (validate)
+  await $.state.set({ plugin: 'cost-ledger', key: 'here' }, value)
+  publishedHere = key
+}
+
+/**
+ * Nacheinander und nie werfend: Eine Ablehnung bricht keine Buchung ab (SPEC Nachtrag 0.10.0), nur das Debug-Log hört davon.
+ * Schnell: kein Lesen des Speichers, nur `clock.now` und höchstens ein `state.set`.
+ */
+function publish($: EngineInterface): Promise<void> {
+  const p = hereChain.then(() => publishHere($))
+  hereChain = p.catch(() => undefined)
+  return p.catch((err) => log($, `$.state here: ${msg(err)}`))
+}
+
 async function reset($: EngineInterface): Promise<string> {
   const t = T[settings.lang]
   const cfg = await syncConfig($)
@@ -586,6 +709,9 @@ async function reset($: EngineInterface): Promise<string> {
   await $.store.set('meta:resetAt', now)
   await serial(async () => {
     rec = null // Die bisherigen Kosten dieser Session werden nicht neu gebucht: `seen` bleibt
+    others = null
+    scanGen++
+    scanning = false // ein laufendes Lesen zählt nicht mehr; rescan darf neu beginnen
     carry = {}
     carryAt = 0
     pendingGap = 0
@@ -650,19 +776,27 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       await $.command.register({
         name: 'ledger',
         description: T[settings.lang].commandDescription,
-        argumentHint: '[here|weeks|chats|projects|models|limits|plan|sync|reset|help]',
+        argumentHint: '[here|weeks|chats|projects|models|limits|plan|sync|language|reset|help]',
       })
     } catch (err) {
       log($, `/ledger nicht registriert: ${msg(err)}`)
     }
+    // Kosten für limit-bars: Speicher und mit Sync die Gerätedateien lesen, im Hintergrund, der Start wartet nicht (Fynn
+    // 2026-11-04). Nach einem Modul-Reload ist die Session-ID noch unbekannt: Der Wert in $.state bleibt dann, bis der nächste
+    // Prompt die Session bindet.
+    rescan($, true)
     return next(e)
   })
 
   // Session-ID und Titel; /clear, /resume und /branch wechseln die Session ohne neues session.start (interface.md:786)
   on('classic.SessionStart', async ($, e, next) => {
+    let bound = false
     try {
       await serial(async () => {
-        if (e.session_id && e.session_id !== sessionId) await bind($, e.session_id, e.source, e.session_title)
+        if (e.session_id && e.session_id !== sessionId) {
+          bound = true
+          await bind($, e.session_id, e.source, e.session_title)
+        }
         else if (e.session_title && e.session_title !== title) {
           title = e.session_title
           titleDirty = true
@@ -672,15 +806,21 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } catch (err) {
       log($, `SessionStart: ${msg(err)}`)
     }
+    // Mitten im Prozess (/clear, /resume, /branch) hat der Host $.state geleert; beim Prozessstart schreibt session.start
+    if (started && bound) await publish($)
     return next(e)
   })
 
   // Titel nur merken; geschrieben wird beim nächsten Buchen. Nach einem Modul-Reload feuert nur session.start, nicht
   // classic.SessionStart (types:4173-4178, interface.md:789): dann bindet die Session-ID von hier (BaseHookInput)
   on('classic.UserPromptSubmit', async ($, e, next) => {
+    let bound = false
     try {
       await serial(async () => {
-        if (e.session_id && e.session_id !== sessionId) await bind($, e.session_id, undefined, e.session_title)
+        if (e.session_id && e.session_id !== sessionId) {
+          bound = true
+          await bind($, e.session_id, undefined, e.session_title)
+        }
         else if (e.session_title && e.session_title !== title) {
           title = e.session_title
           titleDirty = true
@@ -700,6 +840,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } catch (err) {
       log($, `UserPromptSubmit: ${msg(err)}`)
     }
+    if (started && bound) await publish($) // Session erst hier gebunden (Modul-Reload)
     return next(e)
   })
 
@@ -711,6 +852,12 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       await serial(() => measure($, false, e.usage, { agentId: e.agentId, durationMs: e.durationMs, reason: e.reason, isAborted: e.isAborted }))
     } catch (err) {
       log($, `Buchen: ${msg(err)}`)
+    }
+    await publish($) // außerhalb der Kette: Mod-Aufrufe warten nicht darauf
+    try {
+      await rescanIfOld($)
+    } catch (err) {
+      log($, `here: ${msg(err)}`)
     }
     try {
       await syncAfterTurn($) // außerhalb der Kette: Mod-Aufrufe und session.end warten nicht auf den Ordner (Review K1)
@@ -725,7 +872,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('model.complete', async ($, e, next) => {
     const r = await next(e)
     try {
-      if ('value' in r) await serial(() => bookCall($, next.origin?.plugin, e.model, r.value.usage, false, true))
+      if ('value' in r) {
+        await serial(() => bookCall($, next.origin?.plugin, e.model, r.value.usage, false, true))
+        void publish($) // der Mod-Aufruf wartet nur aufs eigene Speichern, nicht auf $.state (SPEC Verhalten 5; Review 0.10.0 K2)
+      }
     } catch (err) {
       log($, `Mod-Aufruf: ${msg(err)}`)
     }
@@ -736,7 +886,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const r = await next(e)
     try {
       // Der Fork läuft auf dem Modell der Hauptschleife; „nothing-to-fork“ hat keine Usage und kostet nichts
-      if ('value' in r && 'usage' in r.value) await serial(() => bookCall($, next.origin?.plugin, lastModel, r.value.usage, false))
+      if ('value' in r && 'usage' in r.value) {
+        await serial(() => bookCall($, next.origin?.plugin, lastModel, r.value.usage, false))
+        void publish($) // der Mod-Aufruf wartet nur aufs eigene Speichern, nicht auf $.state (SPEC Verhalten 5; Review 0.10.0 K2)
+      }
     } catch (err) {
       log($, `Mod-Aufruf: ${msg(err)}`)
     }
@@ -747,7 +900,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('model.classify', async ($, e, next) => {
     const r = await next(e)
     try {
-      if ('value' in r) await serial(() => bookCall($, next.origin?.plugin, '', undefined, true))
+      if ('value' in r) {
+        await serial(() => bookCall($, next.origin?.plugin, '', undefined, true))
+        void publish($) // der Mod-Aufruf wartet nur aufs eigene Speichern, nicht auf $.state (SPEC Verhalten 5; Review 0.10.0 K2)
+      }
     } catch (err) {
       log($, `Mod-Aufruf: ${msg(err)}`)
     }
@@ -769,13 +925,18 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const [sub = '', ...rest] = e.args.trim().split(/\s+/)
     const arg = rest[0]
     const what = sub.toLowerCase()
+    // Sprache aller fynn-mods (docs/LANGUAGE-SPEC.md §6 Punkt 2); fängt Fehler selbst ab
+    if (isLanguage(e.args)) return { text: await languageCommand($, { mod: SELF, cmd: 'ledger', lang: settings.lang }, e.args) }
     // Hilfe: nur das erste Wort, ohne weitere Wörter (docs/HELP-SPEC.md §2)
     if (HELP_WORDS.includes(what)) return { text: rest.length ? t.unknownArg(e.args.trim()) : await helpCommand($, e.args) }
     // Speicher voll o. Ä.: ein lesbarer Hinweis statt einer Fehlerzeile (Review 0.5.0 K1)
     if (what === 'reset' || what === 'plan' || what === SYNC_WORD) {
       try {
         if (what === SYNC_WORD) return { text: await syncCommand($, e.args.trim().slice(sub.length).trim()) }
-        return { text: what === 'reset' ? await reset($) : await planCommand($, rest) }
+        if (what !== 'reset') return { text: await planCommand($, rest) }
+        const text = await reset($)
+        rescan($) // Summe neu aus dem geleerten Speicher, im Hintergrund
+        return { text }
       } catch (err) {
         log($, `/ledger ${what}: ${msg(err)}`)
         return { text: t.writeFailed(msg(err)) }
@@ -804,6 +965,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } catch (err) {
       log($, `Sync: ${msg(err)}`)
     }
+    // Frischer Stand für den Kostenring: dieselben Datensätze wie diese Ansicht; ein laufendes älteres Lesen verwirft seins
+    scanGen++
+    keepOthers(recs, since, sync ? (sync.names ?? []) : null, now)
+    await publish($)
     // Dieses Projekt und dieser Chat (SPEC Nachtrag 0.8.0); Standard ist „gesamt“, nicht 30 Tage
     const hereFor = (range: number) =>
       hereOf(recs, {

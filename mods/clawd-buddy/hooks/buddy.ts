@@ -7,7 +7,7 @@ import type { ClientPointerEvent, ClientSurface } from 'claude-code'
 import { createEngine } from './engine.ts'
 import type { Engine } from './engine.ts'
 import { ALL_CLIPS, ALL_PROPS } from './library.ts'
-import { WELCOME_WINDOW_MS, activeAgents, deriveMood, deriveTemper, specialDay } from './mood.ts'
+import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, specialDay } from './mood.ts'
 import type { Facts, Strain } from './mood.ts'
 import { mulberry32 } from './capture.ts'
 import { H, PAL, TICK, W } from './stage.ts'
@@ -125,7 +125,13 @@ function tick(surface: ClientSurface<State>) {
     const t = deriveTemper(c.props.strain, now)
     st.engine.set({ temper: t.temper, tired: t.tired })
   }
-  st.engine.set({ agents: activeAgents(c.props.facts, now), music: !!c.props.facts.music })
+  // Takt (0.11.0): das Raster je Tick aus der Uhr neu. Der Client-Takt läuft etwas langsamer als 75 ms (SPEC Offene Punkte „Bildtakt“);
+  // weil jedes Schlag-Bild seine Grenze aus diesem Raster rechnet, bleibt der Fehler beim einzelnen Bild und wächst nicht an
+  const beat = c.props.facts.beat
+  st.engine.set({
+    agents: activeAgents(c.props.facts, now), music: !!c.props.facts.music,
+    beat: beatGrid(beat, now, st.engine.S.ticks + 1, TICK), group: beatGroup(beat),
+  })
   const m = deriveMood(c.props.facts, now)
   if (m !== c.mood) {
     c.mood = m

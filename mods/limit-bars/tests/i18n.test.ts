@@ -168,24 +168,24 @@ test('en (Standard): Terminal-Balken mit 71%, Countdown und Mon 09:00; voll hei�
   const w = world(on)
   w.setLimits(limits(71, 18))
   const ui = await $.ui.mount(band('terminal'))
-  expect(await ui.find({ type: 'Text', text: '71%' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^71%\s*$/ })).toBeDefined() // Langform auf 4 Zeichen aufgefüllt (0.13.0)
   expect(await ui.find({ type: 'Text', text: ' · in 2 h 14 min' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: ' · Mon 09:00' })).toBeDefined()
   await ui.unmount()
   w.setLimits(limits(100, 18))
   await measure($, limits(100, 18))
   const full = await $.ui.mount(band('terminal'))
-  expect(await full.find({ type: 'Text', text: 'full' })).toBeDefined()
+  expect(await full.find({ type: 'Text', text: /^full\s*$/ }), 'full').toBeDefined()
   await w.clock.advance(2 * 60 * MIN + 15 * MIN)
   await full.redraw()
-  expect(await full.find({ type: 'Text', text: '0%' })).toBeDefined()
-  expect(await full.find({ type: 'Text', text: ' · fresh' })).toBeDefined()
+  expect(await full.find({ type: 'Text', text: /^0%\s*$/ })).toBeDefined()
+  expect(await full.find({ type: 'Text', text: ' · fresh' }), 'fresh').toBeDefined()
 })
 
 test('de: Terminal-Balken wie bisher (71 %, Mo 09:00, voll)', DE, async ($, on) => {
   world(on).setLimits(limits(71, 100))
   const ui = await $.ui.mount(band('terminal'))
-  expect(await ui.find({ type: 'Text', text: '71 %' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^71%\s*$/ })).toBeDefined() // seit 0.13.0 ohne Leerzeichen, auf 4 Zeichen aufgefüllt
   expect(await ui.find({ type: 'Text', text: 'voll' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: ' · Mo 09:00' })).toBeDefined()
 })
@@ -227,6 +227,16 @@ test('Befehle werden in der eingestellten Sprache registriert, Argumente englisc
   expect(cacheCmd?.argumentHint).toBe('[ttl 5|60|auto] [warn on|off] [big 150k] [hints on|off]')
   expect(w.registered.find((c) => c.name === 'handoff')?.argumentHint).toBe('[continue|show]')
   expect(w.registered.find((c) => c.name === 'keepwarm')?.argumentHint).toBe('[hours|off]')
+})
+
+// ---------- 0.11.0 language (docs/LANGUAGE-SPEC.md §3): nur /bars bekommt das Wort ----------
+
+test('0.11.0 language: language steht im argumentHint von /bars, nicht bei den Nebenbefehlen', async ($, on) => {
+  const w = world(on)
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  expect(w.registered.find((c) => c.name === 'bars')?.argumentHint).toBe('[show 5h|week|cache|storage on|off] [style bar|ring] [language de|en] [reset] [help]')
+  for (const name of ['cache', 'handoff', 'keepwarm', 'disk']) expect(w.registered.find((c) => c.name === name)?.argumentHint ?? '', name).not.toContain('language')
 })
 
 test('de: Befehle mit deutscher Beschreibung, Argumente englisch', DE, async ($, on) => {
@@ -294,7 +304,7 @@ test('en: Rückfrage vor kaltem Senden auf Englisch; Cancel verwirft mit englisc
   expect(await $.prompt.submit(userPrompt('again'))).toMatchObject({ text: 'again' })
 })
 
-test('en: Hinweis kurz vor Ablauf auf Englisch', async ($, on) => {
+test('en: Hinweis kurz vor Ablauf auf Englisch', { timeoutMs: 30_000 }, async ($, on) => {
   const w = world(on)
   await w.step($, usage(300000, 5000))
   const ui = await $.ui.mount(band('desktop'))

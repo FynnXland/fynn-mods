@@ -64,6 +64,8 @@ export type Facts = {
   skillAt?: number
   /** Spielt tune-strip gerade Musik? Aus dessen `$.state`-Wert `tune-strip.playing` (types/index.d.ts, 0.9.0). Ohne tune-strip leer. */
   music?: boolean
+  /** Takt und Gruppe des Songs aus `tune-strip.beat` (0.11.0, geprüft mit `beatValue`); fehlt = ohne Takt. Kein Titel. */
+  beat?: BeatValue
   /**
    * Zeitpunkt (ms), an dem er zeigt, dass das Kontextfenster voll wird (eine Stufe aus CTX_WARN überschritten; gezeigt am Turn-Ende,
    * nie mitten in der Arbeit): kurz `ctx_full`. Nur die Prozentzahl aus `session.measure` zählt (types:10771), nie der Verlauf.
@@ -238,6 +240,36 @@ export const SK_MAX_MS = { check: 30_000, stop: 10 * 60_000, handoff: 3 * 60_000
 export function musicValue(v: unknown): boolean {
   return !!v && typeof v === 'object' && (v as { playing?: unknown }).playing === true
 }
+
+export type BeatValue = { bpm: number; at: number; sure: boolean; group: 'calm' | 'groove' | 'hard' | 'sad' | null }
+const BEAT_GROUPS = ['calm', 'groove', 'hard', 'sad'] as const
+
+/**
+ * Wert `tune-strip.beat` streng prüfen (0.11.0; ein fremder Mod könnte ihn umschreiben): `bpm` 60–150, `at` endliche Zahl, `sure`
+ * boolesch, `group` eine der vier oder `null`. Alles andere heißt „ohne Takt“ (`undefined`).
+ */
+export function beatValue(v: unknown): BeatValue | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const o = v as Record<string, unknown>
+  if (typeof o.bpm !== 'number' || !Number.isFinite(o.bpm) || o.bpm < 60 || o.bpm > 150) return undefined
+  if (typeof o.at !== 'number' || !Number.isFinite(o.at)) return undefined
+  if (typeof o.sure !== 'boolean') return undefined
+  const group = o.group === null ? null : BEAT_GROUPS.find((g) => g === o.group)
+  if (group === undefined) return undefined
+  return { bpm: o.bpm, at: o.at, sure: o.sure, group }
+}
+
+/**
+ * Schlagraster in Ticks der Engine (0.11.0): `nextTick` ist der Tick, dessen Bild zur Uhrzeit `now` zu sehen ist. Nur mit sicherem
+ * Takt; sonst `null` (dann wippt er im festen Tempo wie 0.9.x).
+ */
+export function beatGrid(b: BeatValue | undefined, now: number, nextTick: number, tickMs: number): { t0: number; per: number } | null {
+  if (!b || !b.sure) return null
+  return { t0: nextTick + (b.at - now) / tickMs, per: 60000 / b.bpm / tickMs }
+}
+
+/** Gruppe für die Engine: sobald tune-strip sie entschieden hat, auch ohne sicheren Takt (0.12.0, Nachtrag „Gruppe auch ohne sicheren Takt“). */
+export const beatGroup = (b: BeatValue | undefined): BeatValue['group'] => (b ? b.group : null)
 
 /** Nur gültige Werte von sidekick übernehmen (ein dritter Mod könnte ihn umschreiben, Review K2), sonst `null`. */
 export function sidekickValue(v: unknown): Facts['sidekick'] {

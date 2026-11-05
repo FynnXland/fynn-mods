@@ -6,10 +6,11 @@
 // Eine Fassung geht nur nach der Antwort im Dialog raus (seit 0.15.0 gibt es keine Stufe, die ohne Rückfrage sendet).
 import type { EngineInterface, On, RenderElement, RenderNode, Timer, UiPressArgument } from 'claude-code'
 import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.ts'
-import { lang, setLang, spanText, t, tokensText, usdText } from './i18n.ts'
+import { lang, setLang, shortDate, spanText, t, tokensText, usdText } from './i18n.ts'
+import { isLanguage, languageCommand } from './language.ts'
 import { NOTES_WORDS, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, nonNeg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.ts'
 import type { Note } from './notes.ts'
-import { CHECK, HANDOFF, modelLabel, modelName } from './models.ts'
+import { CHECK, HANDOFF, RATE, TIP_TARGETS, modelLabel, modelName } from './models.ts'
 import type { CacheMem, CompleteUsage, StepUsage } from './cache.ts'
 import { joinBand, layer, nameOf, splitBand } from './band.ts'
 import {
@@ -50,8 +51,31 @@ import {
   sumPeriod,
   triggerOf,
   wrongChatChoices,
+  applyTips,
+  mdCell,
+  tipsSwitch,
+  bookRate,
+  bookTip,
+  briefMatches,
+  BRIEF_PREFIX,
+  cleanBrief,
+  familyOf,
+  hashText,
+  isPricey,
+  parseRate,
+  priceShare,
+  rateSystem,
+  ratePrompt,
+  spawnEligible,
+  stepSaving,
+  strikeTip,
+  targetOf,
+  tipBlock,
+  tipRuns,
+  tipSaved,
+  TIP_WAYS,
 } from './logic.ts'
-import type { Art, Booking, Choice, Day, Ignored, Ledger, Level, NoteField, Period, Settings, Skill, Trigger, Verdict } from './logic.ts'
+import type { Art, Booking, Choice, Day, Ignored, Ledger, Level, NoteField, Period, Rate, Settings, Skill, TipWay, Tips, Trigger, Verdict } from './logic.ts'
 import { savingsTree } from './view.ts'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
@@ -124,6 +148,7 @@ type Sitzung = {
   wartungCommits: number
   ownAt: number
   note: Note | null // „Gut zu wissen“ über dem Prompt (Nachtrag 0.13.0)
+  leitsatz: boolean // Modell-Tipp (Ausbau 0.18.0): Leitsatz in dieser Session schon angehängt
 }
 
 /** Offener Wartungs-Hinweis; `at`: seit wann er wartet (Review 0.12.0 K5: in einer anderen Session gezeigt oder erledigt → verfällt). */
@@ -131,7 +156,7 @@ type Offen = WHint & { at?: number }
 const offenOf = (h: WHint, now: number): Offen => ({ ...h, at: (h as Offen).at ?? now })
 
 function emptySitzung(): Sitzung {
-  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null, wartung2: false, wartungCommits: 0, ownAt: 0, note: null }
+  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null, wartung2: false, wartungCommits: 0, ownAt: 0, note: null, leitsatz: false }
 }
 
 /** Offener Wartungs-Hinweis aus dem Store, tolerant gelesen (fehlt oder kaputt → null). */
@@ -180,8 +205,45 @@ function cleanSitzung(v: unknown): Sitzung {
   if (typeof o.wartungCommits === 'number') s.wartungCommits = o.wartungCommits
   if (typeof o.ownAt === 'number') s.ownAt = o.ownAt
   s.note = cleanNote(o.note)
+  if (o.leitsatz === true) s.leitsatz = true
   return s
 }
+
+// ---------- Modell-Tipp: Zustand (Ausbau 0.18.0, Zustand) ----------
+
+/**
+ * Tipp dieses Chats, `$.store` `tip:<sessionId>` (7 Tage). `way`: `chat` nach der Rückfrage (sidekick schreibt `turn.step` um, S1 (ii)),
+ * `sitzung`/`selbst` ein Chat, den Claude gestartet hat (das Modell setzte die App, sidekick bucht nur). `seen`: das Modell, das die
+ * Engine beim ersten umgeschriebenen Schritt nannte; ein anderes später heißt, Fynn hat selbst gewechselt. `checkBack`: nach einem
+ * getippten `/model` prüft der nächste Schritt, ob es zurück auf Opus/Fable ging.
+ */
+type ChatTip = { from: string; to: string; at: number; grund: string; way: 'chat' | 'sitzung' | 'selbst'; usd: number; counted: boolean; seen: string; ended: boolean; checkBack: boolean }
+
+function cleanChatTip(v: unknown): ChatTip | null {
+  const o = (v && typeof v === 'object' ? v : null) as Record<string, unknown> | null
+  if (!o || typeof o.from !== 'string' || typeof o.to !== 'string' || typeof o.at !== 'number') return null
+  const way = o.way === 'sitzung' || o.way === 'selbst' ? o.way : 'chat'
+  const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : 0)
+  return { from: o.from, to: o.to, at: o.at, grund: typeof o.grund === 'string' ? o.grund : '', way, usd: num(o.usd), counted: o.counted === true, seen: typeof o.seen === 'string' ? o.seen : '', ended: o.ended === true, checkBack: o.checkBack === true }
+}
+
+/**
+ * Ein beobachteter Subagent (`$.store` `spawn:<agentId>`, 2 Tage, höchstens 200 im Speicher). `kind`: `agent` von sidekick umgestellt,
+ * `selbst` Claude wählte nach dem Leitsatz selbst ein günstigeres Modell, `opus` nicht umgestellt auf Opus/Fable (Rückblick).
+ * `usd`: geschätzte Ersparnis (bei `opus` die Kosten) bis jetzt, `booked`: davon schon in der Bilanz, `wayBooked`: wo.
+ */
+type Watch = { kind: 'agent' | 'selbst' | 'opus'; from: string; to: string; grund: string; description: string; at: number; usd: number; booked: number; counted: boolean; struck: boolean; wayBooked: '' | TipWay }
+const watches = new Map<string, Watch>()
+const WATCH_MAX = 200
+const SPAWN_DAYS = 2
+const TIP_DAYS = 7
+/** Zweiter Subagent mit gleicher Beschreibung auf Opus binnen so vieler Minuten: der erste war daneben (Gegenprobe). */
+const SAME_TASK_MIN = 30
+
+/** Letzte Umstellungen für `/sidekick tips` (`$.store` `tips:recent`, höchstens 10). */
+type Recent = { at: number; way: 'chat' | 'agent' | 'sitzung'; from: string; to: string; grund: string; description: string }
+
+let tip: ChatTip | null = null
 
 let sessionId = ''
 let mem: CacheMem = emptyMem()
@@ -279,7 +341,8 @@ function buddy($: EngineInterface, kind: BuddyKind | null) {
 // ---- Anzeige in der Fußzeile (Nachtrag 0.10.0): `sidekick.status` = Stufe und ob sidekick gerade arbeitet. Der SessionMode-Hook
 // liest den Wert und abonniert ihn so; ein Schreiben zeichnet nur diese Stelle neu, kein $.ui.invalidate (types:3310-3313).
 // Regeln wie bei `buddy`: nie warten, Fehler verschlucken, nacheinander.
-type Status = { level: Level; busy: boolean }
+// `tip`: Name des Zielmodells, solange sidekick in diesem Chat umstellt (Ausbau 0.18.0: „→ Sonnet“ im Label)
+type Status = { level: Level; busy: boolean; tip?: string }
 let statusLast: string | undefined = undefined // `undefined` = unbekannt (nach einem Neuladen): sicher schreiben
 let statusChain: Promise<unknown> = Promise.resolve()
 /**
@@ -303,7 +366,8 @@ function noteMode($: EngineInterface, surface: string, err: string) {
 /** Arbeitet sidekick gerade: Prüfung (`check`), offene Rückfrage (`stop`), Übergabe (`handoff`) oder eine Box (Übergabe). */
 const busyNow = () => buddyKind === 'check' || buddyKind === 'stop' || buddyKind === 'handoff' || busy !== null
 function pushStatus($: EngineInterface) {
-  const value: Status = { level: settings.level, busy: settings.level !== 'off' && busyNow() }
+  const tipName = tip && !tip.ended && tip.way === 'chat' ? modelName(tip.to) : ''
+  const value: Status = { level: settings.level, busy: settings.level !== 'off' && busyNow(), ...(tipName ? { tip: tipName } : {}) }
   const key = JSON.stringify(value)
   if (key === statusLast) return
   statusLast = key
@@ -328,6 +392,15 @@ async function bindSession($: EngineInterface): Promise<void> {
   const saved = cleanMem(await $.store.get(`cache:${id}`))
   if (saved) mem = { lastActivity: saved.lastActivity, ttl: saved.ttl, ttlSource: saved.ttlSource, ctx: saved.ctx, model: saved.model }
   ses = cleanSitzung(await $.store.get(`sitzung:${id}`))
+  const had = !!tip
+  tip = cleanChatTip(await $.store.get(`tip:${id}`))
+  // Nach /clear gehört „→ Sonnet“ nicht mehr ins Label (der neue Chat hat keinen Tipp)
+  if (had || tip) pushStatus($)
+}
+
+function saveTip($: EngineInterface) {
+  if (!sessionId || !tip) return
+  $.store.set(`tip:${sessionId}`, tip).catch(() => {})
 }
 
 function saveSes($: EngineInterface, now: number) {
@@ -680,7 +753,34 @@ function closeOpen($: EngineInterface, now: number, ctx: number) {
 }
 
 // `before`: letzte Nachrichten und Kurzfassung vor dieser Nachricht; nach „Abbrechen“ beim falschen Chat zurück (Review S1)
-type Check = { trigger: Trigger; ctx: number; model: string; ttl: 5 | 60; cold: boolean; unknown: boolean; coldFor: number; verdict: Verdict | null; before: { recent: string[]; summary: string } }
+// `main`: Hauptmodell aus `$.session.model()` (Ausbau 0.18.0, Befund 1); `brief`: die erste Nachricht kommt aus einem Auftrag eines anderen Chats
+type Check = { trigger: Trigger; ctx: number; model: string; main: string; brief: boolean; ttl: 5 | 60; cold: boolean; unknown: boolean; coldFor: number; verdict: Verdict | null; before: { recent: string[]; summary: string } }
+
+/** Hauptmodell der Session (types:2889-2891); ohne Antwort das zuletzt gesehene aus `turn.step`. */
+async function mainModel($: EngineInterface): Promise<string> {
+  try {
+    return (await $.session.model()) || mem.model
+  } catch {
+    return mem.model
+  }
+}
+
+/**
+ * Erste Nachricht eines Chats, den Claude über `start_session` gestartet hat (Verhalten 4): Steht ein gemerkter Auftrag darin, gilt
+ * seine Entscheidung. Der Chat bucht seine Schritte mit dem gemerkten Ausgangsmodell; der Eintrag ist danach verbraucht.
+ */
+async function claimBrief($: EngineInterface, text: string, now: number): Promise<boolean> {
+  const keys = (await $.store.keys()).filter((k) => k.startsWith('brief:')).slice(0, 100)
+  for (const k of keys) {
+    const b = cleanBrief(await $.store.get(k))
+    if (!b || !briefMatches(b, text, now)) continue
+    await $.store.delete(k)
+    tip = { from: b.from, to: b.to, at: now, grund: '', way: b.selbst ? 'selbst' : 'sitzung', usd: 0, counted: false, seen: '', ended: false, checkBack: false }
+    saveTip($)
+    return true
+  }
+  return false
+}
 
 /** Ergebnis des Torwächters: die Prüfung (null = ohne Prüfung durchlassen) und ein Wartungs-Hinweis für genau diese Nachricht. */
 type Gate = { c: Check | null; w: WHint | null }
@@ -712,6 +812,8 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     if (!first) recent = lastOwn(msgs)
   }
   ses.own += 1
+  // Auftrag eines Eltern-Chats (Verhalten 4): Entscheidung ist gefallen, keine Rückfrage; Fehler: wie ohne Eintrag
+  const brief = first ? await claimBrief($, text, now).catch(() => false) : false
   const before = { recent, summary: ses.summary }
   ses.recent = [...recent, cut(text, 400)].slice(-3)
   // Einmal pro Session, parallel zur Modell-Prüfung; ein Fehler kostet nur den Hinweis, nie die Nachricht (fail-open)
@@ -737,7 +839,8 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     saveSes($, now)
     return { c: null, w: await wp }
   }
-  const base = { trigger, ctx, model: mem.model, ttl, cold: st.kind === 'cold', unknown: st.kind === 'unknown', coldFor: -st.left, before }
+  const main = trigger === 'a' ? await mainModel($) : mem.model
+  const base = { trigger, ctx, model: mem.model || main, main, brief, ttl, cold: st.kind === 'cold', unknown: st.kind === 'unknown', coldFor: -st.left, before }
   // Cache-Stufe: nur die Kalt-Rückfrage nach Regeln, kein Modellaufruf (sie kommt auch ohne Urteil, Verhalten 3.4)
   if (settings.level === 'cache') {
     saveSes($, now)
@@ -751,14 +854,16 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     trigger,
     ctx,
     cache: cacheText(st.kind, st.left),
-    model: mem.model,
+    // Bis 0.17.1 stand hier `mem.model`, bei der ersten Nachricht also „unbekannt“ (Ausbau 0.18.0, Befund 1)
+    model: main,
     commit: c ? `${c.sha} vor ${spanText(now - c.at)}` : 'keiner',
   }, reply)
   // Bricht der Nutzer ab, endet auch die Prüfung (types:2500-2501)
   buddy($, 'check')
   const names = (skills ?? []).map((s) => s.name)
   const t0 = await $.clock.now()
-  const r = await $.model.complete({ ...CHECK, system: checkSystem(skills), prompt }, { signal })
+  // Feld `aufwand` nur bei der ersten Nachricht (Verhalten 2)
+  const r = await $.model.complete({ ...CHECK, system: checkSystem(skills, trigger === 'a'), prompt }, { signal })
   const done = await $.clock.now()
   // `usage` kommt auf jedem Arm, auch bei Abbruch (types:6131): immer buchen
   const usd = completeCost(r.usage as CompleteUsage, CHECK.model)
@@ -958,6 +1063,364 @@ async function freshChat($: EngineInterface, text: string, c: Check, handoff: st
     $.ui.toast(t().sendAfterClearFailed(msg(err), handoff ? t().statusShowsHandoff : t().yourText(cut(text, 300))), { timeoutMs: 20000 })
   }
 }
+
+// ---------- Modell-Tipp (Ausbau 0.18.0) ----------
+
+const DAY_MS = 24 * 60 * 60000
+type TipChoice = 'haiku' | 'sonnet' | 'main' | 'never'
+
+/** Zielmodell als volle ID; ein `[1m]` des Hauptmodells geht auf Sonnet über (S1: `turn.step` nimmt `claude-sonnet-5-5[1m]` an). */
+function targetId(target: 'haiku' | 'sonnet', main: string): string {
+  const id = TIP_TARGETS[target].id
+  return target === 'sonnet' && /\[1m\]/i.test(main) ? `${id}[1m]` : id
+}
+
+function addRecent($: EngineInterface, r: Recent) {
+  $.store
+    .get('tips:recent')
+    .then((v) => $.store.set('tips:recent', [...(Array.isArray(v) ? v : []), r].slice(-10)))
+    .catch(() => {})
+}
+
+/**
+ * Nur `tips` ändern, auf frisch gelesenen Einstellungen (Review 0.18.0 S2): Der Dialog hat kein Zeitlimit, eine andere Session kann
+ * inzwischen Stufe oder Schalter geändert haben. Fehler: nichts gespeichert, die Nachricht geht trotzdem weiter.
+ */
+async function updateTips($: EngineInterface, fn: (t: Tips) => Tips) {
+  try {
+    const cur = cleanSettings(await $.store.get('settings'))
+    settings = { ...cur, tips: fn(cur.tips) }
+    await $.store.set('settings', settings)
+  } catch {
+    // Beiwerk
+  }
+}
+
+/**
+ * Die Rückfrage vor dem Senden (Verhalten 2, E1). Die Nachricht geht danach in jedem Fall unverändert weiter; bei Annahme schreibt
+ * `turn.step` das Modell jeder Hauptanfrage dieses Chats um (S1: `/model` über `$.command.run` speichert das Modell als Standard für neue
+ * Sessions, darum Variante (ii)). Geschlossen oder abgelehnt (`-p`): unverändert senden, nur gezählt (fail-open).
+ */
+async function askTip($: EngineInterface, c: Check, now: number) {
+  const v = c.verdict
+  const target = targetOf(v?.aufwand, settings.tips.haiku)
+  if (!v || !target) return
+  const x = t()
+  const list: TipChoice[] = target === 'haiku' ? ['haiku', 'sonnet', 'main', 'never'] : ['sonnet', 'main', 'never']
+  const name = (ch: TipChoice) => (ch === 'main' ? modelLabel(c.main) : ch === 'never' ? '' : modelLabel(TIP_TARGETS[ch].id))
+  const label = (ch: TipChoice) => (ch === 'never' ? x.tipNever : x.tipSend(name(ch)))
+  const options = list.map((ch, i) => label(ch) + (i === 0 ? x.recommended : ''))
+  const question = x.tipQuestion(v.grund ?? '', modelLabel(TIP_TARGETS[target].id), Math.round(priceShare(c.main, TIP_TARGETS[target].id) * 100))
+  bookDay($, now, (d) => countHint(d, 'modell', 'gezeigt'))
+  buddy($, 'stop')
+  let answer = ''
+  try {
+    answer = await $.ui.ask(question, { options, header: HEADER })
+  } catch {
+    buddy($, null)
+    bookDay($, now, (d) => countHint(d, 'modell', 'abgebrochen'))
+    return
+  }
+  buddy($, null)
+  const plain = answer.endsWith(x.recommended) ? answer.slice(0, -x.recommended.length) : answer
+  // Frei getippter Text (Feld „Other“): wie das Hauptmodell senden, aber kein „abgelehnt“ (Review 0.18.0 K5)
+  const ch = list.find((y) => label(y) === plain) ?? null
+  if (ch === 'haiku' || ch === 'sonnet') {
+    tip = { from: c.main, to: targetId(ch, c.main), at: now, grund: v.grund ?? '', way: 'chat', usd: 0, counted: false, seen: '', ended: false, checkBack: false }
+    saveTip($)
+    await updateTips($, (tp) => ({ ...tp, declined: 0 }))
+    bookDay($, now, (d) => countHint(d, 'modell', 'angenommen'))
+    addRecent($, { at: now, way: 'chat', from: c.main, to: tip.to, grund: tip.grund, description: '' })
+    pushStatus($)
+    return
+  }
+  bookDay($, now, (d) => countHint(d, 'modell', 'ignoriert'))
+  if (ch === 'never') {
+    await updateTips($, (tp) => ({ ...tp, first: false, declined: 0 }))
+    return
+  }
+  if (ch !== 'main') return
+  // Dreimal hintereinander das teure Modell: 7 Tage Ruhe, ein Toast sagt es einmal (Nicht nerven)
+  let rest = false
+  await updateTips($, (tp) => {
+    const declined = tp.declined + 1
+    rest = declined >= 3
+    return { ...tp, declined: rest ? 0 : declined, restUntil: rest ? now + 7 * DAY_MS : tp.restUntil }
+  })
+  if (rest) $.ui.toast(x.tipRests, { timeoutMs: 10000 })
+}
+
+/** Das Umschreiben dieses Chats beenden; `back`: zurück auf Opus/Fable, dann wird die Ersparnis gestrichen (Gegenprobe). */
+function endTip($: EngineInterface, back: boolean, now: number) {
+  const tp = tip
+  if (!tp || tp.ended) return
+  tp.ended = true
+  tp.checkBack = false
+  const usd = tp.usd
+  if (back && tp.way === 'chat') {
+    const counted = tp.counted
+    tp.usd = 0
+    bookDay($, now, (d) => strikeTip(d, 'chat', 'zurueck', usd, counted))
+  }
+  saveTip($)
+  pushStatus($)
+}
+
+/**
+ * Welches Modell dieser Hauptschritt bekommt (S1 (ii)): das Ziel des Tipps, solange Fynn nicht selbst gewechselt hat. Ein anderes
+ * `e.model` als beim ersten Schritt, oder nach einem getippten `/model` wieder Opus/Fable, beendet das Umschreiben.
+ */
+function tipModel($: EngineInterface, model: string, now: number): string {
+  const tp = tip
+  if (!tp || tp.ended || tp.way !== 'chat') return ''
+  if (!tp.seen) {
+    tp.seen = model
+    saveTip($)
+  } else if (model !== tp.seen) {
+    endTip($, isPricey(model), now)
+    return ''
+  }
+  if (tp.checkBack) {
+    tp.checkBack = false
+    if (isPricey(model)) {
+      endTip($, true, now)
+      return ''
+    }
+  }
+  return tp.to
+}
+
+/** Ein Schritt im Hauptchat mit Tipp: Ersparnis buchen, wenn er wirklich auf dem Zielmodell lief (`result.model`). */
+function tipStep($: EngineInterface, u: CompleteUsage & { model?: string }, at: number) {
+  const tp = tip
+  if (!tp || tp.ended || !u.model || familyOf(u.model) !== familyOf(tp.to)) return
+  const usd = stepSaving(u, tp.from, tp.to)
+  const first = !tp.counted
+  tp.usd += usd
+  tp.counted = true
+  saveTip($)
+  const way: TipWay = tp.way
+  bookDay($, at, (d) => bookTip(d, way, usd, first))
+}
+
+/** `RATE` über einen Auftrag; gebucht wird jedes Urteil (Kosten in `kosten`, Rolle `tipp`). Fehler, Timeout, kein JSON: null. */
+async function rate($: EngineInterface, input: Parameters<typeof ratePrompt>[0], signal?: AbortSignal): Promise<Rate | null> {
+  const t0 = await $.clock.now()
+  const r = await $.model.complete({ ...RATE, system: rateSystem(), prompt: ratePrompt(input) }, signal ? { signal } : undefined)
+  const ms = (await $.clock.now()) - t0
+  const v = r.isAnswered ? parseRate(r.text) : null
+  const usd = completeCost(r.usage as CompleteUsage, RATE.model)
+  bookDay($, t0, (d) => bookRate(d, RATE.model, usd, ms, v?.stufe ?? null, r.usage as CompleteUsage))
+  return v
+}
+
+function keepWatch($: EngineInterface, id: string, w: Watch) {
+  watches.set(id, w)
+  while (watches.size > WATCH_MAX) watches.delete(watches.keys().next().value as string)
+  $.store.set(`spawn:${id}`, w).catch(() => {})
+}
+
+/** Subagenten, die schon im Store nachgesehen wurden (je einmal je Modul). */
+const looked = new Set<string>()
+
+function cleanWatch(v: unknown): Watch | null {
+  const o = (v && typeof v === 'object' ? v : null) as Record<string, unknown> | null
+  if (!o || (o.kind !== 'agent' && o.kind !== 'selbst' && o.kind !== 'opus') || typeof o.from !== 'string' || typeof o.to !== 'string' || typeof o.at !== 'number') return null
+  const num = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) ? x : 0)
+  const way = (TIP_WAYS as readonly unknown[]).includes(o.wayBooked) ? (o.wayBooked as TipWay) : ''
+  const str = (x: unknown) => (typeof x === 'string' ? x : '')
+  return { kind: o.kind, from: o.from, to: o.to, grund: str(o.grund), description: str(o.description), at: o.at, usd: num(o.usd), booked: num(o.booked), counted: o.counted === true, struck: o.struck === true, wayBooked: way }
+}
+
+/**
+ * Nach einem Neuladen (auch durch `/sidekick language`) einen beobachteten Subagenten aus `spawn:<agentId>` zurückholen (Review 0.18.0
+ * K4). Schritte während des Neuladens fehlen; was schon gebucht war, bleibt.
+ */
+async function restoreWatch($: EngineInterface, agentId: string) {
+  if (watches.has(agentId) || looked.has(agentId)) return
+  looked.add(agentId)
+  while (looked.size > WATCH_MAX * 5) looked.delete(looked.values().next().value as string)
+  const w = cleanWatch(await $.store.get(`spawn:${agentId}`))
+  if (w) watches.set(agentId, w)
+}
+
+/** Ein Schritt eines Subagenten (`turn.step` mit `agentId`): Ersparnis bzw. beim Rückblick die Kosten aufsummieren, gebucht am Ende. */
+function watchStep(agentId: string, u: (CompleteUsage & { model?: string }) | undefined) {
+  const w = watches.get(agentId)
+  if (!w || !u?.model) return
+  if (w.kind === 'opus') {
+    if (isPricey(u.model)) w.usd += completeCost(u, u.model)
+  } else if (familyOf(u.model) === familyOf(w.to)) w.usd += stepSaving(u, w.from, w.to)
+}
+
+/**
+ * Ende eines Laufs (`turn.complete` mit `agentId`): das Aufsummierte buchen. Ein umgestellter Lauf, der mit `error` oder `aborted` endet
+ * (types:14554-14560) oder schon als daneben markiert ist, wandert ganz nach `daneben` (Gegenprobe).
+ */
+function flushWatch($: EngineInterface, agentId: string, reason: string, at: number) {
+  const w = watches.get(agentId)
+  if (!w) return
+  const bad = w.kind === 'agent' && (reason === 'error' || reason === 'aborted' || w.struck)
+  const delta = w.usd - w.booked
+  const prevWay = w.wayBooked
+  const prevBooked = w.booked
+  // Ein Lauf zählt einmal; ein Subagent mit mehreren Runden (SendMessage) bucht je Runde nur das Neue
+  const way: TipWay = w.kind !== 'agent' ? w.kind : bad || prevWay === 'daneben' ? 'daneben' : 'agent'
+  bookDay($, at, (d) => {
+    if (way === 'daneben' && prevWay === 'agent') {
+      strikeTip(d, 'agent', 'daneben', prevBooked, true)
+      bookTip(d, 'daneben', delta, false)
+    } else bookTip(d, way, delta, prevWay === '')
+  })
+  w.booked = w.usd
+  w.counted = true
+  w.wayBooked = way
+  keepWatch($, agentId, w)
+}
+
+/** Gegenprobe: Ein neuer Subagent auf Opus/Fable mit derselben Beschreibung binnen 30 min heißt, der umgestellte Lauf war daneben. */
+async function strikeSame($: EngineInterface, description: string, now: number) {
+  const desc = description.trim()
+  if (!desc) return
+  for (const [id, w] of watches) {
+    if (w.kind !== 'agent' || w.struck || w.description.trim() !== desc || now - w.at > SAME_TASK_MIN * 60000) continue
+    w.struck = true
+    if (w.counted && w.wayBooked === 'agent') {
+      const usd = w.booked
+      w.wayBooked = 'daneben'
+      bookDay($, now, (d) => strikeTip(d, 'agent', 'daneben', usd, true))
+    }
+    keepWatch($, id, w)
+  }
+}
+
+type SpawnIn = Parameters<typeof spawnEligible>[0] & { prompt: string; description: string; subagentType: string; tool_use_id: string }
+type SpawnOut = { model?: string; agentId?: string; deny?: string }
+
+/** Vorfilter und Urteil vor dem Start (Verhalten 3); null: nichts ändern. */
+async function planSpawn($: EngineInterface, e: SpawnIn, signal?: AbortSignal): Promise<{ target: 'haiku' | 'sonnet'; v: Rate } | null> {
+  settings = cleanSettings(await $.store.get('settings'))
+  if (settings.level !== 'guide' || !settings.tips.auto || !spawnEligible(e)) return null
+  // Ohne gebundene Session ginge die Buchung des Urteils verloren (erster Subagent nach dem Laden, Test 0.18.0)
+  await bindSession($)
+  const v = await rate($, { kind: 'agent', type: e.subagentType, description: e.description, prompt: e.prompt, parentModel: e.parentModel }, signal)
+  const target = targetOf(v?.stufe, settings.tips.haiku)
+  return v && target ? { target, v } : null
+}
+
+/** Nach dem Start: beobachten (umgestellt, selbst gewählt, Rückblick), Zeile im Agent-Fenster, Gegenprobe gegen frühere Läufe. */
+async function afterSpawn($: EngineInterface, e: SpawnIn, r: SpawnOut, plan: { target: 'haiku' | 'sonnet'; v: Rate } | null) {
+  if (r.deny || !r.agentId || !r.model || settings.level !== 'guide') return
+  await bindSession($)
+  const now = await $.clock.now()
+  const base = { grund: plan?.v.grund ?? '', description: e.description, at: now, usd: 0, booked: 0, counted: false, struck: false, wayBooked: '' as const }
+  if (plan && familyOf(r.model) === plan.target) {
+    // Meldet `next` ein anderes Modell (in der Session erzwungen), bucht sidekick nichts
+    keepWatch($, r.agentId, { ...base, kind: 'agent', from: e.parentModel, to: r.model })
+    addRecent($, { at: now, way: 'agent', from: e.parentModel, to: r.model, grund: base.grund, description: e.description })
+    try {
+      $.ui.notice(e.tool_use_id, t().tipNotice(modelLabel(r.model), modelLabel(e.parentModel), base.grund))
+    } catch {
+      // Beiwerk: die Zeile fehlt, die Umstellung bleibt
+    }
+    return
+  }
+  if (!isPricey(e.parentModel)) return
+  if (isPricey(r.model)) {
+    await strikeSame($, e.description, now)
+    if (!e.fork && !e.resume) keepWatch($, r.agentId, { ...base, kind: 'opus', from: r.model, to: r.model })
+  } else if (e.model && settings.tips.auto && ses.leitsatz && !e.resume) keepWatch($, r.agentId, { ...base, kind: 'selbst', from: e.parentModel, to: r.model })
+}
+
+const START_TOOL = 'mcp__ccd_session__start_session'
+
+/**
+ * `start_session` der Desktop-App (Verhalten 4; Name aus der Werkzeugbeschreibung, nicht aus `docs/raw`): ohne `model` und nicht als
+ * Fork urteilt `RATE` über `prompt` + `background`. Ein `model` gilt laut Werkzeugbeschreibung nur bei `context: "fresh"`; Transkripte
+ * (2026-11-04) zeigen es auch ohne `context` meist wirksam. Gebucht wird darum erst im neuen Chat und nur, wenn er auf dem Ziel läuft.
+ */
+async function planStart($: EngineInterface, a: Record<string, unknown>, signal?: AbortSignal): Promise<{ to: string; from: string; selbst: boolean } | null> {
+  settings = cleanSettings(await $.store.get('settings'))
+  if (settings.level !== 'guide' || !settings.tips.auto || a.context === 'fork') return null
+  const prompt = typeof a.prompt === 'string' ? a.prompt : ''
+  if (prompt.length < 20) return null
+  const from = await mainModel($)
+  if (!isPricey(from)) return null
+  await bindSession($)
+  if (typeof a.model === 'string' && a.model) {
+    // Claude hat selbst gewählt: nur mitzählen, wenn es günstiger ist und der Leitsatz kam (nicht zugerechnet)
+    return ses.leitsatz && !isPricey(a.model) && familyOf(a.model) ? { to: a.model, from, selbst: true } : null
+  }
+  const background = typeof a.background === 'string' ? a.background : ''
+  const v = await rate($, { kind: 'chat', type: '', description: typeof a.title === 'string' ? a.title : '', prompt: background ? `${background}\n\n${prompt}` : prompt, parentModel: from }, signal)
+  const target = targetOf(v?.stufe, settings.tips.haiku)
+  return target ? { to: TIP_TARGETS[target].id, from, selbst: false } : null
+}
+
+/** Den Auftrag merken (`brief:<hash>`), bevor der neue Chat startet; seine erste Nachricht enthält diese 200 Zeichen (S3). */
+async function rememberBrief($: EngineInterface, prompt: string, p: { to: string; from: string; selbst: boolean }) {
+  const prefix = prompt.trim().slice(0, BRIEF_PREFIX)
+  const at = await $.clock.now()
+  await $.store.set(`brief:${hashText(prefix)}`, { prefix, from: p.from, to: p.to, at, ...(p.selbst ? { selbst: true } : {}) })
+  if (!p.selbst) addRecent($, { at, way: 'sitzung', from: p.from, to: p.to, grund: '', description: cut(prompt.replace(/\s+/g, ' '), 80) })
+}
+
+/** Leitsatz (Verhalten 5): einmal je Session bei der ersten Nachricht, nur mit `tips auto` und teurem Hauptmodell; sonst leer. */
+async function leitsatzFor($: EngineInterface, e: { text: string; command?: unknown; isMeta?: true }): Promise<string> {
+  if (e.command || e.isMeta || e.text.trim().startsWith('/')) return ''
+  settings = cleanSettings(await $.store.get('settings'))
+  if (settings.level !== 'guide' || !settings.tips.auto) return ''
+  await bindSession($)
+  if (ses.leitsatz || !isPricey(await mainModel($))) return ''
+  ses.leitsatz = true
+  saveSes($, await $.clock.now())
+  return t().leitsatz
+}
+
+/** `/sidekick tips …` (Konfiguration): Schalter, `stop` beendet den Tipp dieses Chats, sonst der Stand. */
+async function tipsCommand($: EngineInterface, rest: string): Promise<string> {
+  settings = cleanSettings(await $.store.get('settings'))
+  const r = applyTips(settings.tips, rest)
+  const x = t()
+  if (!r) return x.tipsUnknown(rest.trim())
+  await bindSession($)
+  const now = await $.clock.now()
+  // Rückmeldung als erste Zeile (0.18.1): sonst sieht ein Schalter, der schon so stand, aus, als passiere nichts
+  let said = ''
+  const sw = tipsSwitch(settings.tips, r.form, now)
+  if (sw) said = sw.changed ? x.tipsNow(x.tipsWhat[sw.what], sw.on) : x.tipsAlready(x.tipsWhat[sw.what], sw.on)
+  if (r.form === 'stop') {
+    said = tip && !tip.ended && tip.way === 'chat' ? x.tipsStopped(modelLabel(tip.from)) : x.tipsNoStop
+    endTip($, true, now)
+  } else if (r.tips !== settings.tips) {
+    settings = { ...settings, tips: r.tips }
+    await $.store.set('settings', settings)
+    pushStatus($)
+  }
+  const recent = ((await $.store.get('tips:recent')) as Recent[] | undefined) ?? []
+  const keys = (await $.store.keys()).filter((k) => k.startsWith('bilanz:'))
+  const ledgers: Ledger[] = []
+  for (const k of keys) ledgers.push(cleanLedger(await $.store.get(k)))
+  const week = sumPeriod(ledgers, 'week', now)
+  const s = settings.tips
+  const onOff = (b: boolean) => (b ? x.on : x.off)
+  const out = [...(said ? [said, ''] : []), x.tipsTitle, '', '| | |', '|---|---|']
+  out.push(x.tipsRowFirst(s.first ? (now < s.restUntil ? x.tipsResting(shortDay(s.restUntil)) : x.on) : x.off))
+  out.push(x.tipsRowAuto(onOff(s.auto)))
+  out.push(x.tipsRowHaiku(onOff(s.haiku)))
+  out.push(x.tipsRowChat(tip && !tip.ended && tip.way === 'chat' ? `${modelLabel(tip.from)} → ${modelLabel(tip.to)} · ${hhmm(tip.at)}` : '–'))
+  if (settings.level !== 'guide') out.push(x.tipsRowLevel(x.level[settings.level]))
+  out.push('', x.tipsWeek(usdText(tipSaved(week)), tipRuns(week)), '')
+  const list = Array.isArray(recent) ? recent.filter((y) => y && typeof y.at === 'number').slice(-10).reverse() : []
+  if (list.length) {
+    out.push(x.tipsRecentHead, '|---|---|---|---|')
+    for (const y of list) out.push(`| ${shortDay(y.at)} ${hhmm(y.at)} | ${x.tipWay[y.way] ?? y.way} | ${modelLabel(y.from)} → ${modelLabel(y.to)} | ${mdCell(cut([y.description, y.grund].filter(Boolean).join(' · '), 90)) || '–'} |`)
+  } else out.push(x.tipsNone)
+  out.push('', x.tipsChange)
+  return out.join('\n')
+}
+
+const shortDay = (ms: number) => shortDate(ms)
 
 // ---------- Gut zu wissen (SPEC Nachtrag 0.13.0) ----------
 
@@ -1165,7 +1628,7 @@ async function helpCommand($: EngineInterface): Promise<string> {
   const hs = cleanHints(await $.store.get('hints'))
   const known = cleanTopics(await $.store.get('notes:known')).length
   const source = settings.ttl ? 'set' : mem.ttlSource === 'gemessen' ? 'measured' : 'default'
-  const data = sidekickHelp({ settings, ttl: { min: ttlOf(mem, settings.ttl), source }, hints: { on: hs.on, off: hs.off }, known })
+  const data = sidekickHelp({ settings, ttl: { min: ttlOf(mem, settings.ttl), source }, hints: { on: hs.on, off: hs.off }, known, now })
   const tag = `#${(++helpNo).toString(36)}${now.toString(36).slice(-5)}`
   helps.set(tag, data)
   while (helps.size > 10) helps.delete(helps.keys().next().value as string)
@@ -1242,6 +1705,12 @@ async function housekeeping($: EngineInterface) {
   }
   // Reste der Aufteilung (0.9 bis 0.14), die nichts mehr liest
   for (const k of keys.filter((x) => x === 'split:last' || x === 'held:last')) await $.store.delete(k)
+  // Modell-Tipp (Ausbau 0.18.0, Zustand): Tipp eines Chats 7 Tage, Subagenten und Aufträge an neue Chats 2 Tage
+  const ttlOfKey = (k: string) => (k.startsWith('tip:') ? TIP_DAYS : SPAWN_DAYS)
+  for (const k of keys.filter((x) => x.startsWith('tip:') || x.startsWith('spawn:') || x.startsWith('brief:')).slice(0, 400)) {
+    const v = (await $.store.get(k)) as { at?: unknown } | undefined
+    if (!v || typeof v.at !== 'number' || now - v.at > ttlOfKey(k) * DAY) await $.store.delete(k)
+  }
   const sids = keys.filter((k) => k.startsWith('bilanz:') && k !== 'bilanz:tage').map((k) => k.slice(7))
   const sources: { sid: string; ledger: Ledger }[] = []
   for (const sid of sids.slice(0, 300)) sources.push({ sid, ledger: cleanLedger(await $.store.get(`bilanz:${sid}`)) })
@@ -1269,6 +1738,7 @@ async function statusText($: EngineInterface): Promise<string> {
   out.push(x.rowSkills(onOff(settings.skills)))
   out.push(x.rowTtl(ttl, settings.ttl ? x.ttlSet : mem.ttlSource === 'gemessen' ? x.ttlMeasured : x.ttlDefault))
   out.push(x.rowNotes(onOff(settings.notes), cleanTopics(await $.store.get('notes:known')).length))
+  out.push(x.rowTips(onOff(settings.tips.first), onOff(settings.tips.auto)))
   if (mem.ctx) out.push(x.rowCtx(tokensText(mem.ctx), cacheText(st.kind, st.left)))
   out.push('', x.summary(ses.summary), '')
   out.push(x.lastHint(ses.last ? `${hhmm(ses.last.at)} · ${ses.last.line}` : ''), '')
@@ -1328,7 +1798,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     housekeeping($).catch(() => {})
     // Befehle zuletzt, jeder für sich (CLAUDE.md, Registrieren in session.start); englisch
     for (const c of [
-      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|help]' },
+      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|language|help]' },
       { name: 'savings', description: t().cmdSavings, argumentHint: '[detail] [today|week|all|help]' },
     ]) {
       try {
@@ -1342,7 +1812,21 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
 
   // Jede Anfrage der Hauptschleife beobachten (Vorlage limit-bars register.ts:348-380); Subagenten nicht
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId) return yield* next(e)
+    if (e.agentId) {
+      // Modell-Tipp (Ausbau 0.18.0): Schritte beobachteter Subagenten aufsummieren; der Schritt selbst bleibt unberührt
+      try {
+        await restoreWatch($, e.agentId)
+      } catch {
+        // Beiwerk
+      }
+      const r = yield* next(e)
+      try {
+        watchStep(e.agentId, r.usage as (CompleteUsage & { model?: string }) | undefined)
+      } catch {
+        // Beiwerk
+      }
+      return r
+    }
     // „Gut zu wissen“ (Nachtrag 0.13.0): an Schritt 6, 12, 18 … im Hintergrund, der Schritt wartet nicht
     try {
       maybeNote($, e)
@@ -1350,22 +1834,82 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       // Beiwerk
     }
     let startedAt = 0
+    let want = ''
     try {
       startedAt = await $.clock.now()
+      // Modell-Tipp angenommen: jede Hauptanfrage dieses Chats auf das Ziel (S1 (ii), types:14677-14700 `model` umschreibbar)
+      await bindSession($)
+      want = tipModel($, e.model, startedAt)
     } catch {
-      // ohne Uhr keine Auswertung
+      // ohne Uhr keine Auswertung, ohne Tipp unverändert
     }
-    const r = yield* next(e)
+    const r = yield* next(want ? { ...e, model: want } : e)
     try {
-      if (r.usage && startedAt) await afterStep($, r.usage, startedAt)
+      if (r.usage && startedAt) {
+        await afterStep($, r.usage, startedAt)
+        tipStep($, r.usage as CompleteUsage & { model?: string }, startedAt)
+      }
     } catch {
       // Beiwerk: die Anfrage selbst bleibt unberührt
     }
     return r
   })
 
+  // Modell-Tipp (Verhalten 3): Subagent-Modell wählen. Fail-open: jeder Fehler, Timeout oder kein Urteil startet unverändert. Der Hook
+  // wartet nur in Mods-API-Aufrufen (10-s-Grenze, docs/raw/en/events.md:181), `RATE` hat 6 s.
+  on('agent.spawn', async ($, e, next) => {
+    let plan: Awaited<ReturnType<typeof planSpawn>> = null
+    try {
+      plan = await planSpawn($, e as SpawnIn, next.signal)
+    } catch {
+      plan = null
+    }
+    const r = await next(plan ? { ...e, model: TIP_TARGETS[plan.target].alias } : e)
+    try {
+      await afterSpawn($, e as SpawnIn, r as SpawnOut, plan)
+    } catch {
+      // Beiwerk
+    }
+    return r
+  })
+
+  // Ende eines Subagent-Laufs: Buchung und Gegenprobe (Verhalten 6, Buchung). Nur Beobachter, `next(e)` unverändert.
+  on('turn.complete', async ($, e, next) => {
+    try {
+      if (e.agentId) await restoreWatch($, e.agentId)
+      if (e.agentId && watches.has(e.agentId)) {
+        // Ohne gebundene Session ginge die Buchung verloren (nach einem Neuladen ohne neue Nachricht)
+        await bindSession($)
+        flushWatch($, e.agentId, e.reason, await $.clock.now())
+      }
+    } catch {
+      // Beiwerk
+    }
+    return next(e)
+  })
+
   // Commits merken (Kurzfassung, Wiederholungsregel). `gitOperation` steht im Ergebnis von Bash und PowerShell (tools:4251, :4728)
-  on('tool.call', { tool: ['Bash', 'PowerShell'] }, async ($, e, next) => {
+  // Seit 0.18.0 auch `start_session` der Desktop-App (Modell-Tipp, Verhalten 4): ein `on` je Event und Matcher (CLAUDE.md)
+  on('tool.call', { tool: ['Bash', 'PowerShell', START_TOOL] }, async ($, e, next) => {
+    if (e.tool === START_TOOL) {
+      const a = e as unknown as Record<string, unknown>
+      let plan: Awaited<ReturnType<typeof planStart>> = null
+      try {
+        plan = await planStart($, a, next.signal)
+        if (plan) await rememberBrief($, String(a.prompt), plan)
+      } catch {
+        plan = null
+      }
+      // Die Zeile nur, solange der Aufruf offen ist (types:2370-2375), also vor `next`
+      if (plan && !plan.selbst && typeof a.tool_use_id === 'string')
+        try {
+          $.ui.notice(a.tool_use_id, t().tipNoticeChat(modelLabel(plan.to), modelLabel(plan.from)))
+        } catch {
+          // Beiwerk
+        }
+      // `effort` bleibt (E3); ein höheres Modell als das eigene ignoriert die App (Werkzeugbeschreibung)
+      return next(plan && !plan.selbst ? ({ ...a, model: plan.to } as unknown as typeof e) : e)
+    }
     const r = await next(e)
     try {
       const res = 'result' in r ? (r.result as { gitOperation?: { commit?: { sha?: string } } } | undefined) : undefined
@@ -1397,6 +1941,26 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     } catch {
       // Beiwerk
     }
+    // Modell-Tipp (Ausbau 0.18.0, Gegenprobe): Nach einem getippten `/model` prüft der nächste Schritt, ob es zurück auf Opus/Fable ging
+    try {
+      if (/^\/model(\s|$)/i.test(e.text.trim())) {
+        await bindSession($)
+        if (tip && !tip.ended && tip.way === 'chat') {
+          tip.checkBack = true
+          saveTip($)
+        }
+      }
+    } catch {
+      // Beiwerk
+    }
+    // Leitsatz (Verhalten 5): einmal je Session als `context` (types:9771-9775); fehlt er, geht die Nachricht ohne ihn
+    let leit = ''
+    try {
+      leit = await leitsatzFor($, e)
+    } catch {
+      leit = ''
+    }
+    const go = (x: typeof e) => next(leit ? { ...x, context: [...(x.context ?? []), leit] } : x)
     // Mit Anhängen oder `@datei` kein neuer Chat: neu gesendet fehlten sie (types:8558-8561, limit-bars)
     const resendable = !e.attachments?.length && !/(^|\s)@\S/.test(e.text)
     let g: Gate = PASS
@@ -1404,12 +1968,12 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       g = await gate($, e.text, e.origin.kind, !!e.turnId || e.wait, next.signal)
     } catch {
       buddy($, null)
-      return next(e)
+      return go(e)
     }
     const c = g.c
     if (!c) {
       buddy($, null)
-      return sendWithWartung($, e, g.w, () => next(e))
+      return sendWithWartung($, e, g.w, () => go(e))
     }
     const v = c.verdict
     let now = 0
@@ -1423,6 +1987,16 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     }
     const d = dialog(c, resendable, base)
     buddy($, d ? 'stop' : null)
+    // Modell-Tipp bei der ersten Nachricht (Verhalten 2): nur ohne andere Rückfrage dieser Prüfung („höchstens eine Sache“); die
+    // Nachricht geht danach in jedem Fall unverändert weiter, nur die Schritte laufen bei Annahme auf dem Ziel
+    if (!d && c.trigger === 'a' && v) {
+      try {
+        const why = tipBlock({ level: settings.level, tips: settings.tips, now, model: c.main, stufe: v.aufwand, text: e.text, attachments: !!e.attachments?.length, otherDialog: false, brief: c.brief })
+        if (!why) await askTip($, c, now)
+      } catch {
+        buddy($, null)
+      }
+    }
     if (!d) {
       // Neuer Chat ohne Dialog (Anhang oder @datei, Verhalten 4): auch keine Zeile, die Größe nennt (Nachtrag 0.12.0, Entscheidung 1).
       // Ein „anhalten“ ohne Dialog (Fassung über 600 Zeichen) geht durch denselben Filter wie ein Hinweis (Review 0.12.0 S2)
@@ -1440,11 +2014,11 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
         if (g.w) ses.wartungOffen = offenOf(g.w, now)
         saveSes($, now)
         bookDay($, now, (x) => countHint(x, v.art, 'gezeigt'))
-        const r = await next(e)
+        const r = await go(e)
         $.ui.invalidate('ui.render')
         return r
       }
-      return sendWithWartung($, e, g.w, () => next(e))
+      return sendWithWartung($, e, g.w, () => go(e))
     }
     // Rückfrage: die Prüfung hat Vorrang, der Wartungs-Hinweis wartet auf die nächste Nachricht ohne Zeile (Nachtrag 0.12.0)
     bookDay($, now, (x) => countHint(x, d.art, 'gezeigt'))
@@ -1462,7 +2036,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       buddy($, null)
       // Dialog geschlossen oder niemand zu fragen: so senden, wie getippt. Ausnahme falscher Chat (Fynn: verweigern, Review S2):
       // nicht in den falschen Chat senden, der Text bleibt zum Kopieren
-      if (d.art !== 'falscher_chat') return next(e)
+      if (d.art !== 'falscher_chat') return go(e)
       bookDay($, now, (x) => countHint(x, d.art, 'abgebrochen'))
       forget($, c, now)
       return { drop: t().dropWrongChat(cut(e.text, 3000)) }
@@ -1471,7 +2045,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       bookDay($, now, (x) => countHint(x, 'fassung', 'angenommen'))
       // Sichtbar machen, was gesendet wurde: Der Desktop zeigt in der Sprechblase das Original
       pending = { text: e.text, alt: v.fassung, line: t().sentFassung(whoOf()), sent: v.fassung }
-      const r = await next({ ...e, text: v.fassung })
+      const r = await go({ ...e, text: v.fassung })
       $.ui.invalidate('ui.render')
       return r
     }
@@ -1500,7 +2074,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     // Trotzdem gesendet: diese Art ruht bis +50k oder zum nächsten Commit; beim falschen Chat auch im Kalt-Fall
     if (c.trigger !== 'c' || d.art === 'falscher_chat') ses.ignored = { ...ses.ignored, [d.art]: { ctx: c.ctx, commits: ses.commits } }
     saveSes($, now)
-    return next(e)
+    return go(e)
   })
 
   // Skill-Nutzung zählen; ein vorgeschlagener Skill gilt dann als angenommen
@@ -1672,11 +2246,14 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   })
 
   on('command.run', { command: 'sidekick' }, async ($, e) => {
+    // Sprache aller fynn-mods (docs/LANGUAGE-SPEC.md §6 Punkt 2) vor allem, was Store, Uhr oder Zustand liest; fängt Fehler selbst ab
+    if (isLanguage(e.args)) return { text: await languageCommand($, { mod: 'sidekick', cmd: 'sidekick', lang: lang() }, e.args) }
     const args = e.args.trim()
     // `help` und `?` nur als einziges Wort (HELP-SPEC §2); `help foo` gilt als unbekannt
     if (isHelp(args)) return { text: await helpCommand($) }
     if (/^hints\b/i.test(args)) return { text: await hintsCommand($, args.slice(5)) }
     if (/^notes\b/i.test(args)) return { text: await notesCommand($, args.slice(5)) }
+    if (/^tips\b/i.test(args)) return { text: await tipsCommand($, args.slice(4)) }
     // Immer frisch laden: eine andere Session kann die Stufe geändert haben
     settings = cleanSettings(await $.store.get('settings'))
     if (args && args.toLowerCase() !== 'status') {
@@ -1714,11 +2291,14 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       // Rückfall aus dem Nachtrag 0.10.0 (Befunde): ein eigener Baum mit farbigem ● neben der Zeichnung der Engine
       const theirs = await next(e)
       const dot = el('Text', { color: s.level === 'off' ? MODE_RED : s.busy ? MODE_ORANGE : MODE_GREEN }, ['●'])
-      const word = el('Text', { dimColor: true }, [s.level === 'off' ? x.modeOffWord : `sidekick · ${x.level[s.level]}`])
+      // Modell-Tipp (Ausbau 0.18.0): Die Auswahl der App zeigt weiter das Hauptmodell, das Label den Tipp („→ Sonnet“)
+      const tipText = s.level !== 'off' && typeof s.tip === 'string' && s.tip ? ` → ${s.tip}` : ''
+      const word = el('Text', { dimColor: true }, [s.level === 'off' ? x.modeOffWord : `sidekick · ${x.level[s.level]}${tipText}`])
       const mine = el('Box', { key: 'sidekick-mode', flexDirection: 'row', columnGap: 1, flexShrink: 0 }, [dot, word])
       return el('Box', { flexDirection: 'row', columnGap: 2 }, theirs ? [theirs, mine] : [mine])
     }
-    const label = s.level === 'off' ? x.modeOff : x.modeOn(s.busy ? '🟠' : '🟢', x.level[s.level])
+    const tipText = s.level !== 'off' && typeof s.tip === 'string' && s.tip ? ` → ${s.tip}` : ''
+    const label = s.level === 'off' ? x.modeOff : x.modeOn(s.busy ? '🟠' : '🟢', x.level[s.level]) + tipText
     return next({ ...e, props: { ...e.props, modes: [...e.props.modes, label] } })
   })
 

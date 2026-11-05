@@ -5,12 +5,16 @@
 // Texte en/de nach `userConfig.language` (i18n.ts); Befehle und Argumente englisch.
 // Fail-open: Ein Fehler heißt nur „keine Anzeige“; was andere Mods ins Band zeichnen, bleibt erhalten.
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
-import { joinBand, layer, slot, splitBand, SLOTS } from './band.ts'
+import { joinBand, layer, levelOf, slot, splitBand, SLOTS } from './band.ts'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import { T, langOf } from './i18n.ts'
 import type { Lang } from './i18n.ts'
-import { actionFor, desktopRoom, desktopStage, fmtTime, parseTune, pickStage, pollInterval, positionNow, SIZES } from './model.ts'
+import { BEAT_BOOT, BEAT_CS } from './beat-cs.ts'
+import { Tracker, needsWrite, parseLine, sameBeat, splitLines } from './beat.ts'
+import type { Beat } from './beat.ts'
+import { actionFor, desktopRoom, desktopStage, fmtTime, OFFSET_MAX, parseTune, pickStage, pollInterval, positionNow, SIZES } from './model.ts'
+import { isLanguage, languageCommand, languageHelp } from './language.ts'
 import type { Action, ControlWord, Size, Stage } from './model.ts'
 import { CONTROL_SCRIPT, PS_ABS, PS_ARGS, QUERY_SCRIPT, REPEAT_MODES, parseQuery, trackKey } from './ps.ts'
 import type { Query, Track } from './ps.ts'
@@ -21,6 +25,7 @@ const ACCENT = 'success' // Akzent der Hilfe (Theme-Key, HELP-SPEC §4); Spotify
 const TICK = 1000 // Takt in ms; gelesen wird alle pollSeconds
 const POS_REDRAW = 5000 // Zeit und Balken der Leiste höchstens so oft neu zeichnen (öfter flackert es und verschluckt Klicks)
 const BACK_RESTART = 3 // „Zurück“ springt über 3 s an den Anfang des Titels, darunter zum vorigen Titel (wie Spotify)
+const HOLD_MS = 10000 // so lange bleibt die Leiste stehen, wenn die Mediensteuerung keine Sitzung meldet (Titelwechsel)
 const WAIT_MS = { track: 1500, other: 200 } // Wartezeit im Steuer-Skript, bis die Mediensteuerung den neuen Stand meldet
 
 // Optionen aus userConfig, in register() gesetzt
@@ -28,22 +33,31 @@ let lang: Lang = 'en'
 let optSize: Size | 'off' = 'auto'
 let pollSeconds = 4
 let extraButtons = false
-// Einstellungen aus `$.store` (`/tune size|on|off`), gelten in allen offenen Chats
-type Saved = { size?: Size; enabled?: boolean }
+// Einstellungen aus `$.store` (`/tune size|on|off|beat`), gelten in allen offenen Chats
+type Saved = { size?: Size; enabled?: boolean; beat?: boolean; offset?: number }
 let saved: Saved = {}
 
 // Sitzungsstand
 let surface: string | null = null
+// Oberfläche aus dem Zeichnen: Im Desktop (SDK) meldet session.start `surface: null` (types@2.1.318:12620-12624), erst `ui.render`
+// sagt `desktop`. Für den Takt-Helfer und das Nachmelden nach /clear zählen beide.
+let drawSurface: string | null = null
 let isWindows = true
 let track: Track | null = null
 let cover: string | undefined
 let coverKey = ''
 let queryAt = 0
 let hasSession = false
+let lostAt = 0 // seit wann keine Sitzung gemeldet wird (0 = Sitzung da)
 let failures = 0
 let inflight: Promise<void> | null = null
 let timer: Timer | null = null
 let awaitingRender = false
+let renderMissed = 0 // Takte in Folge, in denen ein angefordertes Neuzeichnen ausblieb
+// Erst nach so vielen Takten ohne Zeichnung gilt das Band als verdeckt (0.6.3): Der Desktop liefert ein Neuzeichnen nicht immer binnen
+// 1 s; vorher hielt der Takt dann an, der Takt-Helfer endete 15 s später und musste neu einmessen („wartet“ trotz Musik, Fynn 2026-11-04)
+const RENDER_GRACE = 4
+let bandDrawn = false // zeichnet tune-strip gerade etwas ins Band (Stufe nicht „aus“)? Nur dann läuft der Takt-Helfer (Review 0.6.0 K3)
 let drawsTime = false
 let lastSig = ''
 let lastDrawAt = 0
@@ -61,6 +75,8 @@ function cleanSaved(v: unknown): Saved {
   const size = SIZES.find((s) => s === o.size)
   if (size) out.size = size
   if (typeof o.enabled === 'boolean') out.enabled = o.enabled
+  if (typeof o.beat === 'boolean') out.beat = o.beat
+  if (typeof o.offset === 'number' && Number.isInteger(o.offset) && Math.abs(o.offset) <= OFFSET_MAX) out.offset = o.offset
   return out
 }
 
@@ -103,16 +119,40 @@ async function runQuery($: EngineInterface, fresh = false): Promise<void> {
   }
 }
 
+/**
+ * Keine Sitzung gemeldet. Beim Titelwechsel fehlt sie für einen Moment; der letzte Stand bleibt dann HOLD_MS stehen (die Position läuft
+ * weiter), erst danach verschwindet die Leiste. Sonst klappt sie bei jedem Wechsel zu und wieder auf.
+ */
+function lose(now: number): void {
+  if (!track) return
+  if (lostAt === 0) lostAt = now
+  if (now - lostAt < HOLD_MS) return
+  track = null
+  hasSession = false
+  cover = undefined
+  coverKey = ''
+  lostAt = 0
+}
+
 /** Stand aus einer Antwort der Abfrage übernehmen. */
 async function adopt($: EngineInterface, q: Query): Promise<void> {
   failures = 0
-  queryAt = await $.clock.now()
-  hasSession = q.track !== null
+  const now = await $.clock.now()
+  if (!q.track) {
+    lose(now)
+    return
+  }
+  lostAt = 0
+  noteTrack(track, queryAt, q.track, now)
+  // Ohne lesbare Prozess-ID (Spotify beendet) kein Helfer gegen eine alte, tote ID (Review 0.6.0 K1)
+  spotifyPid = q.pid ?? 0
+  queryAt = now
+  hasSession = true
   track = q.track
   if (q.cover) {
     cover = q.cover
     coverKey = q.track ? trackKey(q.track) : ''
-  } else if (!q.track || trackKey(q.track) !== coverKey) {
+  } else if (trackKey(q.track) !== coverKey) {
     cover = undefined
     coverKey = ''
   }
@@ -143,8 +183,7 @@ async function runControl($: EngineInterface, a: Action): Promise<'ok' | 'fail' 
     const r = await $.process.run([PS_ABS, ...PS_ARGS, CONTROL_SCRIPT], { env, timeoutMs: 15000 })
     const out = r.stdout.trim().split(/\r?\n/)[0]?.trim()
     if (out === 'nosession') {
-      track = null
-      hasSession = false
+      lose(await $.clock.now())
       return 'nosession'
     }
     const q = parseQuery(r.stdout)
@@ -185,7 +224,10 @@ function perform($: EngineInterface, a: Action): Promise<'ok' | 'fail' | 'nosess
 /** Sofort zeigen, was der Klick bewirken soll. */
 async function show($: EngineInterface, a: Action): Promise<void> {
   epoch += 1
-  expectState(a, await $.clock.now())
+  const now = await $.clock.now()
+  // Eigener Sprung im Titel: der Schlag davor gilt nicht mehr (die Abfrage danach sieht keinen Sprung, weil expectState ihn vorwegnimmt)
+  if (a.cmd === 'seek') tracker.resetTiming(now)
+  expectState(a, now)
   await redraw($)
 }
 
@@ -221,8 +263,9 @@ function ensureTimer($: EngineInterface, now: number): void {
   if (timer) return
   let last = now // das erste Lesen kam schon mit dem ersten Zeichnen
   timer = $.clock.every(TICK, () => {
-    // Neuzeichnen angefordert, aber keins gekommen (Band eingeklappt, Sitzung verdeckt): Takt beenden, das nächste Zeichnen startet ihn neu
-    if (awaitingRender) {
+    // Neuzeichnen angefordert, aber RENDER_GRACE Takte lang keins gekommen (Band eingeklappt, Sitzung verdeckt): Takt beenden, das
+    // nächste Zeichnen startet ihn neu
+    if (awaitingRender && ++renderMissed >= RENDER_GRACE) {
       timer?.cancel()
       timer = null
       return
@@ -261,6 +304,223 @@ async function publishPlaying($: EngineInterface, now: number): Promise<void> {
   } catch {
     publishedPlaying = ''
   }
+}
+
+// ---- Takt (0.6.0, SPEC Nachtrag 0.6.0): ein Helfer je sichtbarer Sitzung hört nur Spotify ab (beat-cs.ts), beat.ts wertet aus,
+// `tune-strip.beat` geht an clawd-buddy. Kein Titel verlässt den Mod: `beatKey` wird nur hier verglichen.
+const BEAT_GRACE = 15_000 // so lange läuft der Helfer nach Pause, ohne Zeichnung usw. weiter (SPEC: „spätestens 15 s“)
+const RETRY_MS = [5_000, 20_000, 60_000] // höchstens drei Neustarts mit wachsendem Abstand, danach erst beim nächsten Titel
+type HelperRun = { pid: number; stop: boolean; stream: ReturnType<EngineInterface['process']['spawn']> | null }
+type HelperState = 'idle' | 'starting' | 'listening' | 'failed' | 'gaveUp'
+let tracker = new Tracker()
+let spotifyPid = 0
+let helper: HelperRun | null = null
+let helperState: HelperState = 'idle'
+let helperFails = 0
+let retryAt = 0
+let beatKey: string | null = null
+let unwantedSince = 0
+let clockNow = 0 // letzte gelesene Uhrzeit, für das Ende des Helfers (dort gibt es kein await mehr)
+let beatTimer: Timer | null = null
+let publishedBeat: Beat | null | undefined = undefined // undefined = noch nichts geschrieben oder Schreiben gescheitert
+let beatWrittenAt = 0
+let beatCheckedAt = 0
+
+const beatOn = () => saved.beat ?? true
+const offsetMs = () => saved.offset ?? 0
+const visibleSurface = () => [surface, drawSurface].some((s) => s === 'terminal' || s === 'desktop')
+
+/** Soll gerade ein Helfer laufen? Nur unter Windows, Band an, Takt an, Spotify spielt, das Band wird gezeichnet (Takt läuft). */
+function wantHelper(): boolean {
+  return isWindows && visibleSurface() && enabled() && beatOn() && timer !== null && bandDrawn && track?.status === 'Playing' && spotifyPid > 0
+}
+
+/** Der Wert für `tune-strip.beat`: `null` ohne laufenden Helfer, bei Pause, aus oder ohne tragende Messung. */
+function beatNow(now: number): Beat | null {
+  if (!enabled() || !beatOn() || helper === null || track?.status !== 'Playing') return null
+  return tracker.value(now, offsetMs())
+}
+
+/**
+ * Titelwechsel, Sprung im Titel, Weiterspielen nach Pause: der Takt davor gilt nicht mehr. Beim neuen Titel auch die Gruppe und die
+ * Zahl der Neustarts zurück. `start` ist der Titelbeginn laut Position.
+ */
+function noteTrack(prev: Track | null, prevAt: number, next: Track, now: number): void {
+  const key = trackKey(next)
+  if (key !== beatKey) {
+    beatKey = key
+    tracker.reset(now - next.pos * 1000)
+    helperFails = 0
+    retryAt = 0
+    if (helperState === 'gaveUp' || helperState === 'failed') helperState = 'idle'
+    return
+  }
+  if (!prev || next.status !== 'Playing') return
+  if (prev.status !== 'Playing' || Math.abs(positionNow(prev, prevAt, now) - next.pos) > 2.5) tracker.resetTiming(now)
+}
+
+function stopHelper(): void {
+  const run = helper
+  helper = null
+  if (helperState !== 'gaveUp') helperState = 'idle'
+  unwantedSince = 0
+  if (!run) return
+  run.stop = true
+  // Der Kreislauf endet spätestens mit der nächsten Zeile (≤ 2,5 s; in den ersten ~6 s schreibt der Helfer nur `ready`, dann so lange);
+  // return() beendet den Prozess, sobald der Stream ihn annimmt (types:3666-3668)
+  try {
+    void run.stream?.return(undefined as never).catch(() => {})
+  } catch {
+    // schon zu Ende
+  }
+}
+
+/** Ein Lauf ist zu Ende. Ohne eigenes Anhalten war es ein Abbruch: später neu starten, nach drei Neustarts erst beim nächsten Titel. */
+function helperEnded(run: HelperRun, broken: boolean): void {
+  if (helper !== run) return
+  helper = null
+  if (!broken) {
+    helperState = 'idle'
+    return
+  }
+  helperFails += 1
+  if (helperFails > RETRY_MS.length) {
+    helperState = 'gaveUp'
+    return
+  }
+  helperState = 'failed'
+  retryAt = clockNow + RETRY_MS[helperFails - 1]!
+}
+
+function onHelperLine(run: HelperRun, text: string): void {
+  if (helper !== run) return
+  const p = parseLine(text)
+  if (!p) return
+  if (p.kind === 'ready') helperState = 'listening'
+  else if (p.kind === 'quiet') tracker.quiet(p.end)
+  else if (p.kind === 'beat') {
+    helperState = 'listening'
+    tracker.feed(p.m)
+  } else helperState = 'failed' // `fail …`: der Prozess endet gleich, das Ende zählt als Abbruch
+}
+
+/** Je Zeile prüfen, ob der Helfer noch gebraucht wird; 15 s ohne Bedarf beenden ihn (auch wenn der Takt schon steht). */
+async function stillWanted($: EngineInterface): Promise<boolean> {
+  try {
+    clockNow = await $.clock.now()
+  } catch {
+    return true
+  }
+  if (wantHelper()) {
+    unwantedSince = 0
+    return true
+  }
+  if (!unwantedSince) unwantedSince = clockNow
+  return clockNow - unwantedSince < BEAT_GRACE
+}
+
+/**
+ * Helfer starten: `powershell.exe -MTA` (Process-Loopback braucht ein MTA, SPEC Machbarkeit) mit der festen Startzeile; der C#-Text
+ * geht als `input` über stdin (keine Längengrenze der Befehlszeile), die Prozess-ID nur über `SP_PID`. Der Kreislauf ist das Leben
+ * des Prozesses: Verlassen, return() oder Entladen des Moduls beenden ihn (types:3666-3668).
+ */
+function startHelper($: EngineInterface, now: number): void {
+  const run: HelperRun = { pid: spotifyPid, stop: false, stream: null }
+  helper = run
+  helperState = 'starting'
+  unwantedSince = 0
+  tracker.resetTiming(now)
+  void (async () => {
+    let broken = true
+    let rest = ''
+    try {
+      const s = $.process.spawn({ argv: [PS_ABS, '-MTA', ...PS_ARGS, BEAT_BOOT], env: { SP_PID: String(run.pid) }, input: BEAT_CS })
+      run.stream = s
+      for await (const ch of s) {
+        if (run.stop) break
+        if (ch.stream !== 'stdout') continue
+        const r = splitLines(rest, ch.text)
+        rest = r.rest
+        for (const l of r.lines) onHelperLine(run, l)
+        if (!(await stillWanted($))) {
+          broken = false
+          break
+        }
+      }
+    } catch {
+      // spawn abgelehnt oder Prozess nicht startbar: Abbruch
+    }
+    helperEnded(run, broken && !run.stop)
+  })().catch(() => {})
+}
+
+/** Im Takt (1 s): Helfer nach Bedarf starten, wechseln oder nach 15 s ohne Bedarf beenden. */
+function manageHelper($: EngineInterface, now: number): void {
+  clockNow = now
+  if (!wantHelper()) {
+    if (helper) {
+      if (!unwantedSince) unwantedSince = now
+      if (now - unwantedSince >= BEAT_GRACE) stopHelper()
+    }
+    return
+  }
+  unwantedSince = 0
+  if (helper) {
+    if (helper.pid === spotifyPid) return
+    stopHelper() // Spotify neu gestartet: neuer Prozessbaum
+  }
+  if (helperState === 'gaveUp' || now < retryAt) return
+  startHelper($, now)
+}
+
+/**
+ * Takt des Helfers (1 s), angelegt in session.start: sein `$` lebt so lange wie die Sitzung (types:3684-3693, Beispiel „a child for
+ * the session's life“), der Helfer hängt also nicht am `$` eines einzelnen Zeichnens. Ob das Band gezeichnet wird, sagt der
+ * Abfragetakt (`timer`); ohne ihn läuft nur diese billige Prüfung, kein Prozess.
+ */
+async function beatTick($: EngineInterface): Promise<void> {
+  if (!isWindows) return
+  const now = await $.clock.now()
+  manageHelper($, now)
+  await publishBeat($, now)
+}
+
+/**
+ * `tune-strip.beat` schreiben, wenn es sich deutlich geändert hat (beat.ts `needsWrite`), nie beim Zeichnen (types@2.1.295:3405).
+ * Alle 30 s den eigenen Wert nachlesen: `/clear`, `/resume` und `/branch` setzen `$.state` zurück (wie bei `playing`).
+ */
+async function publishBeat($: EngineInterface, now: number): Promise<void> {
+  if (!isWindows) return
+  const want = beatNow(now)
+  try {
+    if (publishedBeat !== undefined && !needsWrite(publishedBeat, want, now, beatWrittenAt)) {
+      if (now - beatCheckedAt < PLAYING_RECHECK) return
+      beatCheckedAt = now
+      const cur = await $.state.get({ plugin: 'tune-strip', key: 'beat' })
+      if (sameBeat(cur.value, publishedBeat)) return
+    }
+    publishedBeat = undefined
+    await $.state.set({ plugin: 'tune-strip', key: 'beat' }, want)
+    publishedBeat = want
+    beatWrittenAt = now
+    beatCheckedAt = now
+  } catch {
+    publishedBeat = undefined
+  }
+}
+
+/** Eine Zeile für `/tune beat` (zum Kalibrieren): Zustand, Tempo, Sicherheit, Gruppe, Klarheit, Versatz. */
+function beatLine(now: number): string {
+  const b = T[lang].beat
+  const n = (v: number, d: number) => (lang === 'de' ? v.toFixed(d).replace('.', ',') : v.toFixed(d))
+  // Ohne Helfer: sagen, worauf er wartet (0.6.3)
+  const waits = timer === null || !bandDrawn ? 'hidden' : track?.status !== 'Playing' ? 'paused' : spotifyPid <= 0 ? 'noSpotify' : 'idle'
+  const state = !beatOn() ? 'off' : helperState === 'gaveUp' || helperState === 'failed' ? helperState : helper ? helperState : waits
+  const v = helper ? tracker.value(now, offsetMs()) : null
+  const m = tracker.last
+  const values = v && m ? b.values(n(v.bpm, 1), v.sure, b.group[v.group ?? 'none'] ?? '', n(m.tclar, 2), n(m.pclar, 1)) : ''
+  const off = offsetMs()
+  return b.line(b.state[state] ?? state, values + b.offset(off > 0 ? `+${off}` : String(off)))
 }
 
 async function tick($: EngineInterface, getLast: () => number, setLast: (v: number) => void): Promise<void> {
@@ -309,6 +569,14 @@ async function clawdWidth($: EngineInterface): Promise<number | null> {
     return null
   }
 }
+/** Steht die Pille von quick-replies darunter? (`quick-replies.band`, 0.7.1: `{ shown: true }` oder `null`; sie liegt in der Kette oft außen) */
+async function quickRepliesShown($: EngineInterface): Promise<true | null> {
+  try {
+    return (await $.state.get({ plugin: 'quick-replies', key: 'band' })).value?.shown === true ? true : null
+  } catch {
+    return null
+  }
+}
 
 /** Platz, den Spotify hat; `undefined` = unbekannt (dann gilt die gewählte Stufe). */
 async function roomFor($: EngineInterface, s: string | null, bodyColumns: number): Promise<{ room: number | undefined; widths: 'terminal' | 'desktop' }> {
@@ -346,12 +614,17 @@ function helpData(): HelpData {
       { cmd: '/tune repeat [off|all|track]', does: h.repeat },
       { cmd: '/tune size auto|full|compact|mini', does: h.size },
       { cmd: '/tune on|off', does: h.onOff },
+      { cmd: '/tune beat', does: h.beat },
+      { cmd: '/tune beat on|off', does: h.beatOnOff },
+      { cmd: '/tune beat offset <ms>', does: h.beatOffset },
+      languageHelp('tune', lang), // docs/LANGUAGE-SPEC.md §6 Punkt 4
       { cmd: '/tune help', does: h.help },
     ],
     controls: [{ cmd: h.ctlMain, does: h.ctlMainDoes }, ...(extraButtons ? [{ cmd: h.ctlSeek, does: h.ctlSeekDoes }, { cmd: h.ctlMode, does: h.ctlModeDoes }] : [])],
     features: [
       { name: h.featBand, state: { kind: enabled() ? 'on' : 'off' }, toggle: enabled() ? '/tune off' : '/tune on' },
       { name: h.featSize, state: { kind: 'value', text: sizeLabel, isDefault: sizeNow() === 'auto' }, toggle: '/tune size auto|full|compact|mini' },
+      { name: h.featBeat, state: { kind: beatOn() ? 'on' : 'off' }, toggle: beatOn() ? '/tune beat off' : '/tune beat on' },
     ],
     settings: [
       { title: h.settings.language, value: lang, isDefault: lang === 'en' },
@@ -367,19 +640,38 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
   // Frischer Stand je Laden des Moduls (Tests laden es mehrfach in einem Prozess)
   saved = {}
   surface = null
+  drawSurface = null
   isWindows = true
   track = null
   cover = undefined
   coverKey = ''
   queryAt = 0
   hasSession = false
+  lostAt = 0
   failures = 0
   inflight = null
   timer = null
   awaitingRender = false
+  renderMissed = 0
+  bandDrawn = false
   drawsTime = false
   lastSig = ''
   drawn.clear()
+  tracker = new Tracker()
+  spotifyPid = 0
+  helper = null
+  helperState = 'idle'
+  helperFails = 0
+  retryAt = 0
+  beatKey = null
+  unwantedSince = 0
+  clockNow = 0
+  beatTimer = null
+  publishedBeat = undefined
+  beatWrittenAt = 0
+  beatCheckedAt = 0
+  publishedPlaying = ''
+  playingCheckedAt = 0
   lang = langOf(options?.language)
   const sz = options?.size
   optSize = sz === 'off' ? 'off' : (SIZES.find((s) => s === sz) ?? 'auto')
@@ -392,10 +684,13 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     // Nur nach session.start auf einer echten Oberfläche unter Windows (bei --resume ist die Reihenfolge der beiden Hooks nicht
     // dokumentiert; vorher stünde isWindows noch auf dem Startwert; Review 0.3.1 K2)
-    if (isWindows && (surface === 'terminal' || surface === 'desktop')) {
+    if (isWindows && visibleSurface()) {
       publishedPlaying = ''
+      publishedBeat = undefined
       try {
-        await publishPlaying($, await $.clock.now())
+        const now = await $.clock.now()
+        await publishPlaying($, now)
+        await publishBeat($, now)
       } catch {
         // Uhr abgelehnt: der Takt gleicht spätestens nach 30 s ab
       }
@@ -408,6 +703,17 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
     // Die Mediensteuerung gibt es nur unter Windows; ein Laufwerksbuchstabe im Arbeitsordner ist das Zeichen dafür
     isWindows = /^[A-Za-z]:[\\/]/.test(e.cwd)
     await loadSaved($)
+    // Takt des Helfers (0.6.0): unter Windows immer; ob gezeichnet wird, sagt erst `ui.render`. Eine abgelehnte Uhr heißt nur „kein Takt“
+    // Auch ohne Oberfläche beim Start (Desktop, SDK): billig (eine Uhrabfrage je Sekunde); einen Prozess startet er nur, wenn gezeichnet wird
+    if (isWindows && !beatTimer) {
+      try {
+        beatTimer = $.clock.every(1000, () => {
+          beatTick($).catch(() => {})
+        })
+      } catch {
+        beatTimer = null
+      }
+    }
     try {
       const t = T[lang]
       await $.command.register({ name: 'tune', description: t.help.intro, argumentHint: T[lang].hint })
@@ -418,6 +724,8 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
   })
 
   on('command.run', { command: 'tune' }, async ($, e) => {
+    // Sprache aller fynn-mods (docs/LANGUAGE-SPEC.md §6 Punkt 2), vor allem anderen und auch außerhalb von Windows; fängt Fehler selbst ab
+    if (isLanguage(e.args)) return { text: await languageCommand($, { mod: 'tune-strip', cmd: 'tune', lang }, e.args) }
     const t = T[lang]
     const p = parseTune(e.args)
     if (!isWindows) return { text: t.windowsOnly }
@@ -435,9 +743,20 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
     if (p.kind === 'enabled') {
       await saveSaved($, { enabled: p.value })
       if (p.value) await runQuery($)
-      await publishPlaying($, await $.clock.now())
+      else stopHelper()
+      const now = await $.clock.now()
+      await publishPlaying($, now)
+      await publishBeat($, now)
       await redraw($)
       return { text: t.enabled(p.value) }
+    }
+    if (p.kind === 'beat') return { text: beatLine(await $.clock.now()) }
+    if (p.kind === 'beatOn' || p.kind === 'beatOffset') {
+      await saveSaved($, p.kind === 'beatOn' ? { beat: p.value } : { offset: p.ms })
+      if (p.kind === 'beatOn' && !p.value) stopHelper()
+      await publishBeat($, await $.clock.now())
+      if (p.kind === 'beatOn') return { text: t.beat.set(p.value) }
+      return { text: t.beat.offsetSet(p.ms > 0 ? `+${p.ms}` : String(p.ms)) }
     }
     if (p.kind === 'status') {
       await runQuery($)
@@ -468,9 +787,12 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
     const theirs = await next(e)
     try {
       if (e.surface !== 'terminal' && e.surface !== 'desktop') return theirs
+      drawSurface = e.surface
       // Eine Umfrage hält das Band; ein Hook weicht ihr (types@2.1.288:9580)
       if (e.props.hasSurvey || !isWindows) return theirs
       awaitingRender = false
+      renderMissed = 0
+      bandDrawn = false
       if (!enabled()) {
         // Aus: auch der Takt hält an (Review 0.3.0, K1); `/tune off` hat `tune-strip.playing` schon auf null gesetzt, `on` zeichnet und startet ihn neu
         timer?.cancel()
@@ -488,6 +810,7 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
       const { room } = await roomFor($, e.surface, e.props.bodyColumns)
       const stage: Stage = e.surface === 'desktop' ? desktopStage(room, sizeNow(), DESKTOP_WIDTHS) : pickStage(room, sizeNow(), TERMINAL_WIDTHS)
       drawsTime = stage === 'full'
+      bandDrawn = stage !== 'off'
       if (stage === 'off') return theirs
       const { Box, Text, Button, Svg } = $.ui.resolve(e)
       const els = { Box, Text, Button, Svg } as unknown as Els
@@ -496,12 +819,25 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
           pressButton($, word).catch(() => {})
         },
       }
-      const input = { lang, stage, track, cover, pos: positionNow(track, queryAt, now), extraButtons }
-      const mine = (e.surface === 'desktop' ? desktopTree(els, handlers, input) : terminalTree(els, handlers, input)) as unknown as RenderNode
       const { layers, slots, base } = splitBand(theirs)
+      // Trennlinie unter der Leiste nur, wenn darunter etwas steht: Ebenen unter BAR_LEVEL (sidekick liegt darüber) und Plätze aus der
+      // Kette, dazu die Zeichnung von limit-bars, clawd-buddy und quick-replies (ihr `$.state`-Wert; liegen sie in der Kette außen,
+      // sehen wir sie nicht in `theirs`). Alle drei Werte werden bei jedem Zeichnen gelesen, nie übersprungen: Lesen abonniert sie,
+      // ein Schreiben zeichnet das Band neu. Allein im Band gibt es nichts zu trennen.
+      const others = await Promise.all([limitBarsWidth($), clawdWidth($), quickRepliesShown($)])
+      const below = layers.some((l) => levelOf(l) < BAR_LEVEL) || slots.length > 0 || others.some((x) => x !== null)
+      // Uhr noch einmal lesen: die Awaits oben haben Zeit gekostet, und die Voranimation des Bilds beginnt jetzt bei genau dieser Position
+      const drawNow = await $.clock.now().catch(() => now)
+      const input = { lang, stage, track, cover, pos: positionNow(track, queryAt, drawNow), extraButtons, sep: below }
+      const mine = (e.surface === 'desktop' ? desktopTree(els, handlers, input) : terminalTree(els, handlers, input)) as unknown as RenderNode
       // Desktop, volle Stufe: eigene Leiste über allen Mods (kein Platz in der Zeile); sonst der Platz 20
       if (e.surface === 'desktop' && stage === 'full') return joinBand([...layers, layer(BAR_LEVEL, 'tune-strip', mine)], base, slots)
-      return joinBand(layers, base, [...slots, slot(SLOTS.spotify, 'tune-strip', mine)])
+      // 0.8.1: im Desktop `position: relative`, damit Leiste und Buttons über Clawd liegen, der seit clawd-buddy 0.12.1 hinter der Zeile
+      // liegt (docs/BAND.md „Platz hinter der Zeile“). Ohne Versatz verschiebt es nichts (types:946-958).
+      const inRow = e.surface === 'desktop'
+        ? ({ type: 'Box', props: { key: 'tune-strip-front', position: 'relative', flexDirection: 'column', justifyContent: 'flex-end' }, children: [mine] } as unknown as RenderNode)
+        : mine
+      return joinBand(layers, base, [...slots, slot(SLOTS.spotify, 'tune-strip', inRow)])
     } catch {
       // Eigener Fehler (fail-open): ohne Anzeige, der Inhalt der anderen bleibt
       return theirs

@@ -14,13 +14,14 @@ import { forkCostText, forkStateText, langOf, T } from './i18n.ts'
 import type { ForkState, Lang, Position } from './i18n.ts'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
+import { isLanguage, languageCommand } from './language.ts'
 import { forkPrompt, heldDigit, HELP_WORDS, MIN_ANSWER, merge, MORE_WORD, parseFork, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from './logic.ts'
 import type { Reply } from './logic.ts'
 import { chooseLayout, GAP, label } from './view.ts'
 import type { Layout, LayoutPref } from './view.ts'
 
 const CMD = 'replies'
-const ARG_HINT = '[status|on|off|more on|more off|help]'
+const ARG_HINT = '[status|on|off|more on|more off|language|help]'
 // Akzent der Hilfe: Theme-Key, passt sich hell und dunkel an (docs/HELP-SPEC.md §4, Violett; types@2.1.295:12590)
 const ACCENT = 'autoAccept'
 // Rahmen (2) und Innenabstand (2) der eigenen Pille (nur Desktop)
@@ -114,6 +115,35 @@ function promptEmpty(text: string): boolean {
   return text.trim() === ''
 }
 
+// `$.state` `quick-replies.band` (0.6.2): steht die Pille im Band? tune-strip setzt danach seine Trennlinie, denn die Pille liegt in der
+// Kette oft außen und ist für tune-strip sonst unsichtbar (docs/BAND.md „Pille“). Gemeldet wird der Wunsch (an, Turn fertig, Vorschläge
+// da), nicht der Prompt-Zustand: Tippen blendet die Pille aus, die Linie soll dabei nicht flackern. Nie im Zeichnen schreiben
+// (types@2.1.295:3405); `undefined` = noch nie geschrieben, ein abgelehntes Schreiben wird beim nächsten Mal wiederholt.
+let publishedBand: boolean | undefined = undefined
+let bandChain: Promise<unknown> = Promise.resolve()
+function publishBand($: EngineInterface) {
+  const want = settings.enabled && ready && replies.length > 0
+  if (want === publishedBand) return
+  publishedBand = want
+  bandChain = bandChain
+    .then(() => $.state.set({ plugin: 'quick-replies', key: 'band' }, want ? { shown: true } : null))
+    .catch(() => {
+      if (publishedBand === want) publishedBand = undefined
+    })
+}
+/** Neu zeichnen lassen und dabei die Meldung für tune-strip nachziehen. */
+function redraw($: EngineInterface) {
+  publishBand($)
+  $.ui.invalidate('ui.render')
+}
+/** Aus dem Zeichnen heraus nicht schreibbar: kurz danach nachziehen. */
+function publishSoon($: EngineInterface) {
+  const t = $.clock.every(10, () => {
+    t.cancel()
+    publishBand($)
+  })
+}
+
 function resetTurn() {
   ready = false
   engine = ''
@@ -145,7 +175,7 @@ function arrive($: EngineInterface) {
     return
   }
   recompute()
-  $.ui.invalidate('ui.render')
+  redraw($)
 }
 
 /** Eingabe oder Druck: 2 s Ruhe für die Plätze (einmaliger Timer: erster Tick, dann cancel()). */
@@ -159,7 +189,7 @@ function markInput($: EngineInterface) {
       pending = false
       if (ready) {
         recompute()
-        $.ui.invalidate('ui.render')
+        redraw($)
       }
     }
   })
@@ -215,13 +245,14 @@ function send($: EngineInterface, text: string) {
   if (!ready) return
   ready = false
   markInput($)
-  $.ui.invalidate('ui.render')
+  redraw($)
   // Nach /clear nie den Vorschlag des alten Chats in den neuen schicken
   $.session
     .id()
     .then((now) => {
       if (sid && now !== sid) {
         newChat(now)
+        publishSoon($)
         return
       }
       return $.prompt.submit({ text, asUser: true }).then((r) => {
@@ -233,7 +264,7 @@ function send($: EngineInterface, text: string) {
 
 function fail($: EngineInterface, text: string) {
   ready = replies.length > 0
-  $.ui.invalidate('ui.render')
+  redraw($)
   // Der Host nennt den Mod beim Toast selbst (docs/raw/en/api.md:133)
   $.ui.toast(T[lang].sendFailed(text))
 }
@@ -276,6 +307,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
     resetTurn()
     forkCost = NO_COST
+    publishBand($)
     // Commands zuletzt und in try/catch: ein belegter Name wirft (docs/raw/en/api.md:45)
     try {
       await $.command.register({ name: CMD, description: T[lang].description, argumentHint: ARG_HINT })
@@ -289,7 +321,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     resetTurn()
     // Der Prompt wurde gerade abgeschickt
     promptText = ''
-    $.ui.invalidate('ui.render')
+    redraw($)
     return next(e)
   })
 
@@ -310,7 +342,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       ready = true
       pending = false
       recompute()
-      $.ui.invalidate('ui.render')
+      redraw($)
       // Fork nur, wo gezeichnet wird (erst das Band nennt die Oberfläche, Lehre 9), also nie in -p, SDK, VS Code oder mobil
       if (settings.enabled && settings.more && surface && e.answer.trim().length >= MIN_ANSWER) {
         const gen = forkGen
@@ -359,7 +391,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const was = promptEmpty(promptText)
     promptText = r.text
     markInput($)
-    if (was !== promptEmpty(promptText)) $.ui.invalidate('ui.render')
+    if (was !== promptEmpty(promptText)) redraw($)
     return r
   })
 
@@ -392,16 +424,17 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
     if (sid && now !== sid) {
       newChat(now)
+      publishSoon($)
       return next(e)
     }
     ready = false
     promptText = ''
-    $.ui.invalidate('ui.render')
+    redraw($)
     const r = await next({ ...e, text: pick })
     // Ein Hook weiter innen oder ein UserPromptSubmit-Hook hat die Nachricht gestoppt: die Pille kommt zurück
     if (r.drop !== undefined) {
       ready = replies.length > 0
-      $.ui.invalidate('ui.render')
+      redraw($)
     }
     return r
   })
@@ -410,8 +443,11 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // Der Befehl stand gerade im Prompt; ob das Leeren beim Absenden prompt.edit auslöst, ist nicht belegt
     if (!promptEmpty(promptText)) {
       promptText = ''
-      $.ui.invalidate('ui.render')
+      redraw($)
     }
+    // Sprache aller fynn-mods (docs/LANGUAGE-SPEC.md §6 Punkt 2), vor Store und Session-ID; fängt Fehler selbst ab. Das Leeren
+    // oben bleibt davor: Wo nichts umgestellt wird (Desktop, -p), stünde die Pille sonst bis zur nächsten Eingabe nicht da.
+    if (isLanguage(e.args)) return { text: await languageCommand($, { mod: 'quick-replies', cmd: CMD, lang }, e.args) }
     const args = e.args.trim().toLowerCase().split(/\s+/).filter(Boolean)
     // Vorher neu lesen, damit eine zweite Session ihre Einstellung nicht verliert
     const change = async (patch: Partial<Settings>) => {
@@ -426,7 +462,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       } catch {
         // gilt dann nur bis zum Reload
       }
-      $.ui.invalidate('ui.render')
+      redraw($)
     }
     const t = T[lang]
     // Hilfe nur als einziges Wort (docs/HELP-SPEC.md §2); Zustand beim Aufruf, die Zeichnung schreibt sich nicht um
@@ -438,7 +474,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       // Direkt nach /clear: Vorschläge und Fork-Kosten gehören noch zum alten Chat
       try {
         const now = await $.session.id()
-        if (sid && now !== sid) newChat(now)
+        if (sid && now !== sid) {
+          newChat(now)
+          publishSoon($)
+        }
       } catch {
         // bleibt beim bisherigen Stand
       }
@@ -498,6 +537,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         const now = await $.session.id()
         if (sid && now !== sid) {
           newChat(now)
+          publishSoon($)
           // Auch der Prompt mit „/clear“ ist abgeschickt
           promptText = ''
           return theirs
