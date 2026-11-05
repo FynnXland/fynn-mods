@@ -39,6 +39,8 @@ export type HelpInput = {
   hasCost?: boolean
   /** Windows (Säulen möglich); ohne Angabe: ja */
   isWindows?: boolean
+  /** Ausbau 0.14.0: sidekick stellt die Kalt-Cache-Frage gerade selbst */
+  guardBySidekick?: boolean
 }
 
 // Standards aus plugin.json (userConfig `default`)
@@ -132,7 +134,11 @@ export function barsHelpData(i: HelpInput): HelpData {
         state: { kind: 'value', text: `${t.styleName[i.style]} · ${i.styleByCommand ? h.byCommand : h.bySetting}`, isDefault: !i.styleByCommand && i.style === DEFAULTS.style },
         toggle: `/bars style ${i.style === 'ring' ? 'bar' : 'ring'}`,
       },
-      { name: h.guard, state: { kind: s.guard ? 'on' : 'off' }, toggle: `/cache warn ${s.guard ? 'off' : 'on'}` },
+      {
+        name: h.guard,
+        state: s.guard && i.guardBySidekick ? { kind: 'on', text: t.guardBySidekick } : { kind: s.guard ? 'on' : 'off' },
+        toggle: `/cache warn ${s.guard ? 'off' : 'on'}`,
+      },
       { name: h.alerts, state: { kind: s.alerts ? 'on' : 'off' }, toggle: `/cache hints ${s.alerts ? 'off' : 'on'}` },
       { name: h.big, state: { kind: 'value', text: tokensText(s.bigTokens, i.lang), isDefault: s.bigTokens === DEFAULT_SETTINGS.bigTokens }, toggle: '/cache big <n>' },
       { name: h.ttl, state: { kind: 'value', text: ttlText, isDefault: s.ttl === DEFAULT_SETTINGS.ttl && i.memTtlSource !== 'gemessen' }, toggle: '/cache ttl 5|60|auto' },

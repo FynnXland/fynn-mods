@@ -154,8 +154,8 @@ Einschalten `storagePath` in `/config` setzen.
 
 Ist [cost-ledger](#cost-ledger) installiert, zeigt ein Kostenring, was dieser Chat als Anteil am ganzen Projekt
 gekostet hat, als API-Wert. `/bars show cpu on` ergänzt live Systemwerte (CPU, RAM, GPU-Last und Grafikspeicher, eine
-Messung je Sekunde, jeweils mit Trendpfeil); sie sind **standardmäßig aus** und laufen nur unter Windows, die
-GPU-Zeilen brauchen eine NVIDIA-Karte.
+Messung je Sekunde, jeweils mit Trendpfeil); sie sind **standardmäßig aus** und laufen nur unter Windows. Die GPU-Last
+klappt mit jeder Karte, deren Treiber die Windows-GPU-Zähler liefert; der Grafikspeicher braucht eine NVIDIA-Karte.
 
 **Nach deinem Geschmack:** Jeder Teil (5-Stunden-Balken, Wochen-Balken, Cache-Ring, Speicher-Ring, Kostenring,
 Systemwerte) lässt sich einzeln ausblenden, mit `/bars show cache off` (wirkt sofort in allen offenen Chats) oder
@@ -172,8 +172,8 @@ ohne Flackern mit.
   `/clear` und `/compact` aus und sendet eine Übergabe nur auf deine Wahl; `$.model.fork` nur, solange `/keepwarm`
   läuft; nur mit gesetztem `storagePath` startet er Windows PowerShell mit zwei festen, nur lesenden Skripten
   (Laufwerksgröße, Größen nach Dateiendung); nur mit eingeschalteten Systemwerten einen Windows-PowerShell-Prozess mit
-  festem, nur lesendem Skript (und `nvidia-smi`); liest die Chat- und Projektkosten von cost-ledger und teilt tune-strip
-  über `$.state` nur mit, wie breit die Balken sind. Sonst nur der [Sprachschalter](#rechte-und-vertrauen). Keine
+  festem, nur lesendem Skript (und `nvidia-smi`); liest die Chat- und Projektkosten von cost-ledger und die Stufe von
+  sidekick und teilt tune-strip über `$.state` nur mit, wie breit die Balken sind. Sonst nur der [Sprachschalter](#rechte-und-vertrauen). Keine
   Dateien, kein Netzwerk, keine Umgebungsvariablen.
 - **Details:** [mods/limit-bars](mods/limit-bars/README.md) (englisch)
 
@@ -322,9 +322,9 @@ Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost
   Chat und dieses Projekt gekostet haben, dieselben Zahlen wie `/ledger here all`.
 - **Ein Sprachschalter für alle.** `/<befehl> language de|en` in einem der sechs Mods stellt alle installierten
   fynn-mods auf einmal um.
-- **limit-bars und sidekick warnen beide vor kaltem Senden.** Nutzt du beide, schalte die Warnung von limit-bars
-  einmal mit `/cache warn off` ab, damit nicht zwei Dialoge hintereinander kommen; die Rückfrage von sidekick ersetzt
-  sie.
+- **limit-bars lässt sidekick den Vortritt.** Beide können vor kaltem Senden fragen. Läuft sidekick auf `cache` oder
+  `guide`, schweigt limit-bars von selbst (`/cache` zeigt „an (übernimmt gerade sidekick)“), damit nie zwei Dialoge
+  hintereinander kommen.
 - **Clawd spielt sidekick mit.** Sind beide installiert, hält Clawd die Lupe ans Eingabefeld, während sidekick prüft,
   zeigt bei einer Rückfrage ein Stoppschild und schreibt einen Brief, wenn sidekick einen neuen Chat mit Übergabe
   startet.
@@ -358,7 +358,7 @@ Sicherheitsproblem gefunden? Siehe [SECURITY.md](SECURITY.md) (englisch).
 |---|---|
 | Ein Mod zeichnet nichts | `claude --version` prüfen (diese Mods brauchen v2.1.309 oder neuer) und ob `/plugin` den Mod als `mod active` zeigt. Ein neu installierter Mod lädt in der nächsten Session oder nach `/reload-plugins`. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen die meisten Mods nichts. |
 | Nach einem Claude-Code-Update geht ein Mod nicht mehr | Die Mods aktualisieren (`claude plugin marketplace update fynn-mods`, dann `claude plugin update <mod>@fynn-mods`). Hilft das nicht, bitte ein Issue anlegen. |
-| Zwei Rückfragen hintereinander vor dem Senden mit kaltem Cache | limit-bars und sidekick fragen beide vor dem Senden mit kaltem Cache nach. Die Rückfrage von limit-bars mit `/cache warn off` abschalten. |
+| Zwei Rückfragen hintereinander vor dem Senden mit kaltem Cache | limit-bars auf 0.14.0 oder neuer aktualisieren; dann überlässt es sidekick die Frage. Bei älterem limit-bars die Rückfrage mit `/cache warn off` abschalten. |
 | Alles ist englisch | `/clawd language de` (oder der Befehl eines anderen Mods) stellt alle fynn-mods um; für einen einzelnen Mod die Option `language` mit `/plugin configure <mod>@fynn-mods` auf `de` stellen. In der Desktop-App wirkt das ab dem nächsten Chat oder sofort nach `/reload-plugins`. |
 | tune-strip zeigt nichts | Er läuft nur unter Windows und braucht die Spotify-Desktop-App (der Web-Player wird nicht erkannt). Ist Spotify geschlossen, zeichnet er nichts; `/tune` sagt, was er sieht. Falls ausgeschaltet: `/tune on`. |
 | Der Speicher-Ring fehlt oder bleibt leer | Er läuft nur unter Windows und ist standardmäßig aus: `storagePath` (z. B. `D:\`) in `/config` setzen und prüfen, ob `/bars show storage on` gilt. Bleibt er leer, zeigt `/disk` den Fehler. |

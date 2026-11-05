@@ -1,12 +1,12 @@
 // limit-bars: Systemwerte als Liste (SPEC Ausbau 0.13.0, löst die Säulen aus 0.12.0 ab), reine Funktionen ohne `$`.
-// Ein dauerhafter PowerShell-Prozess (`$.process.spawn`) schreibt jede Sekunde eine Zeile: CPU, RAM und, mit NVIDIA-Karte,
-// GPU-Last und belegter Grafikspeicher. Angezeigt werden höchstens 4 Zeilen untereinander mit Prozent und Trendpfeil.
+// Ein dauerhafter PowerShell-Prozess (`$.process.spawn`) schreibt jede Sekunde eine Zeile: CPU, RAM, GPU-Last (Windows-Zähler,
+// jede Grafikkarte) und, mit NVIDIA-Karte, den belegten Grafikspeicher. Angezeigt werden höchstens 4 Zeilen untereinander mit Prozent und Trendpfeil.
 import { FONT, RING_H, esc } from './ring.ts'
 import { T } from './i18n.ts'
 import type { Lang } from './i18n.ts'
 import { GREEN, GREY, ORANGE, RED, YELLOW } from './view.ts'
 
-/** nvidia-smi über den festen Pfad (installiert der NVIDIA-Treiber); ohne die Datei keine GPU-Zeilen. */
+/** nvidia-smi über den festen Pfad (installiert der NVIDIA-Treiber); nur noch für den Grafikspeicher (VRAM). */
 export const NVIDIA_SMI = 'C:\\Windows\\System32\\nvidia-smi.exe'
 /** Höchstens so viele Messungen je Prozess (30 min), dann endet er und der nächste Takt startet einen neuen. */
 export const SYS_ROUNDS = 1800
@@ -14,8 +14,14 @@ export const SYS_ROUNDS = 1800
 /**
  * Festes Skript für Windows PowerShell 5.1, ohne Argumente oder Umgebung von außen, ohne doppelte Anführungszeichen.
  * CPU: Prozessorzeit aus zwei Rohwerten im Abstand von 1 s (`Win32_PerfRawData_PerfOS_Processor`, `_Total`; so zeigt sie der
- * Task-Manager unter Windows 11, Probe 2026-11-04). RAM: 1 − frei / gesamt. GPU: `nvidia-smi` (Last, belegter und gesamter
- * Grafikspeicher). Ausgabe je Sekunde eine Zeile mit Promille als ganzen Zahlen, Tab-getrennt: `cpu 340 ram 612 gpu 60 vram 569`.
+ * Task-Manager unter Windows 11, Probe 2026-11-04). RAM: 1 − frei / gesamt.
+ * GPU-Last (Fix 0.13.2): wie der Task-Manager aus den Rohzählern `Win32_PerfRawData_GPUPerformanceCounters_GPUEngine` (sprachunabhängig):
+ * je Instanz 100 · ΔRunningTime / ΔTimestamp_Sys100NS zwischen zwei Runden, je physischer Engine summiert (Namensteil ab `luid_`:
+ * Adapter, Engine-Nummer und Typ, ohne den Prozess), davon das Maximum: so zeigt der Task-Manager die Last (die am stärksten belastete
+ * Engine). Je Typ zu summieren hätte zwei Adapter (Grafik im Prozessor und Karte) oder mehrere Copy-Engines addiert (Review 0.13.2 S1). `nvidia-smi utilization.gpu` misst etwas anderes (Probe 2026-11-05: 27–42 % bei 71–78 % im Task-Manager). Nur Instanzen
+ * mit Laufzeit (`RunningTime > 0`): 105 statt 919, ≈ 33 ms je Abfrage; eine Instanz, die gerade erst anläuft, zählt ab der nächsten
+ * Runde. `[math]::Min(1.0, …)` mit 1.0: mit einer ganzen 1 wählt PowerShell die Ganzzahl-Fassung und rundet 0,73 auf 1. VRAM: `nvidia-smi` (belegt/gesamt; den Gesamtspeicher kennt sonst nur der auf 4 GB gekappte `AdapterRAM`).
+ * Ausgabe je Sekunde eine Zeile mit Promille als ganzen Zahlen, Tab-getrennt: `cpu 340 ram 612 gpu 745 vram 569`.
  */
 export const SYS_SCRIPT = [
   "$ErrorActionPreference='Stop'",
@@ -25,6 +31,9 @@ export const SYS_SCRIPT = [
   // brauchte dagegen 2,7–3,8 s und wird nur einmal beim Start für den Gesamtspeicher gefragt)
   '$tot=[double](Get-CimInstance -ClassName Win32_OperatingSystem).TotalVisibleMemorySize',
   "function u { Get-CimInstance -ClassName Win32_PerfRawData_PerfOS_Processor -Filter 'Name=''_Total''' }",
+  "function gq { Get-CimInstance -ClassName Win32_PerfRawData_GPUPerformanceCounters_GPUEngine -Filter 'RunningTime > 0' -Property Name,RunningTime,Timestamp_Sys100NS }",
+  // Vorige Runde je GPU-Instanz; ohne die Klasse (keine GPU, alter Treiber) bleibt $gp leer und die GPU-Zeile fehlt
+  '$gp=$null; try { $gp=@{}; foreach($x in gq){ $gp[$x.Name]=$x } } catch { $gp=$null }',
   '$a=u',
   '$w=[Diagnostics.Stopwatch]::StartNew()',
   // Geschlafen wird nur die Restzeit bis zur vollen Sekunde
@@ -33,8 +42,12 @@ export const SYS_SCRIPT = [
     '$c=1000*(1-([double]$b.PercentProcessorTime-$a.PercentProcessorTime)/([double]$b.Timestamp_Sys100NS-$a.Timestamp_Sys100NS)); $a=$b; ' +
     '$o=Get-CimInstance -ClassName Win32_PerfRawData_PerfOS_Memory; $m=1000*(1-[double]$o.AvailableKBytes/$tot); ' +
     "$l='cpu'+$t+[int][math]::Round($c)+$t+'ram'+$t+[int][math]::Round($m); " +
-    `if($nv){ try { $g=(& '${NVIDIA_SMI}' --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits | Select-Object -First 1) -split ','; ` +
-    "$l=$l+$t+'gpu'+$t+(10*[int]$g[0])+$t+'vram'+$t+[int][math]::Round(1000*[double]$g[1]/[double]$g[2]) } catch {} }; " +
+    'if($null -ne $gp){ try { $gn=@{}; $s=@{}; foreach($x in gq){ $gn[$x.Name]=$x; $p=$gp[$x.Name]; if($p){ ' +
+    '$d=[double]$x.Timestamp_Sys100NS-[double]$p.Timestamp_Sys100NS; if($d -gt 0){ ' +
+    "$k=($x.Name -split '_luid_')[1]; $s[$k]=[double]$s[$k]+([double]$x.RunningTime-[double]$p.RunningTime)/$d } } }; " +
+    "$gp=$gn; if($s.Count -gt 0){ $q=0; foreach($v in $s.Values){ if($v -gt $q){ $q=$v } }; $l=$l+$t+'gpu'+$t+[int][math]::Round(1000*[math]::Min(1.0,$q)) } } catch {} }; " +
+    `if($nv){ try { $g=(& '${NVIDIA_SMI}' --query-gpu=memory.used,memory.total --format=csv,noheader,nounits | Select-Object -First 1) -split ','; ` +
+    "$l=$l+$t+'vram'+$t+[int][math]::Round(1000*[double]$g[0]/[double]$g[1]) } catch {} }; " +
     '[Console]::Out.WriteLine($l); [Console]::Out.Flush() }',
 ].join('; ')
 
@@ -55,10 +68,9 @@ export function parseSample(line: string, at: number): Sample | undefined {
   if (v.cpu === undefined || v.ram === undefined) return undefined
   const pct = (x: number) => Math.round(Math.max(0, Math.min(1000, x))) / 10
   const s: Sample = { at, cpu: pct(v.cpu), ram: pct(v.ram) }
-  if (v.gpu !== undefined && v.vram !== undefined) {
-    s.gpu = pct(v.gpu)
-    s.vram = pct(v.vram)
-  }
+  // GPU-Last und Grafikspeicher kommen getrennt: die Last von jeder Grafikkarte, der Speicher nur mit nvidia-smi (Fix 0.13.2)
+  if (v.gpu !== undefined) s.gpu = pct(v.gpu)
+  if (v.vram !== undefined) s.vram = pct(v.vram)
   return s
 }
 
@@ -92,7 +104,9 @@ export function sysView(cur: Sample | undefined, prev: Sample | undefined, now: 
     return v === undefined ? { tag, pct: null, trend: '' } : { tag, pct: Math.round(v), trend: trendOf(prev?.[key], v) }
   }
   const rows = [row('CPU', 'cpu'), row('RAM', 'ram')]
-  if (fresh?.gpu !== undefined) rows.push(row('GPU', 'gpu'), row('VRAM', 'vram'))
+  // Jede Zeile für sich: GPU-Last gibt es mit jeder Grafikkarte, VRAM nur mit nvidia-smi (Fix 0.13.2)
+  if (fresh?.gpu !== undefined) rows.push(row('GPU', 'gpu'))
+  if (fresh?.vram !== undefined) rows.push(row('VRAM', 'vram'))
   const t = T[lang]
   const alt = rows.map((r) => t.sysAlt(r.tag, r.pct === null ? '–' : t.pct(String(r.pct)))).join('; ')
   return { rows, alt }

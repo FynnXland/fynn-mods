@@ -4,7 +4,7 @@ Two slim bars on the left of the band above the prompt show live how much of the
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.318** · Plugin version **0.13.1**
+Tested with Claude Code **v2.1.318** · Plugin version **0.14.0**
 
 ## Display
 
@@ -53,12 +53,12 @@ Shows what this chat cost compared with the whole project, as API value. The num
 
 ## System values
 
-Off by default. `/bars show cpu on` (or `showSystem`) shows up to four lines to the right of the other rings: `CPU`, `RAM`, `GPU` (load) and `VRAM` (GPU memory in use). **Windows only for now**; elsewhere nothing is drawn and `/bars show cpu on` says so. Without an NVIDIA card the `GPU` and `VRAM` lines are missing.
+Off by default. `/bars show cpu on` (or `showSystem`) shows up to four lines to the right of the other rings: `CPU`, `RAM`, `GPU` (load) and `VRAM` (GPU memory in use). **Windows only for now**; elsewhere nothing is drawn and `/bars show cpu on` says so. The `GPU` line works with any graphics card whose driver provides the Windows GPU counters (NVIDIA, AMD, Intel); `VRAM` needs an NVIDIA card (`nvidia-smi`) and is missing otherwise.
 
 - **Lines:** the tag in orange, the percentage right-aligned so all numbers line up, and a grey arrow: `▲` when the value rose by at least 2 points since the reading a second earlier, `▼` when it fell. Colors like the limit bars: green below 60 %, yellow from 60 %, red from 85 %. GPU memory matters because a full card spills into RAM.
 - **Live:** one reading every second. The band redraws as soon as a whole percentage or an arrow changes, and not otherwise. There is no animation between readings: it would need the next reading and so lag a second behind.
 - **Terminal:** two columns of two lines, `CPU` above `GPU` and `RAM` above `VRAM`, numbers in the same column.
-- **Data source:** one Windows PowerShell process per chat (`$.process.spawn`) with one fixed, read-only script and no arguments or environment from outside. It writes a line every second: CPU as processor time between two raw readings (`Win32_PerfRawData_PerfOS_Processor`), RAM as used share of visible memory (`Win32_PerfRawData_PerfOS_Memory`), GPU load and memory from `nvidia-smi` at its fixed path. WMI class names are the same in every Windows language. It costs about 3 % of one CPU core.
+- **Data source:** one Windows PowerShell process per chat (`$.process.spawn`) with one fixed, read-only script and no arguments or environment from outside. It writes a line every second: CPU as processor time between two raw readings (`Win32_PerfRawData_PerfOS_Processor`), RAM as used share of visible memory (`Win32_PerfRawData_PerfOS_Memory`), GPU load as Task Manager computes it (since 0.13.2): busy time from the raw counters `Win32_PerfRawData_GPUPerformanceCounters_GPUEngine`, summed over all processes per physical engine, the busiest engine wins. `nvidia-smi` (fixed path) only supplies GPU memory, because its own load figure measures something else (about 30 % when Task Manager showed 75 %). WMI class names are the same in every Windows language. It costs about 1–3 % of one CPU core (the PowerShell process about 13 ms per second; the Windows WMI service adds a little).
 - **Lifetime:** the process runs only while the band is drawn and the system values are on, and ends with `/bars show cpu off`, when the band has not been drawn for 15 s (hidden chat), or after 30 minutes (the next tick starts a new one).
 - **Errors:** `/bars` shows the latest reading and the last failure. A process that ends without a reading counts as a failed start; the next try comes after a minute, and after three in a row measuring pauses for an hour.
 
@@ -144,7 +144,7 @@ The cache guard is modeled on Cache Keeper by Nate Herk (MIT); the skill `ueberg
 ```text
 hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, command.run{command=cache}, command.run{command=handoff}, command.run{command=keepwarm}, command.run{command=bars}, command.run{command=disk}, ui.render{component=CommandOutput, props has {command=bars}}, ui.render{component=CommandOutput, props has {command=disk}}, session.measure, ui.render{component=AbovePrompt}
 calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.config.list, $.config.set, $.model.fork, $.process.run, $.process.spawn, $.prompt.submit, $.session.compact, $.session.id, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
-state reads: cost-ledger.here
+state reads: cost-ledger.here, sidekick.status
 state writes: limit-bars.band
 ```
 
@@ -162,10 +162,11 @@ In plain language:
 - Hook `prompt.submit`: the question before a cold send (only for a big chat with a cold cache), otherwise passes through unchanged
 - Hooks `command.run` for `cache`, `handoff`, `keepwarm`, `disk`, `bars` and `$.command.register`: the five commands
 - `$.process.run`: only with `storagePath` set, `powershell.exe` with the two fixed, read-only scripts of the storage ring (size and free space; sizes by file extension)
-- `$.process.spawn` (since 0.13.0): only with the system values on and on Windows, one long-running `powershell.exe` by its full path with one fixed, read-only script (processor time, used memory, and `nvidia-smi` at its fixed path for GPU load and memory), one line per second; ended as described under [System values](#system-values)
+- `$.process.spawn` (since 0.13.0): only with the system values on and on Windows, one long-running `powershell.exe` by its full path with one fixed, read-only script (processor time, used memory, GPU engine busy time, and `nvidia-smi` at its fixed path for GPU memory), one line per second; ended as described under [System values](#system-values)
 - Hook `ui.render` for `CommandOutput` of `disk`: draws the ring with the legend in place of the Markdown row of `/disk`
 - Hook `ui.render` for `CommandOutput` of `bars`: draws the help table in place of the Markdown row of `/bars help` (new in 0.7.0); other `/bars` rows stay Markdown
-- `$.command.list`, `$.command.run`: find and start the skill `uebergabe` (with the language as its argument); `/clear` for "clear and continue"
+- `$.state.get` (also `state reads: sidekick.status`, since 0.14.0): reads sidekick's level (`off`, `cache`, `guide`) when the cache guard is about to ask; nothing else of sidekick's.
+- `$.command.list`, `$.command.run`: find and start the skill `uebergabe` (with the language as its argument); `/clear` for "clear and continue"; since 0.14.0 also whether `/sidekick` can be run right now (sidekick loaded)
 - `$.config.list`, `$.config.set`: only for `/bars language` (since 0.11.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone
 - `$.process.run` (also): for `/bars language` in the desktop app and `claude -p` (since 0.11.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `limit-bars@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `limit-bars@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
 - `$.prompt.submit`: the handoff as the first message in the cleared chat, or the held-back message after compacting
@@ -199,6 +200,18 @@ The mod loads in the next session, or after `/reload-plugins`.
 ```bash
 claude --plugin-dir <path-to-clone>/mods/limit-bars
 ```
+
+## Working with sidekick
+
+Since 0.14.0 the cache guard steps aside for [sidekick](../sidekick/README.md): when sidekick runs on a level where it asks before a cold send itself (`cache` or `guide`), limit-bars does not ask as well, so you never get two dialogs in a row. `/cache` and `/bars help` then show the guard as "on (sidekick is asking right now)".
+
+- limit-bars only checks this right before it would ask (big chat, cold cache): sidekick's level from `sidekick.status`, and whether `/sidekick` is available right now. That second check matters because the level may stay in the session after sidekick is turned off.
+- No level, `off`, sidekick not loaded, or any read error: limit-bars asks as before.
+- Your own setting is never changed. If you turned the guard off with `/cache warn off`, it stays off, with or without sidekick.
+- limit-bars checks that sidekick is set to ask, not that sidekick asks for this very message. Known gaps where nobody asks:
+  - The two mods have separate settings: "big" (`/cache big` here, sidekick's own; both default 150k) and the cache lifetime (`/cache ttl` here, sidekick's `/sidekick ttl`; both default 60 min). If limit-bars' values are lower, nobody asks in between.
+  - You change sidekick's level in another session: the first cold message in this one may still go through without a question.
+  - sidekick's hook is skipped or sidekick's module fails alone while `/sidekick` stays listed.
 
 ## Working with clawd-buddy
 

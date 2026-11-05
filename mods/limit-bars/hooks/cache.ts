@@ -326,6 +326,8 @@ export type Report = {
   sessionUsd: number | null
   handoffAt: number | null
   lang: Lang
+  /** Ausbau 0.14.0: sidekick stellt die Kalt-Cache-Frage gerade selbst, die Wache schweigt */
+  guardBySidekick?: boolean
 }
 
 /** Balken aus Linienzeichen gleicher Höhe (━ gefüllt, ─ leer), als Inline-Code in fester Breite. Blockzeichen █/░ standen in der Desktop-Schrift verschieden hoch (Fynn, Screenshot 2026-10-05). */
@@ -371,7 +373,7 @@ export function cacheReport(r: Report): string {
     for (const l of r.limits) out.push(`${textBar(l.ratio, 14)}  **${l.tag}** ${l.pct}${l.reset ? ` · ${l.reset}` : ''}  `)
   }
   out.push('', t.repSettings, '')
-  out.push(t.repGuard(onOff(r.settings.guard), tokensText(r.settings.bigTokens, L)))
+  out.push(t.repGuard(r.settings.guard && r.guardBySidekick ? t.guardBySidekick : onOff(r.settings.guard), tokensText(r.settings.bigTokens, L)))
   out.push(t.repAlerts(onOff(r.settings.alerts)))
   out.push(`- ${t.repChange}: ${CACHE_ARGS.split(' · ').map((a) => `\`/cache ${a}\``).join(' · ')}`)
   out.push('', t.repCommands, '')

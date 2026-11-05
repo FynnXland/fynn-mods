@@ -122,7 +122,9 @@ test('Ping schreibt statt zu lesen → verfehlt', async () => {
 // ---------- Hooks mit Stubs ----------
 
 type U = ReturnType<typeof usage>
-function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: string; clearFails?: boolean; storeSetFails?: boolean; submitFails?: boolean; settingsGetFails?: boolean } = {}) {
+// Ausbau 0.14.0: sidekick als Nachbar. `level` = sidekick.status.level (undefined = kein Wert), `listed` = /sidekick in der Befehlsliste
+type Side = { level?: 'off' | 'cache' | 'guide'; listed?: boolean; denyState?: boolean; denyList?: boolean; source?: string }
+function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: string; clearFails?: boolean; storeSetFails?: boolean; submitFails?: boolean; settingsGetFails?: boolean; side?: Side } = {}) {
   const seen = { cols: -1 }
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
@@ -156,7 +158,24 @@ function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: s
     return { value: undefined }
   })
   on('command.register', () => ({ value: undefined }))
-  on('command.list', () => ({ value: [{ name: 'limit-bars:uebergabe', description: 'Übergabe', source: 'plugin' }] }))
+  const side = { ...(o.side ?? {}), stateReads: 0 }
+  on('command.list', () =>
+    side.denyList
+      ? ({ deny: 'nein' } as never)
+      : {
+          value: [
+            { name: 'limit-bars:uebergabe', description: 'Übergabe', source: 'plugin' },
+            ...(side.listed ? [{ name: 'sidekick', description: 'sidekick', source: side.source ?? 'plugin', plugin: 'sidekick' }] : []),
+          ],
+        },
+  )
+  on('state.get', ($, e) => {
+    const x = e as unknown as { plugin: string; key: string }
+    if (x.plugin !== 'sidekick' || x.key !== 'status') return { value: { value: undefined, version: 0 } } as never
+    side.stateReads++
+    if (side.denyState) return { deny: 'nein' } as never
+    return { value: { value: side.level === undefined ? undefined : { level: side.level, busy: false }, version: 1 } } as never
+  })
   on('command.run', ($, e) => {
     commands.push(e.command)
     // Ein werfender Stub wird übersprungen (docs/raw/en/test.md:182); ohne weitere Antwort scheitert der Aufruf
@@ -224,6 +243,7 @@ function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: s
     setForkValue: (v: unknown) => (forkValue = v),
     setId: (v: string) => (id = v),
     setCtx: (n: number | undefined) => (ctxTokens = n),
+    side,
   }
 }
 
@@ -728,4 +748,90 @@ test('0.2.1 Einstellungen nicht lesbar → Stand dieser Session, Nachricht geht 
   await w.clock.advance(75 * MIN)
   w.setAnswer(null)
   expect(await $.prompt.submit(userPrompt('drei'))).toMatchObject({ text: 'drei' })
+})
+
+// ---------- Ausbau 0.14.0: Cache-Wache überlässt sidekick die Frage ----------
+
+for (const level of ['cache', 'guide'] as const)
+  test(`0.14.0 sidekick auf ${level} (geladen): limit-bars fragt nicht, die Nachricht geht durch; /cache und /bars help sagen es`, { ...DE, }, async ($, on) => {
+    const w = world(on, { side: { level, listed: true } })
+    await w.step($, usage(400000, 5000))
+    await w.clock.advance(75 * MIN)
+    expect(await $.prompt.submit(userPrompt('weiter bitte'))).toMatchObject({ text: 'weiter bitte' })
+    expect(w.asks.length).toBe(0)
+    expect(w.side.stateReads).toBe(1)
+    const card = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
+    expect(card).toMatch(/Rückfrage vor kaltem Senden: \*\*an \(übernimmt gerade sidekick\)\*\* ab 150k/)
+    const help = (await $.command.run({ command: 'bars', args: 'help' } as never)).text as string
+    expect(help).toMatch(/Rückfrage vor kaltem Senden ● an \(übernimmt gerade sidekick\)/)
+  })
+
+for (const [name, side] of [
+  ['sidekick auf off', { level: 'off', listed: true }],
+  ['kein Wert von sidekick', { listed: false }],
+  ['Lesefehler', { level: 'guide', listed: true, denyState: true }],
+  ['Befehlsliste abgelehnt', { level: 'guide', listed: true, denyList: true }],
+] as const)
+  test(`0.14.0 ${name}: limit-bars fragt wie bisher (im Zweifel lieber selbst)`, DE, async ($, on) => {
+    const w = world(on, { side: side as Side })
+    await w.step($, usage(400000, 5000))
+    await w.clock.advance(75 * MIN)
+    w.setAnswer('Trotzdem senden')
+    expect(await $.prompt.submit(userPrompt('weiter bitte'))).toMatchObject({ text: 'weiter bitte' })
+    expect(w.asks.length).toBe(1)
+    const card = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
+    expect(card).toMatch(/Rückfrage vor kaltem Senden: \*\*an\*\* ab 150k/)
+  })
+
+test('0.14.0 Entlade-Fall: sidekick.status steht noch auf guide, aber /sidekick ist nicht mehr in der Befehlsliste → limit-bars fragt', DE, async ($, on) => {
+  const w = world(on, { side: { level: 'guide', listed: false } })
+  await w.step($, usage(400000, 5000))
+  await w.clock.advance(75 * MIN)
+  await $.prompt.submit(userPrompt('weiter bitte'))
+  expect(w.asks.length).toBe(1)
+})
+
+test('0.14.0 eigene Einstellung aus: bleibt aus, auch wenn sidekick aus ist; die Automatik schaltet nie ein und schreibt nichts', DE, async ($, on) => {
+  const w = world(on, { side: { level: 'off', listed: true } })
+  await w.step($, usage(400000, 5000))
+  await w.clock.advance(75 * MIN)
+  await $.command.run({ command: 'cache', args: 'warn off' } as never)
+  const before = JSON.stringify(w.saved.get('settings'))
+  await $.prompt.submit(userPrompt('weiter bitte'))
+  expect(w.asks.length).toBe(0)
+  w.side.level = 'guide'
+  await $.prompt.submit(userPrompt('noch mal'))
+  w.side.level = 'off'
+  await $.prompt.submit(userPrompt('und noch mal'))
+  expect(w.asks.length).toBe(0)
+  expect(JSON.stringify(w.saved.get('settings'))).toBe(before)
+  const card = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
+  expect(card).toMatch(/Rückfrage vor kaltem Senden: \*\*aus\*\*/)
+})
+
+test('0.14.0 kleiner Chat: sidekick wird gar nicht erst gefragt (nur, wenn limit-bars sonst fragen würde)', DE, async ($, on) => {
+  const w = world(on, { side: { level: 'guide', listed: true } })
+  await w.step($, usage(40000, 500))
+  await w.clock.advance(75 * MIN)
+  await $.prompt.submit(userPrompt('weiter bitte'))
+  expect(w.asks.length).toBe(0)
+  expect(w.side.stateReads).toBe(0)
+})
+
+test('0.14.0 /sidekick nur als Skill (source nicht plugin): zählt nicht, limit-bars fragt', DE, async ($, on) => {
+  const w = world(on, { side: { level: 'guide', listed: true, source: 'skill' } })
+  await w.step($, usage(400000, 5000))
+  await w.clock.advance(75 * MIN)
+  w.setAnswer('Trotzdem senden')
+  await $.prompt.submit(userPrompt('weiter bitte'))
+  expect(w.asks.length).toBe(1)
+})
+
+test('0.14.0 englischer Text in /cache und /bars help', { options: { language: 'en' } }, async ($, on) => {
+  const w = world(on, { side: { level: 'cache', listed: true } })
+  await w.step($, usage(400000, 5000))
+  const card = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
+  expect(card).toMatch(/Question before a cold send: \*\*on \(sidekick is asking right now\)\*\*/)
+  const help = (await $.command.run({ command: 'bars', args: 'help' } as never)).text as string
+  expect(help).toMatch(/on \(sidekick is asking right now\)/)
 })

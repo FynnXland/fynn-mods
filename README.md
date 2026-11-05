@@ -143,7 +143,8 @@ An optional third ring shows how full a drive is, split by file type (programs, 
 
 With [cost-ledger](#cost-ledger) installed, a cost ring shows what this chat cost as a share of the whole project, in
 API value. `/bars show cpu on` adds live system values (CPU, RAM, GPU load and GPU memory, one reading per second, each
-with a trend arrow); they are **off by default** and Windows only, and the GPU lines need an NVIDIA card.
+with a trend arrow); they are **off by default** and Windows only. GPU load works with any card whose driver provides the
+Windows GPU counters; GPU memory needs an NVIDIA card.
 
 **Make it yours:** every part (5-hour bar, weekly bar, cache ring, storage ring, cost ring, system values) can be hidden
 on its own, with `/bars show cache off` (applies to all open chats right away) or permanently with `showFiveHour`,
@@ -160,8 +161,8 @@ without flicker.
   `/clear` and `/compact` and sends a handoff only after you choose so; `$.model.fork` only while `/keepwarm` runs;
   only with `storagePath` set, runs Windows PowerShell with two fixed, read-only scripts (drive size, sizes by file
   extension); only with the system values on, one Windows PowerShell process with a fixed, read-only script (and
-  `nvidia-smi`); reads the chat and project cost from cost-ledger and tells tune-strip only how wide the bars are
-  (`$.state`). Besides that only the [language switch](#rights-and-trust). No files, network or environment variables.
+  `nvidia-smi`); reads the chat and project cost from cost-ledger and sidekick's level, and tells tune-strip only how
+  wide the bars are (`$.state`). Besides that only the [language switch](#rights-and-trust). No files, network or environment variables.
 - **Details:** [mods/limit-bars](mods/limit-bars/README.md)
 
 ### sidekick
@@ -305,8 +306,9 @@ troubleshooting: [Sync between devices](mods/cost-ledger/README.md#sync-between-
   project cost, the same numbers as `/ledger here all`.
 - **One language switch for all.** `/<command> language de|en` in any of the six mods switches every installed
   fynn-mod at once.
-- **limit-bars and sidekick both guard against cold sends.** If you use both, turn off limit-bars' warning once with
-  `/cache warn off`, so you don't get two dialogs in a row; sidekick's question replaces it.
+- **limit-bars steps aside for sidekick.** Both can ask before a cold send. While sidekick runs on `cache` or `guide`,
+  limit-bars stays quiet by itself (`/cache` shows "on (sidekick is asking right now)"), so you never get two dialogs
+  in a row.
 - **Clawd acts out what sidekick does.** With both installed, Clawd holds a magnifying glass to the input while
   sidekick checks, holds up a stop sign when it asks, and writes a letter when it starts a new chat with a handoff.
 - **cost-ledger books the others.** Model calls of sidekick, quick-replies and limit-bars don't show up in
@@ -337,7 +339,7 @@ that looks at your drive: it reads sizes, never file contents. Found a security 
 |---|---|
 | A mod draws nothing | Check `claude --version` (these mods need v2.1.309 or later) and that `/plugin` lists the mod as `mod active`. A newly installed mod loads in the next session or after `/reload-plugins`. In `claude -p`, the Agent SDK, VS Code and on mobile most mods draw nothing. |
 | A mod broke after a Claude Code update | Update the mods (`claude plugin marketplace update fynn-mods`, then `claude plugin update <mod>@fynn-mods`). If that doesn't help, please open an issue. |
-| Two questions in a row before a cold send | limit-bars and sidekick both guard against cold sends. Turn off limit-bars' question with `/cache warn off`. |
+| Two questions in a row before a cold send | Update limit-bars to 0.14.0 or later; it then leaves the question to sidekick. With an older limit-bars, turn off its question with `/cache warn off`. |
 | Everything is in English | `/clawd language de` (or any other mod's command) switches all fynn-mods; for one mod, set `language` to `de` with `/plugin configure <mod>@fynn-mods`. In the desktop app it applies from the next chat, or at once after `/reload-plugins`. |
 | tune-strip shows nothing | It is Windows only and needs the Spotify desktop app (the web player is not recognized). While Spotify is closed it draws nothing; `/tune` tells you what it sees. `/tune on` if you turned it off. |
 | The storage ring is missing or empty | It is Windows only and off by default: set `storagePath` (for example `D:\`) in `/config`, and check that `/bars show storage on` is set. If it stays empty, `/disk` shows the error. |

@@ -812,6 +812,24 @@ async function readCostState($: EngineInterface): Promise<void> {
   }
 }
 
+/**
+ * Ausbau 0.14.0: Stellt sidekick die Kalt-Cache-Frage gerade selbst? Ja, wenn `sidekick.status.level` `cache` oder `guide` ist UND
+ * `/sidekick` in `$.command.list()` steht. Der Wert in `$.state` lebt bis zum Ende der Sitzung (interface.md:762) und bliebe nach
+ * einem Deaktivieren von sidekick womöglich stehen; die Befehlsliste nennt nur, was man „jetzt“ ausführen kann (types
+ * `$.command.list`). Kein Wert, `off`, ein Lesefehler oder kein `/sidekick` heißt: sidekick fragt nicht, limit-bars fragt selbst.
+ * Nur eine Bedingung beim Senden: Die eigene Einstellung wird nie umgeschrieben, `/cache warn off` bleibt aus.
+ */
+async function sidekickAsks($: EngineInterface): Promise<boolean> {
+  try {
+    // `plugin` und `key` als Literale (validate: state reads)
+    const st = (await $.state.get({ plugin: 'sidekick', key: 'status' })).value
+    if (st?.level !== 'cache' && st?.level !== 'guide') return false
+    return (await $.command.list()).some((c) => c.name === 'sidekick' && c.source === 'plugin')
+  } catch {
+    return false
+  }
+}
+
 /** Den Messprozess beenden (`return()` auf den Strom beendet das Kind, types `$.process.spawn`). */
 function stopSys(): void {
   const s = sysStream
@@ -1070,6 +1088,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       return next(e)
     }
     if (!question) return next(e)
+    // sidekick fragt selbst: keine zweite Frage hintereinander (Ausbau 0.14.0)
+    if (await sidekickAsks($)) return next(e)
     let answer = t.send
     // Mit Anhängen oder `@datei` kein „Erst komprimieren“: als Plugin-Prompt neu gesendet, fehlten sie (types@2.1.289:8521-8523, Review S3)
     const resendable = !e.attachments?.length && !/(^|\s)@\S/.test(e.text)
@@ -1136,7 +1156,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       // ohne Limits
     }
     const list = await loadHandoffs($)
-    const text = cacheReport({ now, mem, settings, keep, cold, last, limits, sessionUsd, handoffAt: list[0]?.at ?? null, lang })
+    const guardBySidekick = settings.guard && (await sidekickAsks($))
+    const text = cacheReport({ now, mem, settings, keep, cold, last, limits, sessionUsd, handoffAt: list[0]?.at ?? null, lang, guardBySidekick })
     return { text: note + text }
   })
 
@@ -1249,6 +1270,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         styleByCommand: styleOverride !== undefined,
         noFive: noFiveHour(),
         hasCost: !!costHere,
+        guardBySidekick: settings.guard && (await sidekickAsks($)),
         isWindows,
       })
       return { text: helpMarkdown(data, rememberHelp(await $.clock.now(), data)) }

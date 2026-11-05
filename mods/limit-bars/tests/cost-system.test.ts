@@ -174,9 +174,23 @@ test('0.13.0 system.ts: festes Skript ohne doppelte Anführungszeichen und Umgeb
   expect(SYS_SCRIPT).toMatch(/Win32_PerfRawData_PerfOS_Processor/)
   expect(SYS_SCRIPT).toMatch(/Win32_PerfRawData_PerfOS_Memory/)
   expect(SYS_SCRIPT.includes(NVIDIA_SMI)).toBe(true)
+  // Fix 0.13.2: GPU-Last aus den Rohzählern wie der Task-Manager, nvidia-smi nur noch für den Grafikspeicher
+  expect(SYS_SCRIPT).toMatch(/Win32_PerfRawData_GPUPerformanceCounters_GPUEngine -Filter 'RunningTime > 0' -Property Name,RunningTime,Timestamp_Sys100NS/)
+  // Summe je physischer Engine (ab `luid_`, ohne Prozess), Maximum darüber; nicht je Typ (Review 0.13.2 S1)
+  expect(SYS_SCRIPT).toMatch(/-split '_luid_'/)
+  expect(SYS_SCRIPT.includes("-split 'engtype_'")).toBe(false)
+  // Ohne gepaarte Instanz keine GPU-Zeile statt dauerhaft 0 % (Review 0.13.2 K1)
+  expect(SYS_SCRIPT.includes('if($s.Count -gt 0)')).toBe(true)
+  expect(SYS_SCRIPT.includes('utilization.gpu')).toBe(false)
+  expect(SYS_SCRIPT).toMatch(/--query-gpu=memory\.used,memory\.total/)
+  // [math]::Min mit 1.0: mit einer ganzen 1 wählte PowerShell Min(Int32, Int32) und rundete 0,73 auf 1 (Gegenprobe 2026-11-05)
+  expect(SYS_SCRIPT.includes('[math]::Min(1.0,$q)')).toBe(true)
+  expect(SYS_SCRIPT.includes('[math]::Min(1,')).toBe(false)
   expect(SYS_SCRIPT.includes('Get-Counter')).toBe(false)
   expect(parseSample('cpu\t340\tram\t612\tgpu\t60\tvram\t569', NOW)).toEqual({ at: NOW, cpu: 34, ram: 61.2, gpu: 6, vram: 56.9 })
   expect(parseSample('cpu\t1100\tram\t-3', NOW)).toEqual({ at: NOW, cpu: 100, ram: 0 })
+  // GPU-Last ohne nvidia-smi (AMD, Intel): Last ja, Grafikspeicher nein
+  expect(parseSample('cpu\t340\tram\t612\tgpu\t745', NOW)).toEqual({ at: NOW, cpu: 34, ram: 61.2, gpu: 74.5 })
   expect(parseSample('cpu\t34,5\tram\t600', NOW)).toBeUndefined()
   expect(parseSample('ram\t600', NOW)).toBeUndefined()
   let r = takeLines('', 'cpu\t1\tram')
@@ -198,6 +212,11 @@ test('0.13.0 system.ts: Trend ab 2 Punkten, ohne GPU zwei Zeilen, alte Messung �
   ])
   expect(v.alt).toBe('CPU 34 %; RAM 61 %; GPU 6 %; VRAM 60 %')
   expect(sysView(parseSample('cpu\t50\tram\t20', NOW), undefined, NOW, 'en').rows.map((r) => r.tag)).toEqual(['CPU', 'RAM'])
+  expect(sysView(parseSample('cpu\t50\tram\t20\tgpu\t745', NOW), undefined, NOW, 'en').rows.map((r) => r.tag)).toEqual(['CPU', 'RAM', 'GPU'])
+  // VRAM ohne GPU-Last (Zählerklasse fehlt, nvidia-smi da): RAM über VRAM, CPU allein
+  const vOnly = sysView(parseSample('cpu\t50\tram\t20\tvram\t690', NOW), undefined, NOW, 'en')
+  expect(vOnly.rows.map((r) => r.tag)).toEqual(['CPU', 'RAM', 'VRAM'])
+  expect(termColumns(vOnly).map((c) => c.map((x) => x.tag))).toEqual([['CPU'], ['RAM', 'VRAM']])
   expect(sysView(cur, prev, NOW + 11000, 'de').rows).toEqual([
     { tag: 'CPU', pct: null, trend: '' },
     { tag: 'RAM', pct: null, trend: '' },
@@ -592,5 +611,34 @@ test('0.13.0 Systemwerte: reguläres Ende nach Messungen (30-Minuten-Deckel) →
   const text = await bars($)
   expect(text.includes('gescheitert')).toBe(false)
   expect(text.includes('pausiert')).toBe(false)
+  await ui.unmount()
+})
+
+test('0.13.2 Systemwerte: ohne NVIDIA (nur GPU-Last aus den Windows-Zählern) drei Zeilen, VRAM fehlt; Terminal CPU über GPU', { options: { language: 'de', showSystem: true, showFiveHour: false, showWeekly: false, showCache: false, showCost: false } }, async ($, on) => {
+  const w = world(on)
+  await w.start($, 'terminal')
+  const ui = await $.ui.mount(band('terminal', 120))
+  await clock2(w)
+  await w.say('cpu\t340\tram\t610\tgpu\t745\r\n')
+  await ui.drawn()
+  const flat = (n: any): string => (typeof n === 'string' ? n : (n.children ?? []).map(flat).join(''))
+  expect(((await ui.find({ key: 'sys-0' })) as any).children.map(flat)).toEqual(['CPU   34% ', 'GPU   75% '])
+  expect(((await ui.find({ key: 'sys-1' })) as any).children.map(flat)).toEqual(['RAM   61% ', ' '])
+  await ui.unmount()
+})
+
+test('0.13.2 Systemwerte Desktop: drei Zeilen (GPU ohne VRAM) unten bündig, Zahlen an einer x-Stelle', { options: { language: 'de', showSystem: true } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop'))
+  await clock2(w)
+  await w.say('cpu\t340\tram\t610\tgpu\t745\r\n')
+  await ui.drawn()
+  const src = (await svgOf(ui))!.props.source
+  expect([...src.matchAll(/fill="#D77757">(CPU|RAM|GPU|VRAM)<\/text>/g)].map((m) => m[1])).toEqual(['CPU', 'RAM', 'GPU'])
+  const vals = [...src.matchAll(/<text x="([\d.]+)" y="(\d+)" text-anchor="end"[^>]*>(\d+%)<\/text>/g)]
+  expect(vals.map((m) => m[3])).toEqual(['34%', '61%', '75%'])
+  expect(new Set(vals.map((m) => m[1])).size).toBe(1)
+  expect(vals.map((m) => Number(m[2]))).toEqual([25, 39, 53])
   await ui.unmount()
 })

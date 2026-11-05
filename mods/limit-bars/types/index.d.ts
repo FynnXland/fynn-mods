@@ -6,11 +6,17 @@
 // Seit 0.12.0 liest limit-bars `cost-ledger.here` für den Kostenring (SPEC Ausbau 0.12.0). Ohne Abhängigkeit in plugin.json kennt
 // dieser Vertrag den von cost-ledger nicht; deshalb steht der Wert hier noch einmal und muss mit mods/cost-ledger/types/index.d.ts
 // übereinstimmen. `validate` meldet ihn als „state of other plugins, not checked“.
+// Seit 0.14.0 liest limit-bars auch `sidekick.status` (Stufe von sidekick): Fragt sidekick selbst vor kaltem Senden (`cache`,
+// `guide`), schweigt die Cache-Wache von limit-bars. Kopie aus mods/sidekick/types/index.d.ts, muss gleich bleiben.
 
 declare module 'claude-code' {
   interface PluginState {
     'limit-bars': {
       band: { width: number } | null
+    }
+    sidekick: {
+      buddy: { kind: 'check' | 'stop' | 'handoff' | 'fresh'; at: number } | null
+      status: { level: 'off' | 'cache' | 'guide'; busy: boolean; tip?: string } | null
     }
     'cost-ledger': {
       here: {

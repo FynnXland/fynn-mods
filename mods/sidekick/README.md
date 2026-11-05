@@ -193,7 +193,7 @@ Maintenance lines have their own buttons since 0.16.0 (**Insert in prompt** / **
 ## Working with other mods
 
 - **clawd-buddy** shows what sidekick does: while it checks your message, holds it back with a question, or starts a new chat. sidekick writes only the kind of state and a timestamp to `$.state` (`sidekick.buddy`), which clawd-buddy reads. Neither mod needs the other.
-- **limit-bars** stays a display. To avoid two dialogs in a row, turn off its cold-cache warning once: **`/cache warn off`** (the German `/cache warnung aus` works too). sidekick's question replaces it.
+- **limit-bars** stays a display. Since limit-bars 0.14.0 its cold-cache warning steps aside by itself while sidekick runs on `cache` or `guide`, so there are no two dialogs in a row; with an older limit-bars, turn it off once with **`/cache warn off`** (the German `/cache warnung aus` works too).
 - Claude Code's built-in plugin **`cc-plugin-you-should-know`** (off by default, availability depends on your organization) does what sidekick's **Good to know** does. Use one of them: with both on, every check runs twice. `/savings` only includes sidekick's own.
 - **tune-strip** (since 0.15.2): in the desktop app, the handoff box and the Good-to-know note stand above the full tune-strip bar, with a thin blue line below them that disappears with them. In the terminal nothing changed.
 - **quick-replies:** its suggestions use the digits 1, 2, 3 … after a turn; a Good-to-know note only carries digits while Claude is working, so they never clash.
@@ -312,7 +312,7 @@ The mod loads in the next session, or after `/reload-plugins`.
 claude --plugin-dir <path-to-clone>/mods/sidekick
 ```
 
-**If you also use limit-bars:** run `/cache warn off` once (see above).
+**If you also use limit-bars:** with limit-bars 0.14.0 or later there is nothing to do; with an older one, run `/cache warn off` once (see above).
 
 **Status and pause:** `/sidekick status` shows the current state and level; `/sidekick off` turns sidekick off without uninstalling it, `/sidekick on` brings it back.
 
