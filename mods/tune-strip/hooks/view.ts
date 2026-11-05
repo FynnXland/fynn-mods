@@ -134,17 +134,22 @@ function titleOf(t: Track): string {
 /**
  * Desktop. `full`: eine eigene Leiste (Ebene `BAR_LEVEL`) über allen Mods: Cover, Titel – Interpret, Zeit mit Balken, rechts alle Knöpfe.
  * `compact`/`mini`: ein Platz in der Zeile (Cover, Titel auf feste Breite gekürzt, Knöpfe). Die Knöpfe zeigen nur Symbole: der Desktop
- * zeichnet `label` als Knopftext, deshalb steht der Inhalt als Kind und der Knopf hat keinen `label`.
+ * zeichnet `label` als Knopftext, deshalb ist das Symbol das einzige Kind und der Knopf hat keinen ausgeschriebenen `label`.
+ *
+ * Knöpfe im Desktop (Nachtrag 0.9.0): Die App zeichnet ihren eigenen Knopf aus dem Kindtext, ohne Farbe der Kinder (docs/raw/en/reference.md:307),
+ * in fester Größe; `variant: 'secondary'` sieht aus wie ohne, eine Box mit `width` macht den Knopf nicht breiter (Probe, Fynn 2026-11-05).
+ * Deshalb keine Farbe und keine Leerzeichen im Knopf: grau mit hellem Symbol, `primary` hell mit dunklem Symbol. `primary` markiert
+ * Abspielen/Pause und eingeschaltete Zustandsknöpfe (Zufall, Wiederholen), weil eine Textfarbe dort nicht ankommt.
  */
 export function desktopTree(els: Els, h: Handlers, v: ViewInput) {
   const { Box, Text, Button, Svg } = els
   const t = T[v.lang]
   const playing = v.track.status === 'Playing'
-  const btn = (key: string, glyph: string, word: Parameters<Handlers['press']>[0], o: { primary?: boolean; on?: boolean; scope?: string; color?: string } = {}) =>
+  const btn = (key: string, glyph: string, word: Parameters<Handlers['press']>[0], o: { primary?: boolean; scope?: string } = {}) =>
     Button({
       key,
       ...(o.scope ? { hover: { scope: o.scope } } : {}),
-      children: [Text({ ...(o.color ? { color: o.color } : o.on ? { color: 'success' } : {}), children: [glyph] })],
+      children: [glyph],
       ...(o.primary ? { variant: 'primary' } : {}),
       onPress: () => h.press(word),
     })
@@ -185,27 +190,25 @@ export function desktopTree(els: Els, h: Handlers, v: ViewInput) {
   // der zwischen Titel und Knöpfen frei ist: die Knöpfe rücken nicht, und sie bleiben in der Leiste mittig.
   const hint = (scope: string, text: string) =>
     Box({ display: 'none', hover: { scope, display: 'flex' }, children: [Text({ dimColor: true, wrap: 'truncate-end', children: [text] })] })
-  const named = (key: string, glyph: string, word: Parameters<Handlers['press']>[0], text: string, o: { primary?: boolean; on?: boolean; color?: string } = {}) => ({
+  const named = (key: string, glyph: string, word: Parameters<Handlers['press']>[0], text: string, o: { primary?: boolean } = {}) => ({
     button: btn(key, glyph, word, { ...o, scope: `sp-${key}` }),
     hint: hint(`sp-${key}`, text),
   })
-  // Drei große Knöpfe: zurück (neu starten, zweimal: voriger Titel), Abspielen/Pause als Pille in der Mitte, weiter. Die Symbole stehen
-  // in Orange wie die Beschriftung der limit-bars; Leerzeichen machen die Knöpfe breiter (Höhe und Schriftgröße legt der Desktop fest).
-  const wide = (g: string) => `   ${g}   `
-  const toggleN = named('toggle', playing ? '     ⏸     ' : '     ▶     ', 'toggle', playing ? t.label.pause : t.label.play, { primary: true })
+  // Drei Knöpfe: zurück (neu starten, zweimal: voriger Titel), Abspielen/Pause hell in der Mitte, weiter
+  const toggleN = named('toggle', playing ? '⏸' : '▶', 'toggle', playing ? t.label.pause : t.label.play, { primary: true })
   const parts = v.extraButtons
     ? [
-        named('prev', wide('⏮'), 'prev', t.label.prev, { color: ORANGE }),
+        named('prev', '⏮', 'prev', t.label.prev),
         named('back', '−15', 'back', t.label.back),
         toggleN,
         named('forward', '+15', 'forward', t.label.forward),
-        named('next', wide('⏭'), 'next', t.label.next, { color: ORANGE }),
+        named('next', '⏭', 'next', t.label.next),
       ]
-    : [named('prev', wide('⏮'), 'prev', t.label.prev, { color: ORANGE }), toggleN, named('next', wide('⏭'), 'next', t.label.next, { color: ORANGE })]
+    : [named('prev', '⏮', 'prev', t.label.prev), toggleN, named('next', '⏭', 'next', t.label.next)]
   const modeParts = v.extraButtons
     ? [
-        named('shuffle', '⇄', 'shuffle', t.label.shuffle, { on: v.track.shuffle }),
-        named('repeat', v.track.repeat === 'Track' ? '↻1' : '↻', 'repeat', t.label.repeat, { on: v.track.repeat !== 'None' }),
+        named('shuffle', '⇄', 'shuffle', t.label.shuffle, { primary: v.track.shuffle }),
+        named('repeat', v.track.repeat === 'Track' ? '↻1' : '↻', 'repeat', t.label.repeat, { primary: v.track.repeat !== 'None' }),
       ]
     : []
   const controls = Box({

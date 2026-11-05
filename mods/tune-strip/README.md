@@ -8,13 +8,13 @@ Spotify is a trademark of Spotify AB. This is an unofficial hobby mod, not made 
 
 Since 0.6.0 it also finds the **beat** of the song (tempo, where the beats fall, and whether the song is calm, groove/hip-hop, hard or sad) so that clawd-buddy can nod along in time. **Spotify's audio is analysed locally for tempo only; nothing is recorded, stored or sent.** Only Spotify is listened to, never the rest of your system sound. Turn it off with `/tune beat off`.
 
-Tested with Claude Code **v2.1.318** · Plugin version **0.8.1** · Windows only
+Tested with Claude Code **v2.1.318** · Plugin version **0.9.0** · Windows only
 
 ## Display
 
 | Surface | Look |
 |---|---|
-| Desktop Code tab | `full`: its own bar above all other band mods, in the style of the limit-bars (monospace text, orange title, segmented green position bar with the time), three large buttons on the right (restart/previous, play/pause as a white pill in the middle, next; symbols only) and an orange separator line below. Hovering a button names its action in the line above the buttons. With `extraButtons` the bar also shows −15 s, +15 s and, after a gap, shuffle and repeat. `compact`/`mini`: a small place in the band row |
+| Desktop Code tab | `full`: its own bar above all other band mods, in the style of the limit-bars (monospace text, orange title, segmented green position bar with the time), three buttons on the right as the desktop app draws them (restart/previous and next in grey, play/pause light in the middle; symbols only) and an orange separator line below while other band mods draw underneath (it stays for 3 s when they briefly disappear, so it does not flicker). Hovering a button names its action to the left of the buttons. With `extraButtons` the bar also shows −15 s, +15 s and, after a gap, shuffle and repeat (light when on). `compact`/`mini`: a small place in the band row |
 | Terminal | One line, e.g. `♪ Title – Artist 1:23/3:45 ⏮ ⏯ ⏭`, shortened when the window is narrow |
 
 - **Sizes:** `full` (cover, title, position bar, all buttons), `compact` (cover, title, previous/play/next), `mini` (cover and play/pause), `off`. In the terminal `auto` picks the largest size that fits next to the other band mods; tune-strip always yields first.

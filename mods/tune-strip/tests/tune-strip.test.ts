@@ -358,9 +358,12 @@ test('Desktop: Knöpfe zeigen nur Symbole (kein ausgeschriebener label, den der 
   walk(tree)
   expect(buttons.length).toBe(3)
   for (const b of buttons) {
-    expect(String(b.props.label)).toMatch(/^[ ⏮⏸▶⏭⇄↻−+0-9]+$/u) // die Engine setzt label aus dem Kindtext
-    expect(textOf(b)).toMatch(/^[ ⏮⏸▶⏭⇄↻−+0-9]+$/u)
+    // Die Engine setzt label aus dem einen Kindtext; 0.9.0: nur das Symbol, ohne Leerzeichen und ohne gefärbtes Text-Kind
+    // (der Desktop zeichnet den Kindtext ohne Farbe und schluckt Leerzeichen, Nachtrag 0.9.0)
+    expect(String(b.props.label ?? textOf(b))).toMatch(/^[⏮⏸▶⏭⇄↻−+0-9]+$/u)
+    expect(JSON.stringify(b)).not.toContain('"color"')
   }
+  expect(buttons.filter((b) => b.props.variant === 'primary').length).toBe(1) // nur Abspielen/Pause ist hell
   await ui.unmount()
   // Ebenen: tune-strip (40) steht vor quick-replies (20) und sidekick (30) in der Wurzel
   const lay = (n: number, name: string) => layer(n, name, key(name))
@@ -826,6 +829,78 @@ test('Trennlinie 0.7.1: quick-replies.band steht und fällt mit der Linie, auch 
   const ui2 = await $.ui.mount(band('desktop', 120))
   expect(seen((await ui2.drawn()) as Node)).toContain('Trennlinie')
   await ui2.unmount()
+})
+
+// 0.9.0: Zustand von Zufall/Wiederholen zeigt im Desktop `variant: 'primary'` (eine Textfarbe im Knopf zeichnet die App nicht)
+test('Knöpfe 0.9.0: eingeschaltete Zustandsknöpfe sind hell (primary), ausgeschaltete grau', DE_EXTRA, async ($, on) => {
+  const w = world(on, { inner: 'text', out: q({ shuffle: true, repeat: 'None' }, true) })
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop', 120))
+  const v = async (k: string) => walk((await ui.drawn()) as Node).find((x) => x && typeof x === 'object' && x.type === 'Button' && x.props?.key === k)
+  const variant = async (k: string) => ((await v(k)) as { props?: Record<string, unknown> })?.props?.variant
+  expect(await variant('shuffle')).toBe('primary')
+  expect(await variant('repeat')).toBeUndefined()
+  expect(await variant('toggle')).toBe('primary')
+  expect(await variant('prev')).toBeUndefined()
+  await ui.unmount()
+})
+
+// 0.9.0: Haltezeit der Trennlinie. Beim Turnwechsel öffnet oder schließt sidekick seine Ebene, und `quick-replies.band` ist kurz null
+// (oder ein `$.state.get` wird abgelehnt); die Linie bleibt stehen und geht erst, wenn 3 s lang nichts mehr darunter steht.
+for (const gap of ['null', 'abgelehnt'] as const) {
+  test(`Trennlinie 0.9.0: sidekick auf und zu, quick-replies.band kurz ${gap} – die Linie bleibt durchgehend`, DE, async ($, on) => {
+    const o: { inner: 'above' | 'text' } = { inner: 'above' }
+    const w = world(on, o)
+    let mode: 'shown' | 'null' | 'abgelehnt' = 'shown'
+    on('state.get', ($: unknown, e: any) => {
+      if (mode === 'abgelehnt') throw new Error('state.get abgelehnt')
+      return { value: { value: e.plugin === 'quick-replies' && mode === 'shown' ? { shown: true } : undefined, version: 1 } } as never
+    })
+    on('state.set', () => ({ value: { isSet: true, version: 1 } }) as never)
+    await w.start($)
+    const ui = await $.ui.mount(band('desktop', 120))
+    expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
+    // sidekick schließt, der Turn beginnt: quick-replies meldet kurz nichts
+    o.inner = 'text'
+    mode = gap
+    const before = w.state.renders
+    await w.clock.advance(5000) // Neuzeichnen der Zeit (POS_REDRAW)
+    expect(w.state.renders).toBeGreaterThan(before)
+    expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
+    // sidekick öffnet wieder, die Pille ist zurück, bevor die Haltezeit endet
+    o.inner = 'above'
+    mode = 'shown'
+    for (let i = 0; i < 4; i++) {
+      await w.clock.advance(1000)
+      expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
+    }
+    await w.clock.advance(10000)
+    expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
+    await ui.unmount()
+  })
+}
+
+test('Trennlinie 0.9.0: steht wirklich nichts mehr darunter, geht die Linie nach der Haltezeit von selbst', DE, async ($, on) => {
+  const o: { inner: 'above' | 'text' } = { inner: 'above' }
+  const w = world(on, o)
+  let shown = true
+  on('state.get', ($: unknown, e: any) => ({ value: { value: e.plugin === 'quick-replies' && shown ? { shown: true } : undefined, version: 1 } }) as never)
+  on('state.set', () => ({ value: { isSet: true, version: 1 } }) as never)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop', 120))
+  expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
+  shown = false
+  await w.clock.advance(5000) // erstes Zeichnen ohne etwas darunter: die Linie bleibt noch
+  expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
+  await w.clock.advance(1000)
+  expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
+  await w.clock.advance(3000) // Haltezeit vorbei: der Takt zeichnet selbst neu, die Linie geht
+  expect(seen((await ui.drawn()) as Node)).not.toContain('Trennlinie')
+  // kommt wieder etwas darunter, steht sie beim nächsten Zeichnen sofort
+  shown = true
+  await w.clock.advance(5000)
+  expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
+  await ui.unmount()
 })
 
 // ---------- 0.3.0: tune-strip.playing für clawd-buddy ----------

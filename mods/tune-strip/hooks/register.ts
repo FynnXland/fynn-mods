@@ -61,6 +61,12 @@ let bandDrawn = false // zeichnet tune-strip gerade etwas ins Band (Stufe nicht 
 let drawsTime = false
 let lastSig = ''
 let lastDrawAt = 0
+// Haltezeit der Trennlinie (0.9.0): „etwas darunter“ gilt sofort, „nichts darunter“ erst nach SEP_HOLD_MS. Beim Turnwechsel ist
+// `quick-replies.band` kurz null, und ein abgelehntes `$.state.get` zählte wie „nichts“; beides ließ die Linie kurz verschwinden (Fynn, 2026-11-05)
+const SEP_HOLD_MS = 3000
+let sepOn = false // steht die Linie gerade?
+let sepLostAt = 0 // erstes Zeichnen ohne etwas darunter, während die Linie stand (0 = nichts verloren); wie `lostAt` beim Titelwechsel
+let sepHeld = false // die Linie steht nur noch wegen der Haltezeit; der Takt zeichnet nach deren Ende neu
 // Jede Steuerung erhöht den Zählstand; eine Abfrage, die davor begann, wird verworfen (sie würde den Klick zurückdrehen)
 let epoch = 0
 let ctlChain: Promise<unknown> = Promise.resolve()
@@ -540,6 +546,12 @@ async function tick($: EngineInterface, getLast: () => number, setLast: (v: numb
       return
     }
   }
+  // Haltezeit der Trennlinie vorbei: einmal neu zeichnen, damit die Linie geht, falls darunter weiter nichts steht
+  if (sepHeld && now - sepLostAt >= SEP_HOLD_MS) {
+    sepHeld = false
+    await redraw($)
+    return
+  }
   // Position läuft zwischen den Abfragen weiter: nur neu zeichnen, wenn die Zeit sichtbar ist und gespielt wird, und nicht öfter als alle POS_REDRAW ms
   if (drawsTime && track?.status === 'Playing' && now - lastDrawAt >= POS_REDRAW) await redraw($)
 }
@@ -656,6 +668,9 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
   bandDrawn = false
   drawsTime = false
   lastSig = ''
+  sepOn = false
+  sepLostAt = 0
+  sepHeld = false
   drawn.clear()
   tracker = new Tracker()
   spotifyPid = 0
@@ -797,6 +812,10 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
         // Aus: auch der Takt hält an (Review 0.3.0, K1); `/tune off` hat `tune-strip.playing` schon auf null gesetzt, `on` zeichnet und startet ihn neu
         timer?.cancel()
         timer = null
+        // Die Linie fängt nach `/tune on` frisch an (Review 0.9.0 K2): keine Haltezeit aus der Zeit vor `off`
+        sepOn = false
+        sepLostAt = 0
+        sepHeld = false
         return theirs
       }
       const now = await $.clock.now()
@@ -828,7 +847,19 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
       const below = layers.some((l) => levelOf(l) < BAR_LEVEL) || slots.length > 0 || others.some((x) => x !== null)
       // Uhr noch einmal lesen: die Awaits oben haben Zeit gekostet, und die Voranimation des Bilds beginnt jetzt bei genau dieser Position
       const drawNow = await $.clock.now().catch(() => now)
-      const input = { lang, stage, track, cover, pos: positionNow(track, queryAt, drawNow), extraButtons, sep: below }
+      // 0.9.0: Linie mit Haltezeit (SEP_HOLD_MS); `sepHeld` lässt den Takt nach ihrem Ende neu zeichnen
+      if (below) {
+        sepOn = true
+        sepLostAt = 0
+      } else if (sepOn) {
+        if (sepLostAt === 0) sepLostAt = drawNow
+        if (drawNow - sepLostAt >= SEP_HOLD_MS) {
+          sepOn = false
+          sepLostAt = 0
+        }
+      }
+      sepHeld = stage === 'full' && sepOn && !below
+      const input = { lang, stage, track, cover, pos: positionNow(track, queryAt, drawNow), extraButtons, sep: sepOn }
       const mine = (e.surface === 'desktop' ? desktopTree(els, handlers, input) : terminalTree(els, handlers, input)) as unknown as RenderNode
       // Desktop, volle Stufe: eigene Leiste über allen Mods (kein Platz in der Zeile); sonst der Platz 20
       if (e.surface === 'desktop' && stage === 'full') return joinBand([...layers, layer(BAR_LEVEL, 'tune-strip', mine)], base, slots)
