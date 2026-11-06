@@ -10,7 +10,8 @@ import { ALL_CLIPS, ALL_PROPS } from '../hooks/library.ts'
 import { FY, H, POSES } from '../hooks/stage.ts'
 import { CLIP_EN, T } from '../hooks/i18n.ts'
 
-const T0 = new Date('2026-11-06T15:00:00').getTime()
+// Fest in UTC (15:00 deutscher Zeit): frostRoll hängt an den Millisekunden, und die CI läuft in UTC.
+const T0 = Date.UTC(2026, 10, 6, 14, 0, 0)
 const frost = (o: Partial<Frost> = {}): Frost => ({ at: T0, src: 'new', cracks: 0, ...o })
 const iced = (o: Partial<Frost> = {}, extra: Partial<Facts> = {}): Facts => ({ ...NO_FACTS, frost: frost(o), ...extra })
 
@@ -303,7 +304,7 @@ test('Im Mod (fester Wurf): Niete; die eigene Schätzung trifft und friert nach 
   await $.turn.start({ text: 'a', turnId: 't1' })
   await clock.advance(1000)
   await $.turn.complete(done('t1'))
-  expect(await status($)).toMatch(/Ice: own estimate \(60 min\), rolled: yes, freezes at 16:00; frozen in this chat: no\./)
+  expect(await status($)).toMatch(/Ice: own estimate \(60 min\), rolled: yes, freezes at \d{2}:\d{2}; frozen in this chat: no\./)
   await ui.redraw()
   let f = await clientFacts(ui)
   expect(f.frost).toEqual({ at: HIT + FROST_ESTIMATE_MS, src: 'estimate', cracks: 0 })
