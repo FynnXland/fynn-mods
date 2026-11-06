@@ -1380,7 +1380,7 @@ test('0.10.0 language: Wort im argumentHint, Zeile in der Hilfe (en) vor help', 
   })
   on('session.start', () => ({ cwd: '/work' }))
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
-  expect(hint).toBe('on | off | list | demo <animation> | nap | boop | status | flicker | language | help')
+  expect(hint).toBe('on | off | list | demo <animation> | nap | boop | freeze | status | flicker | language | help')
   const en = String((await $.command.run({ command: 'clawd', args: 'help' } as any)).text).split('\n')
   expect(en).toContain('- `/clawd language de|en`: Switch the language of all fynn-mods')
   const order = en.filter((l) => l.startsWith('- `/clawd')).map((l) => /^- `([^`]+)`/.exec(l)![1])

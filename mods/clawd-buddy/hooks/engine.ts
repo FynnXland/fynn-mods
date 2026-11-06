@@ -144,10 +144,17 @@ const FRONT_MATES = 6
 const BACK_Y = 4
 const MATE_HIDE = 5
 
-const ONE_SHOT = new Set(['done', 'done_long', 'ctx_full', 'oops', 'limit_back', 'agent_done', 'streak', 'sk_fresh', 'skill'])
+const ONE_SHOT_SET = new Set(['done', 'done_long', 'ctx_full', 'oops', 'limit_back', 'agent_done', 'streak', 'sk_fresh', 'skill', 'sk_hint', 'sk_upkeep'])
 // sidekick-Zustände, Komprimieren und Skill-Start sind kurz bzw. eindeutig: ohne Entprellung und Mindestdauer
-const URGENT = new Set(['waitUser', 'done', 'done_long', 'ctx_full', 'oops', 'limit_5h', 'limit_week', 'limit_back', 'agent_done', 'streak', 'waitUserLong',
-  'sk_check', 'sk_stop', 'sk_handoff', 'sk_fresh', 'compact', 'skill'])
+const URGENT_SET = new Set(['waitUser', 'done', 'done_long', 'ctx_full', 'oops', 'limit_5h', 'limit_week', 'limit_back', 'agent_done', 'streak', 'waitUserLong',
+  'sk_check', 'sk_stop', 'sk_handoff', 'sk_fresh', 'compact', 'skill', 'sk_hint', 'sk_upkeep',
+  'sk_stop_cold', 'sk_stop_wrong', 'sk_stop_model', 'sk_stop_rewrite', 'sk_stop_topic'])
+/** Eis (0.13.0): Risse, Zerbrechen und Schmelzen je Riss-Stufe; die Stimmung heißt wie der Clip (frost_crack2, frost_break, frost_melt3 …). */
+const FROST_EXACT = /^frost_(crack[1-3]|break[1-3]?|melt[1-3]?)$/
+const FROST_THAW = /^frost_(break|melt)/
+// Risse kommen sofort (dringend); Zerbrechen und Schmelzen sind dazu einmalig und spielen zu Ende (wie limit_back)
+const ONE_SHOT = { has: (m: string): boolean => ONE_SHOT_SET.has(m) || (FROST_EXACT.test(m) && FROST_THAW.test(m)) }
+const URGENT = { has: (m: string): boolean => URGENT_SET.has(m) || FROST_EXACT.test(m) }
 const MOOD_DEBOUNCE = 10 // ~0,75 s: so lange muss eine neue Stimmung anhalten
 const MIN_DWELL = 40 // ~3 s: so lange spielt ein Clip mindestens, bevor eine ruhige Stimmung ihn ablöst
 // Von einer Arbeit zur nächsten (Lesen → Schreiben, Shell → Grübeln …): länger entprellen und länger bleiben, damit Gegenstände nicht
@@ -262,7 +269,16 @@ export function createEngine(opts: EngineOpts) {
    * beim Tippen und zum langen Warten dazu; bei Arbeit bleibt er bei seiner Arbeit.
    */
   const musicIn = (mood: string): boolean => S.music && MUSIC_MOODS.has(mood)
-  const poolOf = (mood: string): ClipDef[] => clips.filter((c) => (c.cat === mood || (c.cat === 'music' && musicIn(mood))) && when(c))
+  const poolOf = (mood: string): ClipDef[] => {
+    // Eis (0.13.0): Riss, Zerbrechen und Schmelzen zur Riss-Stufe; nur aus dem Eis heraus (sonst gibt es nichts aufzutauen). Weniger Bewegung:
+    // ruhiges Schmelzen ohne Splitter und Schütteln (SPEC Teil A)
+    if (FROST_EXACT.test(mood)) {
+      if (FROST_THAW.test(mood) && S.landing !== 'ice') return []
+      if (FROST_THAW.test(mood) && S.reduced) return byName.thaw ? [byName.thaw] : []
+      return byName[mood] ? [byName[mood]] : []
+    }
+    return clips.filter((c) => (c.cat === mood || (c.cat === 'music' && musicIn(mood))) && when(c))
+  }
   /**
    * Gewicht nach Laune: Frust-Clips erst ab etwas Frust und mit ihm immer häufiger, bis sie die Gruppe dominieren; Clips für gute
    * Laune bzw. Müdigkeit entsprechend. Neutrale Clips werden bei starker Laune etwas seltener.
@@ -552,8 +568,21 @@ export function createEngine(opts: EngineOpts) {
     return dyn(c.name + '_outro', c.label + ' (wegräumen)', c.from, c.from, mergeFrames(start, c.outro))
   }
 
+  /**
+   * Weg zwischen zwei Posen über Übergangsclips. Ins Eis (0.13.0) friert er mit einem Clip aus `frost_in` ein (zittern, Arme reiben) statt
+   * mit dem ruhigen Übergang `freeze`; bei weniger Bewegung bleibt es beim ersten, ruhigsten.
+   */
+  function pathTo(from: string, to: string): string[] {
+    const path = planPath(clips, from, to)
+    if (!path.includes('freeze')) return path
+    const pool = clips.filter((c) => c.cat === 'frost_in')
+    if (!pool.length) return path
+    const entry = S.reduced ? pool[0].name : pick(pool, 'frost_in')
+    return path.map((n) => (n === 'freeze' ? entry : n))
+  }
+
   function planTo(name: string): string[] {
-    return [...planPath(clips, S.landing, byName[name].from), name]
+    return [...pathTo(S.landing, byName[name].from), name]
   }
 
   function endClip() {
@@ -566,14 +595,16 @@ export function createEngine(opts: EngineOpts) {
     // Sicherheitsnetz: Arme und Mund sauber zurück (Gegenstände müssen die Clips selbst wegräumen, siehe Prüfung)
     const list = pl.outro.length ? pl.outro : pl.body
     const lastP = list.length ? list[list.length - 1].p : null
-    const tidy = lastP && !isDyn(c) ? tidyFrames(lastP) : []
+    const tidy = lastP && !isDyn(c) ? tidyFrames(lastP, S.landing) : []
     if (tidy.length) S.queue.unshift(dyn('tidy', 'Arme zurück', S.landing, S.landing, tidy))
     nextFromQueue()
   }
 
-  function tidyFrames(p: Pose): Resolved[] {
-    if (p.armL === 'down' && p.armR === 'down' && !p.mouth) return []
-    return [{ p: { ...p, armL: 'down', armR: 'down', mouth: null }, t: 1 }]
+  /** Arme zurück in die Haltung der Landepose (im Eis bleiben sie verschränkt, 0.13.0), Mund zu. */
+  function tidyFrames(p: Pose, landing: string): Resolved[] {
+    const base = POSES[landing] ?? POSES.stand
+    if (p.armL === base.armL && p.armR === base.armR && !p.mouth) return []
+    return [{ p: { ...p, armL: base.armL, armR: base.armR, mouth: null }, t: 1 }]
   }
 
   /** Clip verlassen: Outro abspielen (wenn vorhanden), danach weiter mit der Warteschlange. */
@@ -581,7 +612,7 @@ export function createEngine(opts: EngineOpts) {
     const pl = S.play!
     pl.interrupted = true
     S.landing = pl.clip.from
-    if (target) S.queue = [...planPath(clips, pl.clip.from, byName[target].from), target]
+    if (target) S.queue = [...pathTo(pl.clip.from, byName[target].from), target]
     if (pl.outro.length && pl.phase !== 'outro') {
       pl.phase = 'outro'
       pl.fi = 0
@@ -611,11 +642,15 @@ export function createEngine(opts: EngineOpts) {
     const settled = settle.length ? settle[settle.length - 1].p : p
     // Was in der Hand war (relative Nicht-Effekt-Requisiten), verschwindet nicht abrupt: der Clip soll es selbst weglegen;
     // hier bleiben nur Effekte (sie lösen sich im Reaktionsclip auf) und der Carry.
-    const keepFx = settled.props.filter((x) => props[x[0]]?.effect === true)
-    const frames = [...settle, ...tidyFrames({ ...settled, props: keepFx })]
+    // Gegenstände der Pose selbst (der Eisblock der Pose `ice`, 0.13.0) bleiben stehen; ihre Effekte (Glanz, Risse) ersetzt die Pose
+    const own = POSES[fromPose]?.props ?? []
+    const fam = (n: string) => n.replace(/\d+$/, '')
+    const ownFam = new Set(own.map((x) => fam(x[0])))
+    const keepFx = [...own, ...settled.props.filter((x) => props[x[0]]?.effect === true && !ownFam.has(fam(x[0])))]
+    const frames = [...settle, ...tidyFrames({ ...settled, props: keepFx }, fromPose)]
     S.play = { clip: pl ? pl.clip : byName.idle_breathe, mood: S.mood, intro: [], body: [], outro: [], phase: 'end', fi: 0, tick: 0, interrupted: true }
     S.landing = fromPose
-    const rest = target ? [...planPath(clips, fromPose, byName[target].from), target] : S.queue
+    const rest = target ? [...pathTo(fromPose, byName[target].from), target] : S.queue
     S.queue = frames.length ? [dyn('ausklang', 'Ausklang (Pose zurück)', fromPose, fromPose, frames), ...rest] : rest
     nextFromQueue()
   }

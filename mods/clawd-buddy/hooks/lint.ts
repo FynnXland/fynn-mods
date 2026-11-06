@@ -20,7 +20,8 @@ export type Issue = { kind: string; frame: number; name: string; x: number; y: n
 const MAX_STEP = 8
 const EFFECT_NEAR = 6
 const POCKET_MAX = 6
-const family = (n: string): string => n.replace(/@\d+$/, '').replace(/(\d|Flip|Hi)$/, '')
+// Familie: Zustände desselben Gegenstands (Ziffern am Ende, 0.13.0 auch mehrstellig: frost_ice0 … frost_ice53), Umblättern, Hochkant
+const family = (n: string): string => n.replace(/@\d+$/, '').replace(/(\d+|Flip|Hi)$/, '')
 
 type Comp = {
   name: string

@@ -18,6 +18,8 @@ export const PAL: Readonly<Record<string, string>> = {
   L: '#8CCBF2', N: '#3E4C9A', T: '#2E2E2E', M: '#C9594B',
   // Helfer (Subagenten): hellere Claude-Farbe für den Körper, dunklere für Arme und die hintere Reihe (Fynn, 2026-10-06: statt Blau)
   A: '#EDA98A', F: '#B8664A',
+  // Eis (0.13.0): Inneres des Eisklumpens, ein dunkles Blaugrau (Hintergrund durch Eis gesehen); Rand Hellblau L, Glanz Weiß W
+  I: '#35627D',
 }
 
 /** Requisite: Palettenraster, '.' = durchsichtig. `effect`: kleiner Effekt (Funkeln, Note, …), der aus der Figur entsteht. */
@@ -38,6 +40,11 @@ export type PropSprite = {
    * an der Figur, darf aber auf dem Gegenstand liegen, den sie hält (anim.test „Effekte überlappen sich nie“).
    */
   hand?: true
+  /**
+   * Liegt hinter der Figur (0.13.0, Eisklumpen): wird vor Beinen und Körper gezeichnet, die Figur steht also darin. So wirkt ein Block
+   * durchsichtig, ohne dass sein Bild von der Pose abhängt. Die Prüfung „Effekte überlappen sich nie“ zählt ihn nicht als Gegenstand.
+   */
+  under?: true
 }
 /** Verweis auf eine Requisite im Frame: [Name, x, y, 'g'?]. Ohne 'g' relativ zur Figur, mit 'g' relativ zum Heimatplatz. */
 export type PropRef = readonly [name: string, x: number, y: number, flag?: 'g' | 'G']
@@ -83,9 +90,11 @@ export const POSES: Readonly<Record<string, Pose>> = {
   lie: { ...DEF, by: 2, squash: 2, armL: 'out', armR: 'out', eyes: 'closed' },
   back: { ...DEF, back: true, eyes: 'none' },
   held: { ...DEF, fy: -3, legs: 'stepA', eyes: 'wide' },
+  // 0.13.0: eingefroren. Der Eisblock und sein Glanz gehören zur Pose (clips/frost.ts), damit er über mehrere Clips stehen bleibt.
+  ice: { ...DEF, armL: 'cross', armR: 'cross', props: [['frost_ice0', -3, -2, 'g'], ['frost_fx0', -3, -2, 'g']] },
 }
 export const POSE_NAMES: Readonly<Record<string, string>> = {
-  stand: 'stehen', sit: 'sitzen', lie: 'liegen', back: 'abgewandt', held: 'hochgehoben',
+  stand: 'stehen', sit: 'sitzen', lie: 'liegen', back: 'abgewandt', held: 'hochgehoben', ice: 'eingefroren',
 }
 
 /** Arme: Pixel des linken Arms relativ zur Körperoberkante; rechts gespiegelt (x → 16−x). */
@@ -210,6 +219,7 @@ export function propSprite(props: PropTable, name: string): PropSprite | undefin
       ...(src.effect ? { effect: true as const } : {}),
       ...(src.noFlip ? { noFlip: true as const } : {}),
       ...(src.front ? { front: true as const } : {}),
+      ...(src.under ? { under: true as const } : {}),
       ...(src.mirrorRows ? { mirrorRows: shrink(src.mirrorRows) } : {}),
     }
   }
@@ -236,6 +246,8 @@ export function compose(p: Pose, props: PropTable): Composed {
     if (tag) hit[y * W + x] = mt(tag)
   }
   const eyePx = new Set<number>()
+  // Ebene hinter der Figur (under): zuerst, Beine und Körper liegen darüber
+  for (const pr of p.props) drawProp(pr, 'under')
   for (const [x, y] of LEGS[p.legs] || []) set(ox + x, oy + y, 'O', 'body')
   for (let y = top; y <= bot; y++) for (let x = 2; x <= 14; x++) set(ox + x, oy + y, 'O', 'body')
   const sideArm = (spec: ArmSpec, right: boolean) => {
@@ -283,10 +295,10 @@ export function compose(p: Pose, props: PropTable): Composed {
       set(ox + 13 + fc, oy + top + 4, 'P', null)
     }
   }
-  const drawProp = (pr: PropRef, front: boolean): void => {
+  function drawProp(pr: PropRef, layer: 'under' | 'mid' | 'front'): void {
     const [name, px, py, flag] = pr
     const s = propSprite(props, name)
-    if (!s || !!s.front !== front) return
+    if (!s || (s.under ? 'under' : s.front ? 'front' : 'mid') !== layer) return
     const bx = flag ? FX + px : ox + px
     const by = flag ? FY + py : oy + py + p.by
     // 'G': fest auf der Bühne, wird beim Spiegeln nicht mitgespiegelt (Begleiter der Subagenten bleiben links)
@@ -299,7 +311,7 @@ export function compose(p: Pose, props: PropTable): Composed {
       for (let rx = 0; rx < row.length; rx++) if (row[rx] !== '.') put(keep ? bx + w - 1 - rx : bx + rx, by + ry, row[rx], 'prop:' + name)
     })
   }
-  for (const pr of p.props) drawProp(pr, false)
+  for (const pr of p.props) drawProp(pr, 'mid')
   // Hände vor dem Körper gehen nie über die Augen (Fynn), außer beim Augenreiben (rub*), wo genau das gemeint ist: Berührt ein Vorderarm
   // ein Auge (auch nur daneben oder darunter), rutscht er als Ganzes bis zu 3 Pixel nach unten; nur wenn das nicht reicht, bleibt dort eine Lücke.
   const touchesEye = (x: number, y: number): boolean =>
@@ -320,7 +332,7 @@ export function compose(p: Pose, props: PropTable): Composed {
   }
   frontArm(p.armL, false)
   frontArm(p.armR, true)
-  for (const pr of p.props) drawProp(pr, true)
+  for (const pr of p.props) drawProp(pr, 'front')
   return { buf, hit }
 }
 

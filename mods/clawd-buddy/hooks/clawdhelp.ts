@@ -10,7 +10,7 @@ import { languageHelp } from './language.ts'
 export const ACCENT = 'claude'
 
 /** Unterbefehle, die `/clawd` versteht (register.ts nutzt die Liste; ein Test prüft jeden gegen die Hilfe). */
-export const SUBCOMMANDS = ['status', 'on', 'off', 'list', 'demo', 'nap', 'boop', 'flicker'] as const
+export const SUBCOMMANDS = ['status', 'on', 'off', 'list', 'demo', 'nap', 'boop', 'freeze', 'flicker'] as const
 /** Wörter für die Hilfe, nur als einziges Wort, Groß-/Kleinschreibung egal (HELP-SPEC §2). */
 export const HELP_WORDS = ['help', '?'] as const
 
@@ -51,6 +51,7 @@ export function clawdHelp(o: HelpInput): HelpData {
       { cmd: '/clawd demo <animation>', does: x.demo },
       { cmd: '/clawd nap', does: x.nap },
       { cmd: '/clawd boop', does: x.boop },
+      { cmd: '/clawd freeze', does: x.freeze },
       { cmd: '/clawd flicker', does: x.flicker },
       languageHelp('clawd', o.lang), // docs/LANGUAGE-SPEC.md §6 Punkt 4
       { cmd: '/clawd help', does: x.help },

@@ -9,7 +9,7 @@
 import { clip } from '../clipdef.ts'
 import type { ClipDef, Frame } from '../clipdef.ts'
 import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, riseIn, sinkOut } from '../macros.ts'
+import { armBlock, fetchIn, fetchOut, riseIn, sinkOut } from '../macros.ts'
 
 type Side = 'L' | 'R'
 const g = (name: string, x: number, y: number): PropRef => [name, x, y, 'g']
@@ -93,6 +93,35 @@ export const PROPS: Readonly<Record<string, PropSprite>> = {
   sk_tick: fxs(['....E', '...E.', 'E.E..', '.E...']),
   sk_excl: fxs(['YY', 'YY', 'YY', 'YY', '..', 'YY']),
   sk_arrow: fxs(['..W..', '..W..', '..W..', 'W.W.W', '.WWW.', '..W..']),
+
+  // ---- 0.13.0: Rückfragen nach Grund, Hinweiszeile, Wartung ----
+  // Atemwölkchen in der Kälte (klein, weiß) und Zähneklappern (der schmale Mund geht auf und zu, stage.ts → MOUTH.whistle)
+  sk_breath: fxs(['.W', 'WW']),
+  sk_breath2: fxs(['W.W', '.W.']),
+  // Landkarte 9×6: Papier creme, Falz grau, Fluss blau, Wald grün, rotes Kreuz; 1 = hochkant gedreht, 2 = auf dem Kopf
+  sk_map0: spr(['CEECGCCBC', 'EECCGCBCC', 'CCCCGBCCC', 'CCCBGCCMC', 'CCBCGCMCM', 'CBCCGCCMC']),
+  sk_map1: spr(['CBCCEC', 'CCBCEE', 'CCCBCE', 'GGGGGG', 'CCCCBC', 'CMCCCB', 'MCMCCC', 'CMCCCC', 'CCCCCC']),
+  sk_map2: spr(['CMCCGCCBC', 'MCMCGCBCC', 'CMCCGBCCC', 'CCCBGCCCC', 'CCBCGCCEE', 'CBCCGCEEC']),
+  // Waage 11×7 (steht auf der Linie): Ständer grau, Balken gekippt, zwei gelbe Schalen; 0 = links unten, 1 = rechts unten
+  sk_scale0: spr(['.....G.....', '.....GGGGG.', '.GGGGG...G.', '.G...G..YYY', 'YYY..G.....', '.....G.....', '...GGGGG...']),
+  sk_scale1: spr(['.....G.....', '.GGGGG.....', '.G...GGGGG.', 'YYY..G...G.', '.....G..YYY', '.....G.....', '...GGGGG...']),
+  // Zwei Zettel 5×6: links grau verkritzelt (alte Fassung), rechts sauber mit grünem Haken (Haikus Fassung)
+  sk_noteA: spr(['WWWWW', 'WGGWW', 'WWGGW', 'WGWGW', 'WGGWW', 'WWWWW']),
+  sk_noteB: spr(['WWWWW', 'WWWWE', 'WWWEW', 'EWEWW', 'WEWWW', 'WWWWW']),
+  // Block 7×9 für „neues Thema“: 0 = beschriebene Seite, Flip = Seite steht beim Umblättern hochkant, 1 = leeres Blatt
+  sk_pad0: spr(['RRRRRRR', 'WWWWWWW', 'WDDDWDW', 'WWWWWWW', 'WDDWDDW', 'WWWWWWW', 'WDDDDWW', 'WWWWWWW', 'WWWWWWW']),
+  sk_padFlip: spr(['RRRRRRR', '...WG..', '...WG..', '...WG..', '...WG..', '...WG..', '...WG..', '...WG..', '...WG..']),
+  sk_pad1: spr(['RRRRRRR', 'WWWWWWW', 'WWWWWWW', 'WWWWWWW', 'WWWWWWW', 'WWWWWWW', 'WWWWWWW', 'WWWWWWW', 'WWWWWWW']),
+  // Glühbirne über dem Kopf: 0 = aus (grau), 1 = an (gelb, weißer Glühfaden, Strahlen)
+  sk_bulb0: fxs(['..GGG..', '.GGGGG.', '..GGG..', '...D...']),
+  sk_bulb1: fxs(['Y.YYY.Y', '.YYWYY.', 'Y.YYY.Y', '...D...']),
+  // Ölkännchen 6×5 (grau, Tülle oben links, Griff rechts): 0 = aufrecht, 1 = geneigt (Tülle unten); Öltropfen goldgelb
+  sk_oil0: spr(['G.....', '.G.DD.', '..GGGD', '.GGGGD', '.GGGG.']),
+  sk_oil1: spr(['......', '...DD.', '.GGGGD', 'GGGGGD', 'G.GGG.']),
+  sk_drop: fxs(['Y', 'Y']),
+  // Besen 3×8 (Stiel braun, Borsten gelb) und kleine Staubwölkchen
+  sk_broom: spr(['.R.', '.R.', '.R.', '.R.', '.R.', 'YYY', 'YYY', 'Y.Y']),
+  sk_dust: fxs(['G.', 'GG']),
 }
 
 const out: ClipDef[] = []
@@ -337,6 +366,211 @@ C('sk_open_letter', 'Öffnet den Brief vom neuen Chat', 'sk_fresh', {
     { ...armBlock('L', 2, 3), props: [g('sk_env0@40', -2, 2)], t: 1 },
     ...stow(g('sk_env0@25', -1, 4)),
     { blush: false, t: 2 },
+  ],
+})
+
+// =================================================================================================================================
+// 0.13.0: Rückfragen nach Grund (sidekick.buddy.why, SPEC „Ausbau 0.13.0“ Teil B). Alle Schleifen, bis Fynn im Dialog antwortet.
+// =================================================================================================================================
+
+// ---- sk_stop_cold: Kalt-Cache-Frage. Er friert, ohne einzufrieren. ----
+
+// 1 (ruhig): umarmt sich selbst, bibbert 1 px, die Zähne klappern (der schmale Mund geht auf und zu), ein Atemwölkchen steigt auf; ab und zu
+// ein Blick hinunter zur Eingabe. Arme vor dem Körper an den Seiten (nicht verschränkt: sonst läge der Mund darunter).
+const breath = (k: number): PropRef => (k ? g('sk_breath2', 17, 2) : g('sk_breath', 17, 3))
+const chatter = (n: number, extra: Frame = {}): Frame[] =>
+  Array.from({ length: n }, (_, i): Frame => ({ fx: i % 2, mouth: i % 2 ? 'whistle' : null, ...extra, t: 1 }))
+C('sk_cold_shiver', 'Bibbert: Der Cache ist kalt', 'sk_stop_cold', {
+  loop: true, interruptible: true,
+  intro: [{ armL: 'hold', armR: 'hold', eyes: 'half', t: 2 }],
+  frames: [
+    ...chatter(6, { armL: 'hold', armR: 'hold', eyes: 'half', props: [] }),
+    { fx: 0, mouth: null, props: [breath(0)], t: 3 }, { props: [breath(1)], t: 3 }, { props: [], t: 2 },
+    ...chatter(6),
+    // schaut zur Eingabe hinunter
+    { fx: 0, mouth: null, look: [0, 1], eyes: 'open', t: 6 }, { look: [0, 0], eyes: 'half', t: 2 },
+    ...chatter(4),
+    { fx: 0, mouth: null, props: [breath(0)], t: 3 }, { props: [breath(1)], t: 3 }, { props: [], t: 4 },
+  ],
+  outro: [{ fx: 0, mouth: null, armL: 'down', armR: 'down', eyes: 'open', look: [0, 0], props: [], t: 2 }],
+})
+
+// 2: tritt von einem Fuß auf den anderen, haucht in die Hände (Hände vor dem Körper oben, Wölkchen), reibt sie, schaut zur Eingabe.
+C('sk_cold_stomp', 'Tritt auf der Stelle und haucht in die Hände', 'sk_stop_cold', {
+  loop: true, interruptible: true,
+  frames: [
+    { legs: 'stepA', armL: 'down', armR: 'down', eyes: 'half', t: 2 }, { legs: 'stepB', t: 2 }, { legs: 'stepA', t: 2 }, { legs: 'stepB', t: 2 },
+    { legs: 'stand', armL: 'holdUp', armR: 'holdUp', eyes: 'closed', t: 2 },
+    { props: [breath(0)], t: 3 }, { props: [breath(1)], t: 3 },
+    { armL: 'hold', armR: 'holdUp', eyes: 'half', props: [], t: 2 }, { armL: 'holdUp', armR: 'hold', t: 2 },
+    { armL: 'hold', armR: 'holdUp', t: 2 }, { armL: 'holdUp', armR: 'hold', t: 2 },
+    { armL: 'down', armR: 'down', eyes: 'open', look: [0, 1], t: 6 }, { look: [0, 0], t: 2 },
+  ],
+  outro: [{ legs: 'stand', armL: 'down', armR: 'down', eyes: 'open', look: [0, 0], props: [], t: 2 }],
+})
+
+// ---- sk_stop_wrong: falscher Chat. Landkarte aus der Tasche, er dreht sie, Kopf schief, Fragezeichen. ----
+const MAPL = { name: 'sk_map0', size: [9, 6] as const, at: [-10, 4] as const, side: 'L' as const, grip: 1, rummage: 3 }
+const mapUp = (n: number, x: number, y: number, t: number, extra: Frame = {}): Frame => ({
+  ...armBlock('L', 3, y + 2), props: [g('sk_map' + n, x, y)], t, ...extra,
+})
+const QM = g('question', 17, -3)
+C('sk_map_lost', 'Dreht ratlos eine Landkarte', 'sk_stop_wrong', {
+  loop: true, interruptible: true,
+  intro: [...fetchIn(MAPL), mapUp(0, -10, 2, 2, { look: [-1, 0] }), mapUp(0, -10, 0, 2)],
+  frames: [
+    mapUp(0, -10, 0, 6, { face: -1, look: [-1, 0], eyes: 'open' }),
+    // dreht sie hochkant …
+    mapUp(1, -8, -2, 6, { face: -1 }),
+    // … und auf den Kopf, legt den Kopf schief, Fragezeichen
+    mapUp(2, -10, 0, 4, { face: 1, look: [-1, 0] }),
+    { face: 1, props: [g('sk_map2', -10, 0), QM], t: 8 },
+    { eyes: 'half', t: 1 }, { eyes: 'open', t: 3 },
+    // schaut zu dir hinunter, ob du weißt, wo es hingeht
+    { face: 0, look: [0, 1], props: [g('sk_map2', -10, 0), QM], t: 8 },
+    // dreht sie zurück
+    mapUp(1, -8, -2, 5, { look: [-1, 0] }),
+    mapUp(0, -10, 0, 3),
+  ],
+  outro: [mapUp(0, -10, 2, 2, { face: 0, look: [-1, 1] }), mapUp(0, -10, 4, 2), { armL: 'down', t: 1 }, ...fetchOut(MAPL)],
+})
+
+// ---- sk_stop_model: Modell-Tipp. Eine kleine Waage steht neben ihm, die Schalen wippen; er wägt mit den Händen mit. ----
+const sc = (n: number): PropRef => g('sk_scale' + n, -12, 3)
+/** Waage angehoben (y über dem Boden), beim Hervorholen und Wegpacken. */
+const sc0 = (y: number): PropRef => g('sk_scale0', -12, y)
+C('sk_scale_weigh', 'Wägt mit einer kleinen Waage ab', 'sk_stop_model', {
+  loop: true, interruptible: true,
+  // eigene Kram-Folge statt fetchIn: die Waage ist zu filigran, verkleinert zerfiele sie in Einzelteile (nur @30 hängt zusammen)
+  intro: [
+    ...dig('L', 3),
+    { by: 0, eyes: 'wide', look: [-1, -1], ...armBlock('L', 2, 1), armR: 'down', props: [g('sk_scale0@30', -3, -1)], t: 2 },
+    { eyes: 'open', ...armBlock('L', 2, 3), props: [sc0(0)], t: 2 },
+    { look: [-1, 1], ...armBlock('L', 2, 5), props: [sc0(2)], t: 1 },
+    { ...armBlock('L', 2, 6), props: [sc(0)], t: 2 },
+  ],
+  frames: [
+    { look: [-1, 1], face: -1, armL: 'up1', armR: 'down', props: [sc(0)], t: 6 },
+    { armL: 'down', armR: 'up1', props: [sc(1)], t: 6 },
+    { armL: 'up1', armR: 'down', props: [sc(0)], t: 6 },
+    { armL: 'down', armR: 'up1', props: [sc(1)], t: 6 },
+    // überlegt: schaut zu dir, blinzelt
+    { face: 0, look: [0, 1], armL: 'down', armR: 'down', props: [sc(0)], t: 8 }, { eyes: 'half', t: 1 }, { eyes: 'open', t: 3 },
+  ],
+  outro: [
+    { face: 0, look: [-1, 1], armL: 'down', armR: 'down', props: [sc(0)], t: 1 },
+    { ...armBlock('L', 2, 6), t: 2 }, { ...armBlock('L', 2, 5), props: [sc0(2)], t: 1 }, { ...armBlock('L', 2, 3), props: [sc0(0)], t: 2 },
+    { ...armBlock('L', 2, 2), props: [g('sk_scale0@30', -3, 1)], t: 1 },
+    ...stow(g('sk_scale0@20', -1, 4)),
+  ],
+})
+
+// ---- sk_stop_rewrite: Haikus Fassung. Zwei Zettel, links verkritzelt, rechts mit Haken; er schaut abwechselnd. ----
+const NOTE_A = { name: 'sk_noteA', size: [5, 6] as const, at: [-6, 4] as const, side: 'L' as const, rummage: 2 }
+const NOTE_B = { name: 'sk_noteB', size: [5, 6] as const, at: [18, 4] as const, side: 'R' as const, rummage: 2 }
+const na = (y: number): PropRef => g('sk_noteA', -6, y)
+const nb = (y: number): PropRef => g('sk_noteB', 18, y)
+/** Beide Zettel hochgehalten (y −1), die Hände halten sie am unteren Rand. */
+const both = (t: number, extra: Frame = {}): Frame => ({ ...armBlock('L', 2, 4), ...armBlock('R', 2, 4), props: [na(-1), nb(-1)], t, ...extra })
+C('sk_two_notes', 'Hält zwei Fassungen hoch und vergleicht', 'sk_stop_rewrite', {
+  loop: true, interruptible: true,
+  intro: [
+    ...fetchIn(NOTE_A), ...fetchIn({ ...NOTE_B, keep: [na(4)] }),
+    // hebt beide an
+    { ...armBlock('L', 2, 7), ...armBlock('R', 2, 7), props: [na(2), nb(2)], t: 2 },
+    both(2),
+  ],
+  frames: [
+    both(6, { face: -1, look: [-1, 0] }),
+    both(6, { face: 1, look: [1, 0] }),
+    both(4, { face: -1, look: [-1, 0] }),
+    // länger beim rechten, nickt
+    both(4, { face: 1, look: [1, 0] }), both(2, { by: 1 }), both(4, { by: 0 }),
+    // schaut zu dir: welche?
+    both(8, { face: 0, look: [0, 1] }),
+  ],
+  outro: [
+    { face: 0, look: [0, 0], ...armBlock('L', 2, 7), ...armBlock('R', 2, 7), props: [na(2), nb(2)], t: 2 },
+    { armL: 'down', armR: 'down', props: [na(4), nb(4)], t: 1 },
+    ...fetchOut({ ...NOTE_B, keep: [na(4)] }), ...fetchOut(NOTE_A),
+  ],
+})
+
+// ---- sk_stop_topic: neues Thema. Er blättert auf einem Block eine Seite um und tippt auf das leere Blatt. ----
+const PAD = { name: 'sk_pad0', size: [7, 9] as const, at: [-7, 1] as const, side: 'L' as const, grip: 3, rummage: 3 }
+const pad = (n: string | number): PropRef => g('sk_pad' + n, -7, 1)
+C('sk_blank_page', 'Blättert um und zeigt auf ein leeres Blatt', 'sk_stop_topic', {
+  loop: true, interruptible: true,
+  intro: [...fetchIn(PAD), { face: -1, look: [-1, 1], props: [pad(0)], t: 3 }],
+  frames: [
+    // blättert: Hand an die Oberkante, die Seite steht hochkant, dahinter das leere Blatt
+    { face: -1, look: [-1, 1], ...armBlock('L', 3, 1), props: [pad(0)], t: 3 },
+    { props: [pad('Flip')], t: 2 },
+    { props: [pad(1)], t: 2 },
+    // tippt zweimal auf das leere Blatt und schaut dich an
+    { ...armBlock('L', 3, 5), t: 2 }, { ...armBlock('L', 2, 5), t: 2 }, { ...armBlock('L', 3, 5), t: 2 }, { ...armBlock('L', 2, 5), t: 2 },
+    { armL: 'down', face: 0, look: [0, 1], t: 8 }, { eyes: 'half', t: 1 }, { eyes: 'open', t: 4 },
+    // blättert zurück (die beschriebene Seite kommt wieder)
+    { face: -1, look: [-1, 1], ...armBlock('L', 3, 1), t: 2 },
+    { props: [pad('Flip')], t: 2 },
+    { props: [pad(0)], t: 2 },
+    { armL: 'down', t: 4 },
+  ],
+  outro: [{ face: 0, look: [0, 0], armL: 'down', props: [pad(0)], t: 1 }, ...fetchOut(PAD)],
+})
+
+// =================================================================================================================================
+// sk_hint: sidekick setzt eine Hinweiszeile (einmalig, ~3 s). Eine Glühbirne geht über dem Kopf an, er zeigt nach oben zur Zeile.
+// =================================================================================================================================
+
+const bulb = (n: number): PropRef => g('sk_bulb' + n, 5, -4)
+C('sk_bulb', 'Glühbirne: ein Hinweis steht über der Eingabe', 'sk_hint', {
+  frames: [
+    { look: [0, -1], eyes: 'open', props: [bulb(0)], t: 3 },
+    { props: [bulb(1)], eyes: 'wide', t: 2 }, { props: [bulb(0)], t: 1 }, { props: [bulb(1)], t: 3 },
+    // zeigt nach oben (die Hinweiszeile steht über dem Band)
+    { armR: 'up1', t: 1 }, { armR: 'raise', t: 10 },
+    { armR: 'up1', eyes: 'open', look: [0, 1], t: 2 }, { armR: 'down', t: 6 },
+    { props: [bulb(0)], look: [0, 0], t: 3 }, { props: [], t: 2 },
+  ],
+})
+
+// =================================================================================================================================
+// sk_upkeep: Wartungshinweis (einmalig, ~3–4 s). Er ölt kurz die Linie (zwei Tropfen) oder fegt sie mit einem kleinen Besen.
+// =================================================================================================================================
+
+// 1 (ruhig): Ölkännchen aus der Tasche, neigt es, zwei Tropfen fallen aus der Tülle auf die Linie und versickern, packt es weg.
+const OIL = { name: 'sk_oil0', size: [6, 5] as const, at: [-6, 5] as const, side: 'L' as const, grip: 2, rummage: 3 }
+const oil = (n: number, y: number): PropRef => g('sk_oil' + n, -6, y)
+const drop = (y: number): PropRef => g('sk_drop', -6, y)
+C('sk_oil_can', 'Ölt kurz die Eingabe', 'sk_upkeep', {
+  frames: [
+    ...fetchIn(OIL),
+    // hebt es an und neigt es
+    { face: -1, look: [-1, 1], ...armBlock('L', 3, 4), props: [oil(0, 2)], t: 2 },
+    { props: [oil(1, 2)], t: 2 },
+    { props: [oil(1, 2), drop(7)], t: 2 }, { props: [oil(1, 2), drop(8)], t: 1 }, { props: [oil(1, 2), drop(9)], t: 1 },
+    { props: [oil(1, 2)], t: 2 },
+    { props: [oil(1, 2), drop(7)], t: 2 }, { props: [oil(1, 2), drop(8)], t: 1 }, { props: [oil(1, 2), drop(9)], t: 1 },
+    // richtet es auf, nickt zufrieden, packt es weg
+    { props: [oil(0, 2)], t: 2 }, { ...armBlock('L', 3, 7), props: [oil(0, 5)], t: 2 }, { armL: 'down', face: 0, eyes: 'closed', t: 3 },
+    { eyes: 'open', look: [0, 0], t: 1 },
+    ...fetchOut(OIL),
+  ],
+})
+
+// 2: kleiner Besen aus der Tasche, fegt zweimal hin und her über die Linie, Staub fällt hinter die Linie, packt ihn weg.
+const BROOM = { name: 'sk_broom', size: [3, 8] as const, at: [-4, 2] as const, side: 'L' as const, grip: 2, rummage: 3 }
+const broom = (x: number): PropRef => g('sk_broom', x, 2)
+const sweep = (x: number, dust: readonly PropRef[], t: number): Frame => ({ ...armBlock('L', Math.min(6, -x), 4), props: [broom(x), ...dust], t })
+C('sk_sweep', 'Fegt kurz die Eingabe', 'sk_upkeep', {
+  frames: [
+    ...fetchIn(BROOM),
+    { face: -1, look: [-1, 1], t: 1 },
+    sweep(-5, [], 2), sweep(-6, [g('sk_dust', -9, 8)], 2), sweep(-5, [g('sk_dust', -10, 9)], 2), sweep(-4, [], 2),
+    sweep(-5, [], 2), sweep(-6, [g('sk_dust', -9, 8)], 2), sweep(-5, [g('sk_dust', -10, 9)], 2), sweep(-4, [], 2),
+    { face: 0, look: [0, 0], armL: 'down', eyes: 'closed', props: [broom(-4)], t: 3 }, { eyes: 'open', t: 1 },
+    ...fetchOut(BROOM),
   ],
 })
 

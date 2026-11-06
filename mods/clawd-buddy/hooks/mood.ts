@@ -57,7 +57,14 @@ export type Facts = {
    * Was der Mod sidekick gerade tut, aus dessen `$.state`-Wert `sidekick.buddy` (types/index.d.ts): prüft die Nachricht, hält sie an,
    * baut einen neuen Chat, neuer Chat eben gestartet. Ohne sidekick leer.
    */
-  sidekick?: { kind: 'check' | 'stop' | 'handoff' | 'fresh'; at: number } | null
+  sidekick?: SidekickBuddy | null
+  /**
+   * Eisklumpen (0.13.0, SPEC „Ausbau 0.13.0“ Teil A): ein gewürfelter kalter Moment. `at` = Beginn (bei der eigenen 60-min-Schätzung in der
+   * Zukunft: der Client sieht selbst, wann es so weit ist), `cracks` = Riss-Stufe 0–3 (je Tipp-Schub eine), `sentAt`/`how`/`level` = gesendet
+   * (Senden zerbricht das Eis bzw. lässt es schmelzen, mit der Riss-Stufe beim Senden). Fehlt = kein Eis. Würfel und „einmal pro Chat“
+   * führt das Hooks-Modul.
+   */
+  frost?: Frost
   /** Seit wann der Verlauf komprimiert wird (session.compact des Hauptgesprächs, ms; fehlt = gerade nicht). */
   compactSince?: number
   /** Zeitpunkt (ms), an dem zuletzt ein Skill startete (skill.prompt): kurz `skill`. */
@@ -235,7 +242,7 @@ export const SK_FRESH_MS = 6_000
  * Sicherheitsnetz, falls sidekick einen Zustand nicht mehr zurücksetzt (z. B. Neuladen mitten in der Prüfung): so lange gilt er
  * höchstens (ms). Die Prüfung dauert sonst 1–6 s, der Dialog wartet auf Fynn, die Übergabe braucht bis ~45 s.
  */
-export const SK_MAX_MS = { check: 30_000, stop: 10 * 60_000, handoff: 3 * 60_000, fresh: SK_FRESH_MS } as const
+export const SK_MAX_MS = { check: 30_000, stop: 10 * 60_000, handoff: 3 * 60_000, fresh: SK_FRESH_MS, hint: 4_000, upkeep: 5_000 } as const
 /** Wert `tune-strip.playing` prüfen (ein fremder Mod könnte ihn umschreiben): nur `{ playing: true }` heißt Musik. */
 export function musicValue(v: unknown): boolean {
   return !!v && typeof v === 'object' && (v as { playing?: unknown }).playing === true
@@ -271,13 +278,100 @@ export function beatGrid(b: BeatValue | undefined, now: number, nextTick: number
 /** Gruppe für die Engine: sobald tune-strip sie entschieden hat, auch ohne sicheren Takt (0.12.0, Nachtrag „Gruppe auch ohne sicheren Takt“). */
 export const beatGroup = (b: BeatValue | undefined): BeatValue['group'] => (b ? b.group : null)
 
-/** Nur gültige Werte von sidekick übernehmen (ein dritter Mod könnte ihn umschreiben, Review K2), sonst `null`. */
+export type SidekickWhy = 'cold' | 'wrong' | 'model' | 'rewrite' | 'topic'
+/** `sidekick.buddy` (types/index.d.ts): was sidekick gerade tut; 0.13.0 dazu `hint`, `upkeep` und der Grund einer Rückfrage (`why`). */
+export type SidekickBuddy = { kind: 'check' | 'stop' | 'handoff' | 'fresh' | 'hint' | 'upkeep'; at: number; why?: SidekickWhy }
+const SK_KINDS = ['check', 'stop', 'handoff', 'fresh', 'hint', 'upkeep'] as const
+const SK_WHYS = ['cold', 'wrong', 'model', 'rewrite', 'topic'] as const
+
+/**
+ * Nur gültige Werte von sidekick übernehmen (ein dritter Mod könnte ihn umschreiben, Review K2), sonst `null`. Ein Grund zählt nur bei
+ * `stop` und nur, wenn er bekannt ist; sonst bleibt es die Rückfrage ohne Grund (0.13.0, SPEC Teil B).
+ */
 export function sidekickValue(v: unknown): Facts['sidekick'] {
   if (!v || typeof v !== 'object') return null
-  const o = v as { kind?: unknown; at?: unknown }
-  const kinds = ['check', 'stop', 'handoff', 'fresh'] as const
-  const kind = kinds.find((k) => k === o.kind)
-  return kind && typeof o.at === 'number' && Number.isFinite(o.at) ? { kind, at: o.at } : null
+  const o = v as { kind?: unknown; at?: unknown; why?: unknown }
+  const kind = SK_KINDS.find((k) => k === o.kind)
+  if (!kind || typeof o.at !== 'number' || !Number.isFinite(o.at)) return null
+  const why = kind === 'stop' ? SK_WHYS.find((w) => w === o.why) : undefined
+  return why ? { kind, at: o.at, why } : { kind, at: o.at }
+}
+
+/**
+ * `sidekick.status` streng lesen (0.13.0, SPEC Teil C): nur `level` und `cold`, alles andere bleibt ungelesen. `null` = fehlt oder ungültig.
+ * `cold` zählt nur als `true`.
+ */
+export function sidekickStatus(v: unknown): { level: 'off' | 'cache' | 'guide'; cold: boolean } | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as { level?: unknown; cold?: unknown }
+  const level = (['off', 'cache', 'guide'] as const).find((l) => l === o.level)
+  return level ? { level, cold: o.cold === true } : null
+}
+
+// ---- Eisklumpen (0.13.0, SPEC „Ausbau 0.13.0“ Teil A)
+
+export type Frost = { at: number; src: FrostSource; cracks: number; sentAt?: number; how?: 'break' | 'melt'; level?: number }
+/**
+ * Woher der kalte Moment kommt: neuer Chat, fortgesetzter Chat mit abgelaufenem Cache (0.13.1), sidekick meldet kalt, eigene Schätzung
+ * (60 min nach dem letzten Turn), `/clawd freeze`.
+ */
+export type FrostSource = 'new' | 'resume' | 'sidekick' | 'estimate' | 'manual'
+/** Wahrscheinlichkeit, dass ein kalter Moment ihn einfriert (Fynn: „nicht immer, sondern nur manchmal“, etwa jedes 3. Mal). */
+export const FROST_P = 1 / 3
+/** Anteil „Eis zerbricht“ beim Senden; sonst schmilzt es (3 zu 1). */
+export const FROST_BREAK_P = 3 / 4
+/** Eigene Schätzung ohne sidekick: so lange nach dem letzten Turn gilt der Cache als kalt (Fynn: 60 min). */
+export const FROST_ESTIMATE_MS = 60 * 60_000
+/** So lange nach dem Senden gilt die Auftau-Stimmung (der Clip ist einmalig und spielt zu Ende, ≤ ~4,5 s). */
+export const FROST_THAW_MS = 5_000
+/** Kommt das Senden so kurz nach dem Beginn, entfällt das Eis ganz (es hatte sich kaum gebildet). */
+export const FROST_GRACE_MS = 1_500
+/** Ein neuer Tipp-Schub (eine Riss-Stufe) beginnt nach so langer Tipp-Pause. */
+export const FROST_BURST_MS = 1_200
+
+/**
+ * Würfel aus einem Schlüssel (deterministisch, ein Schritt mulberry32): gleiche Uhrzeit, gleicher Wurf. So sind Tests mit fester Uhr
+ * wiederholbar, und die echte Uhr streut genug. Ergebnis in [0, 1).
+ */
+export function frostRoll(key: number): number {
+  let a = (Math.floor(key) + 0x6d2b79f5) | 0
+  a = Math.imul(a ^ (a >>> 15), 1 | a)
+  a = (a + Math.imul(a ^ (a >>> 7), 61 | a)) ^ a
+  return ((a ^ (a >>> 14)) >>> 0) / 4294967296
+}
+
+/**
+ * Entscheidung zu einem kalten Moment (SPEC Teil A), mit dem Wurf `roll` aus [0, 1): nie im Turn, höchstens einmal pro Chat (auch nicht,
+ * solange er schon im Eis steht), kein neues Einfrieren bei Musik, sonst friert er bei `roll < FROST_P` ein.
+ */
+export function frostDecide(o: { turnActive: boolean; chatFrozen: boolean; frozenNow: boolean; music: boolean }, roll: number): 'frozen' | 'no' | 'music' | 'already' | 'turn' {
+  if (o.turnActive) return 'turn'
+  if (o.chatFrozen || o.frozenNow) return 'already'
+  if (o.music) return 'music'
+  return roll < FROST_P ? 'frozen' : 'no'
+}
+
+/** Steht er gerade im Eis (begonnen, nicht gesendet, kein Turn)? Dann entfällt z. B. die Begrüßung (das Auftauen ist die Begrüßung). */
+export function frostActive(f: Facts, now: number): boolean {
+  return !!f.frost && now >= f.frost.at && f.frost.sentAt === undefined && !f.turnActive
+}
+
+/**
+ * Stimmung aus dem Eis, oder `null`. Eingefroren: `frozen`, nach Rissen `frost_crack1` … 3 (Schleife, bleibt gerissen). Gesendet:
+ * `frost_break` bzw. `frost_melt` mit der Riss-Stufe (…1 … 3), damit der Riss beim Auftauen nicht zurückspringt. Das Einfrieren selbst
+ * (frost_in) spielt die Engine auf dem Weg ins Eis.
+ */
+export function frostMood(f: Facts, now: number): string | null {
+  const fr = f.frost
+  if (!fr || now < fr.at) return null
+  if (fr.sentAt !== undefined) {
+    if (now - fr.sentAt >= FROST_THAW_MS) return null
+    const lv = Math.max(0, Math.min(3, fr.level ?? 0))
+    return `frost_${fr.how ?? 'break'}${lv || ''}`
+  }
+  if (f.turnActive) return null
+  const c = Math.max(0, Math.min(3, fr.cracks))
+  return c ? `frost_crack${c}` : 'frozen'
 }
 
 /**
@@ -314,9 +408,12 @@ export function activeAgents(f: Facts, now: number): number {
 /** Engine-Stimmung zu den Fakten zur Zeit `now` (ms). */
 export function deriveMood(f: Facts, now: number): string {
   if (f.ask) return f.askSince && now - f.askSince >= WAIT_ASK_LONG_MS ? 'waitUserLong' : 'waitUser'
+  // Eis (0.13.0): nach dem Senden zuerst der Auftau-Clip (vor sidekicks Prüfung oder Rückfrage und vor der Arbeit)
+  const frost = frostMood(f, now)
+  if (frost && f.frost?.sentAt !== undefined) return frost
   const sk = f.sidekick && now - f.sidekick.at < SK_MAX_MS[f.sidekick.kind] ? f.sidekick.kind : null
-  // sidekick fragt Fynn (Dialog offen): wie eine Rückfrage
-  if (sk === 'stop') return 'sk_stop'
+  // sidekick fragt Fynn (Dialog offen): wie eine Rückfrage; mit Grund eigene Momente (0.13.0, SPEC Teil B)
+  if (sk === 'stop') return f.sidekick?.why ? `sk_stop_${f.sidekick.why}` : 'sk_stop'
   // Limit ausgeschöpft: Claude kann nicht arbeiten, das hat Vorrang vor allem außer einer offenen Rückfrage
   const lim = limitState(f, now)
   if (lim === 'week') return 'limit_week'
@@ -324,10 +421,15 @@ export function deriveMood(f: Facts, now: number): string {
   if (lim === 'back' && !f.turnActive) return 'limit_back'
   // Komprimieren hält alles an; danach geht es mit der Arbeit weiter
   if (f.compactSince && now - f.compactSince < COMPACT_MAX_MS) return 'compact'
+  // Eingefroren (0.13.0): Rückfrage, Limits und Komprimieren gehen vor, im Turn nie (frostMood)
+  if (frost) return frost
   // sidekick baut einen neuen Chat bzw. hat ihn eben gestartet (der Turn darin beginnt sofort: die Freude geht kurz vor)
   if (sk === 'handoff') return 'sk_handoff'
   if (sk === 'fresh') return 'sk_fresh'
   if (sk === 'check') return 'sk_check'
+  // sidekick setzt eine Hinweiszeile bzw. einen Wartungshinweis (0.13.0): kurz, einmalig
+  if (sk === 'hint') return 'sk_hint'
+  if (sk === 'upkeep') return 'sk_upkeep'
   if (f.skillAt && now - f.skillAt < SKILL_MS) return 'skill'
   const ownTool = f.tool && f.turnActive && f.tool.kind !== 'agent' ? f.tool : null
   // Commits und Checks haben eigene Warte-Animationen: dort kein Wechsel ins allgemeine Warten

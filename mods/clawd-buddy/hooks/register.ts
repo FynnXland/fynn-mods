@@ -9,7 +9,8 @@ import type { EngineInterface, On, Timer } from 'claude-code'
 import { joinBand, nameOf, slot, SLOTS, splitBand } from './band.ts'
 import { ALL_CLIPS } from './library.ts'
 import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, beatValue, musicValue, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
-import type { Strain } from './mood.ts'
+import { FROST_BREAK_P, FROST_BURST_MS, FROST_ESTIMATE_MS, FROST_GRACE_MS, frostDecide, frostRoll, sidekickStatus } from './mood.ts'
+import type { FrostSource, Strain } from './mood.ts'
 import { createDesk, DESK_TICK, stillSource } from './desk.ts'
 import { T, clipLabel, langOf, num as fmt } from './i18n.ts'
 import { ACCENT, SUBCOMMANDS, clawdHelp, isHelp } from './clawdhelp.ts'
@@ -63,6 +64,77 @@ let typingInvalidatedPerf = -1e9
 let lastSeen = 0
 let seenSaved = 0
 let seenPerf = -1e9
+
+// ---- Eisklumpen (0.13.0, SPEC „Ausbau 0.13.0“ Teil A). Nur im Speicher: ein Neuladen des Mods darf neu würfeln (README: Grenze).
+let chatFrozen = false // in diesem Chat schon gefroren (höchstens einmal pro Chat; /clawd freeze zählt nicht)
+let skUsable = false // sidekick.status brauchbar (vorhanden, gültig, nicht `off`): dann keine eigene Schätzung
+let skCold = false // zuletzt gelesenes sidekick.status.cold (nur der Wechsel auf true beginnt einen kalten Moment)
+// Für /clawd status: letzter kalter Moment, ob gewürfelt wurde, Ergebnis
+let frostInfo: { src: '' | FrostSource; rolled: boolean; result: '' | 'frozen' | 'no' | 'music' | 'already' | 'turn' | 'warm' } = { src: '', rolled: false, result: '' }
+// Uhrzeit zu performance.now() (aus der letzten Zeichnung): so braucht das Tippen keinen `$`-Aufruf je Taste, um die Zeit zu kennen
+let clockAt: { clock: number; perf: number } | null = null
+// 0.13.1: resume/fork hat über den Chat schon entschieden (Cache-Stand bekannt). Ein späteres session.start setzt dann nichts zurück und
+// würfelt nicht; ob classic.SessionStart bei --resume vor oder nach session.start kommt, ist nicht dokumentiert [UNKLAR].
+let resumeDecided = false
+
+/** Neuer Chat (Start, /clear): Eis und „einmal pro Chat“ zurücksetzen. */
+function newChat() {
+  chatFrozen = false
+  skCold = false
+  if (facts.frost) {
+    facts = { ...facts }
+    delete facts.frost
+  }
+}
+
+/** Ein begonnenes Eis (nicht /clawd freeze) zählt für „einmal pro Chat“. */
+function noteFrozen(now: number) {
+  if (facts.frost && facts.frost.src !== 'manual' && now >= facts.frost.at) chatFrozen = true
+}
+
+/**
+ * Ein kalter Moment beginnt (SPEC Teil A): einmal würfeln (p = 1/3), höchstens einmal pro Chat, nie im Turn, kein neues Einfrieren bei
+ * Musik. Bei der eigenen Schätzung liegt der Beginn in der Zukunft (`at`); gewürfelt wird schon jetzt, der Client sieht selbst, wann es so
+ * weit ist (kein Takt im Hooks-Modul nötig). Der Würfel hängt an der Uhrzeit (frostRoll): mit fester Uhr wiederholbar.
+ */
+function coldMoment(src: FrostSource, now: number, at = now): boolean {
+  noteFrozen(now)
+  const frozenNow = !!facts.frost && facts.frost.sentAt === undefined && now >= facts.frost.at
+  const result = frostDecide({ turnActive: facts.turnActive, chatFrozen, frozenNow, music: !!facts.music }, frostRoll(at))
+  frostInfo = { src, rolled: result === 'frozen' || result === 'no', result }
+  if (result !== 'frozen') {
+    // Eine noch geplante ältere Schätzung gilt nicht mehr (dieser Moment ersetzt sie)
+    if (result === 'no' && facts.frost && facts.frost.sentAt === undefined && now < facts.frost.at) {
+      facts = { ...facts }
+      delete facts.frost
+    }
+    return false
+  }
+  facts = { ...facts, frost: { at, src, cracks: 0 } }
+  noteFrozen(now)
+  return true
+}
+
+/**
+ * Gesendet (das erste von turn.start und sidekick check/stop): das Eis zerbricht (3 von 4) oder schmilzt. Noch nicht begonnen (Schätzung)
+ * heißt: der kalte Moment kommt nicht. Ganz kurz nach dem Beginn entfällt das Eis (es hatte sich kaum gebildet). Liefert, ob sich etwas änderte.
+ */
+function frostSent(now: number): boolean {
+  const fr = facts.frost
+  if (!fr || fr.sentAt !== undefined) return false
+  facts = { ...facts }
+  if (now < fr.at) {
+    delete facts.frost
+    return true
+  }
+  noteFrozen(now)
+  if (now - fr.at < FROST_GRACE_MS) {
+    delete facts.frost
+    return true
+  }
+  facts.frost = { ...fr, sentAt: now, how: frostRoll(fr.at + 1) < FROST_BREAK_P ? 'break' : 'melt', level: fr.cracks }
+  return true
+}
 
 // Desktop-App: Dort lädt der Client-Rahmen nicht; die Engine läuft im Hooks-Modul (desk.ts). Jede Zeichnung liefert die nächsten
 // Sekunden als ein Svg mit SMIL-Animation, das der Desktop selbst abspielt. Neu gezeichnet wird nur bei Ereignissen und kurz bevor die
@@ -178,6 +250,19 @@ function factsChanged($: EngineInterface, now?: number) {
   $.ui.invalidate('ui.render')
 }
 
+/**
+ * Läuft schon Musik? Vor dem Würfeln beim Start lesen (beim Start ist facts.music noch leer, es kommt sonst erst mit der ersten Zeichnung):
+ * kein neues Einfrieren bei Musik (SPEC Teil A, Review S2). Lesen geht auch außerhalb des Zeichnens (types:3526-3546).
+ */
+async function readMusic($: EngineInterface) {
+  try {
+    const sp = await $.state.get({ plugin: 'tune-strip', key: 'playing' })
+    facts = { ...facts, music: musicValue(sp.value) }
+  } catch (err) {
+    $.ui.log(`clawd-buddy: tune-strip state not read: ${String(err)}`, { to: 'debug' })
+  }
+}
+
 // Top-Level-Funktion: `$` darf nur an solche weitergereicht werden (docs/raw/en/create.md:317)
 async function save($: EngineInterface) {
   const prev = ((await $.store.get('buddy')) ?? {}) as Stored
@@ -219,6 +304,39 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       publishedWidth = undefined
       publishBand($)
     }
+    // /clear ist ein neuer Chat (0.13.0): kalter Moment, „einmal pro Chat“ beginnt neu.
+    if (e.source === 'clear') {
+      newChat()
+      try {
+        const now = await $.clock.now()
+        if (coldMoment('new', now)) factsChanged($, now)
+      } catch (err) {
+        $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+      }
+    }
+    // resume/fork (0.13.1, Nachtrag): ein anderer Chat. Abgelaufener Cache (types 2.1.318:12596-12598) ist ein kalter Moment mit dem
+    // normalen Würfel, warmer Cache keiner (ein Wurf aus session.start entfällt dann). Fehlt das Feld (z. B. noch keine Antwort im Verlauf,
+    // rel/hooks.md:1275), bleibt alles wie in 0.13.0.
+    const expired = e.prompt_cache_likely_expired
+    if ((e.source === 'resume' || e.source === 'fork') && typeof expired === 'boolean') {
+      resumeDecided = true
+      newChat()
+      if (expired) {
+        await readMusic($)
+        let now: number | undefined
+        try {
+          now = await $.clock.now()
+        } catch (err) {
+          $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+        }
+        if (now !== undefined) coldMoment('resume', now)
+        else frostInfo = { src: 'resume', rolled: false, result: '' }
+        factsChanged($, now)
+      } else {
+        frostInfo = { src: 'resume', rolled: false, result: 'warm' }
+        factsChanged($)
+      }
+    }
     return next(e)
   })
 
@@ -236,8 +354,20 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       $.ui.log(`clawd-buddy: store not read: ${String(err)}`, { to: 'debug' })
     }
     publishBand($)
+    // Neuer Chat (0.13.0): ein kalter Moment. Hat resume/fork schon entschieden (0.13.1, kam vor session.start), bleibt es dabei.
+    await readMusic($)
+    if (!resumeDecided) {
+      newChat()
+      try {
+        const now = await $.clock.now()
+        // Kam resume/fork während des Wartens auf die Uhr (Zustellung nebeneinander ist nicht dokumentiert, Review 0.13.1 K1): nicht würfeln
+        if (!resumeDecided) coldMoment('new', now)
+      } catch (err) {
+        $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+      }
+    }
     try {
-      await $.command.register({ name: 'clawd', description: tx.description, argumentHint: 'on | off | list | demo <animation> | nap | boop | status | flicker | language | help' })
+      await $.command.register({ name: 'clawd', description: tx.description, argumentHint: 'on | off | list | demo <animation> | nap | boop | freeze | status | flicker | language | help' })
     } catch (err) {
       $.ui.log(`/clawd not registered: ${String(err)}`, { to: 'debug' })
     }
@@ -287,6 +417,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     let now: number | undefined
     try {
       now = await $.clock.now()
+      // Eis (0.13.0): Senden taut ihn auf, vor der Arbeit
+      frostSent(now)
       if (!strain.turnSince) strain = strainTurnStart(strain, now)
       turnHadError = false
     } catch {
@@ -314,8 +446,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } else {
       // Wirft die Uhr, bleibt der Turn trotzdem nicht "aktiv" hängen (letzte bekannte Zeit als Ersatz)
       let now = facts.endedAt
+      let clockOk = false
       try {
         now = await $.clock.now()
+        clockOk = true
       } catch (err) {
         $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
       }
@@ -328,6 +462,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         facts = { ...facts, ctxAt: now }
       }
       strain = strainTurnEnd(strain, now, e.reason === 'answer', !turnHadError)
+      // Eis (0.13.0): ohne brauchbaren sidekick-Wert schätzt Clawd selbst: 60 min nach diesem Turn gilt der Cache als kalt.
+      // Nur mit gelesener Uhr: die Ersatzzeit kann 0 sein, dann käme das Eis sofort (Review K3)
+      if (clockOk && !skUsable && !chatFrozen) coldMoment('estimate', now, now + FROST_ESTIMATE_MS)
       // Erfolgsserie erreicht eine Marke (5, 10, 15 …): Pokal/Medaille statt des normalen Abschlusses
       if (strain.streak > 0 && strain.streak % STREAK_STEP === 0) facts = { ...facts, streakAt: now }
       factsChanged($, now)
@@ -456,7 +593,17 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('prompt.edit', async ($, e, next) => {
     // Zuerst weiterreichen: das Tippen darf nie verzögert werden. Keine `$`-Aufrufe pro Taste außer dem gedrosselten invalidate.
     const result = await next(e)
+    const gap = performance.now() - typingPerf
     typingPerf = performance.now()
+    // Eis (0.13.0): je Tipp-Schub eine Riss-Stufe (höchstens 3). Die Zeit kommt aus der letzten Zeichnung, kein `$`-Aufruf je Taste.
+    const fr = facts.frost
+    if (fr && fr.sentAt === undefined && fr.cracks < 3 && clockAt && gap >= FROST_BURST_MS && !facts.turnActive) {
+      const now = clockAt.clock + (typingPerf - clockAt.perf)
+      if (now >= fr.at) {
+        facts = { ...facts, frost: { ...fr, cracks: fr.cracks + 1 } }
+        factsChanged($, now)
+      }
+    }
     // Desktop: die Animation sieht das Mitlesen TYPING_MS lang voraus, also reicht eine Neuzeichnung je halbem Fenster
     if (typingPerf - typingInvalidatedPerf > (deskTimer ? TYPING_MS / 2 : 1000)) {
       typingInvalidatedPerf = typingPerf
@@ -573,6 +720,22 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       $.ui.invalidate('ui.render')
       return { text: tx.nap }
     }
+    if (sub === 'freeze') {
+      // Sofort einfrieren, ohne Würfel; zählt nicht für „einmal pro Chat“ (SPEC Teil A)
+      let now = 0
+      try {
+        now = await $.clock.now()
+      } catch (err) {
+        $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+        return { text: tx.freezeFail }
+      }
+      await ensureOn()
+      facts = { ...facts, frost: { at: now, src: 'manual', cracks: 0 } }
+      frostInfo = { src: 'manual', rolled: false, result: 'frozen' }
+      deskForce = true
+      $.ui.invalidate('ui.render')
+      return { text: tx.freeze }
+    }
     if (sub === 'boop') {
       boopN += 1
       desk?.request('boop')
@@ -602,7 +765,12 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       const deskInfo = meterText(lang, meter, performance.now())
       meter = newMeter()
       const text = tx.status({ on: enabled, mood, temper: fmt(lang, t.temper, 2), tired: Math.round(t.tired * 100), annoy, desk: deskInfo, beat: beatText })
-      return { text: `${text} ${tx.help}` }
+      noteFrozen(now)
+      const fr = facts.frost
+      const pending = fr && fr.sentAt === undefined && now < fr.at ? new Date(fr.at) : null
+      const at = pending ? `${String(pending.getHours()).padStart(2, '0')}:${String(pending.getMinutes()).padStart(2, '0')}` : ''
+      const ice = tx.frost({ ...frostInfo, at: frostInfo.result === 'frozen' ? at : '', chat: chatFrozen })
+      return { text: `${text} ${ice} ${tx.help}` }
     }
     // Nicht erreichbar, solange jeder Eintrag von SUBCOMMANDS oben einen Zweig hat; Schutz, falls beide auseinanderlaufen
     return { text: `${tx.unknown(sub)} ${tx.help} ${tx.seeHelp}` }
@@ -633,20 +801,46 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       // (band.ts, docs/BAND.md). Clawd kommt nur neben den Grund (z. B. die Limit-Balken).
       const { layers, slots, base } = splitBand(theirs)
       const now = await $.clock.now()
+      clockAt = { clock: now, perf: performance.now() }
       // Schnittstelle zu sidekick: dessen `$.state`-Wert lesen. Das Lesen beim Zeichnen abonniert ihn, ein Schreiben von sidekick
       // zeichnet das Band neu (types:3308-3313). Ohne sidekick bleibt er leer.
       try {
         const sk = await $.state.get({ plugin: 'sidekick', key: 'buddy' })
         const v = sidekickValue(sk.value)
         if (JSON.stringify(v) !== JSON.stringify(facts.sidekick ?? null)) facts = { ...facts, sidekick: v }
+        // Eis (0.13.0): sidekick prüft oder fragt nach dem Senden, das zählt als gesendet (wie turn.start)
+        if (v && (v.kind === 'check' || v.kind === 'stop') && facts.frost && v.at >= facts.frost.at) frostSent(now)
       } catch (err) {
         $.ui.log(`clawd-buddy: sidekick state not read: ${String(err)}`, { to: 'debug' })
+      }
+      // sidekick.status (0.13.0, nur level und cold): meldet sidekick kalt, beginnt ein kalter Moment; ist der Wert brauchbar, entfällt die
+      // eigene Schätzung. Das Lesen abonniert den Wert (types:3308-3313). Ohne sidekick bleibt alles bei der Schätzung.
+      try {
+        const ss = sidekickStatus((await $.state.get({ plugin: 'sidekick', key: 'status' })).value)
+        skUsable = !!ss && ss.level !== 'off'
+        const cold = skUsable && !!ss?.cold
+        if (cold && !skCold) coldMoment('sidekick', now)
+        skCold = cold
+        if (skUsable && facts.frost?.src === 'estimate' && facts.frost.sentAt === undefined && now < facts.frost.at) {
+          facts = { ...facts }
+          delete facts.frost
+        }
+        // Eine eigene Schätzung, die noch nicht begonnen hat, gilt nicht mehr: sidekick kennt den Cache (Status-Zeile ohne alten Wurf)
+        if (skUsable && frostInfo.src === 'estimate' && !(facts.frost?.src === 'estimate')) frostInfo = { src: '', rolled: false, result: '' }
+      } catch (err) {
+        $.ui.log(`clawd-buddy: sidekick status not read: ${String(err)}`, { to: 'debug' })
       }
       // Schnittstelle zu tune-strip (0.9.0): spielt gerade Musik? Nur das Flag, kein Titel. Ohne tune-strip bleibt es aus.
       try {
         const sp = await $.state.get({ plugin: 'tune-strip', key: 'playing' })
         const m = musicValue(sp.value)
         if (m !== (facts.music ?? false)) facts = { ...facts, music: m }
+        // Spielt Musik, beginnt kein neues Einfrieren (eine geplante Schätzung entfällt); schon gefroren bleibt er gefroren (0.13.0)
+        if (m && facts.frost && facts.frost.sentAt === undefined && now < facts.frost.at) {
+          facts = { ...facts }
+          delete facts.frost
+          frostInfo = { ...frostInfo, result: 'music' }
+        }
       } catch (err) {
         $.ui.log(`clawd-buddy: tune-strip state not read: ${String(err)}`, { to: 'debug' })
       }

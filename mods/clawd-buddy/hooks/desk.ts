@@ -22,7 +22,7 @@ import { createEngine } from './engine.ts'
 import type { Engine } from './engine.ts'
 import { seededRng } from './capture.ts'
 import { ALL_CLIPS, ALL_PROPS } from './library.ts'
-import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, specialDay } from './mood.ts'
+import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, frostActive, specialDay } from './mood.ts'
 import type { Facts, Strain } from './mood.ts'
 import { H, PAL, POSES, TICK, W, compose } from './stage.ts'
 
@@ -109,7 +109,8 @@ export function createDesk(o: DeskOpts): Desk {
     const back = facts.backAt ?? 0
     if (back !== D.seenBack) {
       D.seenBack = back
-      if (back && now - back < WELCOME_WINDOW_MS) engine.welcome()
+      // Gefroren entfällt die Begrüßung: das Auftauen ist dann die Begrüßung (0.13.0)
+      if (back && now - back < WELCOME_WINDOW_MS && !frostActive(facts, now)) engine.welcome()
     }
     // Takt (0.11.0): Das Bild dieses Takts ist zur Uhrzeit `now` zu sehen; daraus und aus `tune-strip.beat` das Raster in Ticks
     engine.set({

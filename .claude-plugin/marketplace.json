@@ -8,7 +8,7 @@
     {
       "name": "clawd-buddy",
       "source": "./mods/clawd-buddy",
-      "description": "Animated pixel mascot Clawd above the prompt: reacts to Claude's work, waiting times, idle time, time of day, the mouse and a mood that builds up over the session."
+      "description": "Animated pixel mascot Clawd above the prompt: reacts to Claude's work, waiting times, idle time, time of day, the mouse and a mood that builds up over the session; now and then he freezes in a block of ice when the cache is cold."
     },
     {
       "name": "limit-bars",
@@ -18,7 +18,7 @@
     {
       "name": "sidekick",
       "source": "./mods/sidekick",
-      "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Haiku 5.5: a hint line under your message or a question (new chat with handoff, a skill, a clearer version that is only sent if you choose it, or \"wrong chat?\" when the message belongs to another project). It never rewrites or sends anything without asking. Names due maintenance (/skill-doctor, prompt-audit, consolidate-memory, /init) with a button that puts the command into the prompt box for you to send and a ? that explains why it is due. Three levels (off, cache, guide) with a colored label in the prompt footer. /savings shows cost and measurable savings at a glance, /savings detail compares the models over time. Optional, off by default (/sidekick notes on): while Claude works, a \"good to know\" note above the prompt when you likely missed something with consequences (one question to your main model over the conversation, every 6 steps). Model tip: on the first message of a chat on Opus or Fable it asks whether a simple task should run on Sonnet 5.5 or Haiku 5.5; optionally (/sidekick tips auto on, off by default) it switches simple subagents and chats Claude starts to a cheaper model, and /savings shows the savings as a marked estimate. /sidekick help shows all commands and settings as a table."
+      "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Haiku 5.5: a hint line under your message or a question (new chat with handoff, a skill, a clearer version that is only sent if you choose it, or \"wrong chat?\" when the message belongs to another project). It never rewrites or sends anything without asking. Names due maintenance (/skill-doctor, prompt-audit, consolidate-memory, /init) with a button that puts the command into the prompt box for you to send and a ? that explains why it is due. Three levels (off, cache, guide) with a colored label in the prompt footer. /savings shows cost and measurable savings at a glance, /savings detail compares the models over time. Optional, off by default (/sidekick notes on): while Claude works, a \"good to know\" note above the prompt when you likely missed something with consequences (one question to your main model over the conversation, every 6 steps). Model tip: on the first message of a chat on Opus or Fable it asks whether a simple task should run on Sonnet 5.5 or Haiku 5.5; optionally (/sidekick tips auto on, off by default) it switches simple subagents and chats Claude starts to a cheaper model, and /savings shows the savings as a marked estimate. Retry loop: on the third correction in a row it offers a new chat with handoff or a nudge for Claude to step back, and after the second and fourth compaction it offers a new chat. /sidekick help shows all commands and settings as a table."
     },
     {
       "name": "quick-replies",

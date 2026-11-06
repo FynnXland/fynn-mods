@@ -179,6 +179,7 @@ function countsBlock(d: Day): RenderElement {
   const lines = [
     x.checks(d.pruefungen, secsText(d.warteMs, d.pruefungen)),
     x.handoffs(d.uebergaben, d.hinweise.modell?.gezeigt ?? 0),
+    ...(d.schleife.denkanstoss ? [x.loopNudges(d.schleife.denkanstoss, d.schleife.wieder)] : []),
     x.coldWithout(d.kaltOhne.n, usdText(d.kaltOhne.usd)),
     x.skillsUsed(sk.slice(0, 8).map(([k, v]) => `${k} ${v}×`).join(', ')),
   ]

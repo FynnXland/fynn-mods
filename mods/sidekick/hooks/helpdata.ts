@@ -46,6 +46,8 @@ function commands(): HelpCommand[] {
     { cmd: '/sidekick tips auto on|off', does: h.tipsAuto },
     { cmd: '/sidekick tips haiku on|off', does: h.tipsHaiku },
     { cmd: '/sidekick tips stop', does: h.tipsStop },
+    { cmd: '/sidekick loop [status]', does: h.loop },
+    { cmd: '/sidekick loop on|off', does: h.loopOnOff },
     languageHelp('sidekick', lang()), // docs/LANGUAGE-SPEC.md §6 Punkt 4
     { cmd: '/sidekick help', does: h.help },
     { cmd: '/savings [today|week|all]', does: h.savings },
@@ -87,6 +89,11 @@ function features(f: HelpFacts): HelpFeature[] {
     ? { name: h.fTips, state: { kind: 'off' }, toggle: '/sidekick tips on' }
     : { name: h.fTips, state: { kind: 'on', ...(f.now < tp.restUntil ? { text: h.tipsRestState(shortDate(tp.restUntil)) } : {}) }, toggle: '/sidekick tips off' }
   const auto: HelpFeature = tp.auto ? { name: h.fTipsAuto, state: { kind: 'on' }, toggle: '/sidekick tips auto off' } : { name: h.fTipsAuto, state: { kind: 'off' }, toggle: '/sidekick tips auto on' }
+  // Korrektur-Schleife (Ausbau 0.19.0), Standard an
+  const lp = s.loop
+  const loop: HelpFeature = !lp.on
+    ? { name: h.fLoop, state: { kind: 'off' }, toggle: '/sidekick loop on' }
+    : { name: h.fLoop, state: { kind: 'on', ...(f.now < lp.restUntil ? { text: h.tipsRestState(shortDate(lp.restUntil)) } : {}) }, toggle: '/sidekick loop off' }
   return [
     { name: h.fLevel, state: { kind: 'value', text: x.level[s.level], isDefault: s.level === D.level }, toggle: '/sidekick off|cache|guide' },
     { name: h.fThreshold, state: { kind: 'value', text: tokensText(s.threshold), isDefault: s.threshold === D.threshold }, toggle: '/sidekick threshold <n>' },
@@ -99,6 +106,7 @@ function features(f: HelpFacts): HelpFeature[] {
     notes,
     tips,
     auto,
+    loop,
   ]
 }
 

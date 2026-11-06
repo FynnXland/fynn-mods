@@ -74,8 +74,12 @@ import {
   tipRuns,
   tipSaved,
   TIP_WAYS,
+  LOOP_AT,
+  applyLoop,
+  isKorrektur,
+  loopChoices,
 } from './logic.ts'
-import type { Art, Booking, Choice, Day, Ignored, Ledger, Level, NoteField, Period, Rate, Settings, Skill, TipWay, Tips, Trigger, Verdict } from './logic.ts'
+import type { Art, Booking, Choice, Day, Ignored, Ledger, Level, Loop, LoopChoice, NoteField, Period, Rate, Settings, Skill, TipWay, Tips, Trigger, Verdict } from './logic.ts'
 import { savingsTree } from './view.ts'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
@@ -149,6 +153,17 @@ type Sitzung = {
   ownAt: number
   note: Note | null // „Gut zu wissen“ über dem Prompt (Nachtrag 0.13.0)
   leitsatz: boolean // Modell-Tipp (Ausbau 0.18.0): Leitsatz in dieser Session schon angehängt
+  // Korrektur-Schleife (Ausbau 0.19.0, Verhalten 2): Korrekturen in Folge, Commits beim Start der Serie, Frage in dieser Serie schon
+  // gestellt, letzte Nachricht ging mit Denkanstoß raus (Gegenprobe bei der nächsten)
+  korr: number
+  korrCommits: number
+  korrAsked: boolean
+  nudged: boolean
+  // Zusammenfassungs-Zähler (Verhalten 3): Compactions dieses Chats (nur `session.compact`), Marke bei der 2. und 4. (0 = keine),
+  // B2: die nächste Anfrage folgt auf eine Compaction (kein Kaltstart, keine Kalt-Rückfrage)
+  compacts: number
+  compactMark: number
+  afterCompact: boolean
 }
 
 /** Offener Wartungs-Hinweis; `at`: seit wann er wartet (Review 0.12.0 K5: in einer anderen Session gezeigt oder erledigt → verfällt). */
@@ -156,7 +171,7 @@ type Offen = WHint & { at?: number }
 const offenOf = (h: WHint, now: number): Offen => ({ ...h, at: (h as Offen).at ?? now })
 
 function emptySitzung(): Sitzung {
-  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null, wartung2: false, wartungCommits: 0, ownAt: 0, note: null, leitsatz: false }
+  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null, wartung2: false, wartungCommits: 0, ownAt: 0, note: null, leitsatz: false, korr: 0, korrCommits: 0, korrAsked: false, nudged: false, compacts: 0, compactMark: 0, afterCompact: false }
 }
 
 /** Offener Wartungs-Hinweis aus dem Store, tolerant gelesen (fehlt oder kaputt → null). */
@@ -206,6 +221,14 @@ function cleanSitzung(v: unknown): Sitzung {
   if (typeof o.ownAt === 'number') s.ownAt = o.ownAt
   s.note = cleanNote(o.note)
   if (o.leitsatz === true) s.leitsatz = true
+  const nat = (x: unknown) => (typeof x === 'number' && Number.isFinite(x) && x > 0 ? Math.floor(x) : 0)
+  s.korr = nat(o.korr)
+  s.korrCommits = nat(o.korrCommits)
+  if (o.korrAsked === true) s.korrAsked = true
+  if (o.nudged === true) s.nudged = true
+  s.compacts = nat(o.compacts)
+  s.compactMark = o.compactMark === 2 || o.compactMark === 4 ? o.compactMark : 0
+  if (o.afterCompact === true) s.afterCompact = true
   return s
 }
 
@@ -372,7 +395,12 @@ function pushStatus($: EngineInterface) {
   if (key === statusLast) return
   statusLast = key
   try {
-    statusChain = statusChain.then(() => $.state.set({ plugin: 'sidekick', key: 'status' }, value)).catch(() => {})
+    // Abgelehnt (z. B. aus einem `ui.render`-Hook heraus, types:3551-3552): als ungeschrieben merken, der nächste Aufruf schreibt erneut (Review 0.19.0 S1)
+    statusChain = statusChain
+      .then(() => $.state.set({ plugin: 'sidekick', key: 'status' }, value))
+      .catch(() => {
+        if (statusLast === key) statusLast = undefined
+      })
   } catch {
     // Beiwerk
   }
@@ -754,7 +782,9 @@ function closeOpen($: EngineInterface, now: number, ctx: number) {
 
 // `before`: letzte Nachrichten und Kurzfassung vor dieser Nachricht; nach „Abbrechen“ beim falschen Chat zurück (Review S1)
 // `main`: Hauptmodell aus `$.session.model()` (Ausbau 0.18.0, Befund 1); `brief`: die erste Nachricht kommt aus einem Auftrag eines anderen Chats
-type Check = { trigger: Trigger; ctx: number; model: string; main: string; brief: boolean; ttl: 5 | 60; cold: boolean; unknown: boolean; coldFor: number; verdict: Verdict | null; before: { recent: string[]; summary: string } }
+// `grund` (Ausbau 0.19.0): Frage kam aus der Korrektur-Schleife oder dem Zusammenfassungs-Zähler; bei `schleife` bekommt die Übergabe den
+// Abschnitt „Was nicht funktioniert hat“
+type Check = { trigger: Trigger; ctx: number; model: string; main: string; brief: boolean; ttl: 5 | 60; cold: boolean; unknown: boolean; coldFor: number; verdict: Verdict | null; before: { recent: string[]; summary: string }; grund?: 'schleife' | 'verdichtet' }
 
 /** Hauptmodell der Session (types:2889-2891); ohne Antwort das zuletzt gesehene aus `turn.step`. */
 async function mainModel($: EngineInterface): Promise<string> {
@@ -782,9 +812,41 @@ async function claimBrief($: EngineInterface, text: string, now: number): Promis
   return false
 }
 
-/** Ergebnis des Torwächters: die Prüfung (null = ohne Prüfung durchlassen) und ein Wartungs-Hinweis für genau diese Nachricht. */
-type Gate = { c: Check | null; w: WHint | null }
+/**
+ * Ergebnis des Torwächters: die Prüfung (null = ohne Prüfung durchlassen) und ein Wartungs-Hinweis für genau diese Nachricht.
+ * Ausbau 0.19.0: `loop` die Korrektur-Schleife fragt, `compact` die Neuer-Chat-Frage nach der 2./4. Zusammenfassung ist fällig; `mini`
+ * die Fakten dieser Nachricht ohne Prüfung, für beide Fragen, wenn kein Auslöser die Prüfung gestartet hat.
+ */
+type Gate = { c: Check | null; w: WHint | null; loop?: boolean; compact?: number; mini?: Check }
 const PASS: Gate = { c: null, w: null }
+
+/** Korrektur-Serie fortschreiben (Verhalten 2): Ende bei einer Nachricht, die keine Korrektur ist, und bei einem neuen Commit. */
+function trackKorrektur($: EngineInterface, text: string, now: number) {
+  const k = isKorrektur(text)
+  // Gegenprobe des Denkanstoßes: War die Nachricht danach wieder eine Korrektur?
+  if (ses.nudged) {
+    ses.nudged = false
+    if (k) bookDay($, now, (d) => (d.schleife.wieder += 1))
+  }
+  if (!k) {
+    ses.korr = 0
+    ses.korrAsked = false
+    return
+  }
+  if (ses.korr > 0 && ses.commits !== ses.korrCommits) {
+    ses.korr = 0
+    ses.korrAsked = false
+  }
+  if (ses.korr === 0) ses.korrCommits = ses.commits
+  ses.korr += 1
+}
+
+/** Serie beenden: `/clear` (neue Session), `/rewind`, `/compact` und jede Compaction (Verhalten 2). */
+function endSeries() {
+  ses.korr = 0
+  ses.korrAsked = false
+  ses.nudged = false
+}
 
 /** Schritt 1 bis 3 der SPEC (Verhalten 3): Filter, Auslöser, Modell-Prüfung. */
 async function gate($: EngineInterface, text: string, kind: string, running: boolean, signal: AbortSignal): Promise<Gate> {
@@ -800,7 +862,10 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
   const usage = await $.session.usage()
   const ctx = typeof usage.context.tokens === 'number' ? usage.context.tokens : mem.ctx
   const ttl = ttlOf(mem, settings.ttl)
-  const st = cacheState(mem.lastActivity, ttl, now)
+  // B2 (Ausbau 0.19.0): Nach einer Compaction, auch der im Leerlauf kurz vor Ablauf des Caches, schreibt die nächste Anfrage nur die
+  // Zusammenfassung; der alte Verlauf wird nie neu geschrieben. Kalt ist sie also nicht, und die Kalt-Rückfrage mit der alten Größe
+  // wäre falsch (S3: `context.tokens` fehlte vor der ersten Anfrage, sidekick nahm die alte Größe aus `mem`)
+  const st = ses.afterCompact ? { kind: 'warm' as const, left: ttl * 60000 } : cacheState(mem.lastActivity, ttl, now)
   closeOpen($, now, ctx)
   let first = false
   let recent = ses.recent
@@ -812,6 +877,8 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     if (!first) recent = lastOwn(msgs)
   }
   ses.own += 1
+  // Korrektur-Schleife (Ausbau 0.19.0): nur Regeln (Probe P3, Entscheidung Fynn); die erste Nachricht eines Chats korrigiert nichts
+  if (!first) trackKorrektur($, text, now)
   // Auftrag eines Eltern-Chats (Verhalten 4): Entscheidung ist gefallen, keine Rückfrage; Fehler: wie ohne Eintrag
   const brief = first ? await claimBrief($, text, now).catch(() => false) : false
   const before = { recent, summary: ses.summary }
@@ -835,9 +902,15 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
     wp = maintenance($, now).catch(() => null)
   }
   const trigger = triggerOf({ first, ctx, cold: st.kind === 'cold', unknown: st.kind === 'unknown', settings })
+  // Ausbau 0.19.0, E7: Korrektur-Schleife und Zusammenfassungs-Zähler nur auf Guide. Die Schleife höchstens einmal je Serie, mit Ruhe
+  // nach dreimal „Unverändert senden“; die Zusammenfassungs-Frage bei der nächsten eigenen Nachricht ab 4 Wörtern
+  const guide = settings.level === 'guide'
+  const loop = guide && settings.loop.on && now >= settings.loop.restUntil && ses.korr >= LOOP_AT && !ses.korrAsked
+  const compact = guide && !first && ses.compactMark > 0 && text.trim().split(/\s+/).length >= 4 ? ses.compactMark : 0
+  const mini: Check = { trigger: trigger ?? 'b', ctx, model: mem.model, main: mem.model, brief, ttl, cold: st.kind === 'cold', unknown: st.kind === 'unknown', coldFor: -st.left, verdict: null, before }
   if (!trigger) {
     saveSes($, now)
-    return { c: null, w: await wp }
+    return { c: null, w: await wp, loop, compact, mini }
   }
   const main = trigger === 'a' ? await mainModel($) : mem.model
   const base = { trigger, ctx, model: mem.model || main, main, brief, ttl, cold: st.kind === 'cold', unknown: st.kind === 'unknown', coldFor: -st.left, before }
@@ -877,7 +950,7 @@ async function gate($: EngineInterface, text: string, kind: string, running: boo
   if (verdict?.kurzfassung) ses.summary = verdict.kurzfassung
   if (verdict && verdict.urteil !== 'durch' && isSuppressed(ses.ignored, verdict.art, ctx, ses.commits)) verdict = { ...verdict, urteil: 'durch' }
   saveSes($, now)
-  return { c: { ...base, verdict }, w: await wp }
+  return { c: { ...base, verdict }, w: await wp, loop, compact, mini }
 }
 
 /** Die nicht gesendete Nachricht aus dem Prüfkontext nehmen: Sonst sähe die nächste Prüfung das fremde Gebiet als Teil des Chats. */
@@ -1004,7 +1077,8 @@ async function writeHandoff($: EngineInterface, text: string, c: Check) {
   const cm = ses.commit
   const facts = { root, commit: cm ? `${cm.sha} vor ${spanText(start - cm.at)}` : 'keiner', model: mem.model ? modelLabel(mem.model) : '' }
   const prompt = handoffPrompt(ses.summary, parts.start, parts.tail, text, facts)
-  const r = await $.model.complete({ ...HANDOFF, system: handoffSystem(), prompt })
+  // Aus der Korrektur-Schleife: dazu „Was nicht funktioniert hat“ (Ausbau 0.19.0, Verhalten 2)
+  const r = await $.model.complete({ ...HANDOFF, system: handoffSystem(c.grund === 'schleife'), prompt })
   const end = await $.clock.now()
   const usd = completeCost(r.usage as CompleteUsage, HANDOFF.model)
   bookDay($, start, (d) => {
@@ -1048,7 +1122,7 @@ async function freshChat($: EngineInterface, text: string, c: Check, handoff: st
   // Nach „falscher Chat“ keine Ersparnis: Ohne sidekick wäre die Nachricht nicht in den großen Chat gegangen, sondern in einen
   // anderen (Review K1)
   if (c.verdict?.art !== 'falscher_chat') {
-    const booking: Booking = { kind: c.cold ? 'kalt' : 'warm', oldCtx: c.ctx, model: c.model, ttl: c.ttl, first: 0, steps: 0, at: now }
+    const booking: Booking = { kind: c.cold ? 'kalt' : 'warm', oldCtx: c.ctx, model: c.model, ttl: c.ttl, first: 0, steps: 0, at: now, ...(c.grund ? { grund: c.grund } : {}) }
     bookNow($, now, (l) => ({ ...l, offen: booking }))
   }
   ses.own = 1
@@ -1094,6 +1168,69 @@ async function updateTips($: EngineInterface, fn: (t: Tips) => Tips) {
   } catch {
     // Beiwerk
   }
+}
+
+/** Wie `updateTips`, nur `loop` (Korrektur-Schleife, Ausbau 0.19.0). */
+async function updateLoop($: EngineInterface, fn: (l: Loop) => Loop) {
+  try {
+    const cur = cleanSettings(await $.store.get('settings'))
+    settings = { ...cur, loop: fn(cur.loop) }
+    await $.store.set('settings', settings)
+  } catch {
+    // Beiwerk
+  }
+}
+
+/**
+ * Frage der Korrektur-Schleife (Ausbau 0.19.0, Verhalten 2) vor dem Senden. Gibt zurück, was mit der Nachricht geschieht: `send`
+ * unverändert, `nudge` mit Denkanstoß als `context`, `new` neuer Chat mit Übergabe (der Aufrufer startet ihn). Geschlossen: `send`.
+ */
+async function askLoop($: EngineInterface, c: Check, resendable: boolean, base: number, now: number): Promise<LoopChoice> {
+  const x = t()
+  ses.korrAsked = true
+  saveSes($, now)
+  const big = c.ctx >= settings.threshold || c.cold
+  const list = loopChoices({ big, resendable })
+  const lbl = (ch: LoopChoice) => (ch === 'new' ? x.newChat : ch === 'nudge' ? x.loopNudge : x.loopSend)
+  const options = list.map((ch, i) => lbl(ch) + (i === 0 ? x.recommended : ''))
+  const parts = [x.loopQuestion]
+  // Im großen Chat mit Kosten wie bei der Neuer-Chat-Frage
+  if (big && resendable) parts.push(x.optNew(x.newChat, usdText(handoffEstimate(c.ctx * 4, base, c.model, c.ttl))))
+  // /rewind öffnet eine Auswahl und hat keinen Knopf (logic.ts NO_BUTTON): nur als Hinweis
+  parts.push(x.loopRewind, x.howNext)
+  bookDay($, now, (d) => countHint(d, 'schleife', 'gezeigt'))
+  buddy($, 'stop')
+  let answer = ''
+  try {
+    answer = await $.ui.ask(parts.join('\n\n'), { options, header: HEADER })
+  } catch {
+    buddy($, null)
+    bookDay($, now, (d) => countHint(d, 'schleife', 'abgebrochen'))
+    return 'send'
+  }
+  buddy($, null)
+  const plain = answer.endsWith(x.recommended) ? answer.slice(0, -x.recommended.length) : answer
+  // Frei getippter Text (Feld „Other“): unverändert senden, ignoriert, aber nicht als „Unverändert senden“ gezählt (wie 0.18.0 K5)
+  const ch = list.find((y) => lbl(y) === plain) ?? null
+  if (ch === 'new' || ch === 'nudge') {
+    bookDay($, now, (d) => {
+      countHint(d, 'schleife', 'angenommen')
+      if (ch === 'nudge') d.schleife.denkanstoss += 1
+    })
+    await updateLoop($, (l) => ({ ...l, declined: 0 }))
+    return ch
+  }
+  bookDay($, now, (d) => countHint(d, 'schleife', 'ignoriert'))
+  if (ch !== 'send') return 'send'
+  // Dreimal hintereinander „Unverändert senden“: 7 Tage Ruhe, ein Toast sagt es einmal (Nicht nerven)
+  let rest = false
+  await updateLoop($, (l) => {
+    const declined = l.declined + 1
+    rest = declined >= 3
+    return { ...l, declined: rest ? 0 : declined, restUntil: rest ? now + 7 * DAY_MS : l.restUntil }
+  })
+  if (rest) $.ui.toast(x.loopRests, { timeoutMs: 10000 })
+  return 'send'
 }
 
 /**
@@ -1420,6 +1557,25 @@ async function tipsCommand($: EngineInterface, rest: string): Promise<string> {
   return out.join('\n')
 }
 
+/** `/sidekick loop [status|on|off]` (Ausbau 0.19.0): Rückmeldung wie bei `tips` (0.18.1), Stand und Serie dieses Chats. */
+async function loopCommand($: EngineInterface, rest: string): Promise<string> {
+  settings = cleanSettings(await $.store.get('settings'))
+  const x = t()
+  const now = await $.clock.now()
+  const r = applyLoop(settings.loop, rest, now)
+  if (!r) return x.loopUnknown(rest.trim())
+  await bindSession($)
+  const said = r.form === 'on' || r.form === 'off' ? (r.changed ? x.loopNow(r.form === 'on') : x.loopAlready(r.form === 'on')) : ''
+  if (r.changed) {
+    settings = { ...settings, loop: r.loop }
+    await $.store.set('settings', settings)
+  }
+  const l = settings.loop
+  const out = [...(said ? [said, ''] : []), x.loopTitle, '', x.loopState(l.on, now < l.restUntil ? x.tipsResting(shortDate(l.restUntil)) : ''), '', x.loopSeries(ses.korr)]
+  if (settings.level !== 'guide') out.push('', x.loopLevel(x.level[settings.level]))
+  return out.join('\n')
+}
+
 const shortDay = (ms: number) => shortDate(ms)
 
 // ---------- Gut zu wissen (SPEC Nachtrag 0.13.0) ----------
@@ -1665,8 +1821,13 @@ async function notesCommand($: EngineInterface, rest: string): Promise<string> {
 async function afterStep($: EngineInterface, u: StepUsage, startedAt: number) {
   await bindSession($)
   const total = totalInput(u)
-  // Ohne session.compact-Recht: deutlich geschrumpfter Kontext gilt als Kompaktierung, nicht als Kaltstart
-  const shrunk = mem.ctx > 0 && total < 0.6 * mem.ctx
+  // Deutlich geschrumpfter Kontext gilt als Kompaktierung, nicht als Kaltstart (auch nach `/rewind`). Seit 0.19.0 meldet zusätzlich
+  // `session.compact` die Compaction (B2): Die erste Anfrage danach lag in S2 bei 0,57 der alten Größe, knapp unter der Grenze
+  const shrunk = ses.afterCompact || (mem.ctx > 0 && total < 0.6 * mem.ctx)
+  if (ses.afterCompact) {
+    ses.afterCompact = false
+    saveSes($, startedAt)
+  }
   const res = observeStep(mem, u, startedAt, shrunk)
   const ttl = ttlOf(res.mem, settings.ttl)
   const asked = askedCold
@@ -1739,6 +1900,7 @@ async function statusText($: EngineInterface): Promise<string> {
   out.push(x.rowTtl(ttl, settings.ttl ? x.ttlSet : mem.ttlSource === 'gemessen' ? x.ttlMeasured : x.ttlDefault))
   out.push(x.rowNotes(onOff(settings.notes), cleanTopics(await $.store.get('notes:known')).length))
   out.push(x.rowTips(onOff(settings.tips.first), onOff(settings.tips.auto)))
+  out.push(x.rowLoop(onOff(settings.loop.on)))
   if (mem.ctx) out.push(x.rowCtx(tokensText(mem.ctx), cacheText(st.kind, st.left)))
   out.push('', x.summary(ses.summary), '')
   out.push(x.lastHint(ses.last ? `${hhmm(ses.last.at)} · ${ses.last.line}` : ''), '')
@@ -1798,7 +1960,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     housekeeping($).catch(() => {})
     // Befehle zuletzt, jeder für sich (CLAUDE.md, Registrieren in session.start); englisch
     for (const c of [
-      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|language|help]' },
+      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|language|help]' },
       { name: 'savings', description: t().cmdSavings, argumentHint: '[detail] [today|week|all|help]' },
     ]) {
       try {
@@ -1888,6 +2050,35 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     return next(e)
   })
 
+  // Zusammenfassungs-Zähler (Ausbau 0.19.0, Verhalten 3) und B2. Nur Beobachter: `next(e)` unverändert, kein `skip`, keine anderen
+  // `instructions` (SPEC Rechte). Gezählt wird, was im Hauptchat wirklich zusammenfasst: `manual` (S2: `/compact`) und `auto`, dazu
+  // zählt die Compaction im Leerlauf (rel/hooks.md:3312, rel/llm-gateway-protocol.md:157). Nicht `precompute`, das nichts einsetzt
+  // (types:11731), nicht `plugin` (heute kommt keine von sidekick), nicht die eines Subagenten (`agentId`), nicht ein `skip`
+  on('session.compact', async ($, e, next) => {
+    const r = await next(e)
+    try {
+      const skipped = typeof (r as { skip?: unknown }).skip === 'string'
+      if (!e.agentId && (e.trigger === 'manual' || e.trigger === 'auto') && !skipped) {
+        await bindSession($)
+        const now = await $.clock.now()
+        ses.compacts += 1
+        if (ses.compacts === 2 || ses.compacts === 4) ses.compactMark = ses.compacts
+        ses.afterCompact = true
+        endSeries()
+        saveSes($, now)
+        // B2: Größe nach der Compaction für die nächste Prüfung; `context.tokens` fehlte in S2 bis zur ersten Anfrage
+        const after = (r as { tokensAfter?: unknown }).tokensAfter
+        if (typeof after === 'number' && after > 0) {
+          mem = { ...mem, ctx: after }
+          saveMem($, now)
+        }
+      }
+    } catch {
+      // Beiwerk: die Compaction selbst bleibt unberührt
+    }
+    return r
+  })
+
   // Commits merken (Kurzfassung, Wiederholungsregel). `gitOperation` steht im Ergebnis von Bash und PowerShell (tools:4251, :4728)
   // Seit 0.18.0 auch `start_session` der Desktop-App (Modell-Tipp, Verhalten 4): ein `on` je Event und Matcher (CLAUDE.md)
   on('tool.call', { tool: ['Bash', 'PowerShell', START_TOOL] }, async ($, e, next) => {
@@ -1943,6 +2134,15 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     }
     // Modell-Tipp (Ausbau 0.18.0, Gegenprobe): Nach einem getippten `/model` prüft der nächste Schritt, ob es zurück auf Opus/Fable ging
     try {
+      // Korrektur-Schleife (Ausbau 0.19.0): `/rewind` beendet die Serie (`/clear` beginnt ohnehin eine neue Session). Für `/compact` kam
+      // in S2 kein `prompt.submit`; dort beendet `session.compact` die Serie, der Zweig ist nur die Absicherung (Review 0.19.0 K6)
+      if (/^\/(rewind|compact)(\s|$)/i.test(e.text.trim())) {
+        await bindSession($)
+        if (ses.korr || ses.nudged) {
+          endSeries()
+          saveSes($, await $.clock.now())
+        }
+      }
       if (/^\/model(\s|$)/i.test(e.text.trim())) {
         await bindSession($)
         if (tip && !tip.ended && tip.way === 'chat') {
@@ -1970,7 +2170,8 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       buddy($, null)
       return go(e)
     }
-    const c = g.c
+    // Korrektur-Schleife und Zusammenfassungs-Frage (Ausbau 0.19.0) brauchen keinen Auslöser der Prüfung: dann mit den Fakten ohne Urteil
+    let c = g.c ?? (g.loop || g.compact ? (g.mini ?? null) : null)
     if (!c) {
       buddy($, null)
       return sendWithWartung($, e, g.w, () => go(e))
@@ -1985,7 +2186,49 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     } catch {
       // Schätzung mit Standard
     }
-    const d = dialog(c, resendable, base)
+    let d = dialog(c, resendable, base)
+    // Vorrang (Verhalten 2): falscher Chat > Kalt-Cache-Frage > Korrektur-Schleife > übrige Hinweise. Bei der Kalt-Cache-Frage steht
+    // der Satz zur Schleife darin, kein zweiter Dialog; ihre Übergabe bekommt dann „Was nicht funktioniert hat“
+    if (g.loop && d?.art !== 'falscher_chat') {
+      if (d && c.trigger === 'c') {
+        const how = t().howNext
+        d = { ...d, question: d.question.endsWith(how) ? `${d.question.slice(0, -how.length)}${t().loopCold}\n\n${how}` : `${d.question}\n\n${t().loopCold}` }
+        c = { ...c, grund: 'schleife' }
+        ses.korrAsked = true
+        saveSes($, now)
+      } else {
+        keepWartung($, g.w, now)
+        let ch: LoopChoice = 'send'
+        try {
+          ch = await askLoop($, c, resendable, base, now)
+        } catch {
+          ch = 'send'
+        }
+        if (ch === 'new' && resendable) {
+          const check: Check = { ...c, grund: 'schleife' }
+          const text = e.text
+          later($, 300, () => {
+            runHandoff($, text, check, false).catch((err) => $.ui.toast(t().newChatFailed(msg(err), cut(text, 300)), { timeoutMs: 30000 }))
+          })
+          return { drop: t().dropStarting(false, cut(e.text, 3000)) }
+        }
+        if (ch === 'nudge') {
+          // Der Nutzer sieht den Denkanstoß nicht, Claude liest ihn (types:9771-9775); die Gegenprobe zählt die nächste Nachricht
+          ses.nudged = true
+          saveSes($, now)
+          return go({ ...e, context: [...(e.context ?? []), t().nudge] })
+        }
+        return go(e)
+      }
+    }
+    // Zusammenfassungs-Zähler (Verhalten 3): die vorhandene Neuer-Chat-Frage mit Grund „verdichtet“, nur ohne andere Rückfrage. Die
+    // Kosten rechnen mit dem aktuellen Kontext (`c.ctx` nach der Compaction). Die Marke gilt bis zur Antwort
+    if (!d && g.compact && resendable) {
+      d = { question: `${t().compacted(ses.compacts)} ${t().howNext}`, options: labels(rankChoices({ cold: false, sendUsd: Infinity, resendable, fassung: false })), art: 'verdichtet' }
+      c = { ...c, grund: 'verdichtet' }
+      ses.compactMark = 0
+      saveSes($, now)
+    }
     buddy($, d ? 'stop' : null)
     // Modell-Tipp bei der ersten Nachricht (Verhalten 2): nur ohne andere Rückfrage dieser Prüfung („höchstens eine Sache“); die
     // Nachricht geht danach in jedem Fall unverändert weiter, nur die Schritte laufen bei Annahme auf dem Ziel
@@ -2254,6 +2497,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (/^hints\b/i.test(args)) return { text: await hintsCommand($, args.slice(5)) }
     if (/^notes\b/i.test(args)) return { text: await notesCommand($, args.slice(5)) }
     if (/^tips\b/i.test(args)) return { text: await tipsCommand($, args.slice(4)) }
+    if (/^loop\b/i.test(args)) return { text: await loopCommand($, args.slice(4)) }
     // Immer frisch laden: eine andere Session kann die Stufe geändert haben
     settings = cleanSettings(await $.store.get('settings'))
     if (args && args.toLowerCase() !== 'status') {
@@ -2275,7 +2519,9 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       return next(e)
     }
     let err = ''
-    let s: Status = { level: settings.level, busy: settings.level !== 'off' && busyNow() }
+    // Rückfall ohne gespeicherten Wert (nach /clear oder /resume leer, en/interface.md:762): mit dem Tipp dieses Chats (Review 0.19.0 S1)
+    const tipName = tip && !tip.ended && tip.way === 'chat' ? modelName(tip.to) : ''
+    let s: Status = { level: settings.level, busy: settings.level !== 'off' && busyNow(), ...(tipName ? { tip: tipName } : {}) }
     try {
       const { value } = await $.state.get({ plugin: 'sidekick', key: 'status' })
       // Ein vor 0.15.0 geschriebener Wert mit Stufe plan oder auto (er überlebt ein Neuladen) zeigte sonst ein leeres Label

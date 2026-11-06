@@ -22,6 +22,15 @@ type Texts = {
   demoPlays: (name: string, label: string) => string
   demoMore: (names: string) => string
   nap: string
+  /** Antwort auf /clawd freeze (0.13.0) */
+  freeze: string
+  /** /clawd freeze ohne lesbare Uhr (Review K2) */
+  freezeFail: string
+  /**
+   * Eis-Zeile in /clawd status (0.13.0, SPEC Teil A): Quelle des letzten kalten Moments, gewürfelt ja/nein, Ergebnis, schon in diesem
+   * Chat gefroren. `at` = Beginn einer geplanten Schätzung (Uhrzeit HH:MM), sonst leer.
+   */
+  frost: (o: { src: '' | 'new' | 'resume' | 'sidekick' | 'estimate' | 'manual'; rolled: boolean; result: '' | 'frozen' | 'no' | 'music' | 'already' | 'turn' | 'warm'; at: string; chat: boolean }) => string
   unknown: (sub: string) => string
   status: (o: { on: boolean; mood: string; temper: string; tired: number; annoy: number; desk: string; beat: string }) => string
   /** Takt aus tune-strip für /clawd status (0.11.0) */
@@ -47,6 +56,7 @@ type Texts = {
     nap: string
     boop: string
     flicker: string
+    freeze: string
     help: string
     click: string
     arm: string
@@ -66,7 +76,7 @@ type Texts = {
 export const T: Readonly<Record<Lang, Texts>> = {
   en: {
     description: 'Control the mascot',
-    help: 'Commands: on | off | list | demo <animation> | nap | boop | status | flicker | help',
+    help: 'Commands: on | off | list | demo <animation> | nap | boop | freeze | status | flicker | help',
     on: 'clawd-buddy: on',
     off: 'clawd-buddy: off',
     demoUsage: 'clawd demo <animation>. /clawd list shows all of them.',
@@ -74,6 +84,13 @@ export const T: Readonly<Record<Lang, Texts>> = {
     demoPlays: (name, label) => `playing: ${name} (${label})`,
     demoMore: (names) => `, more matches: ${names}`,
     nap: 'clawd-buddy: getting sleepy …',
+    freeze: 'clawd-buddy: brrr … frozen. Type to crack the ice, send to break it.',
+    freezeFail: 'clawd-buddy: could not freeze (the clock could not be read). Try again in a moment.',
+    frost: (o) => {
+      const src = { '': 'no cold moment yet', new: 'new chat', resume: 'resumed chat', sidekick: 'sidekick says cold', estimate: 'own estimate (60 min)', manual: '/clawd freeze' }[o.src]
+      const res = { '': '', frozen: o.at ? `freezes at ${o.at}` : 'frozen', no: 'stays warm', music: 'music is playing, no freezing', already: 'already frozen in this chat', turn: 'Claude is working', warm: 'cache still warm' }[o.result]
+      return `Ice: ${src}${o.src ? `, rolled: ${o.rolled ? 'yes' : 'no'}` : ''}${res ? `, ${res}` : ''}; frozen in this chat: ${o.chat ? 'yes' : 'no'}.`
+    },
     unknown: (sub) => `unknown: ${sub}.`,
     status: (o) => `clawd-buddy: ${o.on ? 'on' : 'off'}, ${o.mood} (${o.temper}), tiredness ${o.tired}%, annoyance ${o.annoy}. ${o.beat}. ${o.desk}.`,
     beat: (o) => (o ? `Beat ${o.bpm} bpm, ${o.group}, ${o.sure ? 'sure' : 'unsure'}` : 'No beat from tune-strip'),
@@ -102,6 +119,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
       nap: 'Send him to sleep for about 5 minutes',
       boop: 'Poke him',
       flicker: 'Desktop app only: 20-second flicker test',
+      freeze: 'Freeze him in a block of ice right away (typing cracks it, sending breaks it)',
       help: 'This help (also /clawd ?)',
       click: 'Click on Clawd',
       arm: 'Drag an arm',
@@ -131,7 +149,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
   },
   de: {
     description: 'Maskottchen steuern',
-    help: 'Befehle: on | off | list | demo <animation> | nap | boop | status | flicker | help',
+    help: 'Befehle: on | off | list | demo <animation> | nap | boop | freeze | status | flicker | help',
     on: 'clawd-buddy: an',
     off: 'clawd-buddy: aus',
     demoUsage: 'clawd demo <animation>. Mit /clawd list siehst du alle.',
@@ -139,6 +157,13 @@ export const T: Readonly<Record<Lang, Texts>> = {
     demoPlays: (name, label) => `spielt: ${name} (${label})`,
     demoMore: (names) => `, weitere Treffer: ${names}`,
     nap: 'clawd-buddy: wird müde …',
+    freeze: 'clawd-buddy: brrr … eingefroren. Tippen macht Risse, Senden zerbricht das Eis.',
+    freezeFail: 'clawd-buddy: Einfrieren ging nicht (die Uhr ließ sich nicht lesen). Versuch es gleich noch einmal.',
+    frost: (o) => {
+      const src = { '': 'noch kein kalter Moment', new: 'neuer Chat', resume: 'fortgesetzter Chat', sidekick: 'sidekick meldet kalt', estimate: 'eigene Schätzung (60 min)', manual: '/clawd freeze' }[o.src]
+      const res = { '': '', frozen: o.at ? `friert um ${o.at} ein` : 'eingefroren', no: 'bleibt warm', music: 'Musik läuft, kein Einfrieren', already: 'in diesem Chat schon gefroren', turn: 'Claude arbeitet', warm: 'Cache noch warm' }[o.result]
+      return `Eis: ${src}${o.src ? `, gewürfelt: ${o.rolled ? 'ja' : 'nein'}` : ''}${res ? `, ${res}` : ''}; in diesem Chat gefroren: ${o.chat ? 'ja' : 'nein'}.`
+    },
     unknown: (sub) => `unbekannt: ${sub}.`,
     status: (o) => `clawd-buddy: ${o.on ? 'an' : 'aus'}, ${o.mood} (${o.temper}), Müdigkeit ${o.tired} %, Ärger ${o.annoy}. ${o.beat}. ${o.desk}.`,
     beat: (o) => (o ? `Takt ${o.bpm} bpm, ${o.group}, ${o.sure ? 'sicher' : 'unsicher'}` : 'Kein Takt von tune-strip'),
@@ -167,6 +192,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
       nap: 'Schickt ihn für etwa 5 Minuten schlafen',
       boop: 'Stupst ihn an',
       flicker: 'Nur Desktop-App: 20-s-Flacker-Test',
+      freeze: 'Friert ihn sofort in einen Eisblock ein (Tippen macht Risse, Senden zerbricht ihn)',
       help: 'Zeigt diese Hilfe (auch /clawd ?)',
       click: 'Klick auf Clawd',
       arm: 'Arm ziehen',
@@ -366,6 +392,34 @@ export const CLIP_EN: Readonly<Record<string, string>> = {
   ctx_stack: 'Wobbly paper stack (context almost full)',
   long_phew: 'Phew, done (long turn)',
   long_flag: 'Waves the finish flag (long turn)',
+  // 0.13.0: Eisklumpen
+  freeze: 'stand → frozen',
+  thaw: 'frozen → stand',
+  frost_creep: 'Slowly freezes over',
+  frost_shiver: 'Freezes over, shivering and rubbing his arms',
+  frozen: 'Stands frozen in a block of ice',
+  frozen_sleep: 'Fell asleep in the ice',
+  frost_crack1: 'Ice cracks (stage 1)',
+  frost_crack2: 'Ice cracks (stage 2)',
+  frost_crack3: 'Ice cracks (stage 3)',
+  frost_break: 'Ice shatters, he shakes himself free',
+  frost_break1: 'Ice shatters (after crack stage 1)',
+  frost_break2: 'Ice shatters (after crack stage 2)',
+  frost_break3: 'Ice shatters (after crack stage 3)',
+  frost_melt: 'Ice melts, he shakes out a foot',
+  frost_melt1: 'Ice melts (after crack stage 1)',
+  frost_melt2: 'Ice melts (after crack stage 2)',
+  frost_melt3: 'Ice melts (after crack stage 3)',
+  // 0.13.0: sidekick nach Grund, Hinweis, Wartung
+  sk_cold_shiver: 'Shivers: the cache is cold',
+  sk_cold_stomp: 'Stomps in place and blows into his hands',
+  sk_map_lost: 'Turns a map around, puzzled',
+  sk_scale_weigh: 'Weighs it up on a small scale',
+  sk_two_notes: 'Holds up two versions and compares',
+  sk_blank_page: 'Turns the page and points at a blank sheet',
+  sk_bulb: 'Light bulb: a hint sits above the input',
+  sk_oil_can: 'Oils the input a little',
+  sk_sweep: 'Sweeps the input',
 }
 
 /** Bezeichnung eines Clips in der eingestellten Sprache. */

@@ -7,7 +7,7 @@ import type { ClientPointerEvent, ClientSurface } from 'claude-code'
 import { createEngine } from './engine.ts'
 import type { Engine } from './engine.ts'
 import { ALL_CLIPS, ALL_PROPS } from './library.ts'
-import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, specialDay } from './mood.ts'
+import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, frostActive, specialDay } from './mood.ts'
 import type { Facts, Strain } from './mood.ts'
 import { mulberry32 } from './capture.ts'
 import { H, PAL, TICK, W } from './stage.ts'
@@ -104,7 +104,8 @@ function applyActions(st: State) {
   const back = p.facts.backAt ?? 0
   if (back !== c.seenBack) {
     c.seenBack = back
-    if (back && clockNow(c) - back < WELCOME_WINDOW_MS) e.welcome()
+    // Gefroren entfällt die Begrüßung: das Auftauen ist dann die Begrüßung (0.13.0)
+    if (back && clockNow(c) - back < WELCOME_WINDOW_MS && !frostActive(p.facts, clockNow(c))) e.welcome()
   }
   if (c.ticks >= c.napUntil) e.set({ nightStart: p.nightStart, nightEnd: p.nightEnd, idleSeconds: p.idleSeconds })
   e.set({ reduced: p.reduced })

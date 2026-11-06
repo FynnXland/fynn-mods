@@ -4139,7 +4139,7 @@ test('0.17.0 language: Wort im argumentHint von /sidekick, nicht in /savings', a
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await flush(200)
   const hint = (name: string) => w.registered.find((c) => c.name === name)?.argumentHint ?? ''
-  expect(hint('sidekick')).toBe('[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|language|help]')
+  expect(hint('sidekick')).toBe('[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|language|help]')
   expect(hint('savings')).not.toContain('language')
 })
 

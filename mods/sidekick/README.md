@@ -4,7 +4,9 @@ Checks your message just before it is sent: first with fixed rules, and only whe
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.318** · Plugin version **0.18.1**
+Tested with Claude Code **v2.1.318** · Plugin version **0.19.0**
+
+**New in 0.19.0: Retry loop and compaction count.** When you write the third correction in a row ("still doesn't work"), sidekick asks before sending whether a fresh chat with a handoff or a short nudge to Claude to step back would help more than a fourth attempt. After the second and the fourth compaction of a chat, the new-chat question comes once on your next message, because each compaction loses details. A compaction also no longer triggers a wrong cold-cache question. See [Retry loop](#retry-loop-since-0190).
 
 **New in 0.18.0: Model tip.** On the first message of a chat that runs on Opus or Fable, sidekick asks before sending whether a simple task should run on Sonnet 5.5 or Haiku 5.5. Optionally (`/sidekick tips auto on`, off by default) it also switches subagents and chats that Claude starts to a cheaper model when their task is simple. `/savings` shows the savings as a marked estimate. See [Model tip](#model-tip-since-0180).
 
@@ -62,6 +64,7 @@ Tested with Claude Code **v2.1.318** · Plugin version **0.18.1**
      - **Cancel**: the message is not sent; your text is shown in the notice.
    - **Wrong chat** (since 0.5.0): if the message clearly belongs to a different project or field than the chat (e.g. a mobile-game chat and a question about a website's CSS), sidekick holds it back with "This doesn't fit this chat at all. … Are you in the wrong chat?". This is more than a change of topic: a new topic in the same project stays a "new chat" question. Answers, in this order: **Cancel** (recommended; nothing is sent and your text is shown for copying, so you can paste it into the right chat; `/savings` counts it as *accepted*, and the message is removed from what the next check compares against), the fitting new chat (usually without handoff, since another field rarely needs the old history), the other new-chat variant, **Send anyway**. With an attachment or `@file`, only Cancel and Send anyway. After "Send anyway" the question stays quiet until +50k context or the next commit. It is never asked on the first message of a chat or for messages under 4 words, and it takes precedence over the cold-cache question (whose cost is then shown in the same dialog). Unlike the other questions, closing this dialog (Esc) does **not** send: the message is held back like Cancel. A new chat started from here books no savings, because without sidekick the message would have gone to another chat, not into this large one.
    - With trigger (c) the question always comes, with the cost of both paths, e.g. "Sending rewrites everything (≈ $2.40)" versus "New chat with handoff: ≈ $0.26" (Opus 5.5, 1-hour cache, about 20k base load in the new chat).
+   - **After a compaction** (since 0.19.0): the next request only writes the summary, so there is no cold-cache question for it, also after Claude Code compacted the chat while you were away. After the **second** and the **fourth** compaction of a chat, your next own message (4 words or more) gets the new-chat question once: *This chat has been compacted 2 times already; each time, details get lost.* Its savings are computed with the current, small context, so they are honestly small. `/clear` starts the count again; `/rewind` does not count.
 5. A hint type you ignored only comes back once the context has grown by ≥ 50k or a commit happened in between.
 
 **Fail-open:** on error, timeout (6 s per model call), an unusable model answer or a closed dialog, the message goes through unchanged. **Exception:** if the handoff fails after "New chat with handoff", sidekick does not silently send into the cold chat; it asks again.
@@ -124,6 +127,24 @@ When in real doubt the higher level applies; without a rating nothing changes.
 - **In `/savings`:** a line *Model tips ≈ $x (estimate) · n runs*, included in the savings total and the ratio. `/savings detail` has a section per way (first chat, subagents, chats by Claude, Claude chose itself) with runs, $ saved, per run and struck runs, plus the ratings (count, cost, average duration, levels), a look back at subagents that stayed on Opus, and the method.
 - **How it is computed (estimate):** for each step of a switched run, what the same tokens would have cost on the original model minus what they cost on the target model, with the same price table as sidekick's own bookings. Opus would have used other steps and thinking tokens, so the figure is an order of magnitude, not a measurement. **Check against reality:** going back to Opus or Fable in the same chat, a subagent that ends with an error or is aborted, or the same task started again on Opus within 30 minutes strikes the booking (*back* / *missed*); the share shows in `/savings detail`.
 - **Residual risk:** a task rated "simple" by mistake costs rework on a weaker model. The rating only sees the task, not the code. The probe before the build (60 real cases, 2026-11-04) agreed with the owner's own judgement in 16 of 20 and rated 6 of 41 large tasks (over 60 steps or edits in several files) as simple.
+- **No effort tip:** lowering the effort for a simple message in a large chat keeps the cache, but a measurement for 0.19.0 (42 runs in a 117k chat, 2026-11-06) saved only 2–4 % of a round's cost: almost all of it is reading the cached history, and the answer itself is a few hundred tokens. sidekick therefore leaves the effort alone.
+
+## Retry loop (since 0.19.0)
+
+After two failed corrections, a fresh start usually lands better than a third one in the same history. sidekick counts your **corrections in a row**: messages that say Claude's last attempt didn't work, such as "still doesn't work", "geht immer noch nicht", "same error", "didn't fix it", "that's wrong". Only fixed rules decide, in German and English, on the first 400 characters (in long dictated lists a "still" usually stands somewhere in passing). Calibrated on 30 hand-labelled real messages: 10 of 11 corrections found, no false alarm. A series ends with a message that is not a correction, a new commit, `/clear`, `/rewind`, `/compact` or any compaction.
+
+On the **third** correction in a row, sidekick asks before sending: *This is the third correction in a row. A fresh start usually lands better than a fourth attempt in the same history.* The text also points to `/rewind` to go back to before the first attempt (sidekick doesn't run it; it opens a picker). Answers, the recommended one first:
+
+- in a large chat (context at or above `threshold`) or with a cold cache: **New chat with handoff** (with its cost) · **Send with a nudge** · **Send unchanged**
+- otherwise: **Send with a nudge** · **New chat with handoff** · **Send unchanged**
+- with an attachment or `@file`: no new chat
+
+**New chat with handoff** works as usual; the handoff gets an extra section *What didn't work*: the failed attempts and, where the history shows it, why they failed, without new guesses. **Send with a nudge** sends your message unchanged and gives Claude a short paragraph you don't see: *step back, restate the goal, list what was tried and why it failed, check the root cause, then choose an approach.* Closing the dialog sends unchanged.
+
+- **Not annoying:** at most once per series; three times **Send unchanged** in a row and the question pauses for 7 days (a notice says so once); only on level Guide; never in `claude -p`. A wrong-chat question takes precedence; a cold-cache question gets the sentence about the loop instead of a second dialog.
+- **`/sidekick loop on` · `off`** (default on), `/sidekick loop` shows the state and the corrections in a row in this chat.
+- **In `/savings detail`:** *Retry loop* in the hints (shown, accepted, ignored, cancelled). A new chat from it books its savings like any new chat. The nudge books no amount, because its effect can't be measured; it is counted, together with how often the next message was a correction again.
+- **Limit:** the owner's transcripts of 14 days (819 own messages) held 11 corrections and no series of three, so the question will be rare.
 
 ## Commands
 
@@ -149,6 +170,8 @@ When in real doubt the higher level applies; without a rating nothing changes.
 | `/sidekick tips auto on` · `off` | switch subagents and chats Claude starts, plus the guideline (default off) |
 | `/sidekick tips haiku on` · `off` | Haiku as the target for very simple tasks; off: always Sonnet (default on) |
 | `/sidekick tips stop` | this chat back to the main model (the booking is struck) |
+| `/sidekick loop` · `loop status` | Retry loop: on or off, corrections in a row in this chat (since 0.19.0) |
+| `/sidekick loop on` · `off` | ask on the third correction in a row (default on); `on` also ends a pause |
 | `/sidekick language [de\|en]` | switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language (since 0.17.0). Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.17.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/savings [today\|week\|all]` | short balance, default `week`: cost, savings, ratio and the savings items; drawn as a framed card in the terminal and the desktop app (like cost-ledger's `/ledger`), Markdown elsewhere |
 | `/savings detail [today\|week\|all]` | everything, default `all`: also how it is computed, models, checks compared per model, by day, hints and counts (`details` works too, words in any order) |
@@ -175,6 +198,7 @@ An unknown argument to `/sidekick`, `/sidekick hints`, `/sidekick notes` or `/sa
   - checks and average wait
   - hints by type (shown, accepted, ignored, cancelled)
   - handoffs and model hints
+  - nudges from the retry loop and how often the next message was a correction again (since 0.19.0)
   - cold starts without a question, with their cost
   - skills used, with a pointer to `/skill-doctor`
   - maintenance hints per rule (shown, accepted)
@@ -204,13 +228,13 @@ Everything lives in the plugin's `$.store`:
 
 | Key | Content | Lifetime |
 |---|---|---|
-| `settings` | `level`, `lastOn`, `threshold`, `big`, `skills`, `ttl`, `notes`, `tips` (since 0.18.0: `first`, `auto`, `haiku`, Opus answers in a row, pause until) | permanent |
+| `settings` | `level`, `lastOn`, `threshold`, `big`, `skills`, `ttl`, `notes`, `tips` (since 0.18.0: `first`, `auto`, `haiku`, Opus answers in a row, pause until), `loop` (since 0.19.0: on, *Send unchanged* in a row, pause until) | permanent |
 | `tip:<session>` | model tip of this chat: from, to, when, reason, estimated savings so far | 7 days |
 | `spawn:<agent>` | a watched subagent: from, to, reason, description, estimated savings | 2 days |
 | `brief:<hash>` | a brief Claude passed to a new chat: its first 200 characters, from and to model | 2 days or until the new chat starts |
 | `tips:recent` | the last 10 switches for `/sidekick tips` (time, way, models, task description) | until replaced |
 | `cache:<session>` | last activity, TTL, context, model | 7 days |
-| `sitzung:<session>` | summary, last 3 messages, ignored hints, hint lines, last commit, a maintenance hint not shown yet, the current Good-to-know note | 7 days |
+| `sitzung:<session>` | summary, last 3 messages, ignored hints, hint lines, last commit, a maintenance hint not shown yet, the current Good-to-know note; since 0.19.0 the corrections in a row, compactions of this chat and whether the next request follows one | 7 days |
 | `notes:seen`, `notes:known` | Good to know: the last 50 topics shown, and topics marked *Know this* or *Got it* (one sentence each) | permanent (`/sidekick notes forget` clears the known ones) |
 | `notes:ignored`, `notes:skip` | Good to know: ignored notes in a row, checks still to skip | until the next answer |
 | `bilanz:<session>` | daily values of this session, pending savings booking | until compacted |
@@ -242,7 +266,7 @@ Texts are English by default. For German, set `language` to `de`, or run `/sidek
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.step, agent.spawn, turn.complete, tool.call{tool=Bash|PowerShell|mcp__ccd_session__start_session}, prompt.submit, skill.prompt, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, ui.render{component=SessionMode}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
+hooks: session.start, turn.step, agent.spawn, turn.complete, session.compact, tool.call{tool=Bash|PowerShell|mcp__ccd_session__start_session}, prompt.submit, skill.prompt, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, ui.render{component=SessionMode}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
 calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.config.list, $.config.set, $.model.complete, $.model.fork, $.process.run, $.prompt.fill, $.prompt.read, $.prompt.submit, $.session.id, $.session.messages, $.session.model, $.session.root, $.session.surfaces, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.copy, $.ui.invalidate, $.ui.notice, $.ui.resolve, $.ui.toast
 state writes: sidekick.buddy, sidekick.status
 state reads: sidekick.status
@@ -254,6 +278,8 @@ In plain language:
 - `turn.step`: reads the token counts of each main-loop request (cache warm/cold, context, savings measurement). With Good to know on, it also starts the check at step 6, 12, 18 … in the background; the request itself is not delayed. Since 0.18.0 it changes one thing, and only in a chat where you picked a cheaper model in the model tip's question: the model of each main request (`→ Sonnet`). For subagents it reads the token counts of watched runs to estimate the savings.
 - `agent.spawn` (since 0.18.0, only with `/sidekick tips auto on`): sets the model of a built-in subagent without a model to Sonnet or Haiku when Haiku rated its task simple; everything else starts unchanged.
 - `turn.complete` (since 0.18.0): the end of a subagent's run, to book or strike its estimated savings. Read only.
+- `session.compact` (since 0.19.0): read only. Counts the compactions of the main chat (`/compact` and automatic ones, including the one while you are away; not the background precompute, not a subagent's), notes the size afterwards and that the next request follows a compaction. Passes every compaction through unchanged: no skip, no other instructions.
+- `prompt.submit` also attaches the retry loop's nudge (since 0.19.0, only after you pick **Send with a nudge**) as context Claude reads and you don't see; the handoff from the loop gets the section *What didn't work*.
 - `tool.call{…|mcp__ccd_session__start_session}` (since 0.18.0, only with `/sidekick tips auto on`): for a chat Claude starts without a model and not as a fork, passes `claude-sonnet-5-5` or `claude-haiku-5-5` when its task was rated simple, and remembers the first 200 characters of the brief for two days. The tool's name comes from the desktop app; if it changes, the hook silently stops firing.
 - `$.session.model` (since 0.18.0): your main model, so the check knows it on the first message and the tip only appears on Opus or Fable.
 - `$.ui.notice` (since 0.18.0): one line in the agent's window when sidekick switched a subagent or a new chat.
@@ -269,7 +295,7 @@ In plain language:
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=CommandOutput, props has {command=sidekick}}` (since 0.14.0): draws the output of `/sidekick help` as a table in the terminal and the desktop app. Display only; `/sidekick status`, other outputs and other surfaces stay Markdown.
 - `ui.render{component=AbovePrompt}`: only while a new chat is being started, a small blue box above the prompt shows progress and seconds; and, with Good to know on, the current note with its buttons. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
-- `$.model.complete`: Haiku 5.5 for the check (effort `medium`, full ID `claude-haiku-5-5`), Haiku 5.5 for the model tip's rating of a subagent's or new chat's task (effort `low`, since 0.18.0) and Sonnet 5.5 for the handoff (effort `medium`). The only model calls. Your messages and those tasks reach the model only through your session's own login; the rating prompt tells the model to judge the task and never follow instructions in it.
+- `$.model.complete`: Haiku 5.5 for the check (effort `medium`, full ID `claude-haiku-5-5`), Haiku 5.5 for the model tip's rating of a subagent's or new chat's task (effort `low`, since 0.18.0) and Sonnet 5.5 for the handoff (effort `medium`). The only `$.model.complete` calls. Your messages and those tasks reach the model only through your session's own login; the rating prompt tells the model to judge the task and never follow instructions in it.
 - `prompt.submit` also attaches the model tip's guideline (since 0.18.0, only with `/sidekick tips auto on`, once per chat) as context the model reads and you don't see.
 - `$.session.messages`: beginning and end of the history for the handoff, the end of Claude's last reply for the check, and to detect the first message.
 - `$.session.usage`, `$.command.list`: context size, skill names and descriptions; for the maintenance hints, paths and token counts of instruction and memory files (no contents), size of the skill list, model, and whether a command exists.
@@ -331,7 +357,7 @@ claude --plugin-dir <path-to-clone>/mods/sidekick
 - **After `/resume`:** the hint lines of the resumed session appear only once something happens again, e.g. the next message or request. Showing them immediately would need an extra right (`classic.SessionStart`).
 - **The rewritten version** is only offered if it fits entirely into the dialog (≤ 600 characters). A longer one becomes a line. Messages under 4 words never get a rewritten version. The rewrite always stays your message to the assistant (you as sender); a version that reads like the assistant's reply or a question back to you ("I'm ready – what would you like to do?") is dropped. This is detected in English and German, whatever `language` is set to. The rewrite stays in the language of your message.
 - **Commit detection:** a commit made with `git commit -q` goes unnoticed, because the engine parses git's output. Then only the +50k rule applies.
-- **Compaction:** without the `session.compact` right, a context that shrank by more than 40 % counts as compaction, not as a cold start.
+- **Compaction:** since 0.19.0 sidekick hears about each compaction through `session.compact`. A context that shrank by more than 40 % without one (for example after `/rewind`) still counts as compaction, not as a cold start. The idle compaction is assumed to arrive as `auto` (documented for the classic hooks); this was not reproduced, because it needs an interactive session idle for about an hour.
 - The handoff only sees the summary, your first two messages, the end of the history, the project root, the last commit and your new message. In very long chats "first" means the oldest of the newest 4,096 entries Claude Code returns. The model is told not to invent anything and to leave out what it is unsure about; gaps are possible, and open points unrelated to your new message may be left out.
 - **Maintenance hints:**
   - `/consolidate-memory` is missing in CLI sessions; the rule stays silent there.

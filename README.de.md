@@ -127,11 +127,15 @@ ruhigen Songs wiegt er sich, zu Groove und Hip-Hop schnippt er mit den Fingern, 
 zu traurigen Balladen schwenkt er ein Feuerzeug. In der Desktop-App läuft er hinter der Zeile des Bands, breite
 Limit-Balken schieben ihn also nicht mehr zur Seite.
 
+Ab und zu friert ihn ein kalter Cache oder ein neuer Chat in einen Eisklumpen ein (höchstens einmal pro Chat): Tippen
+lässt das Eis reißen, Senden bricht es auf, manchmal schmilzt es.
+
 - **Befehle:** `/clawd` (Status), `/clawd on|off`, `/clawd list`, `/clawd demo <name>`, `/clawd nap`, `/clawd boop`,
-  `/clawd language de|en`, `/clawd help`
+  `/clawd freeze`, `/clawd language de|en`, `/clawd help`
 - **Rechte kurz:** beobachtet Ereignisse und gibt sie unverändert weiter; zeichnet nur seine eigene Tabelle zu
   `/clawd help`; merkt sich an/aus und ein paar Zähler im eigenen Plugin-Speicher; liest von tune-strip, ob Musik
-  läuft, das Tempo und die Gruppe des Songs, nie den Titel. Sonst nur der [Sprachschalter](#rechte-und-vertrauen).
+  läuft, das Tempo und die Gruppe des Songs, nie den Titel; liest von sidekick nur, was er gerade tut, seine Stufe und
+  ob der Cache kalt ist. Sonst nur der [Sprachschalter](#rechte-und-vertrauen).
   Keine Dateien, kein Netzwerk, keine Modellaufrufe.
 - **Details:** [mods/clawd-buddy](mods/clawd-buddy/README.md) (englisch)
 
@@ -210,12 +214,15 @@ Nachricht oder fragt nach.
   Sonnet 5.5 oder Haiku 5.5 laufen soll. Mit `/sidekick tips auto on` (standardmäßig aus) stellt er auch eingebaute
   Subagenten und Chats, die Claude startet, um, wenn Haiku ihren Auftrag als einfach einstuft. `/savings` zeigt die
   Ersparnis als gekennzeichnete Schätzung.
+- **Korrektur-Schleife:** Bei der dritten Korrektur in Folge („geht immer noch nicht“) bietet er einen neuen Chat mit
+  einer Übergabe dessen an, was nicht geklappt hat, oder einen kurzen Anstoß an Claude, einen Schritt zurückzutreten.
+  Nach der zweiten und vierten Zusammenfassung (Compaction) eines Chats bietet er einmal einen neuen Chat an.
 
 Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unverändert raus.
 
 - **Befehle:** `/sidekick` (Status und Einstellungen), `/sidekick off|cache|guide|on`,
-  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick tips …`, `/sidekick language de|en`, `/sidekick help`,
-  `/savings [today|week|all]`, `/savings detail`
+  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick tips …`, `/sidekick loop on|off`, `/sidekick language de|en`,
+  `/sidekick help`, `/savings [today|week|all]`, `/savings detail`
 - **Rechte kurz:** liest deine Nachricht vor dem Senden; hält sie nur an oder ersetzt sie nur nach deiner Wahl im
   Dialog; Haiku 5.5 und Sonnet 5.5 über `$.model.complete` mit einer laufenden Kurzfassung, deinen letzten 3 Nachrichten und dem Ende von Claudes letzter Antwort, nie dem
   ganzen Verlauf; nur mit Gut zu wissen an eine Frage über `$.model.fork` an das Modell deiner Session über den

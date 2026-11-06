@@ -44,8 +44,8 @@ test('Hilfe: help, ?, HELP und Leerzeichen liefern Markdown mit Kennung (en); we
     expect(text, word).toMatch(/^\*\*clawd-buddy · Help\*\* · #[0-9a-z]{5,}\n\nAn animated pixel mascot above the prompt/)
     expect(text.length < 10_000, word).toBe(true)
   }
-  expect(await clawd($, 'help me')).toBe('unknown: help. Commands: on | off | list | demo <animation> | nap | boop | status | flicker | help → /clawd help')
-  expect(await clawd($, 'quatsch')).toBe('unknown: quatsch. Commands: on | off | list | demo <animation> | nap | boop | status | flicker | help → /clawd help')
+  expect(await clawd($, 'help me')).toBe('unknown: help. Commands: on | off | list | demo <animation> | nap | boop | freeze | status | flicker | help → /clawd help')
+  expect(await clawd($, 'quatsch')).toBe('unknown: quatsch. Commands: on | off | list | demo <animation> | nap | boop | freeze | status | flicker | help → /clawd help')
   // Der Status nennt help in der Kurzzeile
   expect(await clawd($, '')).toMatch(/\| flicker \| help$/)
 })
@@ -70,7 +70,7 @@ test('Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstellungen un
   for (const block of ['**BEFEHLE**', '**BEDIENUNG**', '**FUNKTIONEN:**', '**EINSTELLUNGEN (/plugin):**', 'Einstellungen ändern:'])
     expect(lines[lines.findIndex((l) => l.startsWith(block)) - 1], block).toBe('')
   // Unbekannt (de): Kurzhilfe und Verweis
-  expect(await clawd($, 'hilfe')).toBe('unbekannt: hilfe. Befehle: on | off | list | demo <animation> | nap | boop | status | flicker | help → /clawd help')
+  expect(await clawd($, 'hilfe')).toBe('unbekannt: hilfe. Befehle: on | off | list | demo <animation> | nap | boop | freeze | status | flicker | help → /clawd help')
 })
 
 test('Hilfe: Einstellungen abweichend vom Standard (Optionen) erscheinen mit ihrem Wert, ohne „(Standard)“', { options: { language: 'de', nightStart: 22, nightEnd: 7, idleSeconds: 90, reducedMotion: true, side: 'left', birthday: '' } }, async ($, on) => {

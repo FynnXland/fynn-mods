@@ -1,7 +1,7 @@
 {
   "name": "clawd-buddy",
-  "version": "0.12.1",
-  "description": "Animated pixel mascot Clawd above the prompt: reacts to Claude's work, waiting times, idle time, time of day, the mouse and a mood that builds up over the session.",
+  "version": "0.13.1",
+  "description": "Animated pixel mascot Clawd above the prompt: reacts to Claude's work, waiting times, idle time, time of day, the mouse and a mood that builds up over the session; now and then he freezes in a block of ice when the cache is cold.",
   "author": {
     "name": "Fynn Hansen"
   },

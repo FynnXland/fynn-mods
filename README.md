@@ -118,11 +118,15 @@ With [tune-strip](#tune-strip) playing, he nods on the actual beat of the song a
 sways to calm songs, snaps his fingers to groove and hip-hop, plays air guitar to hard songs and waves a lighter to sad
 ballads. In the desktop app he walks behind the row of the band, so wide limit bars don't push him aside.
 
+Now and then a cold cache or a new chat freezes him in a block of ice (at most once per chat): typing cracks it,
+sending breaks it, and sometimes it melts.
+
 - **Commands:** `/clawd` (status), `/clawd on|off`, `/clawd list`, `/clawd demo <name>`, `/clawd nap`, `/clawd boop`,
-  `/clawd language de|en`, `/clawd help`
+  `/clawd freeze`, `/clawd language de|en`, `/clawd help`
 - **Rights in short:** observes events and passes them on unchanged; draws only its own `/clawd help` table;
   remembers on/off and a few counters in its own plugin store; reads from tune-strip whether music is playing, the
-  tempo and the group of the song, never the title. Besides that only the [language switch](#rights-and-trust). No
+  tempo and the group of the song, never the title; reads from sidekick only what it does, its level and whether the
+  cache is cold. Besides that only the [language switch](#rights-and-trust). No
   files, network or model calls.
 - **Details:** [mods/clawd-buddy](mods/clawd-buddy/README.md)
 
@@ -196,12 +200,15 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
 - **Model tip:** on the first message of a chat on Opus or Fable, sidekick asks whether a simple task should run on
   Sonnet 5.5 or Haiku 5.5. With `/sidekick tips auto on` (off by default) it also switches built-in subagents and
   chats Claude starts when Haiku rates their task simple. `/savings` shows the savings as a marked estimate.
+- **Retry loop:** on the third correction in a row ("still doesn't work"), it offers a new chat with a handoff of what
+  didn't work, or a short nudge for Claude to step back. After the second and fourth compaction of a chat it offers a
+  new chat once.
 
 If a check fails or times out, your message goes through unchanged.
 
 - **Commands:** `/sidekick` (status and settings), `/sidekick off|cache|guide|on`,
-  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick tips …`, `/sidekick language de|en`, `/sidekick help`,
-  `/savings [today|week|all]`, `/savings detail`
+  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick tips …`, `/sidekick loop on|off`, `/sidekick language de|en`,
+  `/sidekick help`, `/savings [today|week|all]`, `/savings detail`
 - **Rights in short:** reads your message before it is sent; holds it back or replaces it only after your choice in
   the dialog; Haiku 5.5 and Sonnet 5.5 via `$.model.complete` with a short running summary, your last 3 messages and the end of Claude's last reply, never the whole
   history; only with Good to know on, one question via `$.model.fork` to your session's own model over the

@@ -83,7 +83,8 @@ test('Effekte überlappen sich nie (Pfeif-Noten, Funken, Herzen …) und nicht m
               // Sichtbar ist das später gezeichnete: liegt ein Effekt oben, überdeckt er etwas (Fynn: Pfeif-Noten übereinander). Ein Effekt
               // unter einem festen Gegenstand ist verdeckt (Knäuel fällt hinter den Kartonrand). Eine Hand (`hand`) liegt bewusst auf dem,
               // was sie hält.
-              if (sp.effect && !sp.hand && !os.hand) bad.push(`${c.name} Frame ${idx}: ${pr[0]} überlappt ${o[0]} bei (${x},${y})`)
+              // Ein Block hinter der Figur (`under`, Eisklumpen 0.13.0) ist Hintergrund: Glanz und Risse liegen bewusst darauf.
+              if (sp.effect && !sp.hand && !os.hand && !os.under && !sp.under) bad.push(`${c.name} Frame ${idx}: ${pr[0]} überlappt ${o[0]} bei (${x},${y})`)
             }
             cells.set(key, `${k}`)
           }
@@ -141,12 +142,18 @@ test('Jeder Clip endet in seiner Zielpose ohne liegengebliebene Gegenstände und
     if (c.cat === 'transition') continue
     const r = resolveClip(c)
     const all = [...r.intro, ...r.body, ...r.outro]
-    const usesProps = all.some((f) => f.p.props.some((x) => !propSprite(ALL_PROPS, x[0])!.effect))
+    // Gegenstände der Ausgangs- und Zielpose selbst (Eisblock der Pose `ice`, 0.13.0) gehören nicht dem Clip
+    // (verglichen nach Familie: frost_ice1 … 6 sind derselbe Block mit Glanzlicht)
+    const fam = (n: string) => n.replace(/\d+$/, '')
+    const own = new Set([...POSES[c.from].props, ...POSES[c.to].props].map((x) => fam(x[0])))
+    const usesProps = all.some((f) => f.p.props.some((x) => !propSprite(ALL_PROPS, x[0])!.effect && !own.has(fam(x[0]))))
     if (c.loop && usesProps) expect(c.outro.length, `${c.name}: Schleife mit Gegenstand braucht ein Outro`).toBeGreaterThan(0)
     const last = all[all.length - 1].p
     if (!c.loop) {
       // Begleiter-Clips enden mit dem Helfer des Subagenten (die Engine lässt ihn danach absinken)
-      const left = last.props.filter((x) => !propSprite(ALL_PROPS, x[0])!.effect && !(c.companion && x[0].startsWith('agent_s')))
+      // Gegenstände der Zielpose selbst bleiben gewollt stehen
+      const ownTo = new Set(POSES[c.to].props.map((x) => x[0]))
+      const left = last.props.filter((x) => !propSprite(ALL_PROPS, x[0])!.effect && !ownTo.has(x[0]) && !(c.companion && x[0].startsWith('agent_s')))
       expect(left.length, `${c.name}: am Ende bleibt ${left.map((x) => x[0]).join(',')} liegen`).toBe(0)
     }
   }
