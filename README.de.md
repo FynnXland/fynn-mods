@@ -9,7 +9,7 @@ Senden mitdenkt, Schnellantworten, eine Musikleiste für Spotify (Windows) und e
 [![Mods](https://img.shields.io/badge/mods-6-555)](#die-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#die-mods)
 
-[Installation](#installation) · [Die Mods](#die-mods) · [Fehlerbehebung](#fehlerbehebung) · [English](README.md) · **Deutsch**
+[Installation](#installation) · [Die Mods](#die-mods) · [Fehlerbehebung](#fehlerbehebung) · [Website](https://fynn.land/fynn-mods/) · [English](README.md) · **Deutsch**
 
 <p align="center">
   <img src="assets/hero.gif" width="790" alt="Der Prompt von Claude Code in der Desktop-App mit fünf Mods: oben eine Musik-Leiste mit einem erfundenen Titel, Cover, Positionsbalken und Knöpfen; darunter vier Antwortvorschläge mit den Nummern 1 bis 4, die Balken für das 5-Stunden- und das Wochenlimit, der Cache-Ring und der Speicher-Ring und Clawd, die Pixel-Krabbe, die auf dem Laptop tippt und vor Freude springt; in der Fußzeile die sidekick-Stufe Guide.">

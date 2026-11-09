@@ -9,7 +9,7 @@ for Spotify (Windows) and a cost ledger.**
 [![Mods](https://img.shields.io/badge/mods-6-555)](#the-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#the-mods)
 
-[Install](#installation) · [The mods](#the-mods) · [Troubleshooting](#troubleshooting) · **English** · [Deutsch](README.de.md)
+[Install](#installation) · [The mods](#the-mods) · [Troubleshooting](#troubleshooting) · [Website](https://fynn.land/fynn-mods/) · **English** · [Deutsch](README.de.md)
 
 <p align="center">
   <img src="assets/hero.gif" width="790" alt="The Claude Code prompt in the desktop app with five mods: on top a music player bar with a made-up song, cover, position bar and buttons; below it four reply suggestions numbered 1 to 4, the 5-hour and weekly limit bars, the cache ring and the storage ring, and Clawd the pixel crab typing on a laptop and jumping for joy; the sidekick level Guide sits in the prompt footer.">
