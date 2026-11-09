@@ -7,7 +7,7 @@ import { CONTROL_WORDS, SIZES, actionFor, desktopRoom, desktopStage, fmtTime, ne
 import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
 import { CONTROL_SCRIPT, PS_ABS, QUERY_SCRIPT, parseQuery, trackKey } from '../hooks/ps.ts'
 import type { Track } from '../hooks/ps.ts'
-import { DESKTOP_WIDTHS, TERMINAL_WIDTHS, clip, coverSvg, infoSvg, sepSvg } from '../hooks/view.ts'
+import { DESKTOP_WIDTHS, TERMINAL_WIDTHS, aheadOf, clip, coverSvg, infoSvg, sepSvg } from '../hooks/view.ts'
 
 // Was die Zeichnung sagt: der Text der Knoten und die Beschreibungen der Svg-Bilder (die Leiste zeichnet Titel und Zeit als Bild)
 const seen = (tree: Node): string => {
@@ -48,13 +48,20 @@ const q = (o: Partial<Record<string, unknown>> = {}, cover = false) =>
   }) + (cover ? `\r\ncover ${COVER}` : '')
 const NO_SESSION = JSON.stringify({ ok: false })
 
-type Run = { kind: 'query' | 'control' | '?'; argv: readonly string[]; env: Record<string, string> | undefined }
+type Run = { kind: 'query' | 'control' | '?'; argv: readonly string[]; env: Record<string, string> | undefined; stdin?: string }
+// Einstellungen (0.11.0): ohne Plugin-Zeilen schreibt die Mod über `claude plugin configure` (Weg 2); der Stub nimmt jeden Aufruf an
+// Ordner der Mod, wie `$.plugin.root` ihn im Test meldet: Weg 2 schreibt nur für die installierte Kopie (hooks/settings.ts)
+const MOD_ROOT = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
+const cliWrites = (runs: Run[]) => runs.filter((r) => r.argv[0] === 'claude' && r.argv[2] === 'configure' && r.argv.includes('--values-stdin')).map((r) => JSON.parse(r.stdin ?? '{}') as Record<string, string>)
 
-function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: Map<string, unknown>; inner?: 'engine' | 'text' | 'layer' | 'above' | 'slot'; cwd?: string } = {}) {
+function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: Map<string, unknown>; inner?: 'engine' | 'text' | 'layer' | 'above' | 'slot'; cwd?: string; cli?: 'refuse' | 'other' } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
+  // Aus-Standards schon gespeichert (hooks/offdefaults.ts), sonst zählten dessen claude-Aufrufe mit; eigene Tests setzen den Schlüssel selbst
+  if (!saved.has('offDefaults2')) saved.set('offDefaults2', ['extraButtons'])
   const runs: Run[] = []
-  const state = { out: o.out ?? q({}, true), ctl: o.ctl ?? 'ok', deny: !!o.deny, renders: 0 }
+  // `live`: die Abfrage meldet eine Position, die mit der Uhr weiterläuft (ab `pos` zur Zeit NOW), wie Spotify beim Abspielen
+  const state = { out: o.out ?? q({}, true), ctl: o.ctl ?? 'ok', deny: !!o.deny, renders: 0, live: null as null | ((pos: number) => string), livePos: 10 }
   on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
     saved.set(e.key, e.value)
@@ -68,10 +75,13 @@ function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: 
   const cwd = o.cwd ?? 'C:\\work'
   on('session.start', () => ({ cwd }))
   on('process.run', ($, e) => {
+    if (state.live) state.out = state.live(state.livePos + (clock.now() - NOW) / 1000)
     const script = e.argv[e.argv.length - 1]
     const kind = script === QUERY_SCRIPT ? 'query' : script === CONTROL_SCRIPT ? 'control' : '?'
-    runs.push({ kind, argv: e.argv, env: e.init?.env as Record<string, string> | undefined })
+    runs.push({ kind, argv: e.argv, env: e.init?.env as Record<string, string> | undefined, ...(e.init?.stdin === undefined ? {} : { stdin: e.init.stdin }) })
     if (state.deny) return { deny: 'kaputt' }
+    if (e.argv.join(' ') === 'claude plugin list --json') return { value: { exitCode: 0, stdout: JSON.stringify([{ id: 'tune-strip@fynn-mods', enabled: true, installPath: o.cli === 'other' ? 'C:/anderswo' : MOD_ROOT }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (o.cli === 'refuse' && e.argv[2] === 'configure') return { value: { exitCode: 1, stdout: JSON.stringify({ refused: { message: 'Size: nope' } }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     // Das Steuer-Skript liest danach im selben Prozess: erste Zeile das Ergebnis, dann die Zeilen der Abfrage
     const reads = kind === 'control' && (state.ctl === 'ok' || state.ctl === 'fail')
     const stdout = kind === 'query' ? state.out : reads ? `${state.ctl}\r\n${state.out}` : state.ctl
@@ -449,7 +459,7 @@ test('Stufen im Desktop: fest gewählt per /tune size; auto ohne bekannte Breite
   }
   expect(await k()).toContain('layer:40:tune-strip')
   await $.command.run({ command: 'tune', args: 'size compact' } as never)
-  expect(w.saved.get('settings')).toEqual({ size: 'compact', enabled: true })
+  expect(cliWrites(w.runs).at(-1)).toEqual({ size: 'compact' })
   let keys = await k()
   expect(keys).toContain('toggle')
   expect(keys).not.toContain('back')
@@ -567,10 +577,114 @@ test('Zurück: über 3 s an den Anfang, dann zum vorigen Titel; `/tune prev` geh
   expect(ctl().at(-1)?.env?.SP_CMD).toBe('prev')
 })
 
-test('Zeichnen: Zeit und Balken höchstens alle 5 s neu, nicht jede Sekunde', DE, async ($, on) => {
-  const w = world(on, { inner: 'text' })
+test('0.10.0 A: ohne Spotify-Sitzung fragt das Zeichnen nur einmal ab und zeichnet höchstens einmal neu (keine Schleife)', DE, async ($, on) => {
+  const w = world(on, { out: NO_SESSION, inner: 'text' })
   await w.start($)
   const ui = await $.ui.mount(band('desktop', 120))
+  await ui.drawn()
+  for (let i = 0; i < 19; i++) await ui.redraw() // 20 Zeichnungen in Folge, ohne dass der Takt läuft
+  await w.clock.settle()
+  expect(w.count('query')).toBe(1)
+  expect(w.state.renders - 20).toBeLessThanOrEqual(1) // höchstens ein eigenes Neuzeichnen
+  // Spotify startet: der Takt (ohne Sitzung alle 15 s) findet den Titel, die Leiste erscheint mit genau einem Neuzeichnen
+  w.state.out = q({}, true)
+  const before = w.state.renders
+  await w.clock.advance(16000)
+  await w.clock.settle()
+  expect(w.state.renders - before).toBe(1)
+  expect(keysOf((await ui.drawn()) as Node)).toContain('layer:40:tune-strip')
+  await ui.unmount()
+})
+
+// Zeichnen wie im echten Band: andere Mods (Clawd ≈ 13/min) zeichnen das Band laufend; jede Zeichnung läuft durch tune-strip.
+// Gezählt werden nur die Zeichnungen, die tune-strip selbst anfordert.
+function ownDraws(w: ReturnType<typeof world>, ui: { redraw: () => Promise<void> }) {
+  return async (seconds: number, othersEvery = 5) => {
+    const before = w.state.renders
+    let others = 0
+    const step = othersEvery > 0 ? othersEvery : seconds
+    for (let t = 0; t < seconds; t += step) {
+      await w.clock.advance(Math.min(step, seconds - t) * 1000)
+      await w.clock.settle()
+      if (othersEvery > 0) {
+        await ui.redraw()
+        others += 1
+      }
+    }
+    return w.state.renders - before - others
+  }
+}
+
+test('0.10.0 B: beim Abspielen ohne Änderung kein eigenes Neuzeichnen über 60 Takte; Sprung > 1,5 s und Titelwechsel je genau eins', DE, async ($, on) => {
+  const w = world(on, { inner: 'text' })
+  w.state.live = (pos) => q({ pos }, true)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop', 120))
+  expect(seen((await ui.drawn()) as Node)).toContain('Hey Jude')
+  await w.clock.settle()
+  const own = ownDraws(w, ui)
+  const queries = w.count('query')
+  expect(await own(60)).toBe(0)
+  expect(w.count('query') - queries).toBeGreaterThanOrEqual(14) // abgefragt wird weiter alle 4 s
+  w.state.livePos += 30 // in Spotify 30 s vorgespult
+  expect(await own(10)).toBe(1)
+  w.state.livePos += 1 // 1 s Abweichung (z. B. Laufzeit der Abfrage): kein Sprung
+  expect(await own(10)).toBe(0)
+  w.state.live = (pos) => q({ title: 'Let It Be', pos }, true)
+  expect(await own(10)).toBe(1)
+  expect(seen((await ui.drawn()) as Node)).toContain('Let It Be')
+  w.state.live = (pos) => q({ title: 'Let It Be', pos, status: 'Paused' }, true)
+  expect(await own(10)).toBe(1) // Pause zeigt sich sofort
+  expect(await own(60)).toBe(0) // und dann steht alles
+  await ui.unmount()
+})
+
+// Jede Zeichnung baut die Voranimation ab der aktuellen Position neu; ohne andere Zeichnungen kommt vorher das Lebenszeichen (20 s).
+// Das Neuzeichnen am Ende einer gekappten Voranimation (register.ts tick) ist damit nur noch eine Absicherung.
+test('0.10.0 B: Titel über 60 min – die Leiste zählt über die 60 min hinaus weiter, ohne eigenes Neuzeichnen', DE, async ($, on) => {
+  const w = world(on, { inner: 'text' })
+  w.state.live = (pos) => q({ pos, end: 7200 }, true)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop', 120))
+  await ui.drawn()
+  await w.clock.settle()
+  const own = ownDraws(w, ui)
+  expect(await own(3700, 15)).toBe(0) // andere Mods zeichnen alle 15 s (unter dem Lebenszeichen von 20 s)
+  const info = walk((await ui.drawn()) as Node).find((n) => n && typeof n === 'object' && n.type === 'Svg' && String(n.props?.source).includes('/ 2:00:00'))
+  expect(String((info as { props: { alt: string } }).props.alt)).toContain('1:01:') // ab 0:10 + 3700 s = 1:01:50, neu vorausgerechnet
+  await ui.unmount()
+})
+
+test('0.10.0: Lebenszeichen – zeichnet niemand, zeichnet tune-strip selbst (beim Abspielen nach 20 s, sonst nach 2 min); verdeckt hält der Takt an', DE, async ($, on) => {
+  const w = world(on, { inner: 'text' })
+  w.state.live = (pos) => q({ pos }, true)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop', 120))
+  await ui.drawn()
+  await w.clock.settle()
+  const own = ownDraws(w, ui)
+  expect(await own(19, 0)).toBe(0)
+  expect(await own(2, 0)).toBe(1) // 20 s ohne Zeichnung beim Abspielen
+  w.state.live = (pos) => q({ pos, status: 'Paused' }, true)
+  expect(await own(10, 0)).toBe(1) // die Pause (Änderung)
+  expect(await own(100, 0)).toBe(0)
+  expect(await own(20, 0)).toBe(1) // 2 min ohne Zeichnung, nichts spielt
+  // Verdeckt: das Lebenszeichen bleibt unbeantwortet, nach RENDER_GRACE hält der Takt an
+  w.state.live = (pos) => q({ pos }, true)
+  await ui.unmount()
+  await w.clock.advance(30000)
+  await w.clock.settle()
+  const n = w.count('query')
+  await w.clock.advance(60000)
+  await w.clock.settle()
+  expect(w.count('query')).toBe(n)
+})
+
+test('Terminal: die Zeit ist Text und wird beim Abspielen höchstens alle 5 s neu gezeichnet, nicht jede Sekunde', DE, async ($, on) => {
+  const w = world(on, { inner: 'text' })
+  w.state.live = (pos) => q({ pos }, true)
+  await w.start($, 'terminal')
+  const ui = await $.ui.mount(band('terminal', 120))
   await w.clock.advance(1000)
   await w.clock.settle()
   const early = w.state.renders
@@ -602,7 +716,7 @@ test('/tune: Antworten, Spulen aus dem letzten Stand, Fehler', DE, async ($, on)
   // Steuern geht auch bei ausgeblendetem Band
   w.state.ctl = 'ok'
   await run('off')
-  expect(w.saved.get('settings')).toMatchObject({ enabled: false })
+  expect(cliWrites(w.runs).at(-1)).toEqual({ size: 'off' })
   const before = w.count('control')
   await run('toggle')
   expect(w.count('control')).toBe(before + 1)
@@ -739,32 +853,103 @@ test('Leiste: Segmentbalken wie bei limit-bars (44 × 3 px mit 1 px Fuge), Titel
   expect(sepSvg().length).toBeLessThan(1000)
 })
 
-test('Leiste: beim Abspielen läuft die Zeit per SMIL jede Sekunde weiter (Voranimation), Pause und Ende ohne Animation', () => {
+// Wert eines <animate> (calcMode discrete, fill freeze) zur Dokumentzeit t, wie SMIL ihn rechnet; undefined vor dem Beginn
+function animValue(attrs: string, t: number): string | undefined {
+  const get = (k: string) => new RegExp(`${k}="([^"]*)"`).exec(attrs)?.[1]
+  const sec = (v: string | undefined) => (v ? parseFloat(v) : 0)
+  const begin = sec(get('begin'))
+  const dur = sec(get('dur'))
+  const repeat = get('repeatCount') === 'indefinite'
+  const active = get('repeatDur') ? sec(get('repeatDur')) : repeat ? Infinity : dur
+  const local = t - begin
+  if (local < 0) return undefined
+  let st: number
+  if (local >= active) {
+    st = active % dur // eingefroren: der Wert am Ende der aktiven Dauer
+    if (st === 0) st = dur
+  } else st = repeat ? local % dur : local
+  const keys = (get('keyTimes') ?? '0').split(';').map(Number)
+  const vals = (get('values') ?? '').split(';')
+  let i = 0
+  for (let k = 0; k < keys.length; k++) if (keys[k]! <= st / dur + 1e-9) i = k
+  return vals[i]
+}
+
+/**
+ * Was die Zeitangabe der Leiste zur Zeit t (Sekunden nach dem Zeichnen) zeigt: alle sichtbaren Spalten übereinandergelegt. Ein
+ * unsichtbarer Vorsatz zählt als Spalten; schreiben zwei sichtbare Angaben in dieselbe Spalte, steht dort „!“.
+ */
+function timeAt(svg: string, t: number, raw = false): string {
+  const cols: string[] = []
+  for (const m of svg.matchAll(/<text x="184" y="28"([^>]*)>(.*?)<\/text>/g)) {
+    const an = /<animate ([^>]*)\/>/.exec(m[2]!)
+    const vis = (an ? animValue(an[1]!, t) : undefined) ?? /visibility="(\w+)"/.exec(m[1]!)?.[1] ?? 'visible'
+    if (vis !== 'visible') continue
+    let col = 0
+    for (const s of m[2]!.matchAll(/<tspan([^>]*)>([^<]*)<\/tspan>/g)) {
+      const chars = [...s[2]!]
+      if (s[1]!.includes('fill-opacity="0"')) {
+        col += chars.length
+        continue
+      }
+      for (const c of chars) {
+        cols[col] = cols[col] === undefined ? c : '!'
+        col += 1
+      }
+    }
+  }
+  const all = Array.from(cols, (c) => c ?? ' ').join('')
+  return raw ? all : all.trim()
+}
+
+test('Leiste: beim Abspielen läuft die Zeit per SMIL jede Sekunde weiter, bis zum Titelende (0.10.0); Pause ohne Animation', () => {
   const still = infoSvg('T', 'A', 50.25, 200)
   expect(still).not.toContain('<animate') // Pause: nichts bewegt sich
+  expect(timeAt(still, 30)).toBe('0:50 / 3:20')
   const run = infoSvg('T', 'A', 50.25, 200, true)
-  // 15 s Vorlauf: 16 Zeitangaben, 0:50 sichtbar, 1:05 zuletzt
-  for (const s of ['0:50', '0:51', '0:52', '1:04', '1:05']) expect(run).toContain(`>${s}</tspan>`)
-  expect(run).not.toContain('>1:06</tspan>')
-  expect((run.match(/y="28"/g) ?? []).length).toBe(16)
   expect(run).toContain('begin="-0.250s"') // die laufende Sekunde hat schon 0,25 s hinter sich
-  expect(run).toContain('dur="16s"')
-  // erste Angabe sichtbar bis 1 − 0,25 s, letzte bleibt stehen
-  expect(run).toContain('values="visible;hidden" keyTimes="0;0.0625"')
-  expect(run).toContain('values="hidden;visible" keyTimes="0;0.9375"')
-  // Segmente: bei 25 % (11 an) wird Segment 11 bei (11,5/44)·200 = 52,27 s grün, also in 2,02 s; jedes weitere 4,545 s später
+  // Jede Sekunde bis zum Ende, je in der Mitte der Sekunde: Sekunde s gilt ab s − 50,25 s
+  for (let s = 50; s <= 200; s++) expect(timeAt(run, s - 50.25 + 0.5)).toBe(`${fmtTime(s)} / 3:20`)
+  expect(timeAt(run, 9.7)).toBe('0:59 / 3:20') // kurz vor dem Sprung auf die volle Minute
+  expect(timeAt(run, 9.8)).toBe('1:00 / 3:20')
+  expect(timeAt(run, 148.9)).toBe('3:19 / 3:20') // letzte Sekunde vor der Länge
+  expect(timeAt(run, 2000)).toBe('3:20 / 3:20') // die Länge bleibt stehen
+  // Segmente bis zum Ende: Segment 11 bei (11,5/44)·200 − 50,25 = 2,02 s, das letzte (43) bei 147,48 s
   expect(run).toContain('begin="2.023s"')
-  expect(run).toContain('begin="6.568s"')
-  expect(run).not.toContain('begin="17')
-  // kurz vor dem Ende: nur so viele Zeitangaben, wie es noch ganze Sekunden gibt
-  const endSvg = infoSvg('T', 'A', 198.5, 200, true)
-  expect((endSvg.match(/y="28"/g) ?? []).length).toBe(3) // 3:18, 3:19, 3:20
-  expect(endSvg).not.toContain('3:21')
+  expect(run).toContain('begin="147.477s"')
+  expect((run.match(/attributeName="fill"/g) ?? []).length).toBe(44 - 11)
+})
+
+test('Leiste 0.10.0: Ziffernspalten über 9:59 → 10:00 und 59:59 → 1:00:00, kürzere Angaben rechtsbündig', () => {
+  // Bruchteile über ½ (die laufende Sekunde ist fast um): im Browser blieb die Zeit sonst am Ende eine Sekunde zu weit stehen (11:41)
+  for (const p of [598.5, 598.8, 598.05]) {
+    const ten = infoSvg('T', 'A', p, 700, true)
+    for (let s = 598; s <= 700; s++) expect(timeAt(ten, Math.max(0.02, s - p + 0.5))).toBe(`${fmtTime(s)} / 11:40`)
+    for (const t of [102, 150, 500]) expect(timeAt(ten, t)).toBe('11:40 / 11:40')
+    // Die Spalten liegen fest: „9:59“ steht rechtsbündig unter „10:00“, die Länge rückt nicht
+    expect(timeAt(ten, 599.6 - p, true)).toBe(' 9:59 / 11:40')
+    expect(timeAt(ten, 600.6 - p, true)).toBe('10:00 / 11:40')
+  }
+  const hour = infoSvg('T', 'A', 3595.7, 3700, true)
+  for (let s = 3595; s <= 3700; s++) expect(timeAt(hour, Math.max(0.02, s - 3595.7 + 0.5))).toBe(`${fmtTime(s)} / 1:01:40`)
+  expect(timeAt(hour, 400)).toBe('1:01:40 / 1:01:40')
+})
+
+test('Leiste 0.10.0: lange Titel nur 60 min voraus, ohne Länge läuft die Zeit, Größe der Quelle', () => {
+  expect(aheadOf(10, 7200)).toEqual({ first: 10, last: 3610, capped: true })
+  expect(aheadOf(50.25, 200)).toEqual({ first: 50, last: 200, capped: false })
+  const long = infoSvg('T', 'A', 10, 7200, true)
+  expect(timeAt(long, 3600.5)).toBe('1:00:10 / 2:00:00')
+  expect(timeAt(long, 5000)).toBe('1:00:10 / 2:00:00') // steht, bis neu gezeichnet wird
   // Länge unbekannt: Zeit läuft trotzdem, der Balken bleibt leer
   const open = infoSvg('T', 'A', 5, 0, true)
-  expect((open.match(/y="28"/g) ?? []).length).toBe(16)
-  expect(open).not.toContain('fill="freeze" values="#4A4A4A')
-  expect(run.length).toBeLessThan(20000)
+  expect(timeAt(open, 10.5)).toBe('0:15 / 0:00')
+  expect(open).not.toContain('values="#4A4A4A')
+  // Svg.source ≤ 131 072 Zeichen (types:13397), Ziel unter 40 kB
+  for (const end of [180, 600, 3600, 7200]) {
+    const svg = infoSvg('Ein sehr langer Titel mit Sonderzeichen <&>', 'Interpret', 0, end, true)
+    expect(svg.length).toBeLessThan(40000)
+  }
 })
 
 test('Leiste: Hinweis je Knopf beim Überfahren (Hover-Gruppe), Absatz vor Zufall/Wiederholen, Trennlinie nur mit Mods darunter', DE_EXTRA, async ($, on) => {
@@ -857,14 +1042,17 @@ for (const gap of ['null', 'abgelehnt'] as const) {
       return { value: { value: e.plugin === 'quick-replies' && mode === 'shown' ? { shown: true } : undefined, version: 1 } } as never
     })
     on('state.set', () => ({ value: { isSet: true, version: 1 } }) as never)
+    w.state.live = (pos) => q({ pos }, true)
     await w.start($)
     const ui = await $.ui.mount(band('desktop', 120))
     expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
+    // Ein Schreiben von quick-replies.band oder eine Ebene von sidekick zeichnet das Band neu (Lesen abonniert): hier ui.redraw()
     // sidekick schließt, der Turn beginnt: quick-replies meldet kurz nichts
     o.inner = 'text'
     mode = gap
     const before = w.state.renders
-    await w.clock.advance(5000) // Neuzeichnen der Zeit (POS_REDRAW)
+    await w.clock.advance(5000)
+    await ui.redraw()
     expect(w.state.renders).toBeGreaterThan(before)
     expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
     // sidekick öffnet wieder, die Pille ist zurück, bevor die Haltezeit endet
@@ -872,9 +1060,11 @@ for (const gap of ['null', 'abgelehnt'] as const) {
     mode = 'shown'
     for (let i = 0; i < 4; i++) {
       await w.clock.advance(1000)
+      await ui.redraw()
       expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
     }
     await w.clock.advance(10000)
+    await ui.redraw()
     expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
     await ui.unmount()
   })
@@ -886,11 +1076,13 @@ test('Trennlinie 0.9.0: steht wirklich nichts mehr darunter, geht die Linie nach
   let shown = true
   on('state.get', ($: unknown, e: any) => ({ value: { value: e.plugin === 'quick-replies' && shown ? { shown: true } : undefined, version: 1 } }) as never)
   on('state.set', () => ({ value: { isSet: true, version: 1 } }) as never)
+  w.state.live = (pos) => q({ pos }, true)
   await w.start($)
   const ui = await $.ui.mount(band('desktop', 120))
   expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
   shown = false
-  await w.clock.advance(5000) // erstes Zeichnen ohne etwas darunter: die Linie bleibt noch
+  await w.clock.advance(5000)
+  await ui.redraw() // erstes Zeichnen ohne etwas darunter (quick-replies schreibt null): die Linie bleibt noch
   expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
   await w.clock.advance(1000)
   expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
@@ -899,6 +1091,7 @@ test('Trennlinie 0.9.0: steht wirklich nichts mehr darunter, geht die Linie nach
   // kommt wieder etwas darunter, steht sie beim nächsten Zeichnen sofort
   shown = true
   await w.clock.advance(5000)
+  await ui.redraw()
   expect(seen((await ui.drawn()) as Node)).toContain('Trennlinie')
   await ui.unmount()
 })
@@ -1040,10 +1233,53 @@ test('0.5.0 language: kommt vor allem anderen an, auch außerhalb von Windows; k
   const queries = w.count('query')
   const text = (await $.command.run({ command: 'tune', args: 'LANGUAGE de' } as never)).text as string
   expect(lists).toBe(1)
-  expect(text).toContain('Hier zeigt Claude Code keine Plugin-Einstellungen')
-  // Ohne Plugin-Zeilen versucht es `claude plugin` (Weg 2, LANGUAGE-SPEC §10); der Stub hier liefert kein JSON
-  expect(text).toContain('`/tune language de`')
+  // Ohne Plugin-Zeilen geht es über `claude plugin` (Weg 2, LANGUAGE-SPEC §10); der Stub meldet tune-strip installiert (0.11.0)
+  expect(text).toContain('tune-strip: de')
   expect(text).not.toContain('nur unter Windows')
   expect(w.count('query')).toBe(queries)
   expect(w.count('control')).toBe(0)
+})
+
+test('0.11.0 Umzug: alter Store-Wert (aus, mini, Takt aus, Versatz) → size off, beat, beatOffset; lastSize bleibt; /tune on stellt mini her', DE, async ($, on) => {
+  const saved = new Map<string, unknown>([['settings', { size: 'mini', enabled: false, beat: false, offset: 50 }]])
+  const w = world(on, { saved })
+  await w.start($)
+  await w.clock.advance(10)
+  expect(cliWrites(w.runs)).toEqual([{ size: 'off', beat: 'false', beatOffset: '50' }])
+  // Markiert statt geleert (0.11.2, sidekick 0.23.0 Review S1): ein Chat mit 0.10.x liest die echten Werte weiter
+  expect(saved.get('settings')).toEqual({ size: 'mini', enabled: false, beat: false, offset: 50, migrated: true })
+  // Zweiter Start: markiert, kein zweiter Umzug (Review K2)
+  await w.start($)
+  expect(cliWrites(w.runs).length).toBe(1)
+  expect(saved.get('lastSize')).toBe('mini')
+  const r = (await $.command.run({ command: 'tune', args: 'on' } as never)) as { text: string }
+  expect(r.text).toContain('Gespeichert')
+  expect(cliWrites(w.runs).at(-1)).toEqual({ size: 'mini' })
+})
+
+test('0.11.0 Einstellungen aus userConfig: size off blendet aus, Hilfe zeigt alle Felder in der Reihenfolge von plugin.json', { options: { language: 'de', size: 'off', beat: false, beatOffset: -40 } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const help = String(((await $.command.run({ command: 'tune', args: 'help' } as never)) as { text: string }).text)
+  expect(help).toContain('Größe off · Mehr Knöpfe aus (Standard) · Takt für Clawd aus · Takt-Verzögerung (ms) -40 · Abfrage alle (s) 4 (Standard) · Sprache de')
+  expect(w.runs.filter((r) => r.argv[0] === 'claude' && r.argv[2] === 'configure')).toEqual([])
+})
+
+test('0.11.0 Schreiben abgelehnt: Meldung, Größe bleibt', { options: { language: 'de', size: 'mini' } }, async ($, on) => {
+  const w = world(on, { cli: 'refuse' })
+  await w.start($)
+  const r = (await $.command.run({ command: 'tune', args: 'size full' } as never)) as { text: string }
+  expect(r.text).toBe('Nicht gespeichert: Size: nope.')
+  expect(String(((await $.command.run({ command: 'tune', args: 'help' } as never)) as { text: string }).text)).toContain('Größe mini')
+})
+
+test('0.11.0 Sperre: fremde Kopie schreibt nichts; alter Store-Wert gilt nur in dieser Session und bleibt', DE, async ($, on) => {
+  const saved = new Map<string, unknown>([['settings', { beat: false }]])
+  const w = world(on, { saved, cli: 'other' })
+  await w.start($)
+  await w.clock.advance(10)
+  expect(cliWrites(w.runs)).toEqual([])
+  expect(saved.get('settings')).toEqual({ beat: false })
+  const r = (await $.command.run({ command: 'tune', args: 'beat on' } as never)) as { text: string }
+  expect(r.text).toMatch(/^Nicht gespeichert: diese Kopie ist aus einem anderen Ordner geladen/)
 })

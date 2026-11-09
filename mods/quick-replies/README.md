@@ -4,7 +4,7 @@ After Claude answers, Claude Code often suggests your next message itself (the g
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.318** · Plugin version **0.6.2**
+Tested with Claude Code **v2.1.319** · Plugin version **0.7.5**
 
 ## Display
 
@@ -43,24 +43,27 @@ The fork only runs after a normal answer of at least 40 characters, not for suba
 | Command | Effect |
 |---|---|
 | `/replies` or `/replies status` | On/off, `more` on/off, the current suggestions with their source, fork state, the fork calls in this chat with their estimated cost, how often Claude Code supplied a suggestion in this session, surface, band width, layout and position in the band |
-| `/replies on` · `/replies off` | Turn the mod on or off |
-| `/replies more on` · `/replies more off` | Turn the extra fork suggestions on or off |
+| `/replies on` · `/replies off` | Turn the suggestions on or off (setting `enabled`) |
+| `/replies more on` · `/replies more off` | Turn the extra fork suggestions on or off (setting `more`) |
 | `/replies language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.6.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/replies help` | Help as a table: all commands, how to send a suggestion (click, key, lone digit), the current state of the suggestions and the fork, and your settings with their values, plus how to change them and how to turn the mod off. Also `/replies ?` |
 
 **Help:** `/replies help` draws a table in the terminal and the desktop app (accent violet, the theme's auto-accept color, so it adapts to light and dark), with the state as of the moment you ran it; run it again to see a change. Everywhere else (`claude -p`, the Agent SDK, VS Code, mobile) you get a short Markdown version, which is also what Claude reads. Unknown arguments answer with the usage line and a pointer to `/replies help`.
 
-`on`/`off` and `more on|off` are saved in the mod's plugin store, so they apply in all projects and sessions. Every session rereads them after each answer, so a change takes effect everywhere from the next answer on. They override the `userConfig` defaults.
+Since 0.7.0 the commands and the settings page change the same settings. `on`/`off` and `more on|off` save the field in your user settings (`pluginConfigs`). In a terminal session they apply at once (Claude Code reloads the mod). In the desktop app and `claude -p` they apply in the current chat at once and in other open chats after `/reload-plugins` or in the next chat. Values saved by earlier versions in the plugin store are moved over once at the next start. After an update, run `/reload-plugins` in chats that are already open; until then they keep running the old version with its old values.
+
+Known issue: the desktop settings page may show switches that were never saved as on, even when their default is off, and saving the page then turns them on. This plugin stores its off defaults once at the first start, so the page shows them correctly.
 
 ## Configuration
 
-`/config` → quick-replies:
+Desktop app: **Settings → Plugins → quick-replies → Settings**. Terminal: `/config` → quick-replies, or `/plugin configure quick-replies`.
 
-| Key | Title in `/config` | Meaning | Default |
-|---|---|---|---|
-| `language` | Language / Sprache | Language of the mod's texts and of the fork's suggestions: `en` English, `de` German | `en` |
-| `more` | More suggestions via fork | Besides Claude Code's suggestion, ask a fork of the session for suggestions after every answer, up to four in total; Claude Code's own stays first. Costs roughly one short answer per answer, mostly from the cache. `/replies more on\|off` overrides it for all sessions | off |
-| `layout` | Layout | `auto`: 2 × 2 if the labels fit, otherwise one per row. `grid`: always 2 × 2. `list`: always one per row | `auto` |
+| Key | Title | Meaning | Default | Command |
+|---|---|---|---|---|
+| `enabled` | Show suggestions | The suggestion pill above Clawd | on | `/replies on\|off` |
+| `more` | More suggestions | After each answer a fork of the session adds suggestions, up to four buttons; Claude Code's own stays first. Costs roughly one short answer per answer, mostly from the cache | off | `/replies more on\|off` |
+| `layout` | Layout | `auto`: 2 × 2 if the labels fit, otherwise one per row. `grid`: always 2 × 2. `list`: always one per row | `auto` | – |
+| `language` | Language / Sprache | Language of the mod's texts and of the fork's suggestions: `en` English, `de` German | `en` | `/replies language de\|en` |
 
 ### Language
 
@@ -90,12 +93,12 @@ In plain language:
 - `$.clock.every`: one-shot timers to start the fork outside the hook and for the 2-s quiet period after input.
 - `$.session.id`: suggestions per session; detects `/clear`.
 - `$.state.set` (`quick-replies.band`, since 0.6.2): tells tune-strip only whether the suggestion pill is up (`{ shown: true }` or null), so tune-strip knows whether to draw its separator line. No suggestion text. Written outside drawing, only on change.
-- `$.store.get`, `$.store.set`: the on/off settings.
-- `$.config.list`, `$.config.set`: only for `/replies language` (since 0.6.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone.
-- `$.process.run`: for `/replies language` in the desktop app and `claude -p` (since 0.6.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `quick-replies@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `quick-replies@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
+- `$.store.get`, `$.store.set`: only to move the on/off values saved before 0.7.0 into the settings once; the old entry is then marked as moved (kept for chats still on the old version). Since this version also the key `offDefaults2`: which off switches were already saved as `false` (see the known issue under the settings).
+- `$.config.list`, `$.config.set`: for `/replies language` (since 0.6.0), which changes nothing but the `language` field of the six fynn-mods, and since 0.7.0 for `/replies on|off|more`, which change only quick-replies' own fields. Other plugins are left alone.
+- `$.process.run`: in the desktop app and `claude -p`, for `/replies language` (since 0.6.1) and for quick-replies' own fields (since 0.7.0: `claude plugin configure quick-replies@fynn-mods --values-stdin --json`), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"` for the six fynn-mods, and with this mod's own fields for this mod only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `quick-replies@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `quick-replies@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod. Since 0.7.5 a settings command reads the value back after saving; if another mod overwrote it at the same moment, it saves once more, otherwise it answers “Not saved”. Once per new off switch (store key `offDefaults2`), the installed copy also reads its own unset fields with `claude plugin configure <mod>@fynn-mods --json` and saves those whose default is off as `false` (see the known issue under the settings). Settings commands save through `claude plugin configure` only when this is the installed copy (its folder is the `readFromFolder` or `installPath` that `claude plugin list` reports); a copy loaded with `--plugin-dir` answers “Not saved: this copy is loaded from another folder …” and changes nothing.
 - `$.ui.resolve`, `$.ui.invalidate`: draw and redraw the pill. `$.ui.toast`: message when sending fails. `$.ui.log`: errors to the debug log.
 
-No file system, no network, no environment variables, no tokens or credentials. The only process is the `claude` CLI (`claude plugin list` / `claude plugin configure`) for `/replies language` in the desktop app and `claude -p`. Every event hook passes the result of the chain on unchanged; errors in its own drawing leave the band as it was.
+No file system, no network, no environment variables, no tokens or credentials. The only process is the `claude` CLI (`claude plugin list` / `claude plugin configure`) for the settings commands in the desktop app and `claude -p`. Every event hook passes the result of the chain on unchanged; errors in its own drawing leave the band as it was.
 
 ## Installation
 
@@ -124,7 +127,7 @@ claude --plugin-dir <path-to-clone>/mods/quick-replies
 ## Known limitations
 
 - **No suggestion, no pill.** Claude Code does not always provide a suggestion (for example on the first turn or with a cold cache). Then there is no pill, unless `more` is on and the fork delivers something. `/replies status` shows how often Claude Code supplied one in this session.
-- **After the mod reloads** (`/replies language`, a settings change in `/config`): the current suggestions and a running fork are dropped (the pill is back with the next answer), and the fork calls, their cost and the Claude Code suggestion count in `/replies status` start over. Earlier `/replies help` tables may show as plain text when redrawn. `/replies on|off` and `more on|off` are kept.
+- **After the mod reloads** (`/replies language`, a settings change in `/config`): the current suggestions and a running fork are dropped (the pill is back with the next answer), and the fork calls, their cost and the Claude Code suggestion count in `/replies status` start over. Earlier `/replies help` tables may show as plain text when redrawn. Settings are kept.
 - **Language switch and the command description:** after changing `language` in `/config`, the `/replies` output and the toast switch right away; the description of `/replies` in the command list may only switch in the next session.
 - **Messages starting with a digit:** while the pill shows, a message cannot start with a digit from `1` to the number of suggestions; typing it sends the suggestion instead. This also applies to the same digit repeated, whether a held key repeats it or `11` is pasted. A digit after other text, a higher digit, or a digit pasted together with other characters (`12`) stays normal text. Likewise, a message that is only such a digit (or repeated digit) is sent as the suggestion, not as the digit; this also applies when Claude offered numbered options in its answer. Write `1.` or `option 1` to send the number itself.
 - **Same digit right after sending:** after a digit has sent a suggestion, the same digit is ignored as the first character of the prompt until about 1.2 s after its last repeat, so a held key does not fill the prompt. The delay is chosen for the longest key-repeat delay Windows offers (1 s); with a longer delay on another system, a repeat may still land in the prompt.

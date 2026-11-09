@@ -1,36 +1,28 @@
 {
   "name": "clawd-buddy",
-  "version": "0.13.1",
-  "description": "Animated pixel mascot Clawd above the prompt: reacts to Claude's work, waiting times, idle time, time of day, the mouse and a mood that builds up over the session; now and then he freezes in a block of ice when the cache is cold.",
+  "version": "0.14.5",
+  "description": "Clawd, an animated pixel mascot above the prompt. He reacts to what Claude is doing and keeps you company while you wait.",
   "author": {
     "name": "Fynn Hansen"
   },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
-    "nightStart": {
-      "type": "number",
-      "title": "Night starts (hour)",
-      "description": "From this hour (0 to 23) he gets tired when idle and falls asleep.",
-      "default": 23,
-      "min": 0,
-      "max": 23
+    "enabled": {
+      "type": "boolean",
+      "title": "Show Clawd",
+      "description": "Off hides Clawd. Also /clawd on|off.",
+      "default": true
     },
-    "nightEnd": {
-      "type": "number",
-      "title": "Night ends (hour)",
-      "description": "Night time lasts until this hour (0 to 23). If it is before the start, the night spans midnight.",
-      "default": 6,
-      "min": 0,
-      "max": 23
-    },
-    "idleSeconds": {
-      "type": "number",
-      "title": "Idle time before pastimes (seconds)",
-      "description": "How long without activity before he passes the time.",
-      "default": 45,
-      "min": 10,
-      "max": 600
+    "side": {
+      "type": "string",
+      "title": "Side",
+      "description": "Where Clawd stands above the prompt.",
+      "default": "right",
+      "options": [
+        "right",
+        "left"
+      ]
     },
     "reducedMotion": {
       "type": "boolean",
@@ -38,26 +30,46 @@
       "description": "Only the base pose and calm variants, no pastimes.",
       "default": false
     },
-    "side": {
-      "type": "string",
-      "title": "Position in the band",
-      "description": "Right or left above the prompt.",
-      "default": "right",
-      "options": [
-        "right",
-        "left"
-      ]
+    "idleSeconds": {
+      "type": "number",
+      "title": "Idle time before pastimes (s)",
+      "description": "Seconds without activity before Clawd starts passing the time.",
+      "default": 45,
+      "min": 10,
+      "max": 600
+    },
+    "nightStart": {
+      "type": "number",
+      "title": "Night starts (hour)",
+      "description": "From this hour Clawd gets sleepy when idle.",
+      "default": 23,
+      "min": 0,
+      "max": 23
+    },
+    "nightEnd": {
+      "type": "number",
+      "title": "Night ends (hour)",
+      "description": "If it is earlier than the start, the night runs past midnight.",
+      "default": 6,
+      "min": 0,
+      "max": 23
+    },
+    "iceWhenCold": {
+      "type": "boolean",
+      "title": "Ice when the cache is cold",
+      "description": "Now and then Clawd freezes in a block of ice while the prompt cache is cold. Typing cracks it, sending breaks it.",
+      "default": true
     },
     "birthday": {
       "type": "string",
       "title": "Birthday (DD.MM.)",
-      "description": "On this day he celebrates with you (cake, party hat). Empty = off.",
-      "default": "05.01."
+      "description": "On this day Clawd celebrates with cake and a party hat. Empty: off.",
+      "default": ""
     },
     "language": {
       "type": "string",
       "title": "Language / Sprache",
-      "description": "Language of the mod's texts. en: English, de: Deutsch.",
+      "description": "Language of the texts. en: English, de: Deutsch. Also /clawd language.",
       "default": "en",
       "options": [
         "en",

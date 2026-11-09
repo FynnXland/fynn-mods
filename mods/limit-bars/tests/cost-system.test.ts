@@ -3,7 +3,10 @@ import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { cleanHere, costFilled, costText, costView, shortUsd } from '../hooks/cost.ts'
 import { PS_ABS } from '../hooks/storage.ts'
-import { NVIDIA_SMI, SYS_SCRIPT, cellText, parseSample, sysTermWidth, sysView, takeLines, termColumns, trendOf } from '../hooks/system.ts'
+import { NVIDIA_SMI, SYS_DELTA, SYS_REDRAW, SYS_SCRIPT, cellText, parseSample, shownPrev, sysAdopt, sysTermWidth, sysView, takeLines, termColumns, trendOf } from '../hooks/system.ts'
+import type { SysRow } from '../hooks/system.ts'
+import { cliAnswer } from './cli.ts'
+import type { Cli } from './cli.ts'
 
 const NOW = new Date(2026, 10, 4, 10, 0, 0).getTime()
 const MIN = 60000
@@ -30,14 +33,16 @@ function world(on: On, o: W = {}) {
   const saved = o.saved ?? new Map<string, unknown>([
     ['cache:sess-1', { lastActivity: NOW - 10 * MIN, ttl: 60, ttlSource: 'gemessen', ctx: 212000, model: 'claude-opus-5-5', savedAt: NOW - 10 * MIN }],
   ])
-  const st = { here: o.here, stateReads: 0, invalidates: 0, widths: [] as number[], sid: 'sess-1' }
+  const cli: Cli = { writes: [], fail: '' }
+  on('process.run', ($: unknown, e: any) => cliAnswer(e, cli) ?? { deny: 'kein Prozess im Test' })
+  const st = { here: o.here, stateReads: 0, invalidates: 0, widths: [] as number[], sid: 'sess-1', five: 41 }
   on('session.id', () => ({ value: st.sid }))
   on('session.usage', () => ({
     value: {
       startedAt: NOW,
       context: { tokens: undefined, window: 1000000 },
       rateLimits: [
-        { kind: 'five_hour', percentUsed: 41, resetsAt: new Date(NOW + 2 * 3600000).toISOString() },
+        { kind: 'five_hour', percentUsed: st.five, resetsAt: new Date(NOW + 2 * 3600000).toISOString() },
         { kind: 'seven_day', percentUsed: 18, resetsAt: new Date(NOW + 3 * 86400000).toISOString() },
       ],
     },
@@ -103,6 +108,7 @@ function world(on: On, o: W = {}) {
   return {
     clock,
     saved,
+    cli,
     st,
     h,
     async say(text: string) {
@@ -310,9 +316,10 @@ test('0.12.0 Kostenring: /bars show cost off blendet ihn aus und liest nichts me
   const w = world(on, { here: HERE })
   await w.start($)
   const text = await bars($)
-  expect(text).toMatch(/\| Kosten-Ring \| an \| Einstellung \|/)
+  expect(text).toMatch(/\| Kosten-Ring \| an \|/)
   expect(text).toMatch(/Kosten-Ring: API-Wert: dieser Chat 0,40 \$ von 887,20 \$ für Projekt ClaudeMods seit 06\.10\.2026 \(2 Geräte\)\. Im Abo/)
   expect(await bars($, 'kosten off')).toMatch(/Kosten-Ring: aus\./)
+  expect(w.cli.writes).toEqual([{ showCost: 'false' }])
   const reads = w.st.stateReads
   const ui = await $.ui.mount(band('desktop'))
   expect((await svgOf(ui))!.props.source.includes('Kosten')).toBe(false)
@@ -321,7 +328,8 @@ test('0.12.0 Kostenring: /bars show cost off blendet ihn aus und liest nichts me
   await ui.unmount()
   w.st.here = null
   await bars($, 'cost on')
-  expect(await bars($)).toMatch(/\| Kosten-Ring \| an, wartet auf cost-ledger \| \/bars \|/)
+  expect(w.cli.writes[1]).toEqual({ showCost: 'true' })
+  expect(await bars($)).toMatch(/\| Kosten-Ring \| an, wartet auf cost-ledger \|/)
 })
 
 test('0.12.0 Kostenring: ein Tick ohne Änderung (gleicher Cent-Betrag) zeichnet nicht neu', DE, async ($, on) => {
@@ -368,6 +376,8 @@ test('0.13.0 Systemwerte: Standard aus, kein Prozess; an unter Windows: ein Proz
   await clock2(w)
   expect([w.h.spawns, w.h.open, w.h.refused]).toEqual([1, 1, 0])
   await w.say(LINE(30, 62, 6, 56.9))
+  // Seit 0.14.1 übernimmt eine Abweichung ab 2 Punkten erst 5 s nach der letzten Übernahme
+  await w.clock.advance(5000)
   await w.say(LINE(34, 61.2, 6, 60))
   await ui.drawn()
   const src = (await svgOf(ui))!.props.source
@@ -379,15 +389,15 @@ test('0.13.0 Systemwerte: Standard aus, kein Prozess; an unter Windows: ein Proz
   expect(new Set(vals.map((m) => m[1])).size).toBe(1)
   expect(vals.map((m) => Number(m[2]))).toEqual([11, 25, 39, 53]) // 4 × 14 px, unten bündig mit den Ringen (56)
   expect(vals.map((m) => m[3])).toEqual(['#6CC070', '#F2C94C', '#6CC070', '#F2C94C'])
-  expect((src.match(/>▲</g) ?? []).length).toBe(2) // CPU 30 → 34, VRAM 56,9 → 60
+  expect((src.match(/>▲</g) ?? []).length).toBe(2) // CPU 30 → 34, VRAM 57 → 60 (gegen den angezeigten Wert)
   expect(src.indexOf('>Kosten<') < 0 && src.indexOf('>Cache<') < src.indexOf('>CPU<')).toBe(true)
   // Säulen gibt es nicht mehr
   expect(src.includes('opacity="0.4"')).toBe(false)
   await ui.unmount()
-  expect(await bars($)).toMatch(/Systemwerte: CPU 34% · RAM 61% · GPU 6% · VRAM 60% \(jede Sekunde gemessen, zuletzt 10:0\d\)/)
+  expect(await bars($)).toMatch(/Systemwerte: CPU 34% · RAM 61% · GPU 6% · VRAM 60% \(wie angezeigt; jede Sekunde gemessen, dafür neu gezeichnet höchstens alle 5 s; letzte Messung 10:0\d\)/)
 })
 
-test('0.13.0 Systemwerte: ohne NVIDIA nur CPU und RAM; jede Messung zeichnet sofort, gleiche Prozentzahl nicht', { options: { language: 'de', showSystem: true } }, async ($, on) => {
+test('0.13.0/0.14.1 Systemwerte: ohne NVIDIA nur CPU und RAM; gleiche Prozentzahl zeichnet nicht, eine Abweichung erst nach 5 s', { options: { language: 'de', showSystem: true } }, async ($, on) => {
   const w = world(on)
   await w.start($)
   const ui = await $.ui.mount(band('desktop'))
@@ -400,6 +410,9 @@ test('0.13.0 Systemwerte: ohne NVIDIA nur CPU und RAM; jede Messung zeichnet sof
   const i0 = w.st.invalidates
   await w.say(LINE(20.3, 40.1)) // gerundet gleich
   expect(w.st.invalidates).toBe(i0)
+  await w.say(LINE(25, 40))
+  expect(w.st.invalidates).toBe(i0) // 5 Punkte, aber die letzte Übernahme ist gerade erst gewesen
+  await w.clock.advance(5000)
   await w.say(LINE(25, 40))
   expect(w.st.invalidates).toBe(i0 + 1)
   await ui.drawn()
@@ -485,7 +498,8 @@ test('0.13.0 Systemwerte: außerhalb von Windows nie ein Prozess; /bars show cpu
   expect((await svgOf(ui))!.props.source.includes('>CPU<')).toBe(false)
   await ui.unmount()
   expect(await bars($, 'cpu on')).toBe('Die Systemwerte (CPU, RAM, GPU) gehen vorerst nur unter Windows.')
-  expect(await bars($)).toMatch(/\| Systemwerte \| an, nur unter Windows \| Einstellung \|/)
+  expect(await bars($)).toMatch(/\| Systemwerte \| an, nur unter Windows \|/)
+  expect(w.cli.writes).toEqual([])
 })
 
 // ---------- Terminal ----------
@@ -579,8 +593,8 @@ test('0.13.0 Englisch: Kostenring „Cost“, Systemwerte „System values“, /
   expect(src).toMatch(/>\/\$887</)
   await ui.unmount()
   const help = await bars($, 'help')
-  expect(help).toMatch(/Cost ring ● on · by setting \(\/bars cost off\)/)
-  expect(help).toMatch(/System values ● on · by setting \(\/bars cpu off\)/)
+  expect(help).toMatch(/Cost ring ● on \(\/bars cost off\)/)
+  expect(help).toMatch(/System values ● on \(\/bars cpu off\)/)
   expect(help).toMatch(/`\/bars show 5h\|week\|cache\|storage\|cost\|cpu on\|off`/)
 })
 
@@ -640,5 +654,229 @@ test('0.13.2 Systemwerte Desktop: drei Zeilen (GPU ohne VRAM) unten bündig, Zah
   expect(vals.map((m) => m[3])).toEqual(['34%', '61%', '75%'])
   expect(new Set(vals.map((m) => m[1])).size).toBe(1)
   expect(vals.map((m) => Number(m[2]))).toEqual([25, 39, 53])
+  await ui.unmount()
+})
+
+// ---------- Nachtrag 0.14.1: Systemwerte zeichnen höchstens alle 5 s neu ----------
+
+const ONLY_SYS = { language: 'de', showSystem: true, showFiveHour: false, showWeekly: false, showCache: false, showCost: false } as const
+/** Eine Sekunde weiter, dann eine Messzeile (der Prozess schreibt jede Sekunde). */
+const sec = async (w: ReturnType<typeof world>, line: string) => {
+  await w.clock.advance(1000)
+  await w.say(line)
+}
+const rowsOf = (...r: [SysRow['tag'], number | null][]): SysRow[] => r.map(([tag, pct]) => ({ tag, pct, trend: '' }))
+const sysVals = (src: string) => [...src.matchAll(/text-anchor="end"[^>]*fill="(#[0-9A-F]{6})">(\d+%|–)<\/text>/g)].map((m) => [m[2], m[1]])
+
+test('0.14.1 system.ts: sysAdopt (Farbstufe und Zeilen sofort, ≥ 2 Punkte erst nach 5 s), Pfeil gegen den angezeigten Wert', () => {
+  expect([SYS_REDRAW, SYS_DELTA]).toEqual([5000, 2])
+  const shown = rowsOf(['CPU', 40], ['RAM', 50])
+  expect(sysAdopt(undefined, shown, 0)).toBe(true)
+  expect(sysAdopt(shown, rowsOf(['CPU', 41], ['RAM', 49]), 60_000)).toBe(false) // Rauschen
+  expect(sysAdopt(shown, rowsOf(['CPU', 42], ['RAM', 50]), 4999)).toBe(false)
+  expect(sysAdopt(shown, rowsOf(['CPU', 42], ['RAM', 50]), 5000)).toBe(true)
+  expect(sysAdopt(shown, rowsOf(['CPU', 40], ['RAM', 48]), 5000)).toBe(true)
+  // (a) Farbstufe mit mindestens 2 Punkten Abstand (59 → 61, 84 → 86): sofort; nur 1 Punkt über die Grenze (59 → 60, 84 → 85):
+  // nicht, auch nicht nach 5 s (Bau 0.14.1, Review S1)
+  expect(sysAdopt(rowsOf(['CPU', 59], ['RAM', 50]), rowsOf(['CPU', 61], ['RAM', 50]), 0)).toBe(true)
+  expect(sysAdopt(rowsOf(['CPU', 84], ['RAM', 50]), rowsOf(['CPU', 86], ['RAM', 50]), 0)).toBe(true)
+  expect(sysAdopt(rowsOf(['CPU', 59], ['RAM', 50]), rowsOf(['CPU', 60], ['RAM', 50]), 60_000)).toBe(false)
+  expect(sysAdopt(rowsOf(['CPU', 84], ['RAM', 50]), rowsOf(['CPU', 85], ['RAM', 50]), 0)).toBe(false)
+  // (b) Zeile dazu, weg, „–“ ↔ Wert: sofort
+  expect(sysAdopt(shown, rowsOf(['CPU', 40], ['RAM', 50], ['GPU', 10]), 0)).toBe(true)
+  expect(sysAdopt(rowsOf(['CPU', 40], ['RAM', 50], ['GPU', 10]), shown, 0)).toBe(true)
+  expect(sysAdopt(rowsOf(['CPU', null], ['RAM', null]), shown, 0)).toBe(true)
+  expect(sysAdopt(shown, rowsOf(['CPU', null], ['RAM', null]), 0)).toBe(true)
+  expect(sysAdopt(rowsOf(['CPU', 40], ['RAM', 50], ['GPU', 10]), rowsOf(['CPU', 40], ['RAM', 50], ['VRAM', 10]), 0)).toBe(true)
+  // Pfeil: gerundet gegen den angezeigten Wert; 40 angezeigt, gemessen 41,6 (zeigt 42) → ▲
+  const cur = parseSample('cpu\t416\tram\t500', NOW)!
+  expect(sysView(cur, shownPrev(shown), NOW, 'de').rows.map((r) => r.trend)).toEqual(['up', ''])
+  expect(shownPrev(rowsOf(['CPU', 40], ['RAM', null]))).toEqual({ cpu: 40 })
+})
+
+test('0.14.1 Rauschen ±1 Punkt jede Sekunde über 30 s: kein Neuzeichnen; /bars zählt 0/min', { options: ONLY_SYS }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop'))
+  await clock2(w)
+  await w.say(LINE(40, 50))
+  await ui.drawn()
+  await bars($) // Zähler zurücksetzen
+  const i0 = w.st.invalidates
+  for (let i = 1; i <= 30; i++) await sec(w, LINE(i % 2 ? 41 : 39, i % 3 ? 50 : 51))
+  expect(w.st.invalidates).toBe(i0)
+  expect(sysVals((await svgOf(ui))!.props.source).map((v) => v[0])).toEqual(['40%', '50%'])
+  expect(await bars($)).toMatch(/Neuzeichnen wegen Systemwerten: 0\/min \(0 in den letzten 30 s\)/)
+  expect([w.h.spawns, w.h.open]).toEqual([1, 1])
+  await ui.unmount()
+})
+
+test('0.14.1 +2 nach 6 s: ein Neuzeichnen mit ▲; +2 nach 2 s: erst nach 5 s; zurück in den Bereich: keins; /bars zählt', { options: ONLY_SYS }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop'))
+  await clock2(w)
+  await w.say(LINE(40, 50))
+  await ui.drawn()
+  await bars($)
+  const i0 = w.st.invalidates
+  for (let i = 0; i < 5; i++) await sec(w, LINE(40, 50))
+  await sec(w, LINE(42, 50)) // 6 s nach der Übernahme
+  expect(w.st.invalidates).toBe(i0 + 1)
+  await ui.drawn()
+  let src = (await svgOf(ui))!.props.source
+  expect(sysVals(src).map((v) => v[0])).toEqual(['42%', '50%'])
+  expect((src.match(/>▲</g) ?? []).length).toBe(1)
+  // Gleiche Werte: der Pfeil bleibt stehen, und nichts zeichnet neu (vorher kippte er nach einer Sekunde und zeichnete)
+  await sec(w, LINE(42, 50))
+  await sec(w, LINE(44, 50)) // 2 s nach der Übernahme
+  for (let i = 0; i < 2; i++) await sec(w, LINE(44, 50))
+  expect(w.st.invalidates).toBe(i0 + 1)
+  await sec(w, LINE(44, 50)) // 5 s nach der Übernahme, Abweichung besteht noch
+  expect(w.st.invalidates).toBe(i0 + 2)
+  await ui.drawn()
+  src = (await svgOf(ui))!.props.source
+  expect(sysVals(src).map((v) => v[0])).toEqual(['44%', '50%'])
+  expect((src.match(/>▲</g) ?? []).length).toBe(1) // 42 → 44
+  // Abweichung, die vor Ablauf der 5 s wieder verschwindet: kein Neuzeichnen
+  await sec(w, LINE(46, 50))
+  for (let i = 0; i < 8; i++) await sec(w, LINE(45, 50))
+  expect(w.st.invalidates).toBe(i0 + 2)
+  // 2 in 20 s (6 + 5 + 9 Messungen): 6/min, bei springender Last höchstens 12/min statt ≈ 60/min
+  expect(await bars($)).toMatch(/Neuzeichnen wegen Systemwerten: 6\/min \(2 in den letzten 20 s\)/)
+  expect(await bars($)).toMatch(/Systemwerte: CPU 44% · RAM 50% \(wie angezeigt;/)
+  await ui.unmount()
+})
+
+test('0.14.1 Farbstufe 59 → 61 % sofort, auch 1 s nach einer Übernahme', { options: ONLY_SYS }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop'))
+  await clock2(w)
+  await w.say(LINE(55, 50))
+  for (let i = 0; i < 5; i++) await sec(w, LINE(55, 50))
+  await sec(w, LINE(59, 50)) // Übernahme nach 6 s
+  await ui.drawn()
+  const i0 = w.st.invalidates
+  await sec(w, LINE(61, 50)) // 1 s später, gelb
+  expect(w.st.invalidates).toBe(i0 + 1)
+  await ui.drawn()
+  expect(sysVals((await svgOf(ui))!.props.source)).toEqual([['61%', '#F2C94C'], ['50%', '#6CC070']])
+  await ui.unmount()
+})
+
+test('0.14.1 Pendeln an der Farbgrenze (59 ↔ 60 jede Sekunde über 30 s): kein Neuzeichnen (Review S1)', { options: ONLY_SYS }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop'))
+  await clock2(w)
+  await w.say(LINE(59, 50))
+  await ui.drawn()
+  const i0 = w.st.invalidates
+  for (let i = 1; i <= 30; i++) await sec(w, LINE(i % 2 ? 60 : 59, 50))
+  expect(w.st.invalidates).toBe(i0)
+  expect(sysVals((await svgOf(ui))!.props.source)).toEqual([['59%', '#6CC070'], ['50%', '#6CC070']])
+  await ui.unmount()
+})
+
+test('0.14.1 GPU-Zeile kommt dazu und fällt weg: jeweils sofort', { options: ONLY_SYS }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop'))
+  await clock2(w)
+  await w.say(LINE(40, 50))
+  await ui.drawn()
+  const i0 = w.st.invalidates
+  await sec(w, 'cpu\t400\tram\t500\tgpu\t300\r\n')
+  expect(w.st.invalidates).toBe(i0 + 1)
+  await ui.drawn()
+  expect(sysVals((await svgOf(ui))!.props.source).map((v) => v[0])).toEqual(['40%', '50%', '30%'])
+  await sec(w, LINE(40, 50))
+  expect(w.st.invalidates).toBe(i0 + 2)
+  await ui.drawn()
+  expect(sysVals((await svgOf(ui))!.props.source).map((v) => v[0])).toEqual(['40%', '50%'])
+  await ui.unmount()
+})
+
+test('0.14.1 Fremdes Neuzeichnen (Limit ändert sich) übernimmt die neuesten Systemwerte und setzt die 5 s zurück', { options: { ...ONLY_SYS, showFiveHour: true } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop'))
+  await clock2(w)
+  await w.say(LINE(40, 50))
+  await ui.drawn()
+  for (let i = 0; i < 4; i++) await sec(w, LINE(40, 50))
+  await w.say(LINE(41, 50)) // 1 Punkt: allein kein Neuzeichnen
+  const i0 = w.st.invalidates
+  w.st.five = 55
+  await clock2(w) // der Takt sieht das neue Limit und zeichnet neu
+  expect(w.st.invalidates).toBe(i0 + 1)
+  await ui.drawn()
+  let src = (await svgOf(ui))!.props.source
+  expect(src).toMatch(/> 55%</)
+  expect(sysVals(src).map((v) => v[0])).toEqual(['41%', '50%'])
+  // 43 weicht 2 Punkte ab, die erste Übernahme liegt > 5 s zurück, das fremde Zeichnen aber nicht: noch nichts
+  await sec(w, LINE(43, 50))
+  expect(w.st.invalidates).toBe(i0 + 1)
+  for (let i = 0; i < 4; i++) await sec(w, LINE(43, 50))
+  expect(w.st.invalidates).toBe(i0 + 2)
+  await ui.drawn()
+  src = (await svgOf(ui))!.props.source
+  expect(sysVals(src).map((v) => v[0])).toEqual(['43%', '50%'])
+  await ui.unmount()
+})
+
+test('0.14.1 Messprozess: ruhige Werte ohne Zeichnen über 60 s laufen weiter; ein spätes Neuzeichnen beendet ihn nicht (SYS_IDLE ab der Anforderung)', { timeoutMs: 20000, options: ONLY_SYS }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop'))
+  await clock2(w)
+  await w.say(LINE(40, 50))
+  await ui.drawn()
+  const i0 = w.st.invalidates
+  for (let i = 0; i < 60; i++) await sec(w, LINE(40, 50))
+  expect(w.st.invalidates).toBe(i0)
+  // Das letzte Zeichnen liegt 60 s zurück; die Anforderung jetzt wird sofort erfüllt
+  await sec(w, LINE(60, 50))
+  expect(w.st.invalidates).toBe(i0 + 1)
+  await ui.drawn()
+  for (let i = 0; i < 3; i++) await sec(w, LINE(60, 50))
+  expect([w.h.spawns, w.h.open]).toEqual([1, 1])
+  await ui.unmount()
+})
+
+test('0.14.1 Terminal: dieselben Regeln, der Text zeigt die angezeigten Werte', { options: ONLY_SYS }, async ($, on) => {
+  const w = world(on)
+  await w.start($, 'terminal')
+  const ui = await $.ui.mount(band('terminal', 120))
+  await clock2(w)
+  await w.say(LINE(34, 61))
+  await ui.drawn()
+  expect(await ui.find({ type: 'Text', text: '  34%' })).toBeDefined()
+  const i0 = w.st.invalidates
+  await sec(w, LINE(37, 61)) // 3 Punkte nach 1 s: noch nicht
+  expect(w.st.invalidates).toBe(i0)
+  for (let i = 0; i < 4; i++) await sec(w, LINE(37, 61))
+  expect(w.st.invalidates).toBe(i0 + 1)
+  await ui.drawn()
+  expect(await ui.find({ type: 'Text', text: '  37%' })).toBeDefined()
+  await sec(w, LINE(85, 61)) // rot: sofort
+  expect(w.st.invalidates).toBe(i0 + 2)
+  await ui.drawn()
+  expect((await ui.find({ type: 'Text', text: '  85%' }))?.props.color).toBe('#C9594B')
+  await ui.unmount()
+})
+
+test('0.14.1 Englisch: /bars nennt „Redraws for system values“', { options: { ...ONLY_SYS, language: 'en' } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const ui = await $.ui.mount(band('desktop'))
+  await clock2(w)
+  await w.say(LINE(40, 50))
+  await ui.drawn()
+  await sec(w, LINE(40, 50))
+  const text = await bars($)
+  expect(text).toMatch(/Redraws for system values: \d+\/min \(1 in the last \d+ s\)/)
+  expect(text).toMatch(/System values: CPU 40% · RAM 50% \(as shown; measured every second, the band redraws for them at most every 5 s; last reading at/)
   await ui.unmount()
 })

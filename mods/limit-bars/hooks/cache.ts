@@ -324,7 +324,8 @@ export type Report = {
   last: { read: number; written: number; at: number } | null
   limits: ReportLimit[]
   sessionUsd: number | null
-  handoffAt: number | null
+  /** Ausbau 0.15.0: sidekicks `/handoff` steht in der Befehlsliste */
+  sidekickHandoff?: boolean
   lang: Lang
   /** Ausbau 0.14.0: sidekick stellt die Kalt-Cache-Frage gerade selbst, die Wache schweigt */
   guardBySidekick?: boolean
@@ -378,7 +379,7 @@ export function cacheReport(r: Report): string {
   out.push(`- ${t.repChange}: ${CACHE_ARGS.split(' · ').map((a) => `\`/cache ${a}\``).join(' · ')}`)
   out.push('', t.repCommands, '')
   out.push(r.keep ? `- \`/keepwarm off\` ${t.repKeepStop}` : `- \`/keepwarm ${t.hoursArg}\` ${t.repKeepStart(ttl >= 60 ? '52 min' : `${dec(3.5, 1, L)} min`)}`)
-  out.push(`- \`/handoff\` ${t.repHandoff}${r.handoffAt ? ` · ${t.repHandoffLast(hhmm(r.handoffAt))}, \`/handoff show\`` : ''}`)
+  if (r.sidekickHandoff) out.push(`- \`/handoff\` (sidekick) ${t.repHandoff}`)
   out.push('', t.repFooter)
   return out.join('\n')
 }

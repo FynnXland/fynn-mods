@@ -96,20 +96,68 @@ export type SysView = { rows: SysRow[]; alt: string }
 /** Älter als so viel gilt eine Messung nicht mehr (Prozess beendet, Rechner schlief): `–`. */
 export const SAMPLE_MAX_AGE = 10_000
 
-/** Die Zeilen: CPU und RAM immer, GPU und VRAM nur, wenn die Messung sie hat. Ganze Prozent, Pfeil gegen die vorige Messung. */
-export function sysView(cur: Sample | undefined, prev: Sample | undefined, now: number, lang: Lang): SysView {
+type Prev = Partial<Record<'cpu' | 'ram' | 'gpu' | 'vram', number>>
+
+/**
+ * Die Zeilen: CPU und RAM immer, GPU und VRAM nur, wenn die Messung sie hat. Ganze Prozent, Pfeil gegen `prev` (seit 0.14.1 der
+ * zuletzt angezeigte Wert, `shownPrev`), beide gerundet: der Pfeil passt so zu den Zahlen, die man sieht.
+ */
+export function sysView(cur: Sample | undefined, prev: Prev | undefined, now: number, lang: Lang): SysView {
   const fresh = !!cur && now - cur.at <= SAMPLE_MAX_AGE && now >= cur.at - 60_000 ? cur : undefined
   const row = (tag: SysTag, key: 'cpu' | 'ram' | 'gpu' | 'vram'): SysRow => {
     const v = fresh?.[key]
-    return v === undefined ? { tag, pct: null, trend: '' } : { tag, pct: Math.round(v), trend: trendOf(prev?.[key], v) }
+    if (v === undefined) return { tag, pct: null, trend: '' }
+    const p = prev?.[key]
+    return { tag, pct: Math.round(v), trend: trendOf(p === undefined ? undefined : Math.round(p), Math.round(v)) }
   }
   const rows = [row('CPU', 'cpu'), row('RAM', 'ram')]
   // Jede Zeile für sich: GPU-Last gibt es mit jeder Grafikkarte, VRAM nur mit nvidia-smi (Fix 0.13.2)
   if (fresh?.gpu !== undefined) rows.push(row('GPU', 'gpu'))
   if (fresh?.vram !== undefined) rows.push(row('VRAM', 'vram'))
+  return sysViewOf(rows, lang)
+}
+
+/** Ansicht aus fertigen Zeilen (die angezeigten, `sysShown`); der `alt`-Text folgt der Sprache. */
+export function sysViewOf(rows: readonly SysRow[], lang: Lang): SysView {
   const t = T[lang]
   const alt = rows.map((r) => t.sysAlt(r.tag, r.pct === null ? '–' : t.pct(String(r.pct)))).join('; ')
-  return { rows, alt }
+  return { rows: [...rows], alt }
+}
+
+/** Angezeigte Zeilen als Vergleichswert für den Pfeil (Nachtrag 0.14.1, Regel 4). */
+export function shownPrev(rows: readonly SysRow[] | undefined): Prev | undefined {
+  if (!rows) return undefined
+  const p: Prev = {}
+  for (const r of rows) if (r.pct !== null) p[r.tag.toLowerCase() as keyof Prev] = r.pct
+  return p
+}
+
+// Nachtrag 0.14.1: Gemessen wird jede Sekunde, das Band zeichnet für die Systemwerte aber höchstens alle 5 s neu und nur ab
+// 2 Punkten Abweichung vom angezeigten Wert. Farbstufe und Zeilen dazu/weg gelten sofort.
+export const SYS_REDRAW = 5000
+export const SYS_DELTA = 2
+
+/**
+ * Soll `live` die angezeigten Zeilen ersetzen? (a) eine Zeile wechselt die Farbstufe und weicht dabei um mindestens `SYS_DELTA`
+ * Punkte ab, (b) eine Zeile kommt dazu oder fällt weg (auch `–` ↔ Wert): sofort; (c) eine Zeile weicht um mindestens `SYS_DELTA`
+ * Punkte ab und die letzte Übernahme liegt mindestens `SYS_REDRAW` ms zurück. Ein reiner Pfeilwechsel zählt nicht.
+ * Der Mindestabstand bei (a) ist eine Abweichung von der SPEC (Bau 0.14.1, Review S1): Pendelt ein Wert an der Grenze (59 ↔ 60),
+ * würde sonst wieder jede Sekunde neu gezeichnet.
+ */
+export function sysAdopt(shown: readonly SysRow[] | undefined, live: readonly SysRow[], sinceMs: number): boolean {
+  if (!shown) return true
+  if (shown.length !== live.length) return true
+  let far = false
+  for (let i = 0; i < live.length; i++) {
+    const a = shown[i]!
+    const b = live[i]!
+    if (a.tag !== b.tag || (a.pct === null) !== (b.pct === null)) return true
+    if (a.pct === null || b.pct === null) continue
+    if (Math.abs(a.pct - b.pct) < SYS_DELTA) continue
+    if (levelColor(a.pct) !== levelColor(b.pct)) return true
+    far = true
+  }
+  return far && sinceMs >= SYS_REDRAW
 }
 
 const ARROW: Readonly<Record<Trend, string>> = { up: '▲', down: '▼', '': '' }

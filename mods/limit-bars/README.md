@@ -1,10 +1,10 @@
 # limit-bars
 
-Two slim bars on the left of the band above the prompt show live how much of the 5-hour and the weekly limit is used and when each window resets. Next to them, a ring shows how long this chat's prompt cache stays warm. On top of that comes a cache guard: a question before an expensive cold send, a notice shortly before the cache expires, and the commands `/cache`, `/handoff` and `/keepwarm`. Optionally, a second ring shows how full a drive is, split by file type, with `/disk` for the details (Windows, off by default). With [cost-ledger](../cost-ledger/README.md) installed, a cost ring shows what this chat and the whole project cost in API value. Optional system values show CPU, RAM, GPU load and GPU memory live, each with a trend arrow (Windows, off by default). Everything fits next to Clawd (clawd-buddy).
+Two slim bars on the left of the band above the prompt show live how much of the 5-hour and the weekly limit is used and when each window resets. Next to them, a ring shows how long this chat's prompt cache stays warm. On top of that comes a cache guard: a question before an expensive cold send, a notice shortly before the cache expires, and the commands `/cache` and `/keepwarm`. Optionally, a second ring shows how full a drive is, split by file type, with `/disk` for the details (Windows, off by default). With [cost-ledger](../cost-ledger/README.md) installed, a cost ring shows what this chat and the whole project cost in API value. Optional system values show CPU, RAM, GPU load and GPU memory, measured every second, each with a trend arrow (Windows, off by default). Everything fits next to Clawd (clawd-buddy).
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.318** · Plugin version **0.14.0**
+Tested with Claude Code **v2.1.319** · Plugin version **0.16.5**
 
 ## Display
 
@@ -34,7 +34,7 @@ Every message sends the whole conversation. Served from the prompt cache that is
 
 ## Storage ring
 
-Off by default. Set `storagePath` in `/config` → limit-bars to a drive, for example `E:\`, and a ring appears to the right of the cache ring. **Windows only for now**; on other systems, or with a path without a drive letter, nothing is drawn.
+Off by default. Set `storagePath` on the settings page (or `/config` → limit-bars) to a drive, for example `E:\`, and a ring appears to the right of the cache ring. **Windows only for now**; on other systems, or with a path without a drive letter, nothing is drawn.
 
 - **Label:** `Storage` above the ring (like `Cache` above the cache ring).
 - **Ring in the band:** the whole ring is the used space, split by file type in a fixed order: programs & libraries (blue), media (rose), AI models & data (ochre), code & text (teal), archives & packages (lavender), other (grey). Like the cache ring it is made of 28 segments with small gaps; the colors are soft tones in the style of the bars. In the middle the used space (`114G`), below it the drive size (`/801G`). Sizes are binary, as in Windows Explorer. Before the first scan the ring is grey.
@@ -55,18 +55,18 @@ Shows what this chat cost compared with the whole project, as API value. The num
 
 Off by default. `/bars show cpu on` (or `showSystem`) shows up to four lines to the right of the other rings: `CPU`, `RAM`, `GPU` (load) and `VRAM` (GPU memory in use). **Windows only for now**; elsewhere nothing is drawn and `/bars show cpu on` says so. The `GPU` line works with any graphics card whose driver provides the Windows GPU counters (NVIDIA, AMD, Intel); `VRAM` needs an NVIDIA card (`nvidia-smi`) and is missing otherwise.
 
-- **Lines:** the tag in orange, the percentage right-aligned so all numbers line up, and a grey arrow: `▲` when the value rose by at least 2 points since the reading a second earlier, `▼` when it fell. Colors like the limit bars: green below 60 %, yellow from 60 %, red from 85 %. GPU memory matters because a full card spills into RAM.
-- **Live:** one reading every second. The band redraws as soon as a whole percentage or an arrow changes, and not otherwise. There is no animation between readings: it would need the next reading and so lag a second behind.
+- **Lines:** the tag in orange, the percentage right-aligned so all numbers line up, and a grey arrow: `▲` when the value rose by at least 2 points against the value shown before, `▼` when it fell. The arrow stays until the next update. Colors like the limit bars: green below 60 %, yellow from 60 %, red from 85 %. GPU memory matters because a full card spills into RAM.
+- **Measured every second, redrawn at most every 5 s (since 0.14.1):** one reading every second, but the band redraws for the system values at most every 5 s, and only when a value is at least 2 points away from the one shown. A colour change (60 %, 85 %) of at least 2 points and a line appearing or disappearing show at once; a value that only wobbles across a colour boundary (59 ↔ 60) does not redraw. When the band redraws for another reason (limits, cache, cost, another mod, `/bars`), it takes the latest readings along. Every redraw makes the desktop app redraw the whole band and the hover bar under your messages, so redrawing every second (the GPU load jumps by several points per second) made it flicker. `/bars` shows "Redraws for system values: n/min", counted since the last `/bars`. There is no animation between readings: it would need the next reading and so lag a second behind.
 - **Terminal:** two columns of two lines, `CPU` above `GPU` and `RAM` above `VRAM`, numbers in the same column.
 - **Data source:** one Windows PowerShell process per chat (`$.process.spawn`) with one fixed, read-only script and no arguments or environment from outside. It writes a line every second: CPU as processor time between two raw readings (`Win32_PerfRawData_PerfOS_Processor`), RAM as used share of visible memory (`Win32_PerfRawData_PerfOS_Memory`), GPU load as Task Manager computes it (since 0.13.2): busy time from the raw counters `Win32_PerfRawData_GPUPerformanceCounters_GPUEngine`, summed over all processes per physical engine, the busiest engine wins. `nvidia-smi` (fixed path) only supplies GPU memory, because its own load figure measures something else (about 30 % when Task Manager showed 75 %). WMI class names are the same in every Windows language. It costs about 1–3 % of one CPU core (the PowerShell process about 13 ms per second; the Windows WMI service adds a little).
-- **Lifetime:** the process runs only while the band is drawn and the system values are on, and ends with `/bars show cpu off`, when the band has not been drawn for 15 s (hidden chat), or after 30 minutes (the next tick starts a new one).
+- **Lifetime:** the process runs only while the band is drawn and the system values are on, and ends with `/bars show cpu off`, when a requested redraw does not come (hidden chat or collapsed band; with steady values it keeps running without redraws), or after 30 minutes (the next tick starts a new one).
 - **Errors:** `/bars` shows the latest reading and the last failure. A process that ends without a reading counts as a failed start; the next try comes after a minute, and after three in a row measuring pauses for an hour.
 
 ## Customize
 
 Every part of the display can be shown or hidden on its own. **The storage ring is off by default**: it only appears once you set `storagePath`.
 
-| Part | Setting (`/config` → limit-bars) | Command | Default |
+| Part | Setting | Command | Default |
 |---|---|---|---|
 | 5-hour bar | `showFiveHour` | `/bars show 5h on\|off` | on |
 | Weekly bar | `showWeekly` | `/bars show week on\|off` | on |
@@ -76,9 +76,9 @@ Every part of the display can be shown or hidden on its own. **The storage ring 
 | System values | `showSystem` | `/bars show cpu on\|off` | off |
 | Style: bars or rings | `style` | `/bars style bar\|ring` | bar |
 
-- **Two ways, one rule:** a value set with `/bars` wins over the setting. `/bars reset` drops all command values, so the settings apply again. `/bars` alone shows what is on and where each value comes from.
-- **`/bars` applies to all open chats** (stored in `$.store`, picked up within 2 s). **Settings** are read when the plugin loads. After changing them under `/plugin` → Configure options, Claude Code runs `/reload-plugins` when you close the panel (if that would invalidate the prompt cache, it asks first and leaves the change pending; `/reload-plugins --force` applies it). After `claude plugin configure`, restart Claude Code. Other open chats keep the old values until they reload.
-- **Hiding the cache ring only hides the ring.** The question before a cold send, the notice before expiry, `/cache`, `/handoff` and `/keepwarm` keep working; turn them off with `/cache warn off` and `/cache hints off`.
+- **One source (since 0.16.0):** `/bars` and the settings page change the same settings. `/bars reset` sets all display settings back to their defaults. `/bars` alone shows what is on.
+- **When a change applies:** in a terminal session a command applies at once (Claude Code reloads the mod). In the desktop app and `claude -p` it applies in the current chat at once and in other open chats after `/reload-plugins` or in the next chat. Values saved by earlier versions with `/bars` or `/cache` (plugin store) are moved into the settings once at the next start. After an update, run `/reload-plugins` in chats that are already open; until then they keep running the old version with its old values.
+- **Hiding the cache ring only hides the ring.** The question before a cold send, the notice before expiry, `/cache` and `/keepwarm` keep working; turn them off with `/cache warn off` and `/cache hints off`.
 - **Hiding the storage ring** stops the background queries and scans (no PowerShell). `/disk` still scans when you call it and `storagePath` is set. `/bars show storage on` without `storagePath` tells you where to set it.
 - **Everything hidden:** limit-bars draws nothing and keeps no space free in the band; other mods (clawd-buddy, quick-replies) use the full width.
 - **Rings** (`style: ring`, desktop app only): one ring per limit in the style of the cache ring, `5h` and `7d` in orange on top, the percentage in the middle, the reset in small type below. Without a 5-hour limit: `5h ∞` with the pace as text, then the weekly ring with a small notch at even use. Rings take less width than the bars (5h, week and cache: 154 × 56 px). The terminal always keeps the bars; `/bars style ring` there saves the value and says so.
@@ -86,53 +86,59 @@ Every part of the display can be shown or hidden on its own. **The storage ring 
 - Short forms and aliases: `/bars 5h off`, `/bars woche aus`, `/bars speicher an`, `/bars cache aus`, `/bars kosten aus`, `/bars system on`, `/bars ram on`, `/bars style kreis`, `/bars style balken`.
 - `onlyFiveHour` still works (on = weekly bar hidden) but is deprecated; use `showWeekly`.
 
+Known issue: the desktop settings page may show switches that were never saved as on, even when their default is off, and saving the page then turns them on. This plugin stores its off defaults once at the first start, so the page shows them correctly.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `/cache` | Everything at a glance: state and remaining time, cache duration and its source, model, context, cost of the next message warm and cold, last request (read/written), cold restarts in this session, session cost, limits, keep-warm, settings |
-| `/cache ttl 5`, `ttl 60`, `ttl auto` · `warn on`/`off` · `big 150k` (big threshold) · `hints on`/`off` (notice before expiry) | Settings, stored in `$.store`; they apply immediately in all open chats |
-| `/handoff` | Claude writes a short handoff (≤ 400 words) with the skill `uebergabe`, in the language set in `language`. Then the mod asks: **New chat with handoff** clears this chat (`/clear`; the old one stays reachable via `/resume`) and sends the handoff as the first message, so the cache starts small. **Keep working here** leaves everything as it is |
-| `/handoff continue` · `/handoff show` | Apply the last handoff afterwards (clear and continue with it), or show it (the last 3 are kept in `$.store`) |
+| `/cache` | Everything at a glance: state and remaining time, cache duration and its source, model, context, cost of the next message warm and cold, last request (read/written), cold restarts in this session, session cost, limits, keep-warm, settings; a `/handoff (sidekick)` line only when sidekick's `/handoff` is available |
+| `/cache ttl 5`, `ttl 60`, `ttl auto` · `warn on`/`off` · `big 150k` (big threshold) · `hints on`/`off` (notice before expiry) | The settings `cacheTtl`, `askBeforeColdSend`, `bigTokens`, `expiryNotice` |
 | `/keepwarm [hours]` · `/keepwarm off` | Keep the cache warm, default 2 h, at most 4 h. **Off by default**, because every ping costs quota. `/keepwarm` without a number turns off a running keep-warm |
 | `/disk` · `/disk refresh` | Drive usage by file type, as a ring with a legend (see [Storage ring](#storage-ring)). Scans again if the last scan is older than an hour, or always with `refresh` |
-| `/bars` · `/bars show 5h\|week\|cache\|storage\|cost\|cpu on\|off` · `/bars style bar\|ring` · `/bars reset` | Show or hide parts of the display in all open chats (see [Customize](#customize)) |
+| `/bars` · `/bars show 5h\|week\|cache\|storage\|cost\|cpu on\|off` · `/bars style bar\|ring` · `/bars reset` | Show or hide parts of the display; the same settings as the settings page (see [Customize](#customize)) |
 | `/bars language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes (see [Known limitations](#known-limitations) for what a reload resets). In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.11.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/bars help` · `/bars ?` | All commands, features and settings at a glance, with their current state and how to switch them. In the terminal and the desktop app a drawn table with headings in the theme's warning color (yellow, follows light and dark); in `claude -p` and VS Code the same as Markdown. It shows the state at the moment you call it; call it again after switching something |
-| `/cache help` · `/handoff help` · `/keepwarm help` · `/disk help` | Answer only with "All commands: `/bars help`". `/handoff help` does not start a handoff |
+| `/cache help` · `/keepwarm help` · `/disk help` | Answer only with "All commands: `/bars help`" |
 
-The German arguments of earlier versions still work: `warnung an|aus`, `gross`/`groß`, `hinweise an|aus` (and the older `guard`, `alerts`), `/handoff weiter|zeigen`, `/keepwarm aus`. An unknown argument names the possible ones and points to `/bars help`.
+`/handoff` moved to sidekick in 0.15.0 (sidekick 0.22.0); without sidekick it is gone. Typing it without sidekick gives Claude Code's "unknown command"; limit-bars does not catch that.
 
-**Question before a cold send:** If the cache is cold and the chat is big (≥ 150k), the next typed message asks **Send anyway** · **Compact first** · **Cancel**, with the cost in the question text. Compacting also reads everything once and saves little with a cold cache; the mod then holds the message back, compacts, and sends it afterwards on its own (this option is not offered with attachments or `@file` in the text, because they would be missing when resent). If you close the dialog, the message goes out unchanged (fail-open). Slash commands, messages during a turn, and messages from plugins never trigger the question.
+The German arguments of earlier versions still work: `warnung an|aus`, `gross`/`groß`, `hinweise an|aus` (and the older `guard`, `alerts`), `/keepwarm aus`. An unknown argument names the possible ones and points to `/bars help`.
 
-**Notice shortly before expiry:** When a big chat enters the yellow phase, a notice appears once: keep going right away → just write; stopping → run `/handoff` now while it is cheap; coming back to this chat later → `/keepwarm`. The handoff pays off **before** expiry: with a cold cache, writing the handoff itself already rereads everything.
+**Question before a cold send:** If the cache is cold and the chat is big (≥ 150k), the next typed message asks **Send anyway** · **Compact first** · **Cancel**, with the cost in the question text. Compacting also reads everything once and saves little with a cold cache; the mod then holds the message back, compacts, and sends it afterwards on its own (this option is not offered with attachments or `@file` in the text, because they would be missing when resent). The **Cancel** toast mentions `/handoff (sidekick)` only when sidekick's `/handoff` is available; otherwise it suggests a new chat for a new topic, or sending as is for the same work. If you close the dialog, the message goes out unchanged (fail-open). Slash commands, messages during a turn, and messages from plugins never trigger the question.
+
+**Notice shortly before expiry:** When a big chat enters the yellow phase, a notice appears once: continuing right away: just write. Coming back later: `/keepwarm`. It does not appear at all while sidekick runs on `cache` or `guide` and makes its own suggestion (including `/handoff`).
 
 **Keep-warm and cost:** A ping via `$.model.fork` reads the cache about 8 min before it expires (with a 5-minute cache, 90 s before), i.e. roughly every 52 min. At 400k context that is ≈ $0.08 per ping, over 3 h ≈ $0.30 instead of $3.20 for a rewrite. Useful, for example, when a background render runs longer than 60 min and you continue in the same chat afterwards. If a ping rewrites instead of reading, or gets no reply, keep-warm turns itself off and tells you. The `/cache` settings apply to all chats. After `/clear` or a restart keep-warm is off.
 
-The cache guard is modeled on Cache Keeper by Nate Herk (MIT); the skill `uebergabe` is based on its `session-handoff` skill. It has an English and a German template; `/handoff` passes the language as the skill's argument. See `THIRD-PARTY-NOTICES.md` in this folder.
+The cache guard is modeled on Cache Keeper by Nate Herk (MIT), for the prices and keep-warm. See `THIRD-PARTY-NOTICES.md` in this folder.
 
 ## Configuration
 
-`/config` → limit-bars:
+Desktop app: **Settings → Plugins → limit-bars → Settings**. Terminal: `/config` → limit-bars, or `/plugin configure limit-bars`.
 
-| Key | Title in `/config` | Meaning | Default |
-|---|---|---|---|
-| `language` | Language / Sprache | `en`: English · `de`: German. Covers the bars, the ring, `alt` texts, `/cache`, `/handoff`, `/keepwarm`, questions, notices, and the language of the handoff the skill writes | `en` |
-| `resetStyle` | Reset display | `mixed`: 5h as a countdown, week as a clock time · `clock`: both as clock times · `countdown`: both as countdowns | `mixed` |
-| `highlightAt` | Highlight from (%) | from this percentage the tag and value are bold (50 to 100) | 90 |
-| `showFiveHour` | Show 5-hour bar | the bar for the 5-hour limit | on |
-| `showWeekly` | Show weekly bar | the bar for the weekly limit | on |
-| `showCache` | Show cache ring | the cache ring (the cache guard stays) | on |
-| `showStorage` | Show storage ring | the storage ring; only shown with `storagePath` | on |
-| `showCost` | Show cost ring | the cost ring; only shown with cost-ledger | on |
-| `showSystem` | Show system values | CPU, RAM, GPU load and GPU memory (Windows only) | off |
-| `style` | Style | `bar`: bars · `ring`: one ring per limit (desktop app only; the terminal keeps the bars) | `bar` |
-| `onlyFiveHour` | 5-hour limit only (deprecated) | on: weekly bar hidden; use `showWeekly` instead | off |
-| `storagePath` | Storage drive | drive for the storage ring, for example `E:\` (Windows only); empty: no storage ring and no PowerShell | empty |
+| Key | Title | Meaning | Default | Command |
+|---|---|---|---|---|
+| `style` | Style | `bar`: bars · `ring`: one ring per limit (desktop app only; the terminal keeps the bars) | `bar` | `/bars style` |
+| `showFiveHour` | 5-hour limit | the bar for the 5-hour limit (without one: the weekly pace) | on | `/bars 5h on\|off` |
+| `showWeekly` | Weekly limit | the bar for the weekly limit | on | `/bars week on\|off` |
+| `showCache` | Cache ring | the cache ring (the cache guard stays) | on | `/bars cache on\|off` |
+| `showCost` | Cost ring | the cost ring; only shown with cost-ledger | on | `/bars cost on\|off` |
+| `showSystem` | System values | CPU, RAM, GPU load and GPU memory (Windows only) | off | `/bars cpu on\|off` |
+| `storagePath` | Storage drive | drive for the storage ring, for example `E:\` (Windows only); empty: no storage ring and no PowerShell | empty | – |
+| `showStorage` | Storage ring | the storage ring; only shown with `storagePath` | on | `/bars storage on\|off` |
+| `askBeforeColdSend` | Ask before a cold send | the question before a message rewrites a big chat into a cold cache | on | `/cache warn on\|off` |
+| `expiryNotice` | Notice before the cache expires | a short notice before the cache of a big idle chat goes cold | on | `/cache hints on\|off` |
+| `bigTokens` | Big chat from (tokens) | context size from which the question and the notice apply | 150000 | `/cache big 150k` |
+| `cacheTtl` | Cache lifetime (min) | `auto` (measured, otherwise 60), `5` or `60` | `auto` | `/cache ttl` |
+| `resetStyle` | Reset time | `mixed`: 5h as a countdown, week as a clock time · `clock`: both as clock times · `countdown`: both as countdowns | `mixed` | – |
+| `highlightAt` | Bold from (%) | from this percentage the tag and value are bold (50 to 100) | 90 | – |
+| `onlyFiveHour` | Old: 5-hour limit only | replaced by `showWeekly`; switched off at the next start (the weekly bar stays hidden) | off | – |
+| `language` | Language / Sprache | `en`: English · `de`: German. Covers the bars, the ring, `alt` texts, `/cache`, `/keepwarm`, questions and notices | `en` | `/bars language` |
 
 ## Language
 
-- `language` is `en` by default. Set it to `de` in `/config` → limit-bars for German texts (`Mo 09:00`, `Mo 09:00`, `≈ 3,30 $`, `/cache` card in German), or run `/bars language de` in a terminal session to switch all fynn-mods at once.
+- `language` is `en` by default. Set it to `de` on the settings page or in `/config` → limit-bars for German texts (`Mo 09:00`, `≈ 3,30 $`, `/cache` card in German), or run `/bars language de` in a terminal session to switch all fynn-mods at once.
 - Formats: en `71%`, `Mon 09:00`, `in 2 d 4 h`, `≈ $3.30`, `1.2M`; de `71%` (limits; since 0.13.0 without a space in both languages), `Mo 09:00`, `in 2 T 4 h`, `≈ 3,30 $`, `1,2M`.
 - Commands and arguments are English in both languages; the German arguments stay valid as aliases.
 - The settings titles in `/config` are English only.
@@ -142,8 +148,8 @@ The cache guard is modeled on Cache Keeper by Nate Herk (MIT); the skill `ueberg
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, command.run{command=cache}, command.run{command=handoff}, command.run{command=keepwarm}, command.run{command=bars}, command.run{command=disk}, ui.render{component=CommandOutput, props has {command=bars}}, ui.render{component=CommandOutput, props has {command=disk}}, session.measure, ui.render{component=AbovePrompt}
-calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.config.list, $.config.set, $.model.fork, $.process.run, $.process.spawn, $.prompt.submit, $.session.compact, $.session.id, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
+hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, command.run{command=cache}, command.run{command=keepwarm}, command.run{command=bars}, command.run{command=disk}, ui.render{component=CommandOutput, props has {command=bars}}, ui.render{component=CommandOutput, props has {command=disk}}, session.measure, ui.render{component=AbovePrompt}
+calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.config.list, $.config.set, $.model.fork, $.process.run, $.process.spawn, $.prompt.submit, $.session.compact, $.session.id, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
 state reads: cost-ledger.here, sidekick.status
 state writes: limit-bars.band
 ```
@@ -157,22 +163,22 @@ In plain language:
 - `$.session.usage`: limits, context size and session cost at start and on every tick (without `breakdown`, free)
 - Hook `session.measure`: takes the percentage and reset time of `five_hour` and `seven_day` after every measurement
 - Hook `turn.step`: reads, for every request of the main loop, how much was read from the cache and how much was written; changes nothing
-- Hook `turn.complete`: notes the end of a turn and captures the reply of the handoff turn
+- Hook `turn.complete`: notes the end of a turn (the working state resets)
 - Hook `session.compact`: notes a compaction (the first request afterwards does not count as a cold restart)
 - Hook `prompt.submit`: the question before a cold send (only for a big chat with a cold cache), otherwise passes through unchanged
-- Hooks `command.run` for `cache`, `handoff`, `keepwarm`, `disk`, `bars` and `$.command.register`: the five commands
+- Hooks `command.run` for `cache`, `keepwarm`, `disk`, `bars` and `$.command.register`: the four commands
 - `$.process.run`: only with `storagePath` set, `powershell.exe` with the two fixed, read-only scripts of the storage ring (size and free space; sizes by file extension)
 - `$.process.spawn` (since 0.13.0): only with the system values on and on Windows, one long-running `powershell.exe` by its full path with one fixed, read-only script (processor time, used memory, GPU engine busy time, and `nvidia-smi` at its fixed path for GPU memory), one line per second; ended as described under [System values](#system-values)
 - Hook `ui.render` for `CommandOutput` of `disk`: draws the ring with the legend in place of the Markdown row of `/disk`
 - Hook `ui.render` for `CommandOutput` of `bars`: draws the help table in place of the Markdown row of `/bars help` (new in 0.7.0); other `/bars` rows stay Markdown
-- `$.state.get` (also `state reads: sidekick.status`, since 0.14.0): reads sidekick's level (`off`, `cache`, `guide`) when the cache guard is about to ask; nothing else of sidekick's.
-- `$.command.list`, `$.command.run`: find and start the skill `uebergabe` (with the language as its argument); `/clear` for "clear and continue"; since 0.14.0 also whether `/sidekick` can be run right now (sidekick loaded)
-- `$.config.list`, `$.config.set`: only for `/bars language` (since 0.11.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone
-- `$.process.run` (also): for `/bars language` in the desktop app and `claude -p` (since 0.11.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `limit-bars@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `limit-bars@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
-- `$.prompt.submit`: the handoff as the first message in the cleared chat, or the held-back message after compacting
+- `$.state.get` (also `state reads: sidekick.status`, since 0.14.0): reads sidekick's level (`off`, `cache`, `guide`) when the cache guard is about to ask or the notice before expiry is due; nothing else of sidekick's.
+- `$.command.list`: whether `/sidekick` can be run right now (sidekick loaded, since 0.14.0) and, since 0.15.0, whether sidekick's `/handoff` exists (for the Cancel toast and the `/cache` card). Nothing is started.
+- `$.config.list`, `$.config.set`: for `/bars language` (since 0.11.0), which changes nothing but the `language` field of the six fynn-mods, and since 0.16.0 for `/bars` and `/cache`, which change only limit-bars' own fields. Other plugins are left alone
+- `$.process.run` (also): in the desktop app and `claude -p`, for `/bars language` (since 0.11.1) and for limit-bars' own fields (since 0.16.0: `claude plugin configure limit-bars@fynn-mods --values-stdin --json`), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"` for the six fynn-mods, and with this mod's own fields for this mod only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `limit-bars@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `limit-bars@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod. Since 0.16.5 a settings command reads the value back after saving; if another mod overwrote it at the same moment, it saves once more, otherwise it answers “Not saved”. Once per new off switch (store key `offDefaults2`), the installed copy also reads its own unset fields with `claude plugin configure <mod>@fynn-mods --json` and saves those whose default is off as `false` (see the known issue under the settings). Settings commands save through `claude plugin configure` only when this is the installed copy (its folder is the `readFromFolder` or `installPath` that `claude plugin list` reports); a copy loaded with `--plugin-dir` answers “Not saved: this copy is loaded from another folder …” and changes nothing.
+- `$.prompt.submit`: the held-back message after **Compact first**
 - `$.session.compact`: **Compact first** in the question
 - `$.model.fork`: only with `/keepwarm` on, the keep-warm ping
-- `$.session.id`, `$.store.*`: per-chat state, settings, `/bars` values, last 3 handoffs, the newest limit reading shared between chats; cleanup after 7 days
+- `$.session.id`, `$.store.*`: per-chat state, the newest limit reading shared between chats, moving the `/bars` and `/cache` values saved before 0.16.0 into the settings once; cleanup after 7 days Since this version also the key `offDefaults2`: which off switches were already saved as `false` (see the known issue under the settings).
 - `$.ui.ask`, `$.ui.toast`: questions and notices
 - `$.ui.invalidate`, `$.ui.resolve`: redraw; components `Box`, `Text`, `Svg`
 - `$.clock.now`, `$.clock.every`: time of day; 2 s tick while the band is drawn; 30 s tick only while keeping warm; one-shot timers to start commands outside a hook
@@ -205,7 +211,8 @@ claude --plugin-dir <path-to-clone>/mods/limit-bars
 
 Since 0.14.0 the cache guard steps aside for [sidekick](../sidekick/README.md): when sidekick runs on a level where it asks before a cold send itself (`cache` or `guide`), limit-bars does not ask as well, so you never get two dialogs in a row. `/cache` and `/bars help` then show the guard as "on (sidekick is asking right now)".
 
-- limit-bars only checks this right before it would ask (big chat, cold cache): sidekick's level from `sidekick.status`, and whether `/sidekick` is available right now. That second check matters because the level may stay in the session after sidekick is turned off.
+- The same check applies to the notice before expiry (since 0.15.0): with sidekick on `cache` or `guide`, limit-bars shows no notice of its own, because sidekick makes the suggestion, including `/handoff`.
+- limit-bars only checks this right before it would ask or notify (big chat, cold or expiring cache): sidekick's level from `sidekick.status`, and whether `/sidekick` is available right now. That second check matters because the level may stay in the session after sidekick is turned off.
 - No level, `off`, sidekick not loaded, or any read error: limit-bars asks as before.
 - Your own setting is never changed. If you turned the guard off with `/cache warn off`, it stays off, with or without sidekick.
 - limit-bars checks that sidekick is set to ask, not that sidekick asks for this very message. Known gaps where nobody asks:
@@ -222,7 +229,7 @@ Both mods draw into the same band above the prompt. Claude Code does not define 
 - **Before the first API response** Claude Code knows no limits; the bars appear with the first response (at most 2 s later), or right away with the newest reading of another chat on this computer. The CLI queries at startup by itself, the desktop app apparently only with the first message.
 - **Clawd on the left** (clawd-buddy `side: left`): the bars and Clawd can both end up on the left. There is no separate option for this.
 - **Countdown in both windows** (`resetStyle: countdown`): the long forms need up to 46 columns. The terminal then shows the short forms (`2h14`, `2d23h`), the desktop app always the long forms.
-- **Commands from hooks:** Claude Code rejects `$.command.run`, `$.prompt.submit` and `$.session.compact` from inside a running hook. `/handoff`, "clear and continue" and **Compact first** therefore run a moment later via a one-shot timer.
+- **Commands from hooks:** Claude Code rejects `$.prompt.submit` and `$.session.compact` from inside a running hook. **Compact first** therefore runs a moment later via a one-shot timer.
 - **Notice shortly before expiry** only appears while this chat's band is being drawn (2 s tick). Keep-warm has its own tick and also runs without the band.
 - **After the mod reloads** (`/bars language` or another mod's language command, `/reload-plugins`, changed settings), a running `/keepwarm` picks up again: its end time and ping count are kept in the mod's store (since 0.11.0), so it also continues when you resume the chat before that end time. If you open the same chat in a second window while the first is still running, both send keep-warm pings; `/keepwarm off` stops it only in the window where you run it. The cold-restart count and the last request on the `/cache` card start over, and the notice before expiry can come once more. The cache ring's state, the `/bars` and `/cache` settings, the limits and the storage reading are kept.
 - **Cache estimate:** the ring counts from the start of the last main-loop request. If something else reads the same cache, it does not see that.

@@ -1,6 +1,7 @@
 // sidekick: Inhalt von `/sidekick help` (SPEC Nachtrag 0.14.0, docs/HELP-SPEC.md §5 „sidekick 0.14.0“). Aus Einstellungen und
 // Zustand beim Aufruf ein Schnappschuss `HelpData`; gezeichnet wird er von help.ts (Kopie von templates/help/help.ts). Rein, ohne `$`.
-import type { HelpCommand, HelpData, HelpFeature } from './help.ts'
+import type { HelpCommand, HelpData, HelpFeature, HelpSetting } from './help.ts'
+import { SETTINGS } from './fields.ts'
 import { lang, shortDate, t, tokensText } from './i18n.ts'
 import { languageHelp } from './language.ts'
 import { DEFAULT_SETTINGS, LEVELS } from './logic.ts'
@@ -18,6 +19,24 @@ export type HelpFacts = {
   known: number
   /** Jetzt (ms), für „Modell-Tipp ruht bis …“ (Ausbau 0.18.0) */
   now: number
+  /** Gespeicherte Prompts und davon mit Knopf (Nachtrag 0.21.0) */
+  prompts?: { n: number; buttons: number }
+  /** userConfig-Werte (0.23.0) für EINSTELLUNGEN; fehlt ein Feld, gilt sein Standard */
+  cfg?: Readonly<Record<string, unknown>>
+}
+
+const onOffWord = (b: boolean) => (b ? t().on : t().off)
+
+/** EINSTELLUNGEN: alle userConfig-Felder mit Wert, in der Reihenfolge von plugin.json (hooks/fields.ts). */
+function settingRows(f: HelpFacts): HelpSetting[] {
+  const h = t().help
+  const l = lang()
+  return (Object.keys(SETTINGS) as (keyof typeof h.settings)[]).map((k) => {
+    const def = SETTINGS[k]!
+    const v = k === 'language' ? l : (f.cfg?.[k] ?? def.default)
+    const value = typeof v === 'boolean' ? onOffWord(v) : typeof v === 'number' ? tokensText(v) : String(v)
+    return { title: h.settings[k], value, isDefault: v === def.default }
+  })
 }
 
 /** Die Zeilen unter BEFEHLE. `cmd` englisch und so, wie die Parser es annehmen (Test „Vollständigkeit“). */
@@ -48,6 +67,25 @@ function commands(): HelpCommand[] {
     { cmd: '/sidekick tips stop', does: h.tipsStop },
     { cmd: '/sidekick loop [status]', does: h.loop },
     { cmd: '/sidekick loop on|off', does: h.loopOnOff },
+    { cmd: '/sidekick save <name> [text]', does: h.pSave },
+    { cmd: '/sidekick prompts [name]', does: h.pList },
+    { cmd: '/sidekick prompts <name> on|off', does: h.pButton },
+    { cmd: '/sidekick forget <name>', does: h.pForget },
+    { cmd: '/p <name>', does: h.pRun },
+    // Ausbau 0.24.0
+    { cmd: '/sidekick queue', does: h.qList },
+    { cmd: '/sidekick queue on|off', does: h.qOnOff },
+    { cmd: lang() === 'de' ? 'danach: <text>' : 'later: <text>', does: h.qPrefix },
+    // Ausbau 0.25.0
+    { cmd: '/sidekick catalog', does: h.catList },
+    { cmd: '/sidekick catalog on|off', does: h.catOnOff },
+    { cmd: '/sidekick catalog mute|unmute <id>', does: h.catMute },
+    // Ausbau 0.22.0 (von limit-bars übernommen)
+    { cmd: '/handoff', does: h.handoff },
+    { cmd: '/handoff fork|text', does: h.handoffForce },
+    { cmd: '/handoff show', does: h.handoffShow },
+    { cmd: '/handoff continue', does: h.handoffContinue },
+    { cmd: h.skillCmd, does: h.skill },
     languageHelp('sidekick', lang()), // docs/LANGUAGE-SPEC.md §6 Punkt 4
     { cmd: '/sidekick help', does: h.help },
     { cmd: '/savings [today|week|all]', does: h.savings },
@@ -72,6 +110,10 @@ function controls(): HelpCommand[] {
     { cmd: h.cLine, does: h.cLineDoes },
     { cmd: h.cInsert, does: h.cInsertDoes },
     { cmd: h.cWhy, does: h.cWhyDoes },
+    { cmd: h.cOffer, does: h.cOfferDoes },
+    { cmd: h.cPromptBtn, does: h.cPromptBtnDoes },
+    { cmd: x.q.btn(false), does: h.cLaterDoes },
+    { cmd: h.cSug, does: h.cSugDoes },
   ]
 }
 
@@ -107,6 +149,9 @@ function features(f: HelpFacts): HelpFeature[] {
     tips,
     auto,
     loop,
+    { name: h.fPrompts, state: { kind: 'value', text: h.promptsState(f.prompts?.n ?? 0, f.prompts?.buttons ?? 0), isDefault: !f.prompts?.n }, toggle: '/sidekick prompts' },
+    f.cfg?.queue === false ? { name: h.settings.queue, state: { kind: 'off' }, toggle: '/sidekick queue on' } : { name: h.settings.queue, state: { kind: 'on' }, toggle: '/sidekick queue off' },
+    f.cfg?.catalog === false ? { name: h.settings.catalog, state: { kind: 'off' }, toggle: '/sidekick catalog on' } : { name: h.settings.catalog, state: { kind: 'on' }, toggle: '/sidekick catalog off' },
   ]
 }
 
@@ -122,7 +167,7 @@ export function sidekickHelp(f: HelpFacts): HelpData {
     notes: [h.rules(RULE_IDS.join(' · ')), h.aliases],
     controls: controls(),
     features: features(f),
-    settings: [{ title: h.setLanguage, value: l, isDefault: l === 'en' }],
+    settings: settingRows(f),
     footer: { terminal: h.footerTerminal, desktop: h.footerDesktop },
   }
 }

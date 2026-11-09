@@ -1,38 +1,44 @@
 {
   "name": "quick-replies",
-  "version": "0.6.2",
-  "description": "Claude Code's own next-message suggestion as a button above Clawd; click it, type 1 in the empty prompt, or send just 1 to send it. With /replies more on, a fork of the session fills up to four places in total. /replies help shows all commands and settings as a table.",
+  "version": "0.7.5",
+  "description": "Turns Claude Code's suggested next message into a button above the prompt. Click it or type 1 to send it.",
   "author": {
     "name": "Fynn Hansen"
   },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
-    "language": {
-      "type": "string",
-      "title": "Language / Sprache",
-      "description": "Language of the mod's texts and of its model prompts. en: English, de: Deutsch.",
-      "default": "en",
-      "options": [
-        "en",
-        "de"
-      ]
+    "enabled": {
+      "type": "boolean",
+      "title": "Show suggestions",
+      "description": "Claude Code's suggested next message as a button above Clawd. Also /replies on|off.",
+      "default": true
     },
     "more": {
       "type": "boolean",
-      "title": "More suggestions via fork",
-      "description": "Besides Claude Code's own suggestion, ask a fork of the session for suggestions after every answer, up to four in total; Claude Code's own stays first. Costs roughly one short answer per answer, mostly from the cache. /replies more on|off overrides this for all sessions.",
+      "title": "More suggestions",
+      "description": "After each answer a fork of the session adds suggestions, up to four buttons. Costs about one short answer, mostly cached. Also /replies more on|off.",
       "default": false
     },
     "layout": {
       "type": "string",
       "title": "Layout",
-      "description": "auto: 2 × 2 if the labels fit, otherwise one per row. grid: always 2 × 2. list: always one per row.",
+      "description": "auto: 2 × 2 when the labels fit, otherwise one per row. grid: always 2 × 2. list: always one per row.",
       "default": "auto",
       "options": [
         "auto",
         "grid",
         "list"
+      ]
+    },
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the texts and the fork prompt. en: English, de: Deutsch. Also /replies language.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
       ]
     }
   }

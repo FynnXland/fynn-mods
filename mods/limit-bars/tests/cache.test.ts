@@ -5,6 +5,8 @@ import { RING_H, RING_SEGMENTS, ringFilled } from '../hooks/ring.ts'
 import { desktopSvg } from '../hooks/svg.ts'
 import { cleanKeep } from '../hooks/register.ts'
 import { layoutTerminal, shownWindows } from '../hooks/view.ts'
+import { cliAnswer } from './cli.ts'
+import type { Cli } from './cli.ts'
 
 const NOW = new Date(2026, 9, 5, 10, 0, 0).getTime()
 const props = (bodyColumns: number) =>
@@ -123,11 +125,13 @@ test('Ping schreibt statt zu lesen → verfehlt', async () => {
 
 type U = ReturnType<typeof usage>
 // Ausbau 0.14.0: sidekick als Nachbar. `level` = sidekick.status.level (undefined = kein Wert), `listed` = /sidekick in der Befehlsliste
-type Side = { level?: 'off' | 'cache' | 'guide'; listed?: boolean; denyState?: boolean; denyList?: boolean; source?: string }
-function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: string; clearFails?: boolean; storeSetFails?: boolean; submitFails?: boolean; settingsGetFails?: boolean; side?: Side } = {}) {
+type Side = { level?: 'off' | 'cache' | 'guide'; listed?: boolean; denyState?: boolean; denyList?: boolean; source?: string; handoff?: boolean | 'other' }
+function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: string; clearFails?: boolean; submitFails?: boolean; settingsGetFails?: boolean; side?: Side } = {}) {
   const seen = { cols: -1 }
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
+  const cli: Cli = { writes: [], fail: '' }
+  on('process.run', ($: unknown, e: any) => cliAnswer(e, cli) ?? { deny: 'kein Prozess im Test' })
   const toasts: string[] = []
   const asks: string[] = []
   let answer: string | null = 'Trotzdem senden'
@@ -144,7 +148,6 @@ function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: s
   on('session.measure', ($, e) => ({ changed: e.changed }))
   on('store.get', ($, e) => (o.settingsGetFails && e.key === 'settings' ? { deny: 'kaputt' } : { value: saved.get(e.key) }))
   on('store.set', ($, e) => {
-    if (o.storeSetFails) return { deny: 'Speicher voll' }
     saved.set(e.key, e.value)
     return { value: undefined }
   })
@@ -157,14 +160,20 @@ function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: s
     toasts.push(e.text)
     return { value: undefined }
   })
-  on('command.register', () => ({ value: undefined }))
+  const registered: string[] = []
+  on('command.register', (_$, e) => {
+    registered.push((e as unknown as { name: string }).name)
+    return { value: undefined }
+  })
   const side = { ...(o.side ?? {}), stateReads: 0 }
   on('command.list', () =>
     side.denyList
       ? ({ deny: 'nein' } as never)
       : {
           value: [
-            { name: 'limit-bars:uebergabe', description: 'Übergabe', source: 'plugin' },
+            { name: 'limit-bars:cache', description: 'Cache', source: 'plugin', plugin: 'limit-bars@fynn-mods' },
+            ...(side.handoff === 'other' ? [{ name: 'handoff', description: 'fremd', source: 'plugin', plugin: 'anderer-mod@fynn-mods' }] : []),
+            ...(side.handoff === true ? [{ name: 'handoff', description: 'Übergabe', source: 'plugin', plugin: 'sidekick@fynn-mods' }] : []),
             ...(side.listed ? [{ name: 'sidekick', description: 'sidekick', source: side.source ?? 'plugin', plugin: 'sidekick' }] : []),
           ],
         },
@@ -229,11 +238,13 @@ function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: s
     clock,
     seen,
     saved,
+    cli,
     toasts,
     asks,
     sent,
     compacts,
     commands,
+    registered,
     step,
     get forks() {
       return forks
@@ -275,7 +286,7 @@ test('Restzeit läuft mit der Uhr ohne Turn weiter (Takt), wird gelb und kalt', 
 })
 
 // Lange simulierte Zeit: unter Last knapp am 5-s-Standard des Test-Kits (Review Variante B, S2)
-test('Vorwarnung: großer Chat in der gelben Phase → ein Hinweis mit /handoff und /keepwarm, nur einmal', { ...DE, timeoutMs: 30_000 }, async ($, on) => {
+test('Vorwarnung: großer Chat in der gelben Phase → ein Hinweis mit /keepwarm, ohne /handoff, nur einmal', { ...DE, timeoutMs: 30_000 }, async ($, on) => {
   const w = world(on)
   await w.step($, usage(300000, 5000))
   const ui = await $.ui.mount(band('desktop'))
@@ -283,9 +294,57 @@ test('Vorwarnung: großer Chat in der gelben Phase → ein Hinweis mit /handoff 
   await w.clock.advance(30000)
   const hints = w.toasts.filter((t) => t.startsWith('Cache läuft in'))
   expect(hints.length).toBe(1)
-  expect(hints[0]).toContain('/handoff')
+  expect(hints[0]).not.toContain('/handoff')
   expect(hints[0]).toContain('/keepwarm')
   await ui.unmount()
+})
+
+// Ausbau 0.15.0: Schlägt sidekick selbst vor, kommt kein Toast von limit-bars
+for (const level of ['cache', 'guide'] as const)
+  test(`0.15.0 Vorwarnung mit sidekick (Stufe ${level}, /sidekick geladen): kein Toast von limit-bars`, { ...DE, timeoutMs: 30_000 }, async ($, on) => {
+    const w = world(on, { side: { level, listed: true } })
+    await w.step($, usage(300000, 5000))
+    const ui = await $.ui.mount(band('desktop'))
+    await w.clock.advance(56 * MIN)
+    await w.clock.advance(30000)
+    expect(w.toasts.filter((t) => t.startsWith('Cache läuft in')).length).toBe(0)
+    expect(w.side.stateReads).toBeGreaterThan(0)
+    await ui.unmount()
+  })
+
+test('0.15.0 Vorwarnung: sidekick-Stufe off oder Lesefehler → Toast wie ohne sidekick, nur einmal', { ...DE, timeoutMs: 30_000 }, async ($, on) => {
+  const w = world(on, { side: { level: 'guide', listed: true, denyState: true } })
+  await w.step($, usage(300000, 5000))
+  const ui = await $.ui.mount(band('desktop'))
+  await w.clock.advance(56 * MIN)
+  await w.clock.advance(30000)
+  const hints = w.toasts.filter((t) => t.startsWith('Cache läuft in'))
+  expect(hints.length).toBe(1)
+  expect(hints[0]).not.toContain('/handoff')
+  await ui.unmount()
+})
+
+test('0.15.0 Vorwarnung (en): Toast ohne /handoff, mit /keepwarm', { options: { language: 'en' }, timeoutMs: 30_000 }, async ($, on) => {
+  const w = world(on)
+  await w.step($, usage(300000, 5000))
+  const ui = await $.ui.mount(band('desktop'))
+  await w.clock.advance(56 * MIN)
+  await w.clock.advance(30000)
+  const hints = w.toasts.filter((t) => t.startsWith('Cache expires in'))
+  expect(hints.length).toBe(1)
+  expect(hints[0]).toContain('/keepwarm')
+  expect(hints[0]).not.toContain('/handoff')
+  await ui.unmount()
+})
+
+test('0.15.0 kein Befehl handoff registriert; die alten Übergaben im Store werden beim Start gelöscht', DE, async ($, on) => {
+  const saved = new Map<string, unknown>([['handoffs', [{ at: NOW, session: 'alt', text: 'x'.repeat(300) }]]])
+  const w = world(on, { saved })
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await w.clock.settle()
+  expect(w.registered).toEqual(['cache', 'keepwarm', 'disk', 'bars'])
+  expect(saved.has('handoffs')).toBe(false)
 })
 
 test('Persistenz: Stand in $.store, nach Neustart lädt session.start ihn; alte Einträge (> 7 Tage) werden aufgeräumt', DE, async ($, on) => {
@@ -390,8 +449,39 @@ test('Warnung vor kaltem Senden: alle drei Antworten', DE, async ($, on) => {
   const r = await $.prompt.submit(userPrompt('drei'))
   expect(r.drop).toContain('abgebrochen')
   expect(w.sent).toEqual(['weiter bitte', 'zwei'])
-  expect(w.toasts.some((t) => t.includes('/handoff'))).toBe(true)
+  expect(w.toasts.some((t) => t.startsWith('Nicht gesendet.'))).toBe(true)
+  expect(w.toasts.some((t) => t.includes('/handoff'))).toBe(false)
 })
+
+for (const [name, handoff, expected] of [
+  ['mit sidekicks /handoff', true, true],
+  ['ohne sidekick', undefined, false],
+  ['/handoff eines anderen Plugins', 'other', false],
+] as const)
+  test(`0.15.0 Abbrechen der Kalt-Warnung ${name}: /handoff ${expected ? 'genannt' : 'nicht genannt'}`, DE, async ($, on) => {
+    const w = world(on, { side: { handoff } })
+    await w.step($, usage(400000, 5000))
+    await w.clock.advance(75 * MIN)
+    w.setAnswer('Abbrechen')
+    await $.prompt.submit(userPrompt('drei'))
+    const toast = w.toasts.find((t) => t.startsWith('Nicht gesendet.')) ?? ''
+    expect(toast.includes('/handoff (sidekick)')).toBe(expected)
+    expect(toast.includes('Gleiche Arbeit: einfach senden')).toBe(true)
+  })
+
+for (const [name, handoff, expected] of [
+  ['mit sidekicks /handoff', true, true],
+  ['ohne sidekick', undefined, false],
+  ['/handoff eines anderen Plugins', 'other', false],
+] as const)
+  test(`0.15.0 /cache-Karte ${name}: Zeile /handoff ${expected ? 'da' : 'weg'}, nie "letzte"`, DE, async ($, on) => {
+    const w = world(on, { side: { handoff } })
+    await w.step($, usage(400000, 5000))
+    const card = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
+    expect(card.includes('`/handoff` (sidekick) schreibt eine Übergabe für einen frischen Chat')).toBe(expected)
+    expect(card).not.toContain('letzte')
+    expect(card).not.toContain('/handoff show')
+  })
 
 test('Warnung fail-open: abgelehnter Dialog lässt durch; kleiner Kontext, Slash-Befehl, laufender Turn, Plugin-Prompt fragen nicht', DE, async ($, on) => {
   const w = world(on)
@@ -419,7 +509,8 @@ test('Warnung aus per /cache warnung aus; Einstellungen werden gespeichert und e
   const r1 = await $.command.run({ command: 'cache', args: 'warnung aus' } as never)
   expect(r1.text).toContain('Gespeichert.')
   expect(r1.text).toContain('Rückfrage vor kaltem Senden: **aus**')
-  expect(w.saved.get('settings')).toMatchObject({ guard: false })
+  expect(w.cli.writes[0]).toMatchObject({ askBeforeColdSend: 'false' })
+  expect(w.saved.get('settings')).toBeUndefined()
   const r2 = await $.command.run({ command: 'cache', args: 'gross 300k' } as never)
   expect(r2.text).toContain('ab 300k')
   const r3 = await $.command.run({ command: 'cache', args: 'ttl 5' } as never)
@@ -539,39 +630,6 @@ test('/keepwarm aus und Höchstdauer 4 h', DE, async ($, on) => {
   expect(w.forks).toBe(0)
 })
 
-const HANDOFF = `# Übergabe: Test\n\n## Auftrag\n${'Ein Satz mit Inhalt. '.repeat(15)}\n\n## Weiter mit\nWeiter.`
-
-test('/handoff: startet den Skill, fängt die Antwort ab, fragt und leert dann den Chat mit der Übergabe', DE, async ($, on) => {
-  const w = world(on)
-  w.setAnswer('Neuer Chat mit Übergabe')
-  const r = await $.command.run({ command: 'handoff', args: '' } as never)
-  expect(r.text).toContain('Erstelle die Übergabe')
-  await w.clock.advance(1000)
-  expect(w.commands).toContain('limit-bars:uebergabe')
-  const t = await w.step($, usage(400000, 5000), undefined, false)
-  await $.turn.complete({ turnId: t, answer: `Hier ist sie.\n\n${HANDOFF}`, durationMs: 1000, isAborted: false, reason: 'answer' } as never)
-  await w.clock.advance(1000)
-  expect(w.asks.some((q) => q.startsWith('Übergabe fertig'))).toBe(true)
-  expect(w.commands).toContain('clear')
-  expect(w.sent.length).toBe(1)
-  expect(w.sent[0].startsWith('Übergabe aus meinem vorigen Chat:\n\n# Übergabe: Test')).toBe(true)
-  const list = w.saved.get('handoffs') as { text: string }[]
-  expect(list.length).toBe(1)
-  expect((await $.command.run({ command: 'handoff', args: 'zeigen' } as never)).text).toContain('# Übergabe: Test')
-})
-
-test('/handoff mit gescheitertem /clear: Hinweis, wo die Übergabe liegt; nichts gesendet', DE, async ($, on) => {
-  const w = world(on, { clearFails: true })
-  w.setAnswer('Neuer Chat mit Übergabe')
-  await $.command.run({ command: 'handoff', args: '' } as never)
-  await w.clock.advance(1000)
-  const t = await w.step($, usage(400000, 5000), undefined, false)
-  await $.turn.complete({ turnId: t, answer: HANDOFF, durationMs: 1000, isAborted: false, reason: 'answer' } as never)
-  await w.clock.advance(1000)
-  expect(w.toasts.some((x) => x.startsWith('/clear ging nicht') && x.includes('/handoff show'))).toBe(true)
-  expect(w.sent.length).toBe(0)
-})
-
 test('Reihenfolge außen und innen neben clawd-buddy auf beiden Oberflächen, mit Ring', DE, async ($, on) => {
   const w = world(on)
   await w.step($, usage(300000, 5000))
@@ -611,20 +669,30 @@ test('session.compact: die erste Anfrage danach zählt nicht als kalter Neustart
   expect((await $.command.run({ command: 'cache', args: '' } as never)).text).toContain('| **Kalte Neustarts** | 2 ·')
 })
 
-test('/cache: Speichern abgelehnt → gilt bis zum Neustart', DE, async ($, on) => {
-  world(on, { storeSetFails: true })
+test('/cache: Schreiben abgelehnt → Hinweis, der Wert gilt nicht', DE, async ($, on) => {
+  const w = world(on)
+  w.cli.fail = 'Speicher gesperrt'
   const r = await $.command.run({ command: 'cache', args: 'hinweise aus' } as never)
-  expect(r.text).toContain('Gilt bis zum Neustart')
-  expect(r.text).toContain('Hinweis kurz vor Ablauf: **aus**')
+  expect(r.text).toContain('Nicht gespeichert: Speicher gesperrt.')
+  expect(r.text).not.toContain('Gespeichert.')
+  expect(r.text).toContain('Hinweis kurz vor Ablauf: **an**')
+  expect(w.cli.writes.length).toBe(0)
 })
 
-test('/cache liest die Einstellungen vor dem Schreiben neu (eine andere Session hat geändert)', DE, async ($, on) => {
+test('/cache schreibt nur das genannte Feld (ein anderer Chat kann die übrigen geändert haben); die Änderungen gelten zusammen', DE, async ($, on) => {
   const w = world(on)
   await $.command.run({ command: 'cache', args: 'gross 300k' } as never)
-  w.saved.set('settings', { ...(w.saved.get('settings') as object), guard: false })
+  await $.command.run({ command: 'cache', args: 'warnung aus' } as never)
   const r = await $.command.run({ command: 'cache', args: 'hinweise aus' } as never)
-  expect(w.saved.get('settings')).toMatchObject({ guard: false, alerts: false, bigTokens: 300000 })
+  expect(w.cli.writes).toEqual([{ bigTokens: '300000' }, { askBeforeColdSend: 'false' }, { expiryNotice: 'false' }])
   expect(r.text).toContain('Rückfrage vor kaltem Senden: **aus** ab 300k')
+})
+
+test('/cache big unter 1000 Tokens: unbekanntes Argument, nichts geschrieben', DE, async ($, on) => {
+  const w = world(on)
+  const r = await $.command.run({ command: 'cache', args: 'big 500' } as never)
+  expect(r.text).toContain('Unbekannt')
+  expect(w.cli.writes).toEqual([])
 })
 
 const ZERO = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -656,40 +724,6 @@ test('/keepwarm: abgelehnter Fork → Warmhalten aus mit Grund', DE, async ($, o
   await $.command.run({ command: 'keepwarm', args: '1' } as never)
   await w.clock.advance(60000)
   expect(w.toasts.some((t) => t.startsWith('Warmhalten aus (') && !t.includes('abgelaufen'))).toBe(true)
-})
-
-test('/handoff: Dialog geschlossen → Hinweis auf /handoff continue; das Alias /handoff weiter setzt die gespeicherte Übergabe ein', DE, async ($, on) => {
-  const w = world(on)
-  w.setAnswer(null)
-  await $.command.run({ command: 'handoff', args: '' } as never)
-  await w.clock.advance(1000)
-  const t = await w.step($, usage(400000, 5000), undefined, false)
-  await $.turn.complete({ turnId: t, answer: HANDOFF, durationMs: 1000, isAborted: false, reason: 'answer' } as never)
-  await w.clock.advance(1000)
-  expect(w.toasts.some((x) => x.includes('/handoff continue'))).toBe(true)
-  expect(w.commands).not.toContain('clear')
-  await $.command.run({ command: 'handoff', args: 'weiter' } as never)
-  await w.clock.advance(1000)
-  expect(w.commands).toContain('clear')
-  expect(w.sent[0].startsWith('Übergabe aus meinem vorigen Chat:')).toBe(true)
-})
-
-test('/handoff: Senden nach /clear scheitert → Hinweis auf /handoff zeigen; ein Turn ohne Übergabe speichert nichts', DE, async ($, on) => {
-  const w = world(on, { submitFails: true })
-  w.setAnswer('Neuer Chat mit Übergabe')
-  await $.command.run({ command: 'handoff', args: '' } as never)
-  await w.clock.advance(1000)
-  let t = await w.step($, usage(400000, 5000), undefined, false)
-  await $.turn.complete({ turnId: t, answer: HANDOFF, durationMs: 1000, isAborted: false, reason: 'answer' } as never)
-  await w.clock.advance(1000)
-  expect(w.commands).toContain('clear')
-  expect(w.toasts.some((x) => x.startsWith('Chat geleert, aber') && x.includes('/handoff show'))).toBe(true)
-  await $.command.run({ command: 'handoff', args: '' } as never)
-  await w.clock.advance(1000)
-  t = await w.step($, usage(400000, 5000), undefined, false)
-  await $.turn.complete({ turnId: t, answer: 'Mache ich gleich.', durationMs: 1000, isAborted: false, reason: 'answer' } as never)
-  expect(w.toasts.some((x) => x.startsWith('Der Übergabe-Turn endete ohne Übergabe'))).toBe(true)
-  expect((w.saved.get('handoffs') as unknown[]).length).toBe(1)
 })
 
 test('Erst komprimieren fehlt bei @datei im Text', DE, async ($, on) => {
@@ -727,7 +761,7 @@ test('0.2.1 Kontextzahl unter dem Ring: grau unter 80k, orange ab 80k, rot ab �
   expect(desktopSvg([], mid).source).toMatch(/font-size="8" fill="#D77757">100k</)
 })
 
-test('0.2.1 /cache warnung aus aus einer anderen Session gilt sofort, ohne neue Session', DE, async ($, on) => {
+test('0.2.1 /cache warnung aus gilt sofort im selben Chat, ohne Neustart', DE, async ($, on) => {
   const w = world(on)
   await w.step($, usage(400000, 5000))
   await w.clock.advance(75 * MIN)
@@ -735,17 +769,19 @@ test('0.2.1 /cache warnung aus aus einer anderen Session gilt sofort, ohne neue 
   w.setAnswer('Trotzdem senden')
   await $.prompt.submit(userPrompt('eins'))
   expect(w.asks.length).toBe(1)
-  // Eine andere Session schaltet die Warnung aus (nur der gemeinsame Store ändert sich)
-  w.saved.set('settings', { ttl: 0, guard: false, bigTokens: 150000, alerts: true })
+  // Die Warnung wird in diesem Chat ausgeschaltet (CLI-Schreiben, die Mod zieht den Wert selbst nach)
+  await $.command.run({ command: 'cache', args: 'warnung aus' } as never)
+  expect(w.cli.writes.length).toBe(1)
   await $.prompt.submit(userPrompt('zwei'))
   expect(w.asks.length).toBe(1)
   expect(w.sent).toEqual(['eins', 'zwei'])
 })
 
-test('0.2.1 Einstellungen nicht lesbar → Stand dieser Session, Nachricht geht durch (fail-open)', DE, async ($, on) => {
-  const w = world(on, { settingsGetFails: true })
+test('0.16.0 Umzug: Store nicht lesbar → nichts geschrieben, die Rückfrage arbeitet mit den Einstellungen; abgelehnter Dialog lässt durch', DE, async ($, on) => {
+  const w = world(on, { settingsGetFails: true, saved: new Map<string, unknown>([['settings', { guard: false }]]) })
   await w.step($, usage(400000, 5000))
   await w.clock.advance(75 * MIN)
+  expect(w.cli.writes).toEqual([])
   w.setAnswer(null)
   expect(await $.prompt.submit(userPrompt('drei'))).toMatchObject({ text: 'drei' })
 })

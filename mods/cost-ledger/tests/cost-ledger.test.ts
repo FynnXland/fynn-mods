@@ -37,6 +37,10 @@ import {
   cleanSettings,
   ledgerHelp,
   planWords,
+  PLANS,
+  LEGACY_PLANS,
+  currentPlan,
+  planLabel,
 } from '../hooks/logic.ts'
 import { buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, safeProj, shareRec, usersIn, validDir } from '../hooks/sync.ts'
 import type { SyncFile } from '../hooks/sync.ts'
@@ -46,6 +50,9 @@ import { arcPath, bigUsd, hereBar, hereSvg, hereText, shareOf, shareText } from 
 import { helpMarkdown, helpTree, stateText } from '../hooks/help.ts'
 import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
 import type { Rec } from '../hooks/logic.ts'
+import { SETTINGS } from '../hooks/fields.ts'
+// Ordner der Mod, wie `$.plugin.root` ihn im Test meldet: Weg 2 schreibt nur für die installierte Kopie (hooks/settings.ts)
+const MOD_ROOT = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
 
 const NOW = new Date(2026, 9, 6, 12, 0).getTime() // 06.10.2026 12:00 lokal
 const DAY = 24 * 60 * 60 * 1000
@@ -87,7 +94,19 @@ function world(on: On, o: W = {}) {
     listFails: false,
     writeFails: false,
     registered: [] as { name: string; argumentHint?: string }[],
+    // Einstellungen (0.11.0): ohne Plugin-Zeilen schreibt die Mod über `claude plugin configure` (Weg 2), hier angenommen
+    cli: [] as Record<string, string>[],
+    cliFail: '',
   }
+  on('process.run', ($, e) => {
+    const res = (exitCode: number, stdout: string, stderr = '') => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv.join(' ') === 'claude plugin list --json') return res(0, JSON.stringify([{ id: 'cost-ledger@fynn-mods', enabled: true, installPath: MOD_ROOT }]))
+    if (e.argv.join(' ') !== 'claude plugin configure cost-ledger@fynn-mods --values-stdin --json') return res(9, '', 'unerwartet')
+    if (st.cliFail) return res(1, JSON.stringify({ refused: { message: st.cliFail } }))
+    const values = JSON.parse(e.init?.stdin ?? '{}') as Record<string, string>
+    st.cli.push(values)
+    return res(0, JSON.stringify({ saved: Object.keys(values) }))
+  })
   // Dateisystem im Speicher; ein Ordner „gibt es“, sobald eine Datei darin liegt (wie nach $.fs.write)
   const files = o.files ?? new Map<string, string>()
   const parent = (p: string) => p.slice(0, Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/')))
@@ -176,8 +195,11 @@ function world(on: On, o: W = {}) {
     },
     async ledger($: any, args = '') {
       lastArgs = args // die Zeile trägt die Argumente des Aufrufs (CommandOutput props.args)
-      return (await $.command.run({ command: 'ledger', args })).text as string
+      // Der Hinweis nach einer Einstellung (0.11.0, „Saved …“) steht in einem eigenen Test; hier fällt er weg
+      return ((await $.command.run({ command: 'ledger', args })).text as string).replace(/\n\n(Saved|Gespeichert)[^\n]*$/, '')
     },
+    /** Was zuletzt über `claude plugin configure` geschrieben wurde (Weg 2) */
+    lastCli: () => st.cli.at(-1),
   }
 }
 
@@ -1316,29 +1338,30 @@ test('0.5.0: Hochrechnung erst ab 5 %; Messung dieses Prozesses (live) hebt pct'
 test('0.5.0: /ledger plan speichert meta:plan; heute, Komma-Preis, Aliase, off; Ungültiges speichert nichts', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
-  expect(await w.ledger($, 'plan max20 14')).toBe('Abo gespeichert: Max 20x, Abrechnungstag 14, 200,00 $ im Monat (Listenpreis). Abo-Monat seit 14.09., erneuert 14.10. · Details: /ledger limits')
-  expect(w.saved.get('meta:plan')).toEqual({ v: 1, plan: 'max20', day: 14, at: NOW })
-  expect(await w.ledger($, 'plan 20X heute 207,50')).toMatch(/Max 20x, Abrechnungstag 6, 207,50 \$ im Monat\. Abo-Monat seit 06\.10\., erneuert 06\.11\./)
-  expect(w.saved.get('meta:plan')).toEqual({ v: 1, plan: 'max20', day: 6, price: 207.5, at: NOW })
-  expect(await w.ledger($, 'plan')).toMatch(/^Abo: Max 20x, Abrechnungstag 6, 207,50 \$ im Monat \(eingestellt 06\.10\. 12:00\)\.\n\*\*\/ledger plan/)
+  expect(await w.ledger($, 'plan max20 14')).toBe('Abo gespeichert: Ultra, Abrechnungstag 14, 200,00 $ im Monat (Listenpreis). Abo-Monat seit 14.09., erneuert 14.10. · Details: /ledger limits')
+  expect(w.lastCli()).toEqual({ plan: 'ultra', billingDay: '14', planPrice: '0' })
+  expect(w.saved.has('meta:plan')).toBe(false)
+  expect(await w.ledger($, 'plan 20X heute 207,50')).toMatch(/Ultra, Abrechnungstag 6, 207,50 \$ im Monat\. Abo-Monat seit 06\.10\., erneuert 06\.11\./)
+  expect(w.lastCli()).toEqual({ plan: 'ultra', billingDay: '6', planPrice: '207.5' })
+  expect(await w.ledger($, 'plan')).toMatch(/^Abo: Ultra, Abrechnungstag 6, 207,50 \$ im Monat\.\n\*\*\/ledger plan/)
   for (const bad of ['gold 3', 'max20', 'max20 32', 'max20 0', 'max20 14 abc', 'max20 14 0', 'max20 14 207 mehr', 'max20 1.5'])
     expect(await w.ledger($, `plan ${bad}`), bad).toMatch(/^Nicht gespeichert: „.*“ ist ungültig\.\n\*\*\/ledger plan/)
-  expect((w.saved.get('meta:plan') as { day: number }).day).toBe(6) // unverändert
+  expect(w.lastCli()).toEqual({ plan: 'ultra', billingDay: '6', planPrice: '207.5' }) // unverändert
   expect(await w.ledger($, 'plan team 1')).toMatch(/Team, Abrechnungstag 1, ohne Preis\./)
   expect(await w.ledger($, 'plan off')).toBe('Abo-Einstellung gelöscht.')
-  expect(w.saved.has('meta:plan')).toBe(false)
+  expect(w.lastCli()).toEqual({ plan: 'none' })
   expect(await w.ledger($, 'plan')).toMatch(/^Kein Abo eingestellt\./)
-  expect(await w.ledger($, 'plan max5x 31 $99.99')).toMatch(/Max 5x, Abrechnungstag 31, 99,99 \$ im Monat\./)
+  expect(await w.ledger($, 'plan max5x 31 $99.99')).toMatch(/Max, Abrechnungstag 31, 99,99 \$ im Monat\./)
   expect(await w.ledger($, 'plan aus')).toBe('Abo-Einstellung gelöscht.')
 })
 
 test('0.5.0: parsePlan und cleanPlan', () => {
   expect(parsePlan(['Pro', 'today'], NOW)).toEqual({ v: 1, plan: 'pro', day: 6, at: NOW })
-  expect(parsePlan(['5x', '8', '100'], NOW)).toEqual({ v: 1, plan: 'max5', day: 8, price: 100, at: NOW })
+  expect(parsePlan(['5x', '8', '100'], NOW)).toEqual({ v: 1, plan: 'max', day: 8, price: 100, at: NOW })
   expect(parsePlan(['enterprise', '31', '1.234'], NOW)).toBeNull()
   expect(parsePlan([], NOW)).toBeNull()
-  expect(cleanPlan({ v: 1, plan: 'max20', day: 8, price: 207, at: NOW })).toEqual({ v: 1, plan: 'max20', day: 8, price: 207, at: NOW })
-  expect(cleanPlan({ v: 1, plan: 'max20', day: 8, price: -1, at: NOW })).toEqual({ v: 1, plan: 'max20', day: 8, at: NOW })
+  expect(cleanPlan({ v: 1, plan: 'max20', day: 8, price: 207, at: NOW })).toEqual({ v: 1, plan: 'ultra', day: 8, price: 207, at: NOW })
+  expect(cleanPlan({ v: 1, plan: 'max20', day: 8, price: -1, at: NOW })).toEqual({ v: 1, plan: 'ultra', day: 8, at: NOW })
   for (const bad of [null, { v: 2, plan: 'pro', day: 1, at: 1 }, { v: 1, plan: 'gold', day: 1, at: 1 }, { v: 1, plan: 'pro', day: 32, at: 1 }, { v: 1, plan: 'pro', day: 1.5, at: 1 }])
     expect(cleanPlan(bad)).toBeNull()
 })
@@ -1381,7 +1404,8 @@ test('0.5.0: /ledger reset lässt meta:plan stehen und leert lim; Reset aus eine
   expect(w.saved.has('meta:limSince')).toBe(true)
   expect(await w.ledger($, 'reset')).toMatch(/geleert \(1 Eintrag\)/)
   // meta:limSince wird mit dem Reset neu gesetzt statt gelöscht (Review: sonst setzte ein späterer Prozess es zu spät)
-  expect([...w.saved.keys()].sort()).toEqual(['meta:limSince', 'meta:plan', 'meta:resetAt', 'meta:since'])
+  // Das Abo liegt seit 0.11.0 in userConfig und bleibt beim Reset ohnehin
+  expect([...w.saved.keys()].sort()).toEqual(['meta:limSince', 'meta:resetAt', 'meta:since'])
   expect(w.saved.get('meta:limSince')).toBe(NOW)
   await w.turn($, 1.25)
   near(w.rec()!.lim.five_hour![String(T5)]!.chat, 0.25)
@@ -1426,14 +1450,14 @@ for (const surface of ['terminal', 'desktop'] as const)
     const ui = await mountLedger($, text, surface)
     expect(await ui.find({ text: /^ENGINE:/ })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: 'cost-ledger · Limits' })).toBeDefined()
-    expect(await ui.find({ text: /Max 20x · Stand 06\.10\. 12:00 · neu laden: \/ledger limits/ })).toBeDefined()
+    expect(await ui.find({ text: /Ultra · Stand 06\.10\. 12:00 · neu laden: \/ledger limits/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '5 Stunden · Reset 15:00 (in 3 h 0 min)' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Woche · Reset Sa 10.10. 12:00 (in 4 T 0 h)' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'ab 06.10.' })).toBeDefined() // Woche begann vor den Fenster-Daten
     expect(await ui.find({ type: 'Text', text: '30 %' })).toBeDefined()
     expect((await ui.find({ type: 'Text', text: '50 %' }))?.props.color).toBe('success')
     expect(await ui.find({ type: 'Text', text: '100 % ≈ 4,00 $ (Schätzung)' })).toBeDefined() // 1,20 $ ÷ 30 × 100
-    expect(await ui.find({ type: 'Text', text: 'Abo-Monat · Max 20x · seit 08.09. · erneuert 08.10. (in 2 Tagen)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Abo-Monat · Ultra · seit 08.09. · erneuert 08.10. (in 2 Tagen)' })).toBeDefined()
     expect(await ui.find({ text: /^5,20 \$ API-Wert für 207,00 \$ Abo = 0,0×/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Letzte 5-Stunden-Fenster' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '06.10. 10–15' })).toBeDefined()
@@ -1485,11 +1509,11 @@ test('0.5.0 UI: Leerzustand ohne Limits und ohne Plan; ohne Limits mit Plan; ohn
   await w.start($)
   const text = await w.ledger($, 'limits')
   expect(text).toMatch(/Keine Limit-Daten: kein Abo erkannt oder seit dem Update noch keine Antwort\./)
-  expect(text).toMatch(/Abo nicht eingestellt: \/ledger plan max20 14/)
+  expect(text).toMatch(/Abo nicht eingestellt: \/ledger plan max 14/)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await mountLedger($, text, surface)
     expect(await ui.find({ type: 'Text', text: /^Keine Limit-Daten/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'Abo nicht eingestellt: /ledger plan max20 14' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Abo nicht eingestellt: /ledger plan max 14' })).toBeDefined()
     await ui.unmount()
   }
   await w.ledger($, 'plan pro 1')
@@ -1526,9 +1550,9 @@ for (const surface of ['terminal', 'desktop'] as const)
     const w = await limitsWorld($, on)
     const text = await w.ledger($)
     // Ab 0.8.0 in Klartext: eine Zeile zum Abo, eine zu den Limits gerade jetzt
-    expect(text.split('\n').slice(1, 3)).toEqual(['Abo Max 20x seit 06.10.: 5,20 $ API-Wert = 0,0× der 207,00 $', 'Limits jetzt: 5 Std. 30 % · Woche 50 % (/ledger limits)'])
+    expect(text.split('\n').slice(1, 3)).toEqual(['Abo Ultra seit 06.10.: 5,20 $ API-Wert = 0,0× der 207,00 $', 'Limits jetzt: 5 Std. 30 % · Woche 50 % (/ledger limits)'])
     const ui = await mountLedger($, text, surface)
-    expect(await ui.find({ text: /^Abo Max 20x seit 06\.10\.: 5,20 \$ API-Wert = 0,0× der 207,00 \$$/ })).toBeDefined()
+    expect(await ui.find({ text: /^Abo Ultra seit 06\.10\.: 5,20 \$ API-Wert = 0,0× der 207,00 \$$/ })).toBeDefined()
     expect(await ui.find({ text: /^Limits jetzt: 5 Std\. 30 % · Woche 50 % \(\/ledger limits\)$/ })).toBeDefined()
     expect((await ui.findAll({ type: 'Text', text: '50 %' })).some((t: any) => t.props.color === 'success')).toBe(true)
     expect(await ui.find({ type: 'Text', text: 'Heute' })).toBeDefined()
@@ -1555,7 +1579,7 @@ test('0.5.0: Text für Claude ≤ 10 Zeilen für limits und die Übersicht, auch
     /^5 Stunden: 30 % · 1,20 \$ · Reset 15:00 \(in 3 h 0 min\) · 100 % ≈ 4,00 \$ \(Schätzung\) · außerhalb des Ledgers ≈ 6 % von 30 % \(Schätzung: claude\.ai, Handy, Chats ohne cost-ledger\)$/m,
   )
   expect(limits).toMatch(/^Woche: 50 % · 1,20 \$ · Reset Sa 10\.10\. 12:00 \(in 4 T 0 h\) · Hochrechnung ab dem nächsten Fenster · ab 06\.10\.$/m)
-  expect(limits).toMatch(/^Abo-Monat: Max 20x · seit 08\.09\. · erneuert 08\.10\. \(in 2 Tagen\) · 5,20 \$ API-Wert für 207,00 \$ Abo = 0,0× \(ab 06\.10\.\)$/m)
+  expect(limits).toMatch(/^Abo-Monat: Ultra · seit 08\.09\. · erneuert 08\.10\. \(in 2 Tagen\) · 5,20 \$ API-Wert für 207,00 \$ Abo = 0,0× \(ab 06\.10\.\)$/m)
   expect(limits).toMatch(/^Letzte 5-Stunden-Fenster: 06\.10\. 10–15 1,20 \$ 30 % \(außen 6 %\) läuft · 06\.10\. 05–10 4,00 \$ 80 % \(außen 0 %\)$/m)
   // Mit allen Hinweisen (Speicher voll, unlesbar, ohne Kosten, Schreibfehler) bleibt es bei 10 Zeilen
   const r = aggregate([{ id: 'A', rec: recOf('P', { [TODAY]: 1 }) }], NOW, {
@@ -1595,25 +1619,25 @@ test('0.5.0: Formatierer für Reset, Dauer, Fenster, Prozent und Faktor in beide
 test('0.5.0 Englisch (Standard): /ledger limits, plan und die Limit-Zeile', async ($, on) => {
   const w = world(on, { saved: new Map<string, unknown>([['meta:limSince', NOW - 7 * H]]) })
   await w.start($)
-  expect(await w.ledger($, 'plan max20 8 207')).toBe('Plan saved: Max 20x, billing day 8, $207.00/month. Subscription month since Sep 8, renews Oct 8 · details: /ledger limits')
+  expect(await w.ledger($, 'plan max20 8 207')).toBe('Plan saved: Ultra, billing day 8, $207.00/month. Subscription month since Sep 8, renews Oct 8 · details: /ledger limits')
   w.st.rl = RL(T5, 30, TW, 50)
   await w.turn($, 1.2)
   const text = await w.ledger($, 'limits')
   expect(text).toMatch(/^\*\*Cost ledger · limits\*\* · as of Oct 6 12:00 · #/)
   expect(text).toMatch(/^5 hours: 30 % · \$1\.20 · reset 15:00 \(in 3 h 0 min\) · 100 % ≈ \$4\.00 \(estimate\) · outside the ledger: estimate from the first complete window ≥ 20 %$/m)
   expect(text).toMatch(/^Week: 50 % · \$1\.20 · reset Sat Oct 10 12:00 \(in 4 d 0 h\) · projection from the next window · from Oct 6$/m)
-  expect(text).toMatch(/^Subscription month: Max 20x · since Sep 8 · renews Oct 8 \(in 2 days\) · \$1\.20 API value for a \$207\.00 plan = 0\.0×/m)
+  expect(text).toMatch(/^Subscription month: Ultra · since Sep 8 · renews Oct 8 \(in 2 days\) · \$1\.20 API value for a \$207\.00 plan = 0\.0×/m)
   expect(text).toMatch(/% applies to the whole account \(incl\. claude\.ai\)/)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await mountLedger($, text, surface)
     expect(await ui.find({ type: 'Text', text: 'cost-ledger · limits' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '5 hours · reset 15:00 (in 3 h 0 min)' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: 'Subscription month · Max 20x · since Sep 8 · renews Oct 8 (in 2 days)' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Subscription month · Ultra · since Sep 8 · renews Oct 8 (in 2 days)' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Last 5-hour windows' })).toBeDefined()
     expect(await ui.find({ text: /Stunden|Woche|Abo-Monat/ })).toBeUndefined()
     await ui.unmount()
   }
-  expect((await w.ledger($)).split('\n').slice(1, 3)).toEqual(['Plan Max 20x since Oct 6: $1.20 API value = 0.0× the $207.00', 'Limits now: 5 h 30 % · week 50 % (/ledger limits)'])
+  expect((await w.ledger($)).split('\n').slice(1, 3)).toEqual(['Plan Ultra since Oct 6: $1.20 API value = 0.0× the $207.00', 'Limits now: 5 h 30 % · week 50 % (/ledger limits)'])
   expect(await w.ledger($, 'help')).toMatch(/^- `\/ledger limits`: .*\n- `\/ledger plan`: .*\n- `\/ledger plan <plan> <day\|today> \[price\]`: /m)
   expect(await w.ledger($, 'plan nope 3')).toMatch(/^Not saved: “nope 3” is not valid\.\n/)
 })
@@ -1700,7 +1724,7 @@ test('0.5.0 Review: /ledger plan constructor, __proto__ … sind ungültig und l
   await w.ledger($, 'plan max20 8 207')
   for (const bad of ['constructor 8', '__proto__ 8', 'tostring 8', 'hasownproperty 8'])
     expect(await w.ledger($, `plan ${bad}`), bad).toMatch(/^Nicht gespeichert:/)
-  expect(w.saved.get('meta:plan')).toEqual({ v: 1, plan: 'max20', day: 8, price: 207, at: NOW })
+  expect(w.st.cli).toEqual([{ plan: 'ultra', billingDay: '8', planPrice: '207' }])
   expect(cleanPlan({ v: 1, plan: 'constructor', day: 8, at: NOW })).toBeNull()
 })
 
@@ -1712,7 +1736,7 @@ test('0.5.0 Review: Limit-Zeile auch im Leerzustand direkt nach /ledger reset', 
   await w.turn($, 1)
   await w.ledger($, 'reset')
   const text = await w.ledger($)
-  expect(text).toMatch(/^Abo Max 20x seit 06\.10\.: 0,00 \$ API-Wert = 0,0× der 207,00 \$\nLimits jetzt: 5 Std\. 30 % \(\/ledger limits\)$/m)
+  expect(text).toMatch(/^Abo Ultra seit 06\.10\.: 0,00 \$ API-Wert = 0,0× der 207,00 \$\nLimits jetzt: 5 Std\. 30 % \(\/ledger limits\)$/m)
   expect(text).toMatch(/Noch keine Einträge/)
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await mountLedger($, text, surface)
@@ -1787,8 +1811,9 @@ test('0.5.0 Review 2: /ledger plan und reset bei vollem Speicher → lesbarer Hi
   await w.start($)
   await w.turn($, 1)
   w.st.setFails = true
-  // Ein werfender Stub wird übersprungen, der Aufruf scheitert dann mit „no implementation“ (docs/raw/en/test.md:182)
-  expect(await w.ledger($, 'plan max20 8 207')).toMatch(/^Speichern scheiterte zuletzt: .*store\.set/)
+  // Ein werfender Stub wird übersprungen, der Aufruf scheitert dann mit „no implementation“ (docs/raw/en/test.md:182).
+  // Das Abo liegt seit 0.11.0 in userConfig: ein voller Speicher stört es nicht
+  expect(await w.ledger($, 'plan max20 8 207')).toMatch(/^Abo gespeichert: Ultra/)
   expect(w.saved.has('meta:plan')).toBe(false)
   expect(await w.ledger($, 'reset')).toMatch(/^Speichern scheiterte zuletzt: .*store\.set/)
 })
@@ -1843,8 +1868,8 @@ test('0.6.0 Hilfe (de): Markdown mit Befehlen, Funktionen, Einstellungen und Ter
   const order = lines.filter((l) => l.startsWith('- `/ledger')).map((l) => /^- `([^`]+)`/.exec(l)![1])
   expect(order.slice(0, 5)).toEqual(['/ledger', '/ledger here [7|30|all]', '/ledger chats|projects|models [7|30|all]', '/ledger weeks', '/ledger limits'])
   expect(order.slice(-2)).toEqual(['/ledger reset', '/ledger help'])
-  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Abo ○ kein Abo \(\/ledger plan max20 14\) · Sync zwischen Geräten ○ aus \(\/ledger sync <ordner>\) · Speicher belegt 0 % von 4 MiB \(nur Info\) · Erfasst seit 06\.10\.2026 \(nur Info\)$/m)
-  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Aufbewahrung \(Tage\) 30 · Tagesbetrag gelb ab \(\$\) 3 \(Standard\) · Tagesbetrag rot ab \(\$\) 8 \(Standard\)$/m)
+  expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Abo ○ kein Abo \(\/ledger plan max 14\) · Sync zwischen Geräten ○ aus \(\/ledger sync <ordner>\) · Speicher belegt 0 % von 4 MiB \(nur Info\) · Erfasst seit 06\.10\.2026 \(nur Info\)$/m)
+  expect(text).toContain('**EINSTELLUNGEN (/plugin):** Abo kein Abo (Standard) · Abrechnungstag 1 (Standard) · Monatspreis ($) Listenpreis (Standard) · Gelb ab ($ pro Tag) 3 (Standard) · Rot ab ($ pro Tag) 8 (Standard) · Chats behalten (Tage) 30 · Sync-Ordner aus (Standard) · Gerätename automatisch (Standard) · Sprache de')
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure cost-ledger · Mod abschalten: /plugin disable cost-ledger')
 })
 
@@ -1867,11 +1892,11 @@ for (const surface of ['terminal', 'desktop'] as const)
     const texts = await ui.findAll({ type: 'Text' })
     expect(texts.some((x: any) => x.children?.[0] === '○ ' && x.props.color === 'inactive')).toBe(true)
     expect(texts.some((x: any) => x.children?.[0] === 'kein Abo' && x.props.color === 'inactive')).toBe(true)
-    expect(await ui.find({ type: 'Text', text: '/ledger plan max20 14' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '/ledger plan max 14' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: ' (Standard)' })).toBeDefined()
     const footer =
       surface === 'desktop'
-        ? 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure cost-ledger'
+        ? 'Einstellungen ändern: Einstellungen → Plugins → cost-ledger → Einstellungen · Mod abschalten: + → Plugins → Manage plugins'
         : 'Einstellungen ändern: /plugin configure cost-ledger · Mod abschalten: /plugin disable cost-ledger'
     expect(await ui.find({ type: 'Text', text: footer })).toBeDefined()
     await ui.unmount()
@@ -1884,13 +1909,13 @@ test('0.6.0 Hilfe: Zustand stimmt beim Aufruf: Abo einstellen → ●, Abo aus �
   await w.ledger($, 'plan max20 8 207')
   const on1 = await mountLedger($, await w.ledger($, 'help'), 'terminal')
   expect((await on1.findAll({ type: 'Text' })).some((x: any) => x.children?.[0] === '● ' && x.props.color === 'success')).toBe(true)
-  expect(await on1.find({ type: 'Text', text: 'Max 20x · Tag 8 · 207,00 $ im Monat' })).toBeDefined()
+  expect(await on1.find({ type: 'Text', text: 'Ultra · Tag 8 · 207,00 $ im Monat' })).toBeDefined()
   expect(await on1.find({ type: 'Text', text: '/ledger plan off' })).toBeDefined()
   expect(await on1.find({ type: 'Text', text: '06.10.2026' })).toBeDefined()
   expect(await on1.find({ type: 'Text', text: /^\d+ % von 4 MiB$/ })).toBeDefined()
   await on1.unmount()
   await w.ledger($, 'plan max5 1')
-  expect(await w.ledger($, 'help')).toMatch(/Abo ● Max 5x · Tag 1 · 100,00 \$ im Monat \(Listenpreis\) \(\/ledger plan off\)/)
+  expect(await w.ledger($, 'help')).toMatch(/Abo ● Max · Tag 1 · 100,00 \$ im Monat \(Listenpreis\) \(\/ledger plan off\)/)
   await w.ledger($, 'plan off')
   const off = await mountLedger($, await w.ledger($, 'help'), 'desktop')
   expect(await off.find({ type: 'Text', text: 'kein Abo' })).toBeDefined()
@@ -1907,7 +1932,7 @@ test('0.6.0 Hilfe: nur lesend (kein Schreiben, kein Aufräumen); Lesefehler → 
   expect(w.st.sets).toBe(sets)
   expect(w.saved.has('s:OLD')).toBe(true) // aufgeräumt wird nur bei /ledger
   expect(text).toMatch(/Erfasst seit 17\.08\.2026/) // 50 Tage vor dem 06.10.
-  expect(text).toMatch(/Aufbewahrung \(Tage\) 1 ·/)
+  expect(text).toMatch(/Chats behalten \(Tage\) 1 ·/)
 })
 
 test('0.6.0 Hilfe: store.keys scheitert → Hilfe mit Befehlen und Einstellungen, Fehler im Debug-Log', DE, async ($, on) => {
@@ -1984,7 +2009,7 @@ for (const surface of ['terminal', 'desktop'] as const)
       // Unter 60 Spalten stehen die Spalten untereinander: keine Zeile mit festen Spalten
       if (columns < 60) expect(boxes.some((b: any) => b.props.flexDirection === 'row' && b.children?.some((c: any) => typeof c === 'object' && c.props?.width !== undefined))).toBe(false)
       expect(await ui.find({ type: 'Text', text: '/ledger plan <plan> <day|today> [price]' })).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: 'Tagesbetrag rot ab ($)' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'Rot ab ($ pro Tag)' })).toBeDefined()
       await ui.unmount()
     })
 
@@ -2020,9 +2045,9 @@ test('0.6.0 Hilfe: Werte, Standard und Zustandstexte (stateText, ledgerHelp)', (
   const de = ledgerHelp(cleanSettings({ language: 'de', dayYellow: 2.5, dayRed: 9 }), { plan: { v: 1, plan: 'team', day: 3, at: NOW }, storeBytes: 1024 * 1024, since: NOW })
   expect(de.features[0]).toEqual({ name: 'Abo', state: { kind: 'on', text: 'Team · Tag 3 · ohne Preis' }, toggle: '/ledger plan off' })
   expect(de.features[2]!.state).toEqual({ kind: 'value', text: '25 % von 4 MiB' })
-  expect(de.settings.map((s) => [s.value, s.isDefault])).toEqual([['de', false], ['365', true], ['2,5', false], ['9', false]])
+  expect(de.settings.map((s) => [s.value, s.isDefault])).toEqual([['Team', false], ['3', false], ['Listenpreis', true], ['2,5', false], ['9', false], ['365', true], ['aus', true], ['automatisch', true], ['de', false]])
   const en = ledgerHelp(cleanSettings({}), { plan: null, storeBytes: 0, since: null })
-  expect(en.settings[0]).toEqual({ title: 'Language', value: 'en', isDefault: true })
+  expect(en.settings.at(-1)).toEqual({ title: 'Language', value: 'en', isDefault: true })
   expect(en.features[3]!.state).toEqual({ kind: 'value', text: '–' })
   expect(stateText({ kind: 'on' }, 'de')).toBe('● an')
   expect(stateText({ kind: 'off' }, 'en')).toBe('○ off')
@@ -2056,7 +2081,7 @@ test('0.6.0 Hilfe-Modul allgemein: BEDIENUNG nur mit Einträgen, leere Abschnitt
   expect(flat.some((n) => n.type === 'Text' && n.children?.[0] === 'on' && n.props?.color === 'success')).toBe(true)
   expect(flat.some((n) => n.type === 'Text' && n.children?.[0] === 'lang' && n.props?.color === undefined)).toBe(true)
   // Unter 60 Spalten: Zustand und Umschalten in einem Text (bricht als ein Absatz um, nicht als zwei Spalten)
-  const narrow = helpTree({ ...d, controls: [], features: [{ name: 'A', state: { kind: 'on', text: 'Max 5x · Tag 1 · 100,00 $ im Monat (Listenpreis)' }, toggle: '/demo off' }] }, 50, 'terminal', '#123456') as any
+  const narrow = helpTree({ ...d, controls: [], features: [{ name: 'A', state: { kind: 'on', text: 'Max · Tag 1 · 100,00 $ im Monat (Listenpreis)' }, toggle: '/demo off' }] }, 50, 'terminal', '#123456') as any
   const nodes: any[] = []
   const walk2 = (n: any) => {
     if (n && typeof n === 'object') {
@@ -2082,7 +2107,11 @@ const peerRec = (o: Partial<Rec> = {}): Rec => ({
 })
 const peerFile = (id: string, name: string, recs: Record<string, Rec>, at = NOW - H, since: number | null = NOW - 30 * DAY) =>
   buildFile({ id, name }, since, Object.entries(recs).map(([sid, rec]) => ({ id: sid, rec })), at)
-const ownDevice = (w: { saved: Map<string, unknown> }) => w.saved.get('meta:device') as { id: string; name: string }
+const ownDevice = (w: { saved: Map<string, unknown>; st: { cli: Record<string, string>[] } }) => {
+  const d = w.saved.get('meta:device') as { id: string; name?: string }
+  const named = [...w.st.cli].reverse().find((c) => c.deviceName !== undefined)?.deviceName
+  return { id: d.id, name: named || d.name || `Gerät ${d.id.slice(0, 4)}` }
+}
 const ownPath = (w: { saved: Map<string, unknown> }) => inDir(SYNC, fileName(ownDevice(w).id))
 
 test('0.7.0 sync.ts: Ordner prüfen, Dateinamen, Geräte-ID und -Name, gespeicherte Einstellungen', () => {
@@ -2231,7 +2260,8 @@ test('0.7.0 /ledger sync: Pfad mit Leerzeichen, ungültige Pfade, Stand, Name, a
   expect(w.st.fs).toEqual([]) // ungültige Pfade werden nie angefasst
   const dir = WIN ? 'E:\\Mein Sync\\cost-ledger' : '/Mein Sync/cost-ledger'
   expect(await w.ledger($, `sync ${dir}`)).toMatch(new RegExp(`^Sync an: ${reEsc(dir)} · dieses Gerät: `))
-  expect(w.saved.get('meta:sync')).toEqual({ v: 1, dir, at: NOW })
+  expect(w.lastCli()).toEqual({ syncFolder: dir })
+  expect(w.saved.has('meta:sync')).toBe(false)
   const dev = ownDevice(w)
   expect(dev.id).toMatch(/^[0-9a-f]{8}$/)
   const mine = inDir(dir, `cost-ledger-${dev.id}.json`)
@@ -2248,7 +2278,8 @@ test('0.7.0 /ledger sync: Pfad mit Leerzeichen, ungültige Pfade, Stand, Name, a
   expect(state).toMatch(/je Projekt den letzten Ordnernamen: keine Pfade, Mod-Namen, Repositories, Chat-Titel oder Nachrichten\.$/)
   expect(await w.ledger($, 'sync aus')).toBe('Sync aus. Die Datei dieses Geräts bleibt im Ordner; gelöscht wurde nichts.')
   expect(w.saved.has('meta:sync')).toBe(false)
-  expect(w.saved.get('meta:device')).toEqual({ id: dev.id, name: 'Laptop Büro' })
+  expect(w.saved.get('meta:device')).toEqual({ id: dev.id })
+  expect(w.lastCli()).toEqual({ syncFolder: '' })
   expect([...w.files.keys()]).toEqual([mine])
   w.st.writeFails = true
   expect(await w.ledger($, WIN ? 'sync F:\\Weg' : 'sync /weg')).toMatch(/^Nicht gespeichert: In den Ordner lässt sich nicht schreiben/)
@@ -2379,7 +2410,7 @@ test('0.7.0 /ledger reset mit Sync: nur dieses Gerät, eigene Datei leer neu, fr
   expect(await w.ledger($, 'reset')).toBe('Kostenbuch geleert (1 Eintrag).')
   expect((JSON.parse(w.files.get(ownPath(w))!) as SyncFile).recs).toEqual({})
   expect(w.files.get(lap)).toBe(lapText)
-  expect(w.saved.has('meta:sync')).toBe(true)
+  expect(w.lastCli()).toEqual({ syncFolder: SYNC })
   expect(w.saved.has('meta:device')).toBe(true)
   const after = await w.ledger($)
   expect(after).toMatch(/gesamt 2,00 \$/)
@@ -2405,7 +2436,8 @@ test('0.7.0 Doppelte Geräte-ID (Speicher kopiert): dieses Gerät nimmt eine neu
   expect(text).toMatch(/^Ein anderes Gerät schrieb mit dieser Geräte-ID \(Speicher kopiert\?\): Dieses Gerät schreibt ab jetzt unter einer neuen ID\.$/m)
   const now = ownDevice(w)
   expect(now.id).not.toBe(old.id)
-  expect(now.name).toBe(old.name)
+  // 0.11.0: ohne eigenen Namen (userConfig deviceName leer) folgt der Standardname der neuen ID, statt den des anderen Geräts zu tragen
+  expect(now.name).toBe(`Gerät ${now.id.slice(0, 4)}`)
   expect(w.files.get(inDir(SYNC, fileName(old.id)))).toBe(copy)
   expect(w.files.has(inDir(SYNC, fileName(now.id)))).toBe(true)
   expect(text).toMatch(/gesamt 6,00 \$/)
@@ -2473,7 +2505,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     const ui = await mountLedger($, text, surface)
     expect(await ui.find({ type: 'Text', text: 'außerhalb des Ledgers ≈ 6 % von 30 % (Schätzung: claude.ai, Handy, Chats ohne cost-ledger)' })).toBeDefined() // k = 4 $ ÷ 80 %
     expect(await ui.find({ type: 'Text', text: '  außen 0 %' })).toBeDefined()
-    expect(await ui.find({ text: /Max 20x · 2 Geräte · Stand 06\.10\. 12:00/ })).toBeDefined()
+    expect(await ui.find({ text: /Ultra · 2 Geräte · Stand 06\.10\. 12:00/ })).toBeDefined()
     await ui.unmount()
     const narrow = await mountLedger($, text, surface, 40)
     const boxes = await narrow.findAll({ type: 'Box' })
@@ -2677,12 +2709,13 @@ test('0.8.0 Kompatibilität: Eine 0.8.0-Datei ist für 0.7.0 gültig (v bleibt 1
   expect(mergeRecs([], [old])[0]!.rec.project).toBe(`${DEVICE_PROJECT}Büro`)
 })
 
-test('0.8.0 Ultra: /ledger plan ultra ohne Listenpreis, mit eigenem Preis Faktor', DE, async ($, on) => {
+test('0.8.0/0.12.0 Ultra: Listenpreis 200 $, eigener Preis gilt; Team ohne Listenpreis', DE, async ($, on) => {
   expect(parsePlan(['ultra', '14'], NOW)).toEqual({ v: 1, plan: 'ultra', day: 14, at: NOW })
   expect(parsePlan(['Ultra', 'heute', '400'], NOW)).toEqual({ v: 1, plan: 'ultra', day: 6, price: 400, at: NOW })
   const w = world(on)
   await w.start($)
-  expect(await w.ledger($, 'plan ultra 14')).toMatch(/^Abo gespeichert: Ultra, Abrechnungstag 14, ohne Preis\./)
+  expect(await w.ledger($, 'plan ultra 14')).toMatch(/^Abo gespeichert: Ultra, Abrechnungstag 14, 200,00 \$ im Monat \(Listenpreis\)\./)
+  expect(await w.ledger($, 'plan team 14')).toMatch(/^Abo gespeichert: Team, Abrechnungstag 14, ohne Preis\./)
   expect(await w.ledger($, 'plan ultra 14 400')).toMatch(/^Abo gespeichert: Ultra, Abrechnungstag 14, 400,00 \$ im Monat\./)
 })
 
@@ -3014,3 +3047,266 @@ test('0.10.0 here-State: Reset während eines laufenden Lesens: das alte Ergebni
   await settle()
   expect(s.last()).toMatchObject({ projectUsd: 0 })
 })
+
+test('0.11.0 Einstellungen: /ledger plan sagt, wo es gilt; abgelehnt → nichts geändert', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  const r = (await $.command.run({ command: 'ledger', args: 'plan max20 8 207' })).text as string
+  expect(r).toMatch(/\n\nGespeichert\. Gilt in diesem Chat sofort, in anderen offenen Chats nach `\/reload-plugins`\.$/)
+  w.st.cliFail = 'Billing day: nope'
+  expect((await $.command.run({ command: 'ledger', args: 'plan pro 3' })).text).toBe('Nicht gespeichert: Billing day: nope.')
+  expect(await w.ledger($, 'plan')).toMatch(/^Abo: Ultra, Abrechnungstag 8, 207,00 \$ im Monat\./)
+})
+
+test('0.11.0 Umzug: meta:plan, meta:sync und ein eigener Gerätename gehen einmal nach userConfig; die Geräte-ID bleibt', DE, async ($, on) => {
+  const saved = new Map<string, unknown>([
+    ['meta:plan', { v: 1, plan: 'max20', day: 8, price: 207, at: NOW - DAY }],
+    ['meta:sync', { v: 1, dir: 'C:\\Drive\\ledger', at: NOW - DAY }],
+    ['meta:device', { id: '11aa22bb', name: 'PC Büro' }],
+  ])
+  const w = world(on, { saved })
+  await w.start($)
+  await w.clock.advance(10)
+  expect(w.st.cli).toEqual([{ plan: 'ultra', billingDay: '8', planPrice: '207', syncFolder: 'C:\\Drive\\ledger', deviceName: 'PC Büro' }])
+  // Markiert statt gelöscht (0.12.1, sidekick 0.23.0 Review S1): ein Chat mit 0.10.x liest Plan, Ordner und Namen bis /reload-plugins weiter
+  expect(saved.get('meta:plan')).toEqual({ v: 1, plan: 'max20', day: 8, price: 207, at: NOW - DAY, migrated: true })
+  expect(saved.get('meta:sync')).toEqual({ v: 1, dir: 'C:\\Drive\\ledger', at: NOW - DAY, migrated: true })
+  expect(saved.get('meta:device')).toEqual({ id: '11aa22bb', name: 'PC Büro', migrated: true })
+  expect(await w.ledger($, 'plan')).toMatch(/^Abo: Ultra, Abrechnungstag 8, 207,00 \$ im Monat\./)
+  // Zweiter Start: markiert, nichts mehr umzuziehen
+  await w.start($)
+  await w.clock.advance(10)
+  expect(w.st.cli.length).toBe(1)
+})
+
+test('0.11.0 Einstellungen aus userConfig: Abo und Gerätename gelten; ohne Sync-Ordner steht er als „aus“ in der Hilfe', { options: { language: 'de', plan: 'pro', billingDay: 3, planPrice: 0, deviceName: 'Laptop' } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  expect(await w.ledger($, 'plan')).toMatch(/^Abo: Pro, Abrechnungstag 3, 20,00 \$ im Monat \(Listenpreis\)\./)
+  const help = await w.ledger($, 'help')
+  expect(help).toContain('Abo Pro · Abrechnungstag 3 · Monatspreis ($) Listenpreis (Standard)')
+  expect(help).toContain('Sync-Ordner aus (Standard) · Gerätename Laptop')
+  expect(w.st.cli).toEqual([])
+})
+
+test('0.11.0 Sync-Ordner aus userConfig (Einstellungsseite): Pfad nie in der Hilfe; fehlt der Ordner, wird nichts angelegt; die Geräte-ID entsteht', { options: { language: 'de', syncFolder: 'E:\\Gibts\\nicht' } }, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await w.turn($, 1)
+  const help = await w.ledger($, 'help')
+  expect(help).toContain('Sync-Ordner gesetzt (Pfad nicht gezeigt)')
+  expect(help).not.toContain('Gibts')
+  const text = await w.ledger($)
+  expect(text).toMatch(/Sync|Ordner/)
+  expect(w.st.fs.filter(([op]) => op === 'write')).toEqual([])
+  expect((w.saved.get('meta:device') as { id: string }).id).toMatch(/^[0-9a-f]{8}$/)
+})
+
+for (const bad of ['relativ\\ordner', '\\\\server\\share', 'E:\\', 'E:\\a\\..\\b'])
+  test(`0.11.0 Sync-Ordner aus userConfig ungültig (${bad}): kein $.fs-Aufruf, /ledger sync sagt, dass Sync aus ist`, { options: { language: 'de', syncFolder: bad } }, async ($, on) => {
+    const w = world(on)
+    await w.start($)
+    await w.turn($, 1)
+    await w.ledger($)
+    expect(await w.ledger($, 'sync')).toMatch(/^Sync ist aus: Der Sync-Ordner in den Einstellungen/)
+    expect(w.st.fs).toEqual([])
+    expect(await w.ledger($, 'help')).toContain('Sync-Ordner aus (Standard)')
+  })
+
+// ---------- 0.12.0: neue Abo-Pläne (Max, Ultra) ----------
+
+/** Toasts der Mod mitschreiben. */
+function toasts(on: On): string[] {
+  const out: string[] = []
+  on('ui.toast', ($, e) => {
+    out.push(e.text)
+    return { value: undefined }
+  })
+  return out
+}
+/** Zeile `cost-ledger.plan` für `$.config.list` (Weg 1), `owner` = Plugin-ID der geladenen Kopie. */
+const planRow = (value: string, owner = 'cost-ledger@fynn-mods') => ({
+  key: 'cost-ledger.plan',
+  label: 'Subscription',
+  kind: 'choice',
+  value,
+  options: SETTINGS.plan!.options,
+  provider: { plugin: owner, tier: 'user' },
+  isLocked: false,
+})
+const OLD_MAX20 = { language: 'de', plan: 'max20', billingDay: 8, planPrice: 0 }
+
+test('0.12.0 Pläne: Auswahl, Listenpreise, jeder Alias zum neuen Namen (auch großgeschrieben)', () => {
+  expect(Object.keys(PLANS)).toEqual(['pro', 'max', 'ultra', 'team', 'enterprise'])
+  // max5 und max20 bleiben nur für den Umzug in der Auswahl (sonst käme ein gespeichertes max20 als none an, types:8067-8069)
+  expect(SETTINGS.plan!.options).toEqual(['none', 'pro', 'max', 'ultra', 'team', 'enterprise', 'max5', 'max20'])
+  expect(LEGACY_PLANS).toEqual({ max5: 'max', max20: 'ultra' })
+  expect(Object.fromEntries(Object.entries(PLANS).map(([k, v]) => [k, v.price ?? null]))).toEqual({ pro: 20, max: 100, ultra: 200, team: null, enterprise: null })
+  const alias: Record<string, string> = { max: 'max', max5: 'max', max5x: 'max', '5x': 'max', ultra: 'ultra', max20: 'ultra', max20x: 'ultra', '20x': 'ultra', pro: 'pro', team: 'team', enterprise: 'enterprise' }
+  expect([...planWords()].sort()).toEqual(Object.keys(alias).sort())
+  for (const [a, p] of Object.entries(alias)) for (const s of [a, a.toUpperCase()]) expect(parsePlan([s, '8'], NOW)?.plan, s).toBe(p)
+  expect(currentPlan('max20')).toBe('ultra')
+  expect(currentPlan('pro')).toBe('pro')
+  expect([planLabel('max5'), planLabel('max20'), planLabel('max'), planLabel('ultra')]).toEqual(['Max', 'Ultra', 'Max', 'Ultra'])
+  expect(cleanPlan({ v: 1, plan: 'max5', day: 3, at: NOW })).toEqual({ v: 1, plan: 'max', day: 3, at: NOW })
+})
+
+test('0.12.0 /ledger plan max 5 und /ledger plan 20x heute (→ ultra) mit Listenpreis', DE, async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  expect(await w.ledger($, 'plan max 5')).toMatch(/^Abo gespeichert: Max, Abrechnungstag 5, 100,00 \$ im Monat \(Listenpreis\)\./)
+  expect(w.lastCli()).toEqual({ plan: 'max', billingDay: '5', planPrice: '0' })
+  expect(await w.ledger($, 'plan 20x heute')).toMatch(/^Abo gespeichert: Ultra, Abrechnungstag 6, 200,00 \$ im Monat \(Listenpreis\)\./)
+  expect(w.lastCli()).toEqual({ plan: 'ultra', billingDay: '6', planPrice: '0' })
+  expect(await w.ledger($, 'plan MAX5X 1 99')).toMatch(/^Abo gespeichert: Max, Abrechnungstag 1, 99,00 \$ im Monat\./)
+  expect(w.lastCli()).toEqual({ plan: 'max', billingDay: '1', planPrice: '99' })
+})
+
+test('0.12.0 alte Tage: ein Abo-Monat mit altem Namen rechnet mit demselben Preis (Listenpreis 200 $ oder der eigene)', () => {
+  const recs = [{ id: 'A', rec: { ...newRec({ project: 'P', root: ROOT, title: '', kind: 'terminal' }, NOW - 20 * DAY, 0), days: { [dayBefore(NOW, 10)]: 40, [dayBefore(NOW, 1)]: 10 }, lim: { five_hour: {} } } as Rec }]
+  const list = limitsReport(recs, NOW, { plan: { v: 1, plan: 'max20', day: 8, at: NOW } }).plan!
+  expect([list.plan, list.price, list.listPrice]).toEqual(['ultra', 200, true])
+  const own = limitsReport(recs, NOW, { plan: { v: 1, plan: 'max20', day: 8, price: 207, at: NOW } }).plan!
+  expect([own.plan, own.price, own.listPrice]).toEqual(['ultra', 207, false])
+  expect(limitsReport(recs, NOW, { plan: { v: 1, plan: 'max5', day: 8, at: NOW } }).plan!.price).toBe(100)
+})
+
+test('0.12.0 Umzug (Weg 2): gespeichertes max20 wird ultra, eigener Preis bleibt, Toast einmal', { options: { ...OLD_MAX20, planPrice: 207 } }, async ($, on) => {
+  const w = world(on)
+  const shown = toasts(on)
+  expect(await w.ledger($, 'plan')).toMatch(/^Abo: Ultra, Abrechnungstag 8, 207,00 \$ im Monat\./) // gilt schon vor dem Umzug
+  await w.start($)
+  await settle()
+  expect(w.st.cli).toEqual([{ plan: 'ultra' }]) // nur der Name, Tag und Preis bleiben
+  expect(shown).toEqual(['Abo-Plan umbenannt: Max 20x heißt jetzt Ultra.'])
+  expect(w.saved.get('meta:planRenamed')).toEqual({ from: 'max20', to: 'ultra', shown: true })
+  expect(await w.ledger($, 'plan')).toMatch(/^Abo: Ultra, Abrechnungstag 8, 207,00 \$ im Monat\./)
+  await w.start($, 'S2') // nächster Chat: nichts mehr umzuziehen, kein zweiter Toast
+  await settle()
+  expect(w.st.cli).toHaveLength(1)
+  expect(shown).toHaveLength(1)
+  await w.ledger($, 'reset') // die Markierung ist eine Einstellung, keine Buchung
+  expect(w.saved.get('meta:planRenamed')).toEqual({ from: 'max20', to: 'ultra', shown: true })
+})
+
+test('0.12.0 Umzug: zweiter offener Chat mit altem Wert schreibt still nach, ohne zweiten Toast', { options: OLD_MAX20 }, async ($, on) => {
+  const saved = new Map<string, unknown>([['meta:planRenamed', { from: 'max20', to: 'ultra', shown: true }]])
+  const w = world(on, { saved })
+  const shown = toasts(on)
+  await w.start($)
+  await settle()
+  expect(w.st.cli).toEqual([{ plan: 'ultra' }])
+  expect(shown).toEqual([])
+})
+
+test('0.12.0 Umzug (Weg 1): max5 → max über $.config.set; den Toast zeigt die neu geladene Instanz', { options: { language: 'en', plan: 'max5', billingDay: 3, planPrice: 0 } }, async ($, on) => {
+  const w = world(on)
+  const shown = toasts(on)
+  const sets: unknown[] = []
+  on('config.list', () => ({ value: [planRow('max5')] as never }))
+  on('config.set', ($, e) => {
+    sets.push({ key: e.key, value: e.value })
+    return { value: e.value }
+  })
+  await w.start($)
+  await settle()
+  expect(sets).toEqual([{ key: 'cost-ledger.plan', value: 'max' }])
+  expect(w.st.cli).toEqual([])
+  expect(shown).toEqual([]) // die alte Instanz tut nach dem set nichts mehr
+  expect(w.saved.get('meta:planRenamed')).toEqual({ from: 'max5', to: 'max', shown: false })
+})
+
+test('0.12.0 Umzug: die neu geladene Instanz (plan max) zeigt den ausstehenden Toast einmal', { options: { language: 'en', plan: 'max', billingDay: 3, planPrice: 0 } }, async ($, on) => {
+  const saved = new Map<string, unknown>([['meta:planRenamed', { from: 'max5', to: 'max', shown: false }]])
+  const w = world(on, { saved })
+  const shown = toasts(on)
+  await w.start($)
+  await settle()
+  await w.start($, 'S2')
+  await settle()
+  expect(shown).toEqual(['Subscription plan renamed: Max 5x is now Max.'])
+  expect(saved.get('meta:planRenamed')).toEqual({ from: 'max5', to: 'max', shown: true })
+  expect(w.st.cli).toEqual([])
+})
+
+test('0.12.0 Umzug: keiner in einer @inline-Kopie (--plugin-dir), der neue Name gilt trotzdem', { options: OLD_MAX20 }, async ($, on) => {
+  const w = world(on)
+  const shown = toasts(on)
+  const sets: unknown[] = []
+  on('config.list', () => ({ value: [planRow('max20', 'cost-ledger@inline')] as never }))
+  on('config.set', ($, e) => {
+    sets.push(e.key)
+    return { value: e.value }
+  })
+  await w.start($)
+  await settle()
+  expect([sets, w.st.cli, shown]).toEqual([[], [], []])
+  expect(w.saved.has('meta:planRenamed')).toBe(false)
+  expect(await w.ledger($, 'plan')).toMatch(/^Abo: Ultra, Abrechnungstag 8, 200,00 \$ im Monat \(Listenpreis\)\./)
+})
+
+test('0.12.0 Umzug gescheitert: kein Toast, keine Markierung, Grund im Debug-Log; beim nächsten Start erneut', { options: OLD_MAX20 }, async ($, on) => {
+  const w = world(on)
+  const shown = toasts(on)
+  w.st.cliFail = 'gesperrt'
+  await w.start($)
+  await settle()
+  expect(shown).toEqual([])
+  expect(w.saved.has('meta:planRenamed')).toBe(false)
+  expect(w.st.logs.some((l) => /max20 → ultra nicht umgezogen: gesperrt/.test(l))).toBe(true)
+  w.st.cliFail = ''
+  await w.start($, 'S2')
+  await settle()
+  expect(w.st.cli).toEqual([{ plan: 'ultra' }])
+  expect(shown).toEqual(['Abo-Plan umbenannt: Max 20x heißt jetzt Ultra.'])
+})
+
+test('0.12.0 Umzug in claude -p (ohne Oberfläche): umgezogen, der Toast wartet auf den nächsten Chat (Review K2)', { options: OLD_MAX20 }, async ($, on) => {
+  const w = world(on, { surfaces: [] })
+  const shown = toasts(on)
+  await w.start($)
+  await settle()
+  expect(w.st.cli).toEqual([{ plan: 'ultra' }])
+  expect(shown).toEqual([])
+  expect(w.saved.get('meta:planRenamed')).toEqual({ from: 'max20', to: 'ultra', shown: false })
+})
+
+test('0.12.0 Umzug: kaputte Markierung zählt nicht (Review K4); werfendes store.get landet im Debug-Log (Review K1)', { options: OLD_MAX20 }, async ($, on) => {
+  const saved = new Map<string, unknown>([['meta:planRenamed', { from: 7, shown: true }]])
+  const w = world(on, { saved })
+  const shown = toasts(on)
+  await w.start($)
+  await settle()
+  expect(shown).toEqual(['Abo-Plan umbenannt: Max 20x heißt jetzt Ultra.'])
+  expect(saved.get('meta:planRenamed')).toEqual({ from: 'max20', to: 'ultra', shown: true })
+})
+
+test('0.12.0 Umzug: store.get wirft → Grund im Debug-Log, nichts geschrieben (Review K1)', { options: OLD_MAX20 }, async ($, on) => {
+  // Der Stub wirft beim Lesen der Markierung; ein werfender Stub lässt den Aufruf scheitern (docs/raw/en/test.md:187)
+  class Broken extends Map<string, unknown> {
+    override get(key: string) {
+      if (key === 'meta:planRenamed') throw new Error('kaputt')
+      return super.get(key)
+    }
+  }
+  const w = world(on, { saved: new Broken() })
+  await w.start($)
+  await settle()
+  expect(w.st.cli).toEqual([])
+  expect(w.st.logs.some((l) => /Umzug der Einstellungen: /.test(l))).toBe(true)
+})
+
+for (const lang of ['en', 'de'] as const)
+  test(`0.12.0 Texte (${lang}): Hilfe und Texte ohne „Max 5x/20x“, alte Namen nur als Alias`, { options: { language: lang, plan: 'ultra', billingDay: 8, planPrice: 0 } }, async ($, on) => {
+    const w = world(on)
+    await w.start($)
+    const t = T[lang] as Record<string, unknown>
+    for (const [k, v] of Object.entries(t)) if (typeof v === 'string') expect(v, k).not.toMatch(/Max 5x|Max 20x/)
+    const help = await w.ledger($, 'help')
+    expect(help).not.toMatch(/Max 5x|Max 20x/)
+    expect(help).toMatch(/Ultra · (day|Tag) 8 · (\$200\.00\/month|200,00 \$ im Monat) \((list price|Listenpreis)\)/)
+    expect(help).toMatch(/max5, max5x, 5x → max; max20, max20x, 20x → ultra/)
+    const plan = await w.ledger($, 'plan max 1')
+    expect(plan).not.toMatch(/5x|20x/)
+    expect(await w.ledger($, 'limits')).not.toMatch(/Max 5x|Max 20x/)
+  })

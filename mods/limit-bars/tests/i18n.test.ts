@@ -3,6 +3,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import { spanText, tokensText } from '../hooks/cache.ts'
 import { T, dec, langOf, usd } from '../hooks/i18n.ts'
 import { clockText, countdownText } from '../hooks/view.ts'
+import { cliAnswer } from './cli.ts'
+import type { Cli } from './cli.ts'
 
 // Sprachumschaltung (release/I18N.md): Standard en, `language: de` für Deutsch. Die übrigen Tests laufen mit `de`.
 const NOW = new Date(2026, 9, 2, 10, 0, 0).getTime()
@@ -83,6 +85,8 @@ test('Formatierer: Beträge, Dezimalzahlen, Tokens, Dauer, Reset-Zeiten je Sprac
 function world(on: On) {
   const clock = mock.clock(on, { now: NOW })
   const saved = new Map<string, unknown>()
+  const cli: Cli = { writes: [], fail: '' }
+  on('process.run', ($: unknown, e: any) => cliAnswer(e, cli) ?? { deny: 'kein Prozess im Test' })
   const toasts: string[] = []
   const asks: { question: string; options: string[] }[] = []
   const runs: { command: string; args: string }[] = []
@@ -111,7 +115,7 @@ function world(on: On) {
     registered.push(e as never)
     return { value: undefined }
   })
-  on('command.list', () => ({ value: [{ name: 'limit-bars:uebergabe', description: 'Handoff', source: 'plugin' }] }))
+  on('command.list', () => ({ value: [{ name: 'limit-bars:cache', description: 'Cache', source: 'plugin' }] }))
   on('command.run', ($, e) => {
     runs.push({ command: e.command, args: e.args })
     return { text: '' }
@@ -147,6 +151,7 @@ function world(on: On) {
   return {
     clock,
     saved,
+    cli,
     toasts,
     asks,
     runs,
@@ -225,7 +230,8 @@ test('Befehle werden in der eingestellten Sprache registriert, Argumente englisc
   const cacheCmd = w.registered.find((c) => c.name === 'cache')
   expect(cacheCmd?.description).toBe('Prompt cache: state, cost, settings')
   expect(cacheCmd?.argumentHint).toBe('[ttl 5|60|auto] [warn on|off] [big 150k] [hints on|off]')
-  expect(w.registered.find((c) => c.name === 'handoff')?.argumentHint).toBe('[continue|show]')
+  // Ausbau 0.15.0: /handoff gehört sidekick
+  expect(w.registered.find((c) => c.name === 'handoff')).toBeUndefined()
   expect(w.registered.find((c) => c.name === 'keepwarm')?.argumentHint).toBe('[hours|off]')
 })
 
@@ -236,7 +242,7 @@ test('0.11.0 language: language steht im argumentHint von /bars, nicht bei den N
   on('session.start', () => ({ cwd: '/work' }))
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
   expect(w.registered.find((c) => c.name === 'bars')?.argumentHint).toBe('[show 5h|week|cache|storage on|off] [style bar|ring] [language de|en] [reset] [help]')
-  for (const name of ['cache', 'handoff', 'keepwarm', 'disk']) expect(w.registered.find((c) => c.name === name)?.argumentHint ?? '', name).not.toContain('language')
+  for (const name of ['cache', 'keepwarm', 'disk']) expect(w.registered.find((c) => c.name === name)?.argumentHint ?? '', name).not.toContain('language')
 })
 
 test('de: Befehle mit deutscher Beschreibung, Argumente englisch', DE, async ($, on) => {
@@ -275,7 +281,9 @@ test('Aliase: englische und deutsche Argumente wirken in beiden Sprachen (en)', 
   expect((await cache($, 'gross 200k')).text).toContain('from 200k')
   expect((await cache($, 'groß 250k')).text).toContain('from 250k')
   expect((await cache($, 'big 300k')).text).toContain('from 300k')
-  expect(w.saved.get('settings')).toMatchObject({ guard: false, alerts: true, bigTokens: 300000 })
+  expect(w.cli.writes.length).toBe(8)
+  expect(w.cli.writes.at(-1)).toEqual({ bigTokens: '300000' })
+  expect(w.saved.has('settings')).toBe(false)
   const bad = await cache($, 'quatsch')
   expect(bad.text).toBe('Unknown: "quatsch". Possible: ttl 5|60|auto · warn on|off · big 150k · hints on|off → `/bars help`')
 })
@@ -285,7 +293,8 @@ test('Aliase in de: warn, hints, big wirken auch bei deutscher Sprache', DE, asy
   expect((await cache($, 'warn off')).text).toContain('Rückfrage vor kaltem Senden: **aus**')
   expect((await cache($, 'hints off')).text).toContain('Hinweis kurz vor Ablauf: **aus**')
   expect((await cache($, 'big 300k')).text).toContain('ab 300k')
-  expect(w.saved.get('settings')).toMatchObject({ guard: false, alerts: false, bigTokens: 300000 })
+  expect(w.cli.writes.at(-1)).toEqual({ bigTokens: '300000' })
+  expect(w.saved.has('settings')).toBe(false)
 })
 
 test('en: Rückfrage vor kaltem Senden auf Englisch; Cancel verwirft mit englischem Hinweis', async ($, on) => {
@@ -314,58 +323,6 @@ test('en: Hinweis kurz vor Ablauf auf Englisch', { timeoutMs: 30_000 }, async ($
   expect(hint).toContain('305k context, rewrite ≈ $2.44')
   expect(hint).toContain('/keepwarm')
   await ui.unmount()
-})
-
-const HANDOFF_EN = `# Handoff: Test\n\n## Task\n${'One sentence with content. '.repeat(15)}\n\n## Next\nGo on.`
-const HANDOFF_DE = `# Übergabe: Test\n\n## Auftrag\n${'Ein Satz mit Inhalt. '.repeat(15)}\n\n## Weiter mit\nWeiter.`
-
-test('en: /handoff startet den Skill mit Sprache en, fängt die englische Übergabe ab und startet den neuen Chat', async ($, on) => {
-  const w = world(on)
-  w.setAnswer('New chat with handoff')
-  expect((await $.command.run({ command: 'handoff', args: '' } as never)).text).toContain('Writing the handoff')
-  await w.clock.advance(1000)
-  expect(w.runs).toContainEqual({ command: 'limit-bars:uebergabe', args: 'en' })
-  const t = await w.step($, usage(400000, 5000), false)
-  await $.turn.complete({ turnId: t, answer: `Here it is.\n\n${HANDOFF_EN}`, durationMs: 1000, isAborted: false, reason: 'answer' } as never)
-  await w.clock.advance(1000)
-  expect(w.asks[0].question.startsWith('Handoff ready.')).toBe(true)
-  expect(w.asks[0].options).toEqual(['New chat with handoff', 'Keep working here'])
-  expect(w.runs.some((r) => r.command === 'clear')).toBe(true)
-  expect(w.sent[0].startsWith('Handoff from my previous chat:\n\n# Handoff: Test')).toBe(true)
-  expect(w.toasts).toContain('New chat started with the handoff. The old chat stays reachable via /resume.')
-  // show und das deutsche Alias zeigen
-  expect((await $.command.run({ command: 'handoff', args: 'show' } as never)).text).toContain('Last handoff (10:00):\n\n# Handoff: Test')
-  expect((await $.command.run({ command: 'handoff', args: 'zeigen' } as never)).text).toContain('# Handoff: Test')
-})
-
-test('de: /handoff gibt dem Skill die Sprache de mit; eine ältere englische Übergabe wird ebenso erkannt', DE, async ($, on) => {
-  const w = world(on)
-  w.setAnswer(null)
-  await $.command.run({ command: 'handoff', args: '' } as never)
-  await w.clock.advance(1000)
-  expect(w.runs).toContainEqual({ command: 'limit-bars:uebergabe', args: 'de' })
-  let t = await w.step($, usage(400000, 5000), false)
-  await $.turn.complete({ turnId: t, answer: `Bitte:\n\n${HANDOFF_DE}`, durationMs: 1000, isAborted: false, reason: 'answer' } as never)
-  await w.clock.advance(1000)
-  expect(w.toasts).toContain('Übergabe gespeichert. Später: /handoff continue (leert den Chat) oder /handoff show.')
-  expect((w.saved.get('handoffs') as { text: string }[])[0].text.startsWith('# Übergabe: Test')).toBe(true)
-  await $.command.run({ command: 'handoff', args: '' } as never)
-  await w.clock.advance(1000)
-  t = await w.step($, usage(400000, 5000), false)
-  await $.turn.complete({ turnId: t, answer: `Vorrede.\n\n${HANDOFF_EN}`, durationMs: 1000, isAborted: false, reason: 'answer' } as never)
-  await w.clock.advance(1000)
-  expect((w.saved.get('handoffs') as { text: string }[])[0].text.startsWith('# Handoff: Test')).toBe(true)
-})
-
-test('en: /handoff continue und das Alias weiter setzen die gespeicherte Übergabe ein', async ($, on) => {
-  const w = world(on)
-  w.saved.set('handoffs', [{ at: NOW, session: 'alt', text: HANDOFF_EN }])
-  expect((await $.command.run({ command: 'handoff', args: 'continue' } as never)).text).toBe('Clearing the chat and continuing with the handoff.')
-  await w.clock.advance(1000)
-  expect(w.sent.length).toBe(1)
-  expect((await $.command.run({ command: 'handoff', args: 'weiter' } as never)).text).toBe('Clearing the chat and continuing with the handoff.')
-  await w.clock.advance(1000)
-  expect(w.sent.length).toBe(2)
 })
 
 test('en: /keepwarm auf Englisch; off und das Alias aus schalten ab', async ($, on) => {

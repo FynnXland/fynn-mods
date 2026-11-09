@@ -106,8 +106,8 @@ const en = {
     featShuffle: 'Shuffle button',
     bySetting: 'Setting',
     footerTerminal: 'Change settings: /plugin configure tune-strip · Turn the mod off: /plugin disable tune-strip',
-    footerDesktop: 'Turn the mod off: + → Plugins → Manage plugins · Change settings: /plugin configure tune-strip in a terminal',
-    settings: { language: 'Language / Sprache', size: 'Size', pollSeconds: 'Poll every (s)', extraButtons: 'Extra buttons (±15 s, shuffle, repeat)' },
+    footerDesktop: 'Change settings: Settings → Plugins → tune-strip → Settings · Turn the mod off: + → Plugins → Manage plugins',
+    settings: { language: 'Language / Sprache', size: 'Size', pollSeconds: 'Refresh every (s)', extraButtons: 'More buttons', beat: 'Beat for Clawd', beatOffset: 'Beat delay (ms)' },
   },
 }
 
@@ -211,8 +211,8 @@ const de: typeof en = {
     featShuffle: 'Zufall-Knopf',
     bySetting: 'Einstellung',
     footerTerminal: 'Einstellungen ändern: /plugin configure tune-strip · Mod abschalten: /plugin disable tune-strip',
-    footerDesktop: 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure tune-strip',
-    settings: { language: 'Sprache', size: 'Größe', pollSeconds: 'Abfrage alle (s)', extraButtons: 'Zusatzknöpfe (±15 s, Zufall, Wiederholen)' },
+    footerDesktop: 'Einstellungen ändern: Einstellungen → Plugins → tune-strip → Einstellungen · Mod abschalten: + → Plugins → Manage plugins',
+    settings: { language: 'Sprache', size: 'Größe', pollSeconds: 'Abfrage alle (s)', extraButtons: 'Mehr Knöpfe', beat: 'Takt für Clawd', beatOffset: 'Takt-Verzögerung (ms)' },
   },
 }
 

@@ -8,7 +8,7 @@ Spotify is a trademark of Spotify AB. This is an unofficial hobby mod, not made 
 
 Since 0.6.0 it also finds the **beat** of the song (tempo, where the beats fall, and whether the song is calm, groove/hip-hop, hard or sad) so that clawd-buddy can nod along in time. **Spotify's audio is analysed locally for tempo only; nothing is recorded, stored or sent.** Only Spotify is listened to, never the rest of your system sound. Turn it off with `/tune beat off`.
 
-Tested with Claude Code **v2.1.318** · Plugin version **0.9.0** · Windows only
+Tested with Claude Code **v2.1.319** · Plugin version **0.11.5** · Windows only
 
 ## Display
 
@@ -20,8 +20,8 @@ Tested with Claude Code **v2.1.318** · Plugin version **0.9.0** · Windows only
 - **Sizes:** `full` (cover, title, position bar, all buttons), `compact` (cover, title, previous/play/next), `mini` (cover and play/pause), `off`. In the terminal `auto` picks the largest size that fits next to the other band mods; tune-strip always yields first.
 - **Desktop:** the bar (`full`) takes no room from the other mods because it has its own row above them (level 40, above quick-replies and sidekick). `auto` uses the bar, and only the compact size in the row when the room is known and enough. The window width in pixels is not measured yet, so for now `auto` means the bar. `/tune size compact` or `mini` puts a small version in the band row instead (slot 20, between limit-bars and Clawd; the title is cut to a fixed width).
 - **Terminal:** always one slot in the band row (slot 20). Without the other mods it stands alone at the left edge.
-- **Nothing to show:** if Spotify is not running, nothing is drawn and no background process runs for it more often than every 15 s.
-- **Position:** between two reads the time keeps counting by itself and stops on pause. The bar redraws at most every 5 s (more often it flickers and swallows clicks); in between, the image itself counts on: the time ticks every full second and the bar fills segment by segment (SMIL, up to 15 s ahead, no extra redraws).
+- **Nothing to show:** if Spotify is not running, nothing is drawn, the band is not redrawn for it (except one check every 2 min when no other band mod draws), and no background process runs for it more often than every 15 s.
+- **Position:** between two reads the time keeps counting by itself and stops on pause. In the desktop the bar image counts on by itself up to the end of the track (SMIL, at most 60 min ahead): the time ticks every full second and the bar fills segment by segment. The band is redrawn only when something changes (track, state, shuffle, repeat, cover), after a button or command, or when Spotify jumps by more than 1.5 s; every redraw makes the desktop redraw the rows below your messages too, so fewer redraws mean no flicker there. In the terminal the time is text and is redrawn at most every 5 s.
 - **Back button:** over 3 s into a track it restarts the track; pressed again right away (position 0) it goes to the previous track, like Spotify's own button. `/tune prev` always goes to the previous track.
 - **Speed:** a click is shown at once (pause, restart, shuffle, repeat), then Windows is asked and the real state corrects it. Control and the read that follows run in one PowerShell start (about 0.8 s); after next or previous the bar jumps back to 0 at once and the script waits only until the new title shows up.
 
@@ -32,7 +32,7 @@ Tested with Claude Code **v2.1.318** · Plugin version **0.9.0** · Windows only
 - **What it does:** while Spotify plays and the band is on screen, a small helper (Windows PowerShell 5.1 with a fixed C# text that ships inside the mod) listens to **Spotify's own audio only** through Windows process loopback (Windows 10 version 2004 or later). Every 2.5 s it reports a line of numbers: tempo, the time of the last beat and a few sound features (bass and treble share, brightness, how dense the attacks are). From these the mod works out the tempo (60–150 bpm; faster songs count at half speed), where the beats fall, and the group of the song: `calm`, `groove` (groove and hip-hop), `hard` or `sad` (since 0.7.0; in practice slow ballads with a soft beat).
 - **What it shares:** `tune-strip.beat` = `{ bpm, at, sure, group }`, or `null` without a beat. No title, no artist, no raw numbers. clawd-buddy reads it; the group `sad` (0.7.0) needs **clawd-buddy 0.12.0**, so update both together (0.11.0 would ignore the whole value).
 - **Nothing kept:** the helper holds at most the last 20 s of numbers in memory (and 1024 audio samples for the analysis). It writes no file of its own, opens no connection and records nothing. (When it starts, Windows PowerShell compiles the C# text with the C# compiler built into Windows, which briefly uses temporary files for that code; no audio is ever written.) If listening to Spotify alone is not possible, there is simply no beat; it never falls back to the whole system sound.
-- **When it runs:** only on Windows, only while Spotify plays and tune-strip draws its band, and only with beat detection on (default). It stops at the latest 15 s after a pause, after the band is no longer drawn, and within a few seconds after `/tune off` or `/tune beat off`; it always ends with the session. If it breaks, it is restarted at most three times (after 5, 20 and 60 s), then only with the next track. Each visible chat runs its own helper. Measured: about 1.5 % of one CPU core.
+- **When it runs:** only on Windows, only while Spotify plays and tune-strip draws its band, and only with beat detection on (default). It stops at the latest 15 s after a pause, about 40 s after the band is no longer drawn (for example when the chat is hidden), and within a few seconds after `/tune off` or `/tune beat off`; it always ends with the session. If it breaks, it is restarted at most three times (after 5, 20 and 60 s), then only with the next track. Each visible chat runs its own helper. Measured: about 1.5 % of one CPU core.
 - **After a track change** the beat is gone for a moment and comes back after about 6–9 s; the group is decided after about 15 s of a song and only changes when another group holds for 30 s (a calm intro before the drop).
 - **Headphones:** Bluetooth headphones play the sound later than Windows hands it over (often 150–250 ms). If Clawd nods too early, shift the beat with `/tune beat offset 200` (positive = later, −400 to 400 ms).
 
@@ -46,26 +46,30 @@ Tested with Claude Code **v2.1.318** · Plugin version **0.9.0** · Windows only
 | `/tune back` · `forward` | −15 s / +15 s |
 | `/tune shuffle [on\|off]` | Shuffle |
 | `/tune repeat [off\|all\|track]` | Repeat |
-| `/tune size auto\|full\|compact\|mini` | Size, applies in all open chats |
-| `/tune on` · `off` | Show or hide the band |
+| `/tune size auto\|full\|compact\|mini\|off` | Size (setting `size`; `off` is the same as `/tune off`) |
+| `/tune on` · `off` | Show or hide the band (`off` sets `size` to `off`, `on` brings back the last size) |
 | `/tune beat` | One line about the beat detection: state, tempo, sure or not, group, clarity, offset |
-| `/tune beat on` · `off` | Beat detection on or off (applies in all open chats) |
-| `/tune beat offset <ms>` | Shift the beat for headphones, −400 to 400 ms (positive = later; applies in all open chats) |
+| `/tune beat on` · `off` | Beat detection on or off (setting `beat`) |
+| `/tune beat offset <ms>` | Shift the beat for headphones, −400 to 400 ms (positive = later; setting `beatOffset`) |
 | `/tune language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.5.1): saved for the next chat, and right away in the current one after `/reload-plugins`. Works on any system, since it does not touch Spotify |
 | `/tune help` | Help as a table: commands, buttons, state and your settings |
 
-Commands and arguments are English in both languages. `size`, `on`, `off`, `beat on|off` and the offset are saved in the mod's plugin store and override the `userConfig` defaults.
+Commands and arguments are English in both languages. Since 0.11.0 the commands and the settings page change the same settings (`pluginConfigs` in your user settings). In a terminal session a command applies at once (Claude Code reloads the mod). In the desktop app and `claude -p` it applies in the current chat at once and in other open chats after `/reload-plugins` or in the next chat. Values saved by earlier versions in the plugin store are moved over once at the next start. After an update, run `/reload-plugins` in chats that are already open; until then they keep running the old version with its old values.
+
+Known issue: the desktop settings page may show switches that were never saved as on, even when their default is off, and saving the page then turns them on. This plugin stores its off defaults once at the first start, so the page shows them correctly.
 
 ## Configuration
 
-`/config` → tune-strip:
+Desktop app: **Settings → Plugins → tune-strip → Settings**. Terminal: `/config` → tune-strip, or `/plugin configure tune-strip`.
 
-| Key | Title in `/config` | Meaning | Default |
-|---|---|---|---|
-| `language` | Language / Sprache | `en` English, `de` Deutsch | `en` |
-| `size` | Size | `auto`, `full`, `compact`, `mini`, `off` | `auto` |
-| `pollSeconds` | Poll every (seconds) | How often the media controls are read while the band is on screen (3–10) | 4 |
-| `extraButtons` | Extra buttons | In the desktop bar also show −15 s, +15 s, shuffle and repeat. The commands work either way | off |
+| Key | Title | Meaning | Default | Command |
+|---|---|---|---|---|
+| `size` | Size | `auto`, `full`, `compact`, `mini`, `off` | `auto` | `/tune size`, `/tune on\|off` |
+| `extraButtons` | More buttons | In the desktop bar also show −15 s, +15 s, shuffle and repeat. The commands work either way | off | – |
+| `beat` | Beat for Clawd | Find the beat locally for clawd-buddy (listens to Spotify only, records nothing) | on | `/tune beat on\|off` |
+| `beatOffset` | Beat delay (ms) | Shift the beat, −400 to 400 ms, positive = later | 0 | `/tune beat offset <ms>` |
+| `pollSeconds` | Refresh every (s) | How often the media controls are read while the band is on screen (3 to 10) | 4 | – |
+| `language` | Language / Sprache | `en` English, `de` Deutsch | `en` | `/tune language de\|en` |
 
 ## Rights
 
@@ -86,11 +90,11 @@ In plain language:
 - `$.state.get`: reads the width that limit-bars and clawd-buddy report for their slot, so tune-strip knows how much room is left, and whether quick-replies shows its pill (`quick-replies.band`, since 0.7.1) for the separator line; and its own `tune-strip.playing` every 30 s as a fallback check.
 - Hook `classic.SessionStart` (only after `/clear`, `/resume`, `/branch`): writes `tune-strip.playing` again right away, because those commands reset it. Reads nothing from the event.
 - `$.state.set` (`tune-strip.playing`, since 0.3.0): publishes only whether music is playing right now (`{ playing: true | false }`, or null without a Spotify session or when tune-strip is off). No title, no artist. clawd-buddy reads it and bobs along. Written from the tick (at most once a second, only on change) and on `/tune on|off`, never while drawing.
-- `$.store.get`, `$.store.set`: the size, on/off, beat on/off and offset settings.
+- `$.store.get`, `$.store.set`: the last size before `/tune off` (so `/tune on` can bring it back), and moving the values saved before 0.11.0 into the settings once. Since this version also the key `offDefaults2`: which off switches were already saved as `false` (see the known issue under the settings).
 - `$.clock.every`, `$.clock.now`: the poll interval and the running position.
 - `$.ui.resolve`, `$.ui.invalidate`: draw and redraw the band. `$.command.register`: `/tune`.
-- `$.config.list`, `$.config.set`: only for `/tune language` (since 0.5.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone.
-- `$.process.run` (also): for `/tune language` in the desktop app and `claude -p` (since 0.5.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `tune-strip@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `tune-strip@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
+- `$.config.list`, `$.config.set`: for `/tune language` (since 0.5.0), which changes nothing but the `language` field of the six fynn-mods, and since 0.11.0 for `/tune size|on|off|beat`, which change only tune-strip's own fields. Other plugins are left alone.
+- `$.process.run` (also): in the desktop app and `claude -p`, for `/tune language` (since 0.5.1) and for tune-strip's own fields (since 0.11.0: `claude plugin configure tune-strip@fynn-mods --values-stdin --json`), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"` for the six fynn-mods, and with this mod's own fields for this mod only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `tune-strip@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `tune-strip@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod. Since 0.11.5 a settings command reads the value back after saving; if another mod overwrote it at the same moment, it saves once more, otherwise it answers “Not saved”. Once per new off switch (store key `offDefaults2`), the installed copy also reads its own unset fields with `claude plugin configure <mod>@fynn-mods --json` and saves those whose default is off as `false` (see the known issue under the settings). Settings commands save through `claude plugin configure` only when this is the installed copy (its folder is the `readFromFolder` or `installPath` that `claude plugin list` reports); a copy loaded with `--plugin-dir` answers “Not saved: this copy is loaded from another folder …” and changes nothing.
 - Hook `ui.render` for `AbovePrompt`: adds the player to the band and leaves everything else in it as it was. Hook `ui.render` for `CommandOutput`: draws `/tune help` as a table.
 
 No file system, no network, no tokens or credentials, no environment variables read. Errors in its own drawing leave the band as it was.

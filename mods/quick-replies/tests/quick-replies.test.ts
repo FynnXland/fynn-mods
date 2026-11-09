@@ -4,6 +4,8 @@ import { joinBand, layer, LEVEL, levelOf, nameOf, splitBand } from '../hooks/ban
 import { HELP_WORDS, MORE_WORD, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from '../hooks/logic.ts'
 import { T } from '../hooks/i18n.ts'
 import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
+import { offFields, toStore } from '../hooks/offdefaults.ts'
+import { SETTINGS } from '../hooks/fields.ts'
 
 type Over = { isWorking?: boolean; hasSurvey?: boolean }
 type Surface = 'terminal' | 'desktop'
@@ -17,7 +19,15 @@ const usage = { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, c
 type Fork = 'ok' | 'junk' | 'unanswered' | 'nothing' | 'deny' | 'slow' | 'cut'
 
 // Grundausstattung: ein Mod weiter innen (clawd), Kern-Stubs, Uhr, Store, Fork-Stub
-function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'drop'; stored?: unknown; forkUsage?: typeof usage } = {}) {
+// Einstellungen (0.7.0): `stored` ist ein alter Store-Wert bis 0.6.2 (wird beim Start umgezogen). Schreiben läuft standardmäßig
+// über Weg 2 (keine Plugin-Zeilen, `claude plugin configure` per Stub); `rows` gibt Weg 1 mit eigenen Zeilen.
+type CfgRow = { key: string; label: string; kind: string; value: unknown; provider: { plugin: string; tier: string }; isLocked: boolean }
+const proc = (stdout: string, stderr = '', exitCode = 0) => ({ value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false } })
+const CONFIGURE = 'claude plugin configure quick-replies@fynn-mods --values-stdin --json'
+// Ordner der Mod, wie `$.plugin.root` ihn im Test meldet: Weg 2 schreibt nur für die installierte Kopie (hooks/settings.ts)
+const MOD_ROOT = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
+
+function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'drop'; stored?: unknown; forkUsage?: typeof usage; rows?: CfgRow[]; cliFail?: string; installPath?: string; setDeny?: string; list?: 'fail' | 'missing' | 'off' | 'junction'; unconfigured?: string[]; lostWrite?: boolean; readBack?: (writes: number) => Record<string, string> } = {}) {
   const clock = mock.clock(on, { now: 0 })
   const w = {
     clock,
@@ -28,8 +38,45 @@ function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'drop'; stored?: unk
     registered: [] as string[],
     descriptions: [] as string[],
     hints: [] as string[],
-    store: new Map<string, unknown>(opts.stored === undefined ? [] : [['settings', opts.stored]]),
+    // Aus-Standards gelten als schon gespeichert (hooks/offdefaults.ts), außer der Test nennt nicht gesetzte Felder (`unconfigured`)
+    store: new Map<string, unknown>([...(opts.unconfigured ? [] : [['offDefaults2', ['more']] as [string, unknown]]), ...(opts.stored === undefined ? [] : [['settings', opts.stored] as [string, unknown]])]),
+    cli: [] as Record<string, string>[],
+    sets: [] as { key: string; value: unknown }[],
+    runs: [] as string[],
   }
+  on('config.list', () => ({ value: JSON.parse(JSON.stringify(opts.rows ?? [])) }))
+  on('config.set', ($, e) => {
+    w.sets.push({ key: e.key, value: e.value })
+    if (opts.setDeny) return { deny: opts.setDeny }
+    return { value: e.value }
+  })
+  on('process.run', ($, e) => {
+    const cmd = e.argv.join(' ')
+    w.runs.push(cmd)
+    if (cmd === 'claude plugin list --json') {
+      if (opts.list === 'fail') return proc('', 'list kaputt', 2)
+      if (opts.list === 'missing') return proc(JSON.stringify([{ id: 'other@fynn-mods', enabled: true, installPath: MOD_ROOT }]))
+      // im Marketplace-Ordner hinter einer Junction geladen: readFromFolder mit anderem Anfang, gleiche letzte vier Ordner
+      if (opts.list === 'junction')
+        return proc(JSON.stringify([{ id: 'quick-replies@fynn-mods', enabled: true, installPath: 'C:/cache/quick-replies/0.7.0', readFromFolder: 'D:/home/x/Junction/' + MOD_ROOT.replace(/\\/g, '/').split('/').slice(-4).join('/') }]))
+      return proc(JSON.stringify([{ id: 'quick-replies@fynn-mods', enabled: opts.list !== 'off', installPath: opts.installPath ?? MOD_ROOT }]))
+    }
+    // Nachlesen nach dem Schreiben (settings.ts, 0.7.5): `readBack(n)` = gespeicherte Werte nach n Schreibvorgängen
+    if (cmd === 'claude plugin configure quick-replies@fynn-mods --json' && opts.readBack) {
+      return proc(JSON.stringify({ pluginId: 'quick-replies@fynn-mods', inputs: opts.readBack(w.cli.length), unconfigured: [] }))
+    }
+    // Nicht gesetzte Felder: was der Test nennt, ohne das schon Geschriebene; `lostWrite` verliert das Schreiben (paralleler Prozess)
+    if (cmd === 'claude plugin configure quick-replies@fynn-mods --json' && opts.unconfigured) {
+      const left = Array.isArray(opts.unconfigured) && !opts.lostWrite ? opts.unconfigured.filter((f) => !w.cli.some((c) => f in c)) : opts.unconfigured
+      return proc(JSON.stringify({ pluginId: 'quick-replies@fynn-mods', unconfigured: left }))
+    }
+    if (cmd !== CONFIGURE) return proc('', `unerwarteter Aufruf: ${cmd}`, 9)
+    if (opts.cliFail) return proc(JSON.stringify({ refused: { message: opts.cliFail } }), 'Failed to save configuration', 1)
+    const values = JSON.parse(e.init?.stdin ?? '{}') as Record<string, string>
+    w.cli.push(values)
+    return proc(JSON.stringify({ saved: Object.keys(values) }))
+  })
+
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', props: {}, children: ['clawd'] }))
   // Wie die Engine die Befehlsausgabe zeichnet, wenn der Mod sie nicht übernimmt
   on('ui.render', { component: 'CommandOutput' }, ($, e) => ({ type: 'Text', props: {}, children: [`ENGINE: ${e.props.text}`] }))
@@ -189,22 +236,70 @@ test('more an: kommt der Fork vor Claude Code, rückt Claude Codes Vorschlag auf
   await ui.unmount()
 })
 
-test('more gilt global: eine andere Session stellt um, diese folgt ab der nächsten Antwort', async ($, on) => {
-  const w = world(on, { stored: { enabled: true, more: false } })
+test('0.7.0 Umzug: alter Store-Wert gilt weiter, wird nach userConfig geschrieben (nur Abweichungen) und markiert (0.7.2)', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
   const ui = await boot($)
-  await finish($)
-  await w.clock.advance(100)
-  expect(w.forks.length).toBe(0)
-  // /replies more on in einer anderen Session schreibt nur in den gemeinsamen Store
-  w.store.set('settings', { enabled: true, more: true })
-  await finish($)
-  await w.clock.advance(100)
-  expect(w.forks.length).toBe(1)
-  w.store.set('settings', { enabled: true, more: false })
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([{ more: 'true' }])
+  // Markiert statt geleert: ein Chat mit 0.6.x liest die echten Werte bis /reload-plugins weiter (sidekick 0.23.0 Review S1)
+  expect(w.store.get('settings')).toEqual({ enabled: true, more: true, migrated: true })
   await finish($)
   await w.clock.advance(100)
   expect(w.forks.length).toBe(1)
   await ui.unmount()
+})
+
+test('0.7.0 Umzug: gleicht der Store schon userConfig → nur markieren, kein Schreiben; markiert → kein zweiter Umzug (0.7.2)', { options: { more: true } }, async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([])
+  expect(w.sets).toEqual([])
+  expect(w.store.get('settings')).toEqual({ enabled: true, more: true, migrated: true })
+  // Markiert mit anderem Wert (z. B. vor einer Änderung auf der Seite umgezogen): wird nicht noch einmal umgezogen
+  w.store.set('settings', { enabled: false, more: true, migrated: true })
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([])
+  // Ein Chat mit 0.6.x schreibt danach neu (ohne Markierung): genau einmal umgezogen, dann wieder markiert (Review K2)
+  w.store.set('settings', { enabled: false, more: true })
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([{ enabled: 'false' }])
+  expect(w.store.get('settings')).toEqual({ enabled: false, more: true, migrated: true })
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  await w.clock.advance(10)
+  expect(w.cli.length).toBe(1)
+})
+
+test('0.7.0 Umzug gescheitert: der alte Wert gilt in dieser Session weiter, der Store bleibt für den nächsten Start', async ($, on) => {
+  const w = world(on, { stored: { enabled: false }, cliFail: 'kaputt' })
+  const ui = await boot($)
+  await w.clock.advance(10)
+  expect(w.store.get('settings')).toEqual({ enabled: false })
+  await finish($)
+  await suggest($, 'Weiter')
+  expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('0.7.0 Weg 1: eigene Zeilen gelistet → $.config.set auf quick-replies.more, kein claude plugin; fremde Zeile bleibt', async ($, on) => {
+  const row = (key: string, value: unknown, plugin = 'quick-replies@fynn-mods'): CfgRow => ({ key, label: key, kind: 'boolean', value, provider: { plugin, tier: 'user' }, isLocked: false })
+  const w = world(on, { rows: [row('quick-replies.more', false), row('quick-replies.enabled', true), row('other.more', false, 'other@x')] })
+  await boot($)
+  const text = String((await $.command.run({ command: 'replies', args: 'more on' })).text)
+  expect(text).toContain('Saved, applies now.')
+  expect(w.sets).toEqual([{ key: 'quick-replies.more', value: true }])
+  expect(w.runs).toEqual([])
+})
+
+test('0.7.0 Schreiben abgelehnt: Meldung mit Grund, Einstellung bleibt', async ($, on) => {
+  const w = world(on, { cliFail: 'N: nope' })
+  await boot($)
+  const text = String((await $.command.run({ command: 'replies', args: 'off' })).text)
+  expect(text).toBe('Not saved: N: nope.')
+  expect(String((await $.command.run({ command: 'replies', args: 'status' })).text)).toContain('quick-replies: on')
+  expect(w.cli).toEqual([])
 })
 
 test('Fork-Fehlerpfade: Müll, keine Antwort, nichts zu forken, abgelehnt → nur Claude Codes Vorschlag, kein Toast', async ($, on) => {
@@ -354,7 +449,7 @@ test('leer bei isWorking, hasSurvey, Text im Prompt, Subagent-Ansicht und /repli
   expect(await ui.find({ key: 'reply-1' })).toBeDefined()
   await $.command.run({ command: 'replies', args: 'off' })
   expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
-  expect(w.store.get('settings')).toEqual({ enabled: false, more: false })
+  expect(w.cli).toEqual([{ enabled: 'false' }])
   await ui.unmount()
 })
 
@@ -523,8 +618,8 @@ test('eigener Fehler beim Zeichnen → Bandinhalt unverändert, Clawd bleibt', a
 })
 
 const REPLIES = {
-  en: { head: 'quick-replies: off · more suggestions via fork off', surface: 'Surface: desktop', on: 'quick-replies on', moreOn: 'via fork on', moreOff: 'more suggestions off', usage: 'Usage', registered: 'Reply suggestions above Clawd' },
-  de: { head: 'quick-replies: aus · weitere Vorschläge per Fork aus', surface: 'Oberfläche: desktop', on: 'quick-replies an', moreOn: 'per Fork an', moreOff: 'weitere Vorschläge aus', usage: 'Nutzung', registered: 'Antwort-Vorschläge über Clawd' },
+  en: { head: 'quick-replies: off · more suggestions via fork off', surface: 'Surface: desktop', on: 'quick-replies on', moreOn: 'via fork on', moreOff: 'more suggestions off', note: 'Applies in this chat now', usage: 'Usage', registered: 'Reply suggestions above Clawd' },
+  de: { head: 'quick-replies: aus · weitere Vorschläge per Fork aus', surface: 'Oberfläche: desktop', on: 'quick-replies an', moreOn: 'per Fork an', moreOff: 'weitere Vorschläge aus', note: 'Gilt in diesem Chat sofort', usage: 'Nutzung', registered: 'Antwort-Vorschläge über Clawd' },
 } as const
 
 for (const language of ['en', 'de'] as const) {
@@ -532,14 +627,17 @@ for (const language of ['en', 'de'] as const) {
     const x = REPLIES[language]
     const w = world(on, { stored: { enabled: false, more: false } })
     await boot($)
+    await w.clock.advance(10)
     expect(w.registered).toEqual(['replies'])
     expect(w.descriptions[0]).toContain(x.registered)
     const run = async (args: string) => String((await $.command.run({ command: 'replies', args })).text)
     expect(await run('')).toContain(x.head)
     expect(await run('status')).toContain(x.surface)
+    expect(await run('on')).toContain(x.note)
+    // schon an: nichts geschrieben, kein Hinweis
     expect(await run('on')).toBe(x.on)
     expect(await run('more on')).toContain(x.moreOn)
-    expect(w.store.get('settings')).toEqual({ enabled: true, more: true })
+    expect(w.cli).toEqual([{ enabled: 'false' }, { enabled: 'true' }, { more: 'true' }])
     expect(await run('more off')).toContain(x.moreOff)
     expect(await run('quatsch')).toContain(x.usage)
     // Argumente sind englisch, in beiden Sprachen; das frühere deutsche `mehr` gibt es seit 0.1.0 nicht mehr
@@ -907,13 +1005,13 @@ test('0.5.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstellun
   const lines = text.split('\n')
   expect(lines[0]).toMatch(/^\*\*quick-replies · Hilfe\*\* · #[0-9a-z]{5,}$/)
   expect(lines).toContain('**BEFEHLE**')
-  expect(lines).toContain('- `/replies more on`: Weitere Vorschläge per Fork, bis zu vier insgesamt, in allen Sessions')
+  expect(lines).toContain('- `/replies more on`: Weitere Vorschläge per Fork, bis zu vier insgesamt')
   expect(lines).toContain('- `/replies help`: Diese Hilfe (auch: ?)')
   expect(lines).toContain('**BEDIENUNG**')
   expect(lines).toContain('- `1–4 im leeren Prompt`: Sendet diesen Vorschlag sofort; die Ziffer bleibt nicht im Prompt')
   expect(text).toMatch(/^Fork: kostet pro Antwort etwa eine kurze Antwort/m)
   expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Vorschläge ● an \(\/replies off\) · Mehr per Fork ○ aus \(\/replies more on\) · Anordnung auto \(Standard\) \(Einstellung\)$/m)
-  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de · Mehr Vorschläge per Fork aus \(Standard\) · Anordnung auto \(Standard\)$/m)
+  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Vorschläge zeigen an \(Standard\) · Mehr Vorschläge aus \(Standard\) · Anordnung auto \(Standard\) · Sprache de$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure quick-replies · Mod abschalten: /plugin disable quick-replies')
   expect(await replies($, 'quatsch')).toBe('Nutzung: /replies [status|on|off|more on|more off|language|help] · Alle Befehle: /replies help')
 })
@@ -942,7 +1040,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect(await ui.find({ type: 'Text', text: ' (Standard)' })).toBeDefined()
     const footer =
       surface === 'desktop'
-        ? 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure quick-replies'
+        ? 'Einstellungen ändern: Einstellungen → Plugins → quick-replies → Einstellungen · Mod abschalten: + → Plugins → Manage plugins'
         : 'Einstellungen ändern: /plugin configure quick-replies · Mod abschalten: /plugin disable quick-replies'
     expect(await ui.find({ type: 'Text', text: footer })).toBeDefined()
     await ui.unmount()
@@ -1004,7 +1102,7 @@ test('0.5.0 Hilfe: Zustand beim Aufruf: off → ○ mit /replies on, more on →
   expect((await ui.find({ type: 'Text', text: 'on (paused)' }))?.props.color).toBeUndefined()
   await ui.unmount()
   expect(text).toMatch(/Suggestions ○ off \(\/replies on\) · More via fork ● on \(paused\) \(\/replies more off\) · Layout grid \(setting\)/)
-  expect(text).toMatch(/\*\*SETTINGS \(\/plugin\):\*\* Language en \(default\) · More suggestions via fork on · Layout grid$/m)
+  expect(text).toMatch(/\*\*SETTINGS \(\/plugin\):\*\* Show suggestions off · More suggestions on · Layout grid · Language en \(default\)$/m)
   // Status = Stand beim Aufruf: die alte Zeichnung bleibt, eine neue zeigt den neuen Stand
   await replies($, 'on')
   const old = await mountHelp($, text, 'desktop')
@@ -1043,13 +1141,13 @@ for (const surface of ['terminal', 'desktop'] as const)
       // Unter 60 Spalten stehen die Spalten untereinander: keine Zeile mit festen Spalten
       if (columns < 60) expect(boxes.some((b: any) => b.props.flexDirection === 'row' && b.children?.some((c: any) => typeof c === 'object' && c.props?.width !== undefined))).toBe(false)
       expect(await ui.find({ type: 'Text', text: '/replies more off' })).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: 'Mehr Vorschläge per Fork' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: 'Mehr Vorschläge' })).toBeDefined()
       await ui.unmount()
     })
 
 test('0.5.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht in der Hilfe (HELP-SPEC §6 Punkt 5)', () => {
   for (const lang of ['en', 'de'] as const) {
-    const d = repliesHelp({ lang, enabled: true, more: false, config: { more: false, layout: 'auto' } })
+    const d = repliesHelp({ lang, enabled: true, more: false, layout: 'auto' })
     const cmds = d.commands.map((c) => c.cmd)
     // ganze Wörter, keine Teilstrings: sonst steckt „on“ in „configure“ (templates/help/README.md, Tests)
     const words = (s: string) => s.split(/[^\p{L}\p{N}?]+/u).filter(Boolean)
@@ -1066,7 +1164,7 @@ test('0.5.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht in
       expect(cmds, `${lang}: more ${word}`).toContain(`/replies ${MORE_WORD} ${word}`)
     }
     expect(d.controls?.length).toBe(3)
-    expect(d.settings.map((s) => s.value)).toEqual([lang, lang === 'en' ? 'off' : 'aus', 'auto'])
+    expect(d.settings.map((s) => s.value)).toEqual([lang === 'en' ? 'on' : 'an', lang === 'en' ? 'off' : 'aus', 'auto', lang])
   }
 })
 
@@ -1184,4 +1282,156 @@ test('0.6.2: quick-replies.band: ein abgelehntes Schreiben wird beim nächsten N
   await w.clock.settle()
   expect(writes.at(-1)).toBeNull()
   await ui.unmount()
+})
+
+test('0.7.0 Sperre: eine Kopie aus einem anderen Ordner (--plugin-dir, @inline) schreibt nichts über claude plugin; ihr alter Store-Wert gilt nur in dieser Session', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true }, installPath: 'D:/home/x/.claude/plugins/cache/fynn-mods/quick-replies/0.7.0' })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([])
+  expect(w.store.get('settings')).toEqual({ enabled: true, more: true })
+  const text = String((await $.command.run({ command: 'replies', args: 'off' })).text)
+  expect(text).toBe('Not saved: this copy is loaded from another folder; only the installed quick-replies@fynn-mods saves settings here.')
+  expect(w.runs.filter((r) => r.includes('configure'))).toEqual([])
+})
+
+// ---------- 0.7.0: Vorlage templates/settings (hooks/settings.ts) ----------
+
+const cfgRow = (field: string, value: unknown, o: { locked?: boolean } = {}): CfgRow => ({ key: `quick-replies.${field}`, label: field, kind: 'boolean', value, provider: { plugin: 'quick-replies@fynn-mods', tier: 'user' }, isLocked: o.locked ?? false })
+
+test('0.7.0 Vorlage Weg 1: gesperrte Zeile → nichts gesetzt, Meldung; abgelehntes set → Grund', async ($, on) => {
+  const w = world(on, { rows: [cfgRow('enabled', true, { locked: true })] })
+  await boot($)
+  expect(String((await $.command.run({ command: 'replies', args: 'off' })).text)).toBe('Not saved: enabled is locked by a managed setting.')
+  expect(w.sets).toEqual([])
+})
+
+test('0.7.0 Vorlage Weg 1: config.set antwortet deny → Nicht gespeichert mit Grund', async ($, on) => {
+  const w = world(on, { rows: [cfgRow('more', false)], setDeny: 'nope' })
+  await boot($)
+  expect(String((await $.command.run({ command: 'replies', args: 'more on' })).text)).toBe('Not saved: nope.')
+  expect(w.cli).toEqual([])
+})
+
+for (const [list, why] of [
+  ['fail', '`claude plugin` could not be run (list kaputt)'],
+  ['missing', 'quick-replies@fynn-mods is not installed and on'],
+  ['off', 'quick-replies@fynn-mods is not installed and on'],
+] as const)
+  test(`0.7.0 Vorlage Weg 2: plugin list ${list} → Nicht gespeichert, kein configure`, async ($, on) => {
+    const w = world(on, { list })
+    await boot($)
+    expect(String((await $.command.run({ command: 'replies', args: 'off' })).text)).toBe(`Not saved: ${why}.`)
+    expect(w.runs.filter((r) => r.includes('configure'))).toEqual([])
+  })
+
+test('0.7.0 Vorlage Weg 2: Marketplace-Ordner hinter einer Junction (readFromFolder anders, letzte vier Ordner gleich) gilt als installierte Kopie', async ($, on) => {
+  const w = world(on, { list: 'junction' })
+  await boot($)
+  expect(String((await $.command.run({ command: 'replies', args: 'off' })).text)).toContain('Saved.')
+  expect(w.cli).toEqual([{ enabled: 'false' }])
+})
+
+test('0.7.0 Vorlage: Umzug mit zwei Feldern bei gelisteten Zeilen → ein Schreiben über die CLI, kein config.set', async ($, on) => {
+  const w = world(on, { stored: { enabled: false, more: true }, rows: [cfgRow('enabled', true), cfgRow('more', false)] })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([{ enabled: 'false', more: 'true' }])
+  expect(w.sets).toEqual([])
+})
+
+test('0.7.0 Vorlage: zwei Felder, CLI nicht nutzbar (fremde Kopie) → nacheinander über config.set (Weg 1)', async ($, on) => {
+  const w = world(on, { stored: { enabled: false, more: true }, rows: [cfgRow('enabled', true), cfgRow('more', false)], installPath: 'C:/anderswo' })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([])
+  expect(w.sets).toEqual([{ key: 'quick-replies.enabled', value: false }, { key: 'quick-replies.more', value: true }])
+})
+
+// ---------- Aus-Standards speichern (hooks/offdefaults.ts, Befund Desktop-Seite 2026-11-08) ----------
+
+test('offdefaults: Aus-Felder aus der Feldliste; zu schreiben nur nicht gesetzte und nicht erledigte', () => {
+  expect(offFields(SETTINGS)).toEqual(['more'])
+  expect(offFields({ a: { type: 'boolean', default: false }, b: { type: 'boolean', default: true }, c: { type: 'string', default: '' }, d: { type: 'boolean', default: false } })).toEqual(['a', 'd'])
+  expect(toStore(['a', 'd'], undefined, ['a', 'd', 'x'])).toEqual(['a', 'd'])
+  expect(toStore(['a', 'd'], ['a'], ['a', 'd'])).toEqual(['d'])
+  expect(toStore(['a', 'd'], [], ['d'])).toEqual(['d'])
+  expect(toStore(['a'], [], 'kaputt')).toEqual([])
+})
+
+test('offdefaults: nicht gesetztes Aus-Feld wird einmal als false gespeichert, danach nie wieder', async ($, on) => {
+  const w = world(on, { unconfigured: ['more', 'layout'] })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([{ more: 'false' }])
+  expect(w.store.get('offDefaults2')).toEqual(['more'])
+  // zweiter Start: erledigt, kein claude-Aufruf mehr
+  const n = w.runs.length
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  await w.clock.advance(10)
+  expect(w.runs.length).toBe(n)
+  expect(w.cli.length).toBe(1)
+})
+
+test('offdefaults: gesetztes Aus-Feld bleibt unberührt (auch wenn es an ist), wird aber als erledigt vermerkt', { options: { more: true } }, async ($, on) => {
+  const w = world(on, { unconfigured: ['layout'] })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([])
+  expect(w.store.get('offDefaults2')).toEqual(['more'])
+})
+
+test('offdefaults: fremde Kopie (--plugin-dir) oder CLI-Fehler → nichts geschrieben, nichts vermerkt', async ($, on) => {
+  const w = world(on, { unconfigured: ['more'], installPath: 'C:/anderer/Ordner' })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([])
+  expect(w.store.has('offDefaults2')).toBe(false)
+})
+
+test('offdefaults: claude plugin list scheitert oder configure --json ohne unconfigured-Liste → nichts geschrieben, nichts vermerkt (Review S1, K1)', async ($, on) => {
+  const w = world(on, { unconfigured: ['more'], list: 'fail' })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([])
+  expect(w.store.has('offDefaults2')).toBe(false)
+})
+
+test('offdefaults: configure --json ohne Liste → nichts vermerkt, beim nächsten Start wieder versucht (Review S1)', async ($, on) => {
+  const w = world(on, { unconfigured: 'kaputt' as unknown as string[] })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([])
+  expect(w.store.has('offDefaults2')).toBe(false)
+  const n = w.runs.length
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  await w.clock.advance(10)
+  expect(w.runs.length).toBeGreaterThan(n)
+})
+
+test('offdefaults: CLI meldet „saved“, aber ein paralleler Prozess hat es überschrieben → nicht vermerkt, nächster Start versucht es wieder', async ($, on) => {
+  const w = world(on, { unconfigured: ['more'], lostWrite: true })
+  await boot($)
+  await w.clock.advance(10)
+  expect(w.cli).toEqual([{ more: 'false' }])
+  expect(w.store.has('offDefaults2')).toBe(false)
+})
+
+// ---------- Nachlesen nach dem Schreiben (templates/settings/settings.ts, 0.7.5) ----------
+
+test('settings: Weg 2 liest nach; vom parallelen Prozess überschrieben → ein zweiter Versuch, dann gespeichert', async ($, on) => {
+  const w = world(on, { readBack: (n) => ({ more: n >= 2 ? 'true' : 'false', enabled: 'true' }) })
+  await boot($)
+  const text = String((await $.command.run({ command: 'replies', args: 'more on' })).text)
+  expect(w.cli).toEqual([{ more: 'true' }, { more: 'true' }])
+  expect(text).toContain('Saved. Applies in this chat now')
+})
+
+test('settings: Weg 2 auch beim zweiten Versuch überschrieben → „Not saved“ mit Grund, Einstellung bleibt', async ($, on) => {
+  const w = world(on, { readBack: () => ({ more: 'false', enabled: 'true' }) })
+  await boot($)
+  const text = String((await $.command.run({ command: 'replies', args: 'more on' })).text)
+  expect(w.cli.length).toBe(2)
+  expect(text).toContain('Not saved: another process overwrote more at the same moment; run the command again.')
+  expect(String((await $.command.run({ command: 'replies', args: 'status' })).text)).not.toMatch(/more suggestions:? on/i)
 })

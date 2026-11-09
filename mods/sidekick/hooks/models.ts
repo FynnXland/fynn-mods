@@ -18,6 +18,20 @@ export const CHECK = { model: 'claude-haiku-5-5', effort: 'medium', maxTokens: 2
  */
 export const RATE = { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 800, timeoutMs: 6000 } as const
 
+/**
+ * Warteschlange (Ausbau 0.24.0, Verhalten 1.3): Urteil „jetzt oder danach“ über eine Nachricht, die während der Arbeit kommt.
+ * Haiku 5.5, effort `low`, 4 s. Probe P2 (2026-11-08, 132 Aufrufe): Ausgabe samt Denken Median ≈ 180, max 698 Tokens, daher 1000;
+ * Dauer Median ≈ 1,6 s, max 3,9 s (SPEC „Bau 0.24.0“).
+ */
+export const QUEUE = { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000, timeoutMs: 4000 } as const
+
+/**
+ * Skill-Katalog (Ausbau 0.25.0, Verhalten 2): passt ein Katalog-Eintrag, den der Stichwort-Vorfilter fand, zur Nachricht? Haiku 5.5,
+ * effort `low`, 4 s. Probe P2 (2026-11-09, 117 Aufrufe): Ausgabe samt Denken bis 667 Tokens, daher 1000; Dauer Median ≈ 1,3 s, max 4,8 s
+ * (1 von 60 über 4 s, dann ohne Vorschlag) (SPEC „Bau 0.25.0“).
+ */
+export const CATALOG = { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000, timeoutMs: 4000 } as const
+
 /** Zielmodelle des Modell-Tipps (E3): Alias für `agent.spawn` (types:299-312), volle ID für `start_session`. */
 export const TIP_TARGETS = {
   haiku: { alias: 'haiku', id: 'claude-haiku-5-5' },

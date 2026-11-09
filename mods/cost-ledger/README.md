@@ -4,7 +4,7 @@ A cost ledger across all your chats. After every answer, cost-ledger records wha
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.318** · Plugin version **0.10.0** · Requires Claude Code v2.1.309 or later
+Tested with Claude Code **v2.1.319** · Plugin version **0.12.2** · Requires Claude Code v2.1.309 or later
 
 ## Usage
 
@@ -17,11 +17,11 @@ Tested with Claude Code **v2.1.318** · Plugin version **0.10.0** · Requires Cl
 | `/ledger projects [7\|30\|all]` | All projects in the period |
 | `/ledger models [7\|30\|all]` | Models: share of the estimated API value (in the desktop app as a ring, in the terminal as bars), answers, input, output and cache tokens (including subagents and mod calls) |
 | `/ledger limits` | Subscription limits: the current 5-hour and weekly window (% used, API value, reset time with countdown, projection “100 % ≈ $X”), your subscription month (API value against the plan price, factor, next renewal) and the last 10 five-hour windows with their average. Each window also shows the estimated share used outside the ledger (see below) |
-| `/ledger plan <plan> <day\|today> [price]` | Set your plan and billing day: `pro`, `max5` (`5x`), `max20` (`20x`), `ultra`, `team` or `enterprise`; day 1–31, or `today` if your plan renewed today; monthly price in $ (comma or dot). Without a price, the list price is used: Pro $20, Max 5x $100, Max 20x $200; Ultra, Team and Enterprise have none, so add your price (`/ledger plan ultra 14 <price>`). Example: `/ledger plan max20 14` |
-| `/ledger plan` | Show the plan setting and the syntax; `/ledger plan off` deletes it |
-| `/ledger sync <folder>` | Turn on sync between your computers through a shared folder (absolute path, spaces allowed), e.g. `/ledger sync <your cloud folder>/cost-ledger`. Run it on every computer with the same folder; step by step under [Sync between devices](#sync-between-devices) |
+| `/ledger plan <plan> <day\|today> [price]` | Set your plan and billing day: `pro`, `max`, `ultra`, `team` or `enterprise`; day 1–31, or `today` if your plan renewed today; monthly price in $ (comma or dot). Without a price, the list price is used: Pro $20, Max $100, Ultra $200; Team and Enterprise need a price here (`/ledger plan team 14 <price>`). The old names still work: `max5`/`5x` → `max`, `max20`/`20x` → `ultra`. Example: `/ledger plan max 14`. Saved as the settings `plan`, `billingDay` and `planPrice` |
+| `/ledger plan` | Show the plan setting and the syntax; `/ledger plan off` sets `plan` to `none` |
+| `/ledger sync <folder>` | Turn on sync between your computers through a shared folder (absolute path, spaces allowed), e.g. `/ledger sync <your cloud folder>/cost-ledger`. Run it on every computer with the same folder; step by step under [Sync between devices](#sync-between-devices). Saved as the setting `syncFolder` once the test write worked |
 | `/ledger sync` | Sync state: folder, this device's name and ID, the other devices with the time of their last update |
-| `/ledger sync name <name>` | Name this device (up to 30 characters); the other devices show its chats under this name. Default: “Device 1a2b” from a random ID |
+| `/ledger sync name <name>` | Name this device (up to 30 characters); the other devices show its chats under this name. Default: “Device 1a2b” from a random ID. Saved as the setting `deviceName` |
 | `/ledger sync off` | Turn sync off. This device's file stays in the folder; cost-ledger never deletes files |
 | `/ledger language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.9.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/ledger reset` | Delete everything on this device, after a confirmation (**Cancel** is recommended and listed first). The plan and sync settings stay; other devices keep their entries |
@@ -31,7 +31,7 @@ German words work as aliases: `hilfe` for `help`, `hier` for `here`, `alle` for 
 
 **Help:** `/ledger help` draws a table in the terminal and the desktop app (accent green), with the state as of the moment you ran it. Run it again to see a change. Elsewhere (`claude -p`, VS Code) you get a short Markdown version, which is also what Claude reads.
 
-On a subscription, the overview has two plain lines under the totals: `Plan Max 20x since Oct 14: $812.40 API value = 4.1× the $200.00` and `Limits now: 5 h 62 % · week 98 % (/ledger limits)`. Each is left out when there is no data for it.
+On a subscription, the overview has two plain lines under the totals: `Plan Ultra since Oct 14: $812.40 API value = 4.1× the $200.00` and `Limits now: 5 h 62 % · week 98 % (/ledger limits)`. Each is left out when there is no data for it.
 
 **`/ledger here`** in detail:
 
@@ -186,14 +186,23 @@ The value is written after every booking (answers, mod calls), at the start of a
 
 ## Configuration
 
-`/plugin` → cost-ledger → settings (`userConfig`):
+Desktop app: **Settings → Plugins → cost-ledger → Settings**. Terminal: `/config` → cost-ledger, or `/plugin configure cost-ledger`.
 
-| Key | Title in `/config` | Meaning | Default |
-|---|---|---|---|
-| `language` | Language / Sprache | Language of the overview, summary, help and confirmation: `en` or `de` | `en` |
-| `keepDays` | Retention (days) | Chats with no new bookings for this long are deleted by cost-ledger on the next `/ledger` | 365 |
-| `dayYellow` | Daily amount yellow from ($) | Daily amount (chat + mods) from which the day's value in the history turns yellow | 3 |
-| `dayRed` | Daily amount red from ($) | Daily amount from which it turns red | 8 |
+| Key | Title | Meaning | Default | Command |
+|---|---|---|---|---|
+| `plan` | Subscription | `none`, `pro`, `max`, `ultra`, `team`, `enterprise`; for the subscription month in `/ledger limits`. `max5` and `max20` are the old names: the mod switches them to `max` and `ultra` at the next start and says so once | `none` | `/ledger plan` |
+| `billingDay` | Billing day | Day of the month your plan renews (1 to 31) | 1 | `/ledger plan` |
+| `planPrice` | Monthly price ($) | 0 = list price (Pro $20, Max $100, Ultra $200); Team and Enterprise need a price | 0 | `/ledger plan` |
+| `dayYellow` | Yellow from ($ per day) | Daily amount (chat + mods) from which the day's value in the history turns yellow | 3 | – |
+| `dayRed` | Red from ($ per day) | Daily amount from which it turns red | 8 | – |
+| `keepDays` | Keep chats (days) | Chats with no new bookings for this long are deleted by cost-ledger on the next `/ledger` | 365 | – |
+| `syncFolder` | Sync folder | Shared folder for [Sync between devices](#sync-between-devices); empty = off | empty | `/ledger sync <folder>`, `/ledger sync off` |
+| `deviceName` | Device name | This device's name in the sync; empty = “Device” and an ID | empty | `/ledger sync name` |
+| `language` | Language / Sprache | Language of the overview, summary, help and confirmation: `en` or `de` | `en` | `/ledger language` |
+
+Since 0.11.0 the commands and the settings page change the same settings (`pluginConfigs` in your user settings, so they stay on each computer like the ledger). In a terminal session a command applies at once (Claude Code reloads the mod). In the desktop app and `claude -p` it applies in the current chat at once and in other open chats after `/reload-plugins` or in the next chat. Plan, sync folder and device name saved by earlier versions in the plugin store are moved over once at the next start. After an update, run `/reload-plugins` in chats that are already open; until then they keep running the old version with its old values.
+
+**Sync folder from the settings page:** `/ledger sync <folder>` first writes a test file and creates the folder; the settings page only saves the path. cost-ledger checks it the same way (absolute, no network path, no `..`, not a drive root) and does not create a missing folder from there: `/ledger` then names a missing folder, `/ledger sync` an invalid one. A duplicate device ID is handled the same way as before.
 
 ## Language
 
@@ -205,7 +214,7 @@ The value is written after every booking (answers, mod calls), at the start of a
 
 ```text
 hooks: session.start, classic.SessionStart, classic.UserPromptSubmit, turn.complete, model.complete, model.fork, model.classify, session.end, command.run{command=ledger}, ui.render{component=CommandOutput, props has {command=ledger}}
-calls: $.clock.now, $.command.register, $.config.list, $.config.set, $.fs.list, $.fs.read, $.fs.write, $.process.run, $.session.repo, $.session.root, $.session.surfaces, $.session.usage, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.log
+calls: $.clock.now, $.command.register, $.config.list, $.config.set, $.fs.list, $.fs.read, $.fs.write, $.process.run, $.session.repo, $.session.root, $.session.surfaces, $.session.usage, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.log, $.ui.toast
 state writes: cost-ledger.here
 ```
 
@@ -226,12 +235,13 @@ And the calls:
 - `$.session.usage`: reads the chat's cost, without `breakdown`, so no extra request; from the same call the context fill and the rate-limit windows (% used, reset time) for `/ledger limits`. Mod calls use the last reading and do not call it again.
 - `$.session.surfaces`: tells desktop, terminal and script runs apart.
 - `$.session.repo`, `$.session.root`: the chat's project name; also the Git remote, stored only as `host/owner/repo`, never with credentials.
-- `$.store.get/set/keys/delete`: the ledger in the mod's own plugin store, one entry per chat; cleanup and reset; the plan setting from `/ledger plan` (plan, billing day, price). `/ledger help` only reads it (storage used, plan, recording since).
+- `$.store.get/set/keys/delete`: the ledger in the mod's own plugin store, one entry per chat; cleanup and reset; this device's sync ID; moving the plan and sync values saved before 0.11.0 into the settings once. `/ledger help` only reads it (storage used, recording since).
 - `$.ui.ask`: confirmation before `/ledger reset`.
 - `$.ui.log`: errors go to the debug log (`{to:'debug'}`), never into the transcript.
+- `$.ui.toast` (since 0.12.0): one notice when a saved old plan name (`max5`, `max20`) is switched to `max` or `ultra`.
 - `$.clock.now`: current date and timestamps.
-- `$.config.list`, `$.config.set`: only for `/ledger language` (since 0.9.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone.
-- `$.process.run`: for `/ledger language` in the desktop app and `claude -p` (since 0.9.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `cost-ledger@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `cost-ledger@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
+- `$.config.list`, `$.config.set`: for `/ledger language` (since 0.9.0), which changes nothing but the `language` field of the six fynn-mods, and since 0.11.0 for `/ledger plan` and `/ledger sync`, which change only cost-ledger's own fields. Other plugins are left alone.
+- `$.process.run`: in the desktop app and `claude -p`, for `/ledger language` (since 0.9.1) and for cost-ledger's own fields (since 0.11.0: `claude plugin configure cost-ledger@fynn-mods --values-stdin --json`), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"` for the six fynn-mods, and with this mod's own fields for this mod only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `cost-ledger@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `cost-ledger@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod. Since 0.12.2 a settings command reads the value back after saving; if another mod overwrote it at the same moment, it saves once more, otherwise it answers “Not saved”. Settings commands save through `claude plugin configure` only when this is the installed copy (its folder is the `readFromFolder` or `installPath` that `claude plugin list` reports); a copy loaded with `--plugin-dir` answers “Not saved: this copy is loaded from another folder …” and changes nothing.
 - `$.state.set` (`state writes: cost-ledger.here`, since 0.10.0): the chat and project cost for limit-bars, see [Working with limit-bars](#working-with-limit-bars). Amounts, the first day of recording, the number of devices and the last folder name; no paths, titles or chat contents.
 - `$.fs.list`, `$.fs.read`, `$.fs.write`: sync between devices (since 0.7.0). Only inside the folder you set with `/ledger sync <folder>`, and only files named `cost-ledger-<id>.json`: it lists that folder, reads the other devices' files and writes its own. Nothing happens with these rights until you turn sync on. Claude Code cannot restrict these rights to a folder, so cost-ledger enforces it itself, and tests check every path.
 
@@ -268,6 +278,7 @@ claude --plugin-dir <path-to-clone>/mods/cost-ledger
 ## Known limitations
 
 - **Only numbers from installation on.** Older chats are missing.
+- **Old plan names in the picker.** The settings page and `/config` still offer `max5` and `max20`. They are kept for the switch to `max` and `ultra` (a saved value that is no longer offered would arrive as `none`) and will go in a later version. Picking one switches to the new name at the next start.
 - **If the desktop app closes a chat hard** (without `session.end`), the remainder since the last answer is missing. If the chat is resumed later, cost-ledger books that remainder then.
 - **`/resume` in the middle of a session** is only covered by a test, not verified in a real session (it cannot be triggered in `-p`). Assumption: `usage().cost` afterwards reflects the resumed chat (as when starting with `--resume`, which is verified). If the counter instead kept running per process, the previous chat's cost would be booked twice onto the resumed one.
 - **The cost ring in limit-bars lags behind other chats.** Its project total adds this chat's bookings at once, but costs booked by other chats on this computer show up within 15 minutes (or at the next `/ledger`), and the other devices' costs are read when the chat starts and at every `/ledger`. In a fresh chat the ring appears once cost-ledger has read the ledger in the background, a few seconds with many chats.

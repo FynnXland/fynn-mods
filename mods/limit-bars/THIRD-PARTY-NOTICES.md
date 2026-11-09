@@ -1,6 +1,6 @@
 # Third-party notices
 
-Parts of this mod are modeled on **Cache Keeper** from Nate Herk's `claude-code-mods`: the cache states and TTL measurement, the warning before a cold send, the keep-warm ping, the handoff flow and the skill `uebergabe` (based on its `session-handoff` skill).
+Parts of this mod are modeled on **Cache Keeper** from Nate Herk's `claude-code-mods`: the cache states and TTL measurement, the prices, the warning before a cold send and the keep-warm ping. The handoff (`/handoff` and the skill `uebergabe`, based on its `session-handoff` skill) moved to sidekick in 0.15.0.
 
 Cache Keeper is licensed under the MIT License:
 

@@ -8,6 +8,8 @@ import type { Beat, FeatureVec, Group, Measure } from '../hooks/beat.ts'
 import { parseTune } from '../hooks/model.ts'
 import { CALIB } from './calib-data.ts'
 import { PS_ABS, QUERY_SCRIPT, parseQuery } from '../hooks/ps.ts'
+// Ordner der Mod, wie `$.plugin.root` ihn im Test meldet: Weg 2 schreibt nur für die installierte Kopie (hooks/settings.ts)
+const MOD_ROOT = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
 
 const NOW = new Date(2026, 10, 4, 20, 0, 0).getTime()
 const DE = { options: { language: 'de' } } as const
@@ -338,7 +340,9 @@ function world(on: On, o: { cwd?: string; denySpawn?: boolean } = {}) {
   on('command.register', () => ({ value: undefined }))
   const cwd = o.cwd ?? 'C:\\work'
   on('session.start', () => ({ cwd }))
-  on('process.run', () => {
+  on('process.run', ($: unknown, e: any) => {
+    if (e.argv.join(' ') === 'claude plugin list --json') return { value: { exitCode: 0, stdout: JSON.stringify([{ id: 'tune-strip@fynn-mods', enabled: true, installPath: MOD_ROOT }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (e.argv[0] === 'claude') return { value: { exitCode: 0, stdout: JSON.stringify({ saved: Object.keys(JSON.parse(e.init?.stdin ?? '{}')) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     const pos = song.paused ? song.pos0 : song.pos0 + (clock.now() - song.t0) / 1000
     const stdout = q({ pos: Math.round(pos * 10) / 10, status: song.paused ? 'Paused' : 'Playing', ...song.over })
     return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -480,7 +484,7 @@ test('Versatz per /tune beat offset wirkt sofort auf tune-strip.beat und gilt in
   expect(r.text).toContain('+150 ms')
   const b = w.st.stored as Beat
   near(phaseOff(b.at, a.at, 500), 150, 3)
-  expect((w.saved.get('settings') as { offset: number }).offset).toBe(150)
+  expect(r.text).toContain('Gespeichert')
   const bad = (await $.command.run({ command: 'tune', args: 'beat offset 999' } as never)) as { text: string }
   expect(bad.text).toContain('/tune help')
 })

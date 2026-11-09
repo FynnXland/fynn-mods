@@ -1,39 +1,86 @@
 {
   "name": "cost-ledger",
-  "version": "0.10.0",
-  "description": "Cost ledger across all chats: after every answer it records the chat cost (as /cost), tokens per model and model calls made by other mods. /ledger shows totals for today, 7 and 30 days and all time (chats incl. their mod calls), the last 14 days, projects and the most expensive chats; /ledger here shows what this project and this chat cost, with the chat share as a ring; /ledger limits shows the API value in the current 5-hour and weekly window and in your subscription month, plus an estimate of the usage outside the ledger (claude.ai, phone); /ledger sync <folder> merges your devices through a shared folder (amounts and the project folder name only: no paths or chat titles); /ledger help lists all commands, the current state and your settings. Observer only, no model calls.",
-  "author": { "name": "Fynn Hansen" },
+  "version": "0.12.2",
+  "description": "Records what every chat costs, across projects and, if you like, across devices, so you can see where your usage goes. It only observes and makes no model calls.",
+  "author": {
+    "name": "Fynn Hansen"
+  },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
-    "language": {
+    "plan": {
       "type": "string",
-      "title": "Language / Sprache",
-      "description": "Language of the mod's texts. en: English, de: Deutsch.",
-      "default": "en",
-      "options": ["en", "de"]
+      "title": "Subscription",
+      "description": "Your plan, for the subscription month in /ledger limits. none: no subscription. max5 and max20 are old names and switch to max and ultra. Also /ledger plan.",
+      "default": "none",
+      "options": [
+        "none",
+        "pro",
+        "max",
+        "ultra",
+        "team",
+        "enterprise",
+        "max5",
+        "max20"
+      ]
     },
-    "keepDays": {
+    "billingDay": {
       "type": "number",
-      "title": "Retention (days)",
-      "description": "Chats that have not been recorded for this many days are deleted by cost-ledger at the next /ledger.",
-      "default": 365,
+      "title": "Billing day",
+      "description": "Day of the month your subscription renews (1 to 31).",
+      "default": 1,
       "min": 1,
-      "max": 3650
+      "max": 31
+    },
+    "planPrice": {
+      "type": "number",
+      "title": "Monthly price ($)",
+      "description": "0: list price (Pro $20, Max $100, Ultra $200). Team and Enterprise need a price here.",
+      "default": 0,
+      "min": 0
     },
     "dayYellow": {
       "type": "number",
-      "title": "Daily amount yellow from ($)",
-      "description": "From this daily amount (chat + mods), the amount in the daily history turns yellow.",
+      "title": "Yellow from ($ per day)",
+      "description": "Days at or above this total (chats and mods) turn yellow in the history.",
       "default": 3,
       "min": 0
     },
     "dayRed": {
       "type": "number",
-      "title": "Daily amount red from ($)",
-      "description": "From this daily amount (chat + mods), the amount in the daily history turns red.",
+      "title": "Red from ($ per day)",
+      "description": "Days at or above this total turn red.",
       "default": 8,
       "min": 0
+    },
+    "keepDays": {
+      "type": "number",
+      "title": "Keep chats (days)",
+      "description": "Chats with no new cost for this long are deleted at the next /ledger.",
+      "default": 365,
+      "min": 1,
+      "max": 3650
+    },
+    "syncFolder": {
+      "type": "directory",
+      "title": "Sync folder",
+      "description": "Shared folder (e.g. Google Drive) to merge your devices. Only amounts and project folder names are written. Empty: off. Also /ledger sync."
+    },
+    "deviceName": {
+      "type": "string",
+      "title": "Device name",
+      "description": "Name of this device in the sync, up to 30 characters. Empty: Device and an ID.",
+      "default": ""
+    },
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the texts. en: English, de: Deutsch. Also /ledger language.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
+      ]
     }
   }
 }

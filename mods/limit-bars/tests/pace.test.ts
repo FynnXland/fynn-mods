@@ -8,6 +8,8 @@ import { MARK, darker } from '../hooks/ring.ts'
 import { desktopSvg } from '../hooks/svg.ts'
 import { cleanShared, lacksFive, layoutTerminal, nextMiss, paceOf, paceShown, sharedMiss, shownWindows, withPace } from '../hooks/view.ts'
 import type { Win } from '../hooks/view.ts'
+import { cliAnswer } from './cli.ts'
+import type { Cli } from './cli.ts'
 
 const H = 3600000
 const MIN = 60000
@@ -35,16 +37,17 @@ const band = (surface: 'terminal' | 'desktop', bodyColumns = 120) =>
   ({ plugin: 'limit-bars', component: 'AbovePrompt', requestId: `above-${surface}-${bodyColumns}`, props: props(bodyColumns), surface }) as never
 
 // Ein Chat: eigene Messung (`usage()`), der gemeinsame Store (Map), gemeldete Breiten, Neuzeichnen
-function world(on: On, o: { own?: Limit[]; saved?: Map<string, unknown>; now?: number; denyDisplay?: boolean } = {}) {
+function world(on: On, o: { own?: Limit[]; saved?: Map<string, unknown>; now?: number } = {}) {
   const clock = mock.clock(on, { now: o.now ?? NOW })
   const saved = o.saved ?? new Map<string, unknown>()
+  const cli: Cli = { writes: [], fail: '' }
+  on('process.run', ($: unknown, e: any) => cliAnswer(e, cli) ?? { deny: 'kein Prozess im Test' })
   const st = { own: o.own ?? [], invalidates: 0, widths: [] as unknown[] }
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
   on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: undefined, window: 200000 }, rateLimits: st.own } }))
   on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
-    if (o.denyDisplay && e.key === 'display') return { deny: 'Speicher voll' }
     saved.set(e.key, e.value)
     return { value: undefined }
   })
@@ -63,7 +66,7 @@ function world(on: On, o: { own?: Limit[]; saved?: Map<string, unknown>; now?: n
     return next(e)
   })
   on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Text', props: {}, children: ['von anderen'] }))
-  return { clock, saved, st }
+  return { clock, saved, cli, st }
 }
 
 const bars = async ($: any, args = '') => (await $.command.run({ command: 'bars', args } as never)).text as string
@@ -253,7 +256,7 @@ test('0.10.0 Balken (Terminal): Kurzformen bei 70/60/50 Spalten, Strich ┆ im W
   const u50 = await $.ui.mount(band('terminal', 50))
   expect(await u50.find({ key: 'limit-bars' })).toBeUndefined()
   await u50.unmount()
-  expect(await bars($)).toContain('| 5-Stunden-Balken | an · kein Limit (Tempo-Anzeige) | Einstellung |')
+  expect(await bars($)).toContain('| 5-Stunden-Balken | an · kein Limit (Tempo-Anzeige) |')
 })
 
 test('0.10.0 layoutTerminal: Langform → kurz → 5h ∞ → nichts', () => {
@@ -338,27 +341,31 @@ test('0.10.0 Ring ohne 5h: Tempo als Text links, Wochen-Ring mit Kerbe; Breite w
   // Neue Breite für spotify gemeldet (nicht beim Zeichnen, sondern beim Befehl)
   expect(w.st.widths.length).toBe(n0 + 1)
   expect(w.st.widths.at(-1)).toEqual({ width: s.width })
-  expect(w.saved.get('display')).toEqual({ style: 'ring' })
+  expect(w.cli.writes).toEqual([{ style: 'ring' }])
   await ui.unmount()
 })
 
-test('0.10.0 Stil: /bars schlägt die Einstellung, Wert aus einem anderen Chat binnen 2 s, reset zurück, Teile-Schalter behalten den Stil', { options: { language: 'de', style: 'ring' } }, async ($, on) => {
+test('0.10.0 Stil: /bars style schreibt die Einstellung und gilt sofort, ein Teile-Schalter behält den Stil, reset schreibt den Standard (Balken)', { options: { language: 'de', style: 'ring' } }, async ($, on) => {
   const w = world(on, { own: both(20, 30) })
   const ui = await $.ui.mount(band('desktop'))
   await w.clock.settle()
   await ui.redraw()
   expect((await svg(ui)).props.source).toContain('>7d</text>')
-  // Ein anderer Chat setzt Balken
-  w.saved.set('display', { style: 'bar' })
-  await w.clock.advance(TICK)
+  // /bars style bar: Balken, sofort in diesem Chat
+  expect(await bars($, 'style bar')).toContain('| Stil | Balken |')
+  expect(w.cli.writes).toEqual([{ style: 'bar' }])
   await ui.redraw()
   expect((await svg(ui)).props.source).not.toContain('>7d</text>')
-  expect(await bars($)).toContain('| Stil | Balken | /bars |')
-  // Ein Teile-Schalter behält den Stil
+  // Ein Teile-Schalter behält den Stil und schreibt nur sein Feld
   await bars($, 'cache off')
-  expect(w.saved.get('display')).toEqual({ cache: false, style: 'bar' })
-  // reset: wieder die Einstellung (Ringe)
-  expect(await bars($, 'reset')).toContain('| Stil | Ringe | Einstellung |')
+  expect(w.cli.writes[1]).toEqual({ showCache: 'false' })
+  expect(await bars($)).toContain('| Stil | Balken |')
+  // reset schreibt die Standards (Stil bar), nicht die frühere Einstellung (Ringe)
+  expect(await bars($, 'reset')).toContain('| Stil | Balken |')
+  expect(w.cli.writes[2]).toMatchObject({ style: 'bar', showCache: 'true' })
+  await ui.redraw()
+  expect((await svg(ui)).props.source).not.toContain('>7d</text>')
+  expect(await bars($, 'style ring')).toContain('| Stil | Ringe |')
   await ui.redraw()
   expect((await svg(ui)).props.source).toContain('>7d</text>')
   await ui.unmount()
@@ -370,7 +377,7 @@ test('0.10.0 Stil im Terminal: /bars style ring speichert und sagt, dass Ringe n
   await w.clock.settle()
   const text = await bars($, 'style ring')
   expect(text).toContain('Ringe zeichnet nur die Desktop-App')
-  expect(w.saved.get('display')).toEqual({ style: 'ring' })
+  expect(w.cli.writes).toEqual([{ style: 'ring' }])
   await ui.redraw()
   expect(await ui.find({ type: 'Text', text: '5h' })).toBeDefined()
   expect(await ui.find({ type: 'Svg' })).toBeUndefined()
@@ -386,7 +393,7 @@ test('0.10.0 Englisch: Tempo-Zeile, Ring-Stil und /bars style', async ($, on) =>
   expect(await bars($, 'style ring')).toContain('Style: rings.')
   await ui.redraw()
   expect((await svg(ui)).props.source).toContain('>−10% pace</text>')
-  expect(await bars($)).toContain('| 5-hour bar | on · no limit (pace display) | settings |')
+  expect(await bars($)).toContain('| 5-hour bar | on · no limit (pace display) |')
   await ui.unmount()
 })
 
@@ -406,12 +413,12 @@ test('0.10.0 Hilfe: Stil und Tempo stehen in den Funktionen', () => {
     noFive: true,
   }
   const de = barsHelpData({ ...input, lang: 'de' })
-  expect(de.features[0]!.state).toEqual({ kind: 'on', text: 'an · kein Limit, Tempo-Anzeige · per Einstellung' })
-  expect(de.features[6]).toEqual({ name: 'Stil', state: { kind: 'value', text: 'Ringe · per Befehl', isDefault: false }, toggle: '/bars style bar' })
+  expect(de.features[0]!.state).toEqual({ kind: 'on', text: 'an · kein Limit, Tempo-Anzeige' })
+  expect(de.features[6]).toEqual({ name: 'Stil', state: { kind: 'value', text: 'Ringe', isDefault: false }, toggle: '/bars style bar' })
   expect(de.commands.some((c) => c.cmd === '/bars style bar|ring')).toBe(true)
   const en = barsHelpData({ ...input, lang: 'en', style: 'bar', styleByCommand: false, noFive: false })
-  expect(en.features[0]!.state).toEqual({ kind: 'on', text: 'on · by setting' })
-  expect(en.features[6]).toEqual({ name: 'Style', state: { kind: 'value', text: 'bars · by setting', isDefault: true }, toggle: '/bars style ring' })
+  expect(en.features[0]!.state).toEqual({ kind: 'on' })
+  expect(en.features[6]).toEqual({ name: 'Style', state: { kind: 'value', text: 'bars', isDefault: true }, toggle: '/bars style ring' })
   expect(en.settings.find((s) => s.title === 'Style')).toEqual({ title: 'Style', value: 'bar', isDefault: true })
 })
 
@@ -444,15 +451,17 @@ test('0.10.0 Nach dem Laden: eigene neuere Messung ohne 5h zählt vom gemeinsame
   await ui.unmount()
 })
 
-test('0.10.0 /bars style bei abgelehntem Speichern: gilt in diesem Chat, Hinweis, der Takt überschreibt ihn nicht', DE, async ($, on) => {
-  const w = world(on, { own: both(20, 30), denyDisplay: true })
+test('0.10.0 /bars style bei abgelehntem Schreiben: Hinweis, der Stil bleibt (auch nach dem Takt)', DE, async ($, on) => {
+  const w = world(on, { own: both(20, 30) })
   const ui = await $.ui.mount(band('desktop'))
   await w.clock.settle()
+  w.cli.fail = 'Speicher voll'
   const text = await bars($, 'style ring')
-  expect(text).toContain('Nicht gespeichert (')
+  expect(text).toBe('Nicht gespeichert: Speicher voll.')
   await w.clock.advance(3 * TICK)
   await ui.redraw()
-  expect((await svg(ui)).props.source).toContain('>7d</text>')
+  expect((await svg(ui)).props.source).not.toContain('>7d</text>')
+  expect(w.cli.writes).toEqual([])
   expect(w.saved.get('display')).toBeUndefined()
   await ui.unmount()
 })

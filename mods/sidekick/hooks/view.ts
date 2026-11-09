@@ -179,7 +179,14 @@ function countsBlock(d: Day): RenderElement {
   const lines = [
     x.checks(d.pruefungen, secsText(d.warteMs, d.pruefungen)),
     x.handoffs(d.uebergaben, d.hinweise.modell?.gezeigt ?? 0),
+    // Ausbau 0.22.0: Übergaben nach Weg, Vorschlag vor Cache-Ablauf
+    ...(d.wege.fork.n || d.wege.text.n || d.wege.skill ? [x.ho.savingsWays(d.wege.fork.n, usdText(d.wege.fork.usd), d.wege.text.n, usdText(d.wege.text.usd), d.wege.skill, d.wege.ohneCache)] : []),
+    ...(d.vorschlag.gezeigt ? [x.ho.savingsSug(d.vorschlag.gezeigt, d.vorschlag.geklickt, d.vorschlag.ignoriert)] : []),
     ...(d.schleife.denkanstoss ? [x.loopNudges(d.schleife.denkanstoss, d.schleife.wieder)] : []),
+    ...(d.prompts.n || d.prompts.angeboten || d.prompts.gespeichert || d.prompts.gesendet ? [x.pr.savingsRow(d.prompts.n, usdText(d.prompts.usd), d.prompts.angeboten, d.prompts.gespeichert, d.prompts.abgelehnt, d.prompts.gesendet)] : []),
+    ...(d.warteschlange.n || d.warteschlange.markiert ? [x.q.savingsRow(d.warteschlange.n, usdText(d.warteschlange.usd), d.warteschlange.markiert)] : []),
+    // Ausbau 0.25.0: Skill-Katalog
+    ...(d.katalog.n || d.katalog.angeboten ? [x.cat.savingsRow(d.katalog.n, usdText(d.katalog.usd), d.katalog.angeboten, d.katalog.mitSkill, d.katalog.kopiert, d.katalog.trotzdem, d.katalog.stumm)] : []),
     x.coldWithout(d.kaltOhne.n, usdText(d.kaltOhne.usd)),
     x.skillsUsed(sk.slice(0, 8).map(([k, v]) => `${k} ${v}×`).join(', ')),
   ]
@@ -267,7 +274,10 @@ export function savingsTree(d: Day, p: Period, now: number, columns: number, sur
   const box = (kids: RenderNode[]) => col({ key: 'sidekick-savings', borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%' }, kids)
   if (!days) {
     const notes = notesBlock(d, false)
-    return box([head, figures, ...savingsBlock(d, surface, inner, false), ...(notes ? [notes] : []), el('Box', { marginTop: 1 }, [dim(x.vMore)])])
+    // Gespeicherte Prompts (Nachtrag 0.21.0): eine Zeile, eigene Rolle „Prompts“ in /savings detail
+    const pr = d.prompts
+    const prompts = pr.n || pr.gespeichert ? el('Box', { marginTop: 1 }, [dim(plain(x.pr.savingsShort(pr.n, usdText(pr.usd), pr.angeboten, pr.gespeichert)))]) : null
+    return box([head, figures, ...savingsBlock(d, surface, inner, false), ...(notes ? [notes] : []), ...(prompts ? [prompts] : []), el('Box', { marginTop: 1 }, [dim(x.vMore)])])
   }
   const span = spanOf(days, active)
   const nodes = [

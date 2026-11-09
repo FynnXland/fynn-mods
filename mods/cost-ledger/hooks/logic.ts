@@ -535,30 +535,41 @@ export function bookLimAt(rec: Rec, at: number, amount: number): void {
   }
 }
 
-/** Abo-Pläne mit Listenpreis in $ je Monat: Pro claude.com/pricing (monatlich), Max support.claude.com Artikel 11049741 (2026-10-08). */
+/** Abo-Pläne mit Listenpreis in $ je Monat (claude.com/pricing, gelesen 2026-11-08; SPEC Nachtrag 0.12.0). Team und Enterprise ohne. */
 export const PLANS: Record<string, { label: string; price?: number }> = {
   pro: { label: 'Pro', price: 20 },
-  max5: { label: 'Max 5x', price: 100 },
-  max20: { label: 'Max 20x', price: 200 },
-  // Ultra ohne Listenpreis: Fynn kennt ihn nicht (Bau 0.8.0, 2026-11-03), der Preis kommt per `/ledger plan ultra <tag> <preis>`
-  ultra: { label: 'Ultra' },
+  max: { label: 'Max', price: 100 },
+  ultra: { label: 'Ultra', price: 200 },
   team: { label: 'Team' },
   enterprise: { label: 'Enterprise' },
 }
+/**
+ * Namen bis 0.11.x → neuer Plan. Sie bleiben vorerst in `userConfig.plan.options`, sonst käme ein gespeichertes `max20` als
+ * `none` an (types@2.1.319:8067-8069, Probe Bau 0.12.0); `migratePlan` in register.ts schreibt den neuen Namen.
+ */
+export const LEGACY_PLANS: Record<string, string> = { max5: 'max', max20: 'ultra' }
+/** Bezeichnungen bis 0.11.x, nur für den Toast zum Umzug. */
+export const LEGACY_LABELS: Record<string, string> = { max5: 'Max 5x', max20: 'Max 20x' }
 const PLAN_ALIASES: Record<string, string> = {
   pro: 'pro',
-  max5: 'max5',
-  max5x: 'max5',
-  '5x': 'max5',
-  max20: 'max20',
-  max20x: 'max20',
-  '20x': 'max20',
+  max: 'max',
+  max5: 'max',
+  max5x: 'max',
+  '5x': 'max',
   ultra: 'ultra',
+  max20: 'ultra',
+  max20x: 'ultra',
+  '20x': 'ultra',
   team: 'team',
   enterprise: 'enterprise',
 }
 /** Nur eigene Schlüssel: `constructor` oder `__proto__` sind kein Plan. */
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k)
+
+/** Gespeicherter Planname → heutiger (`max20` → `ultra`); unbekannte bleiben, wie sie sind. */
+export function currentPlan(plan: string): string {
+  return own(LEGACY_PLANS, plan) ? LEGACY_PLANS[plan]! : plan
+}
 
 /** Alle Schreibweisen eines Plans, die `/ledger plan` annimmt (für Hilfe und Vollständigkeitstest). */
 export function planWords(): string[] {
@@ -569,14 +580,16 @@ export function planWords(): string[] {
 export type Plan = { v: 1; plan: string; day: number; price?: number; at: number }
 
 export function planLabel(plan: string): string {
-  return own(PLANS, plan) ? PLANS[plan]!.label : plan
+  const p = currentPlan(plan)
+  return own(PLANS, p) ? PLANS[p]!.label : plan
 }
 
-/** Gespeicherte Einstellung prüfen; `null` bei fehlender oder kaputter. */
+/** Gespeicherte Einstellung prüfen (alte Namen → neue); `null` bei fehlender oder kaputter. */
 export function cleanPlan(v: unknown): Plan | null {
-  if (!isObj(v) || v.v !== 1 || typeof v.plan !== 'string' || !own(PLANS, v.plan) || !isNum(v.day) || !isNum(v.at)) return null
-  if (!Number.isInteger(v.day) || v.day < 1 || v.day > 31) return null
-  return { v: 1, plan: v.plan, day: v.day, ...(isNum(v.price) && v.price > 0 ? { price: v.price } : {}), at: v.at }
+  if (!isObj(v) || v.v !== 1 || typeof v.plan !== 'string' || !isNum(v.day) || !isNum(v.at)) return null
+  const plan = currentPlan(v.plan)
+  if (!own(PLANS, plan) || !Number.isInteger(v.day) || v.day < 1 || v.day > 31) return null
+  return { v: 1, plan, day: v.day, ...(isNum(v.price) && v.price > 0 ? { price: v.price } : {}), at: v.at }
 }
 
 /**
@@ -757,10 +770,11 @@ export function limitsReport(
       for (const [d, v] of Object.entries(rec.days)) if (inMonth(d)) usd += v
       for (const m of Object.values(rec.mods)) for (const [d, v] of Object.entries(m.days)) if (inMonth(d)) usd += v.usd
     }
-    const price = o.plan.price ?? PLANS[o.plan.plan]?.price ?? null
+    const name = currentPlan(o.plan.plan)
+    const price = o.plan.price ?? (own(PLANS, name) ? PLANS[name]!.price : undefined) ?? null
     const sinceDay = typeof o.since === 'number' ? dayKey(o.since) : null
     plan = {
-      plan: o.plan.plan,
+      plan: name,
       day: o.plan.day,
       price,
       listPrice: o.plan.price === undefined && price !== null,
@@ -1215,6 +1229,8 @@ export type HelpInfo = {
   since: number | null
   /** Gerätename bei eingeschaltetem Sync, sonst `null` (der Ordner steht nicht in der Hilfe) */
   syncDevice?: string | null
+  /** Weitere userConfig-Werte für EINSTELLUNGEN (0.11.0); der Sync-Ordner nur als gesetzt/aus, nie der Pfad */
+  config?: { billingDay: number; planPrice: number; syncFolder: boolean; deviceName: string }
 }
 
 /** Zahl einer Einstellung in der Sprache: en `2.5`, de `2,5`. */
@@ -1229,9 +1245,10 @@ export function ledgerHelp(s: Settings, info: HelpInfo): HelpData {
   const t = T[lang]
   const money = (v: number) => usd(v, lang)
   const p = info.plan
-  const price = p ? (p.price ?? (own(PLANS, p.plan) ? PLANS[p.plan]!.price : undefined)) : undefined
+  const price = p ? (p.price ?? (own(PLANS, currentPlan(p.plan)) ? PLANS[currentPlan(p.plan)]!.price : undefined)) : undefined
   const priceText = p ? (price === undefined ? t.noPrice : `${t.perMonth(money(price))}${p.price === undefined ? ` (${t.listPrice})` : ''}`) : ''
   const pctUsed = Math.round((Math.max(0, info.storeBytes) / STORE_LIMIT) * 100)
+  const c = info.config ?? { billingDay: p?.day ?? 1, planPrice: p?.price ?? 0, syncFolder: !!info.syncDevice, deviceName: '' }
   return {
     mod: 'cost-ledger',
     lang,
@@ -1258,18 +1275,24 @@ export function ledgerHelp(s: Settings, info: HelpInfo): HelpData {
     features: [
       p
         ? { name: t.helpPlanName, state: { kind: 'on', text: `${planLabel(p.plan)} · ${t.helpDay(p.day)} · ${priceText}` }, toggle: '/ledger plan off' }
-        : { name: t.helpPlanName, state: { kind: 'off', text: t.helpNoPlan }, toggle: '/ledger plan max20 14' },
+        : { name: t.helpPlanName, state: { kind: 'off', text: t.helpNoPlan }, toggle: '/ledger plan max 14' },
       info.syncDevice
         ? { name: t.helpSyncFeature, state: { kind: 'on', text: t.helpSyncThis(info.syncDevice) }, toggle: '/ledger sync off' }
         : { name: t.helpSyncFeature, state: { kind: 'off', text: t.helpSyncOffState }, toggle: t.helpSyncSetCmd },
       { name: t.helpStorageName, state: { kind: 'value', text: t.helpStorage(pctUsed) }, toggle: t.helpInfo },
       { name: t.helpSinceName, state: { kind: 'value', text: info.since === null ? '–' : fullDate(info.since, lang) }, toggle: t.helpInfo },
     ],
+    // Reihenfolge wie in plugin.json
     settings: [
-      { title: t.setLanguage, value: lang, isDefault: lang === DEFAULTS.lang },
-      { title: t.setKeepDays, value: String(s.keepDays), isDefault: s.keepDays === DEFAULTS.keepDays },
+      { title: t.setPlan, value: p ? planLabel(p.plan) : t.helpNoPlan, isDefault: !p },
+      { title: t.setBillingDay, value: String(c.billingDay), isDefault: c.billingDay === 1 },
+      { title: t.setPlanPrice, value: c.planPrice > 0 ? money(c.planPrice) : t.listPrice, isDefault: !(c.planPrice > 0) },
       { title: t.setDayYellow, value: settingNum(s.dayYellow, lang), isDefault: s.dayYellow === DEFAULTS.dayYellow },
       { title: t.setDayRed, value: settingNum(s.dayRed, lang), isDefault: s.dayRed === DEFAULTS.dayRed },
+      { title: t.setKeepDays, value: String(s.keepDays), isDefault: s.keepDays === DEFAULTS.keepDays },
+      { title: t.setSyncFolder, value: c.syncFolder ? t.helpFolderSet : t.helpFolderOff, isDefault: !c.syncFolder },
+      { title: t.setDeviceName, value: c.deviceName || t.helpDeviceAuto, isDefault: !c.deviceName },
+      { title: t.setLanguage, value: lang, isDefault: lang === DEFAULTS.lang },
     ],
     footer: { terminal: t.helpFooterTerminal, desktop: t.helpFooterDesktop },
   }

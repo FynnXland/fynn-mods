@@ -18,11 +18,15 @@ import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import type { Lang } from './i18n.ts'
 import { isLanguage, languageCommand } from './language.ts'
+import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
+import { storeOffDefaults } from './offdefaults.ts'
+import { SETTINGS } from './fields.ts'
 import { H, W } from './stage.ts'
 import type { Desk } from './desk.ts'
 import type { Facts, ToolKind } from './mood.ts'
 
-type Stored = { enabled?: boolean; annoy?: number; seenAt?: number }
+// `enabledMigrated`: der Wert von `enabled`, der zuletzt nach userConfig umgezogen ist (0.14.2)
+type Stored = { enabled?: boolean; enabledMigrated?: boolean; annoy?: number; seenAt?: number }
 
 // /clawd help (docs/HELP-SPEC.md §3): Schnappschuss beim Aufruf unter einer Kennung `#…`; der CommandOutput-Hook zeichnet ihn.
 // Höchstens 10 Einträge, der älteste fällt heraus. Status = Stand beim Aufruf, die Zeichnung schreibt sich nicht um.
@@ -31,6 +35,10 @@ let helpNo = 0
 
 // Flüchtiger Zustand dieses Moduls (wird aus Events neu abgeleitet; Reload setzt zurück)
 let enabled = true
+// Einstellung „Ice when the cache is cold“ (0.14.0, userConfig iceWhenCold)
+let iceWhenCold = true
+// Wert der Einstellung `enabled` für die Hilfe: demo/nap/freeze zeigen Clawd nur für die Sitzung (Review 0.14.0 K3)
+let enabledSetting = true
 // Breite des Platzes im Desktop für tune-strip: `$.state` `clawd-buddy.band` (types/index.d.ts, docs/BAND.md „Platzbreite“). `undefined` =
 // noch nicht geschrieben; nie im Zeichnen, dort darf `$.state` nicht geschrieben werden.
 let isDesktop = false
@@ -70,7 +78,7 @@ let chatFrozen = false // in diesem Chat schon gefroren (höchstens einmal pro C
 let skUsable = false // sidekick.status brauchbar (vorhanden, gültig, nicht `off`): dann keine eigene Schätzung
 let skCold = false // zuletzt gelesenes sidekick.status.cold (nur der Wechsel auf true beginnt einen kalten Moment)
 // Für /clawd status: letzter kalter Moment, ob gewürfelt wurde, Ergebnis
-let frostInfo: { src: '' | FrostSource; rolled: boolean; result: '' | 'frozen' | 'no' | 'music' | 'already' | 'turn' | 'warm' } = { src: '', rolled: false, result: '' }
+let frostInfo: { src: '' | FrostSource; rolled: boolean; result: '' | 'frozen' | 'no' | 'music' | 'already' | 'turn' | 'warm' | 'off' } = { src: '', rolled: false, result: '' }
 // Uhrzeit zu performance.now() (aus der letzten Zeichnung): so braucht das Tippen keinen `$`-Aufruf je Taste, um die Zeit zu kennen
 let clockAt: { clock: number; perf: number } | null = null
 // 0.13.1: resume/fork hat über den Chat schon entschieden (Cache-Stand bekannt). Ein späteres session.start setzt dann nichts zurück und
@@ -98,6 +106,11 @@ function noteFrozen(now: number) {
  * weit ist (kein Takt im Hooks-Modul nötig). Der Würfel hängt an der Uhrzeit (frostRoll): mit fester Uhr wiederholbar.
  */
 function coldMoment(src: FrostSource, now: number, at = now): boolean {
+  // Einstellung „Ice when the cache is cold“ aus (0.14.0): kein Einfrieren, auch kein Würfeln
+  if (!iceWhenCold) {
+    frostInfo = { src, rolled: false, result: 'off' }
+    return false
+  }
   noteFrozen(now)
   const frozenNow = !!facts.frost && facts.frost.sentAt === undefined && now >= facts.frost.at
   const result = frostDecide({ turnActive: facts.turnActive, chatFrozen, frozenNow, music: !!facts.music }, frostRoll(at))
@@ -266,7 +279,39 @@ async function readMusic($: EngineInterface) {
 // Top-Level-Funktion: `$` darf nur an solche weitergereicht werden (docs/raw/en/create.md:317)
 async function save($: EngineInterface) {
   const prev = ((await $.store.get('buddy')) ?? {}) as Stored
-  await $.store.set('buddy', { ...prev, enabled, annoy })
+  // `enabled` bleibt stehen, bis der Umzug (migrate) es nach userConfig gebracht hat (Review 0.14.0 S1)
+  await $.store.set('buddy', { ...prev, annoy })
+}
+
+/**
+ * Einmal je Start (0.14.0, docs/SETTINGS-SPEC.md §4): `enabled` stand bis 0.13.1 im Store `buddy` und galt dort. Ein abweichender Wert
+ * wird nach userConfig geschrieben, danach in `buddy` als `enabledMigrated` vermerkt (Laune und „zuletzt gesehen“ bleiben). Im Hintergrund.
+ */
+async function migrate($: EngineInterface, lang: Lang) {
+  let prev: Stored
+  try {
+    prev = ((await $.store.get('buddy')) ?? {}) as Stored
+  } catch {
+    return
+  }
+  // Schon umgezogen: `enabledMigrated` hält den umgezogenen Wert. Schaltet ein Chat, der nach dem Update noch mit 0.13.x läuft,
+  // `enabled` um, weicht er ab und zieht beim nächsten Start um (0.13.x schreibt `buddy` mit allen Feldern weiter).
+  if (typeof prev.enabled !== 'boolean' || prev.enabledMigrated === prev.enabled) return
+  // Markieren statt das Feld zu löschen (0.14.2, wie sidekick 0.23.0 Review S1): Ein Chat mit 0.13.x liest `enabled` bis
+  // `/reload-plugins` weiter; gelöscht zeigte er Clawd wieder, auch wenn er aus war.
+  const moved = prev.enabled
+  const clear = async () => {
+    const now = ((await $.store.get('buddy')) ?? {}) as Stored
+    await $.store.set('buddy', { ...now, enabledMigrated: moved })
+  }
+  const { apply } = await migrateSettings($, 'clawd-buddy', SETTINGS, { enabled }, { enabled: prev.enabled }, clear, lang)
+  if (typeof apply.enabled === 'boolean' && apply.enabled !== enabled) {
+    enabled = apply.enabled
+    enabledSetting = apply.enabled
+    deskForce = true
+    publishBand($)
+    $.ui.invalidate('ui.render')
+  }
 }
 
 /**
@@ -286,12 +331,17 @@ async function noteSeen($: EngineInterface, now: number) {
 }
 
 export function register(on: On, options: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
-  const nightStart = num(options.nightStart, 23)
-  const nightEnd = num(options.nightEnd, 6)
-  const idleSeconds = num(options.idleSeconds, 45)
-  const reduced = options.reducedMotion === true
-  const flip = options.side === 'left'
-  const birthday = typeof options.birthday === 'string' ? options.birthday : ''
+  // Einstellungen (0.14.0, docs/SETTINGS-SPEC.md §4): einzige Quelle ist userConfig. /clawd on|off schreibt `enabled` über hooks/settings.ts.
+  const cfg = readSettings(SETTINGS, options)
+  const nightStart = num(cfg.nightStart, 23)
+  const nightEnd = num(cfg.nightEnd, 6)
+  const idleSeconds = num(cfg.idleSeconds, 45)
+  const reduced = cfg.reducedMotion === true
+  const flip = cfg.side === 'left'
+  const birthday = typeof cfg.birthday === 'string' ? cfg.birthday : ''
+  enabled = cfg.enabled !== false
+  enabledSetting = enabled
+  iceWhenCold = cfg.iceWhenCold !== false
   const lang = langOf(options.language)
   const tx = T[lang]
 
@@ -346,7 +396,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     sessionStarted = true
     try {
       const s = ((await $.store.get('buddy')) ?? {}) as Stored
-      if (typeof s.enabled === 'boolean') enabled = s.enabled
       annoy = num(s.annoy, 0)
       // Zuletzt gesehen (auch in einer anderen Sitzung): eine neue Sitzung am nächsten Morgen begrüßt dich so ebenfalls
       if (!lastSeen) lastSeen = num(s.seenAt, 0)
@@ -354,6 +403,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       $.ui.log(`clawd-buddy: store not read: ${String(err)}`, { to: 'debug' })
     }
     publishBand($)
+    // Danach (nicht gleichzeitig, beide schreiben settings.json) die Aus-Standards einmal speichern (hooks/offdefaults.ts)
+    void migrate($, lang).catch(() => {}).then(() => storeOffDefaults($, 'clawd-buddy', SETTINGS))
     // Neuer Chat (0.13.0): ein kalter Moment. Hat resume/fork schon entschieden (0.13.1, kam vor session.start), bleibt es dabei.
     await readMusic($)
     if (!resumeDecided) {
@@ -641,7 +692,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     if (isLanguage(e.args)) return { text: await languageCommand($, { mod: 'clawd-buddy', cmd: 'clawd', lang }, e.args) }
     // Hilfe: nur `help` oder `?` als einziges Wort (docs/HELP-SPEC.md §2)
     if (isHelp(e.args)) {
-      const data = clawdHelp({ lang, enabled, nightStart, nightEnd, idleSeconds, reduced, side: flip ? 'left' : 'right', birthday })
+      const data = clawdHelp({ lang, enabled, enabledSetting, nightStart, nightEnd, idleSeconds, reduced, side: flip ? 'left' : 'right', birthday, ice: iceWhenCold })
       let now = 0
       try {
         now = await $.clock.now()
@@ -659,35 +710,31 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const arg = rest.join(' ').trim()
     // Nur die Unterbefehle aus SUBCOMMANDS (clawdhelp.ts; ein Test prüft jeden gegen die Hilfe). Sonst Kurzhilfe und Verweis (HELP-SPEC §2)
     if (!(SUBCOMMANDS as readonly string[]).includes(sub)) return { text: `${tx.unknown(sub)} ${tx.help} ${tx.seeHelp}` }
-    // demo und nap schalten ihn ein; das wird wie bei /clawd on gespeichert
+    // demo, nap und freeze zeigen ihn in dieser Sitzung (0.14.0: nicht mehr gespeichert; ein Schreiben nach userConfig lüde die Mod im
+    // Terminal neu und bräche die Vorführung ab). Dauerhaft an: /clawd on oder die Einstellung.
     const ensureOn = async () => {
       if (enabled) return
       enabled = true
       publishBand($)
-      try {
-        await save($)
-      } catch (err) {
-        $.ui.log(`clawd-buddy: saving failed: ${String(err)}`, { to: 'debug' })
-      }
     }
     if (sub === 'on' || sub === 'off') {
+      const want = sub === 'on'
+      // Schreibt `enabled` in userConfig (SETTINGS-SPEC §4). Weg 1 lädt die Mod neu (die neue Instanz liest den Wert), Weg 2 hier nachziehen.
+      const r = await writeSettings($, 'clawd-buddy', SETTINGS, { enabled: want }, lang)
+      if (!r.ok) return { text: writeNote(r, lang) }
       const was = enabled
-      enabled = sub === 'on'
+      enabled = want
+      enabledSetting = want
       publishBand($)
       if (!enabled) {
         deskTimer?.cancel()
         deskTimer = null
       }
-      try {
-        await save($)
-      } catch (err) {
-        $.ui.log(`clawd-buddy: saving failed: ${String(err)}`, { to: 'debug' })
-      }
       // Erst direkt vor dem Neuzeichnen: ein Zeichnen während der `await`s davor verbrauchte das Flag sonst mit dem alten Stand (Review 2, S1).
       if (enabled && !was) deskFresh = true
       else deskForce = true
       $.ui.invalidate('ui.render')
-      return { text: enabled ? tx.on : tx.off }
+      return { text: `${enabled ? tx.on : tx.off}\n\n${writeNote(r, lang)}` }
     }
     if (sub === 'list') {
       const groups = new Map<string, string[]>()

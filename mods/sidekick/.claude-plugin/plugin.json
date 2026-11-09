@@ -1,17 +1,114 @@
 {
   "name": "sidekick",
-  "version": "0.19.0",
-  "description": "Checks your message before it is sent, by rules and, where worthwhile, briefly with Haiku 5.5: a hint line under your message or a question (new chat with handoff, a skill, a clearer version that is only sent if you choose it, or \"wrong chat?\" when the message belongs to another project). It never rewrites or sends anything without asking. Names due maintenance (/skill-doctor, prompt-audit, consolidate-memory, /init) with a button that puts the command into the prompt box for you to send and a ? that explains why it is due. Three levels (off, cache, guide) with a colored label in the prompt footer. /savings shows cost and measurable savings at a glance, /savings detail compares the models over time. Optional, off by default (/sidekick notes on): while Claude works, a \"good to know\" note above the prompt when you likely missed something with consequences (one question to your main model over the conversation, every 6 steps). Model tip: on the first message of a chat on Opus or Fable it asks whether a simple task should run on Sonnet 5.5 or Haiku 5.5; optionally (/sidekick tips auto on, off by default) it switches simple subagents and chats Claude starts to a cheaper model, and /savings shows the savings as a marked estimate. Retry loop: on the third correction in a row it offers a new chat with handoff or a nudge for Claude to step back, and after the second and fourth compaction it offers a new chat. /sidekick help shows all commands and settings as a table.",
+  "version": "0.25.1",
+  "description": "Checks your message before it is sent and offers a better way where there is one: a new chat with a handoff, a skill, a clearer version or a cheaper model. It never changes your words or sends anything without asking.",
   "author": {
     "name": "Fynn Hansen"
   },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
+    "level": {
+      "type": "string",
+      "title": "Level",
+      "description": "off: nothing. cache: only the cold-cache question, no model calls. guide: all checks and hints. Also /sidekick off|cache|guide.",
+      "default": "guide",
+      "options": [
+        "off",
+        "cache",
+        "guide"
+      ]
+    },
+    "threshold": {
+      "type": "number",
+      "title": "Check from (tokens)",
+      "description": "From this context size every message gets a short check. Also /sidekick threshold 80k.",
+      "default": 80000,
+      "min": 1000
+    },
+    "bigTokens": {
+      "type": "number",
+      "title": "Cold-cache question from (tokens)",
+      "description": "Asks before a cold send from this context size. Also /sidekick big 150k.",
+      "default": 150000,
+      "min": 1000
+    },
+    "cacheTtl": {
+      "type": "string",
+      "title": "Cache lifetime (min)",
+      "description": "auto: measured, otherwise 60. Also /sidekick ttl 5|60|auto.",
+      "default": "auto",
+      "options": [
+        "auto",
+        "5",
+        "60"
+      ]
+    },
+    "skills": {
+      "type": "boolean",
+      "title": "Suggest skills",
+      "description": "Sends your skill list along with the check, so it can suggest one. Also /sidekick skills on|off.",
+      "default": true
+    },
+    "maintenanceHints": {
+      "type": "boolean",
+      "title": "Maintenance hints",
+      "description": "Names due maintenance such as /skill-doctor or /init. Single rules: /sidekick hints. Also /sidekick hints on|off.",
+      "default": true
+    },
+    "auditMin": {
+      "type": "number",
+      "title": "Prompt audit from (tokens)",
+      "description": "Size of your instructions from which the audit hint appears. Also /sidekick hints audit-min 2k.",
+      "default": 2000,
+      "min": 100
+    },
+    "notes": {
+      "type": "boolean",
+      "title": "Good to know",
+      "description": "While Claude works, a note when you likely missed something. Asks your main model every 6 steps. Also /sidekick notes on|off.",
+      "default": false
+    },
+    "modelTip": {
+      "type": "boolean",
+      "title": "Model tip",
+      "description": "On the first message on Opus or Fable, asks whether a cheaper model fits. Also /sidekick tips on|off.",
+      "default": true
+    },
+    "modelTipAuto": {
+      "type": "boolean",
+      "title": "Switch subagents automatically",
+      "description": "Simple subagents and chats Claude starts run on a cheaper model. Also /sidekick tips auto on|off.",
+      "default": false
+    },
+    "modelTipHaiku": {
+      "type": "boolean",
+      "title": "Use Haiku for simple tasks",
+      "description": "Off: Sonnet is the cheapest target. Also /sidekick tips haiku on|off.",
+      "default": true
+    },
+    "retryLoop": {
+      "type": "boolean",
+      "title": "Retry loop",
+      "description": "On the third correction in a row, offers a new chat or a step back. Also /sidekick loop on|off.",
+      "default": true
+    },
+    "queue": {
+      "type": "boolean",
+      "title": "Queue",
+      "description": "While Claude works, a message that is clearly a later item still goes straight in, with a note to Claude to finish the running task first. Also /sidekick queue on|off.",
+      "default": true
+    },
+    "catalog": {
+      "type": "boolean",
+      "title": "Skill catalog",
+      "description": "When a message fits a skill from sidekick's small list of third-party skills, suggests it once per chat before sending. Installs nothing. Also /sidekick catalog on|off.",
+      "default": true
+    },
     "language": {
       "type": "string",
       "title": "Language / Sprache",
-      "description": "Language of the mod's texts and of its model prompts. en: English, de: Deutsch.",
+      "description": "Language of the mod's texts and of its model prompts. en: English, de: Deutsch. Also /sidekick language.",
       "default": "en",
       "options": [
         "en",

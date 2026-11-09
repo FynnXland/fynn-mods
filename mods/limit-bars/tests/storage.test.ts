@@ -66,6 +66,8 @@ type Ps = { exitCode?: number; stdout?: string; truncated?: boolean; deny?: stri
 function world(on: On, o: { saved?: Map<string, unknown>; scan?: Ps; probe?: Ps; absDenied?: boolean } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
+  // Aus-Standards schon gespeichert (hooks/offdefaults.ts), sonst zählten dessen claude-Aufrufe mit; eigene Tests setzen den Schlüssel selbst
+  if (!saved.has('offDefaults2')) saved.set('offDefaults2', ['onlyFiveHour', 'showSystem'])
   const attempts: string[] = [] // jedes gestartete Programm, auch abgelehnte
   const runs: { kind: 'probe' | 'scan' | '?'; argv: readonly string[]; env?: Record<string, string>; cwd?: string }[] = []
   let scan: Ps = o.scan ?? { stdout: scanOut }

@@ -2,11 +2,14 @@
 // dazu die Modellaufrufe anderer Mods, und zeigt per /ledger eine Übersicht (Sprache aus userConfig `language`).
 // Fail-open: Jeder Erfassungs-Hook gibt das Ergebnis von `next` unverändert zurück, Fehler gehen nur ins Debug-Log; kein `.catch`.
 // Ein $.store-Schlüssel pro Session (`s:<sessionId>`), den nur diese Session schreibt: $.store ist nicht atomar (CHEATSHEET).
-import type { EngineInterface, FsEntry, On } from 'claude-code'
+import type { ConfigRow, EngineInterface, FsEntry, On } from 'claude-code'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import { T, dateTime, shortDate, usd } from './i18n.ts'
 import { isLanguage, languageCommand } from './language.ts'
+import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
+import type { Values } from './settings.ts'
+import { SETTINGS } from './fields.ts'
 import {
   HELP_WORDS,
   HERE_WORDS,
@@ -15,7 +18,10 @@ import {
   NO_SYNC,
   notesOf,
   OFF_WORDS,
+  LEGACY_LABELS,
+  LEGACY_PLANS,
   PLANS,
+  currentPlan,
   SYNC_WORD,
   VIEW_WORDS,
   ledgerHelp,
@@ -60,6 +66,23 @@ import type { View } from './view.ts'
 const SELF = 'cost-ledger'
 
 let settings: Settings = cleanSettings(undefined)
+// Einstellungen (0.11.0, docs/SETTINGS-SPEC.md §4): Abo, Sync-Ordner und Gerätename liegen in userConfig (`options`), nicht mehr in
+// `meta:plan`, `meta:sync` und `meta:device.name`. Befehle schreiben über hooks/settings.ts. Die Geräte-ID bleibt im Store.
+let ucfg: Values = readSettings(SETTINGS, undefined)
+
+/** Abo aus userConfig; `none` = kein Abo, ein alter Name gilt als neuer (0.12.0). Einen Zeitpunkt gibt es dort nicht (`at` 0). */
+function cfgPlan(): Plan | null {
+  const plan = currentPlan(String(ucfg.plan ?? 'none'))
+  if (plan === 'none' || !Object.prototype.hasOwnProperty.call(PLANS, plan)) return null
+  const day = Number(ucfg.billingDay)
+  const price = Number(ucfg.planPrice)
+  return { v: 1, plan, day: Number.isInteger(day) && day >= 1 && day <= 31 ? day : 1, ...(price > 0 ? { price } : {}), at: 0 }
+}
+
+/** Gerätename aus userConfig, leer → Standard aus der ID. */
+const deviceName = (id: string) => cleanDeviceName(String(ucfg.deviceName ?? ''), id, deviceDefault)
+/** Sync-Ordner, wie er in userConfig steht (leer = aus); geprüft wird in `syncConfig`. */
+const syncRaw = () => String(ucfg.syncFolder ?? '').trim()
 let sessionId = '' // aus classic.SessionStart (kommt vor session.start), nach einem Modul-Reload aus UserPromptSubmit
 let rec: Rec | null = null // eigener Datensatz, im Speicher führend; geschrieben wird er immer ganz
 let seen = 0 // Baseline: letzter gebuchter Stand des Zählers in diesem Prozess
@@ -280,14 +303,13 @@ async function collect($: EngineInterface, now: number) {
   const recs: { id: string; rec: Rec }[] = []
   let unreadable = 0
   let bytes = 0
-  let plan: Plan | null = null
+  const plan: Plan | null = cfgPlan()
   let limSince: number | null = null
   const cutoff = now - settings.keepDays * DAY
   await honorReset($) // Reset aus einem anderen Chat auch ohne neue Buchung beachten
   for (const key of await $.store.keys()) {
     const value = await $.store.get(key)
     bytes += key.length + (JSON.stringify(value ?? null)?.length ?? 0)
-    if (key === 'meta:plan') plan = cleanPlan(value)
     if (key === 'meta:limSince' && typeof value === 'number') limSince = value
     if (!key.startsWith('s:')) continue
     const id = key.slice(2)
@@ -309,19 +331,24 @@ async function collect($: EngineInterface, now: number) {
  */
 async function helpCommand($: EngineInterface, args: string): Promise<string> {
   const now = await $.clock.now()
-  const info: HelpInfo = { plan: null, storeBytes: 0, since: null, syncDevice: null }
+  const info: HelpInfo = {
+    plan: cfgPlan(),
+    storeBytes: 0,
+    since: null,
+    syncDevice: null,
+    config: { billingDay: Number(ucfg.billingDay), planPrice: Number(ucfg.planPrice), syncFolder: false, deviceName: String(ucfg.deviceName ?? '') },
+  }
   try {
-    let on = false
+    const on = syncRaw() !== '' && validDir(syncRaw(), /^[A-Za-z]:/.test(await $.session.root())) !== null
+    info.config!.syncFolder = on
     let device: Device | null = null
     for (const key of await $.store.keys()) {
       const value = await $.store.get(key)
       info.storeBytes += key.length + (JSON.stringify(value ?? null)?.length ?? 0)
-      if (key === 'meta:plan') info.plan = cleanPlan(value)
       if (key === 'meta:since' && typeof value === 'number') info.since = value
-      if (key === 'meta:sync') on = cleanSync(value) !== null
       if (key === 'meta:device') device = cleanDevice(value, deviceDefault)
     }
-    info.syncDevice = on && device ? device.name : null
+    info.syncDevice = on ? (device ? deviceName(device.id) : String(ucfg.deviceName ?? '') || T[settings.lang].helpDeviceAuto) : null
   } catch (err) {
     log($, `/ledger help: ${msg(err)}`)
   }
@@ -343,18 +370,23 @@ async function planCommand($: EngineInterface, args: string[]): Promise<string> 
   }
   const first = (args[0] ?? '').toLowerCase()
   if (!first) {
-    const p = cleanPlan(await $.store.get('meta:plan'))
-    return `${p ? t.planCurrent(planLabel(p.plan), p.day, price(p), dateTime(p.at, lang)) : t.planNone}\n${t.planHelp}`
+    const p = cfgPlan()
+    return `${p ? t.planCurrent(planLabel(p.plan), p.day, price(p)) : t.planNone}\n${t.planHelp}`
   }
+  // Schreibt die Felder in userConfig (SETTINGS-SPEC §4). Weg 1 lädt die Mod neu, Weg 2 zieht die Werte hier nach.
   if (OFF_WORDS.includes(first)) {
-    await $.store.delete('meta:plan')
-    return t.planDeleted
+    const r = await writeSettings($, SELF, SETTINGS, { plan: 'none' }, lang)
+    if (r.ok && r.way === 'cli') ucfg = { ...ucfg, plan: 'none' }
+    return r.ok ? `${t.planDeleted}\n\n${writeNote(r, lang)}` : writeNote(r, lang)
   }
   const p = parsePlan(args, now)
   if (!p) return `${t.planInvalid(args.join(' '))}\n${t.planHelp}`
-  await $.store.set('meta:plan', p)
+  const patch: Values = { plan: p.plan, billingDay: p.day, planPrice: p.price ?? 0 }
+  const r = await writeSettings($, SELF, SETTINGS, patch, lang)
+  if (!r.ok) return writeNote(r, lang)
+  if (r.way === 'cli') ucfg = { ...ucfg, ...patch }
   const m = planMonth(p.day, now)
-  return t.planSaved(planLabel(p.plan), p.day, price(p), shortDate(m.start, lang), shortDate(m.next, lang))
+  return `${t.planSaved(planLabel(p.plan), p.day, price(p), shortDate(m.start, lang), shortDate(m.next, lang))}\n\n${writeNote(r, lang)}`
 }
 
 // ---------- Geräte-Sync (SPEC Nachtrag 0.7.0) ----------
@@ -363,12 +395,139 @@ async function planCommand($: EngineInterface, args: string[]): Promise<string> 
 
 const deviceDefault = (id: string) => T[settings.lang].deviceDefault(id)
 
-/** Sync-Einstellung dieses Geräts aus `$.store`; `null` = Sync aus. */
+/**
+ * Sync-Einstellung dieses Geräts: Ordner aus userConfig (geprüft wie bei `/ledger sync`), Geräte-ID aus `$.store`; `null` = Sync
+ * aus oder Ordner ungültig. Ohne ID (Ordner über die Einstellungsseite gesetzt, ohne `/ledger sync`) wird sie jetzt angelegt; eine
+ * doppelte ID fängt `syncRound` ab.
+ */
 async function syncConfig($: EngineInterface): Promise<SyncCfg | null> {
-  const s = cleanSync(await $.store.get('meta:sync'))
-  if (!s) return null
-  const device = cleanDevice(await $.store.get('meta:device'), deviceDefault)
-  return device ? { dir: s.dir, device } : null
+  const raw = syncRaw()
+  if (!raw) return null
+  const dir = validDir(raw, /^[A-Za-z]:/.test(await $.session.root()))
+  if (!dir) return null
+  let device = cleanDevice(await $.store.get('meta:device'), deviceDefault)
+  if (!device) {
+    device = { id: newDeviceId(), name: '' }
+    await $.store.set('meta:device', { id: device.id })
+  }
+  return { dir, device: { id: device.id, name: deviceName(device.id) } }
+}
+
+/**
+ * Alten Eintrag markieren (0.12.1), nur wenn ihn seit dem Lesen niemand geändert hat; sonst zieht der nächste Start die Änderung um
+ * (Review K1). Kein Objekt (kaputter Eintrag): leeren wie bis 0.12.0.
+ */
+async function markIfSame($: EngineInterface, key: string, raw: unknown) {
+  const now = await $.store.get(key)
+  if (JSON.stringify(now) !== JSON.stringify(raw)) return
+  await $.store.set(key, raw && typeof raw === 'object' ? { ...raw, migrated: true } : null)
+}
+
+/**
+ * Geräte-ID speichern. Ein schon umgezogener (markierter) Name bleibt stehen, damit ein Chat mit 0.10.x ihn bis `/reload-plugins`
+ * weiter liest (Review K3); ein nicht markierter Name fällt weg wie bisher (sonst sähe der Umzug ihn als eigenen Namen, Review 0.11.0 S2).
+ */
+async function setDeviceId($: EngineInterface, id: string) {
+  const old = (await $.store.get('meta:device')) as { name?: unknown; migrated?: unknown } | undefined
+  await $.store.set('meta:device', old?.migrated === true && typeof old.name === 'string' ? { id, name: old.name, migrated: true } : { id })
+}
+
+/**
+ * Einmal je Start (0.11.0, SETTINGS-SPEC §4): `meta:plan`, `meta:sync` und ein eigener Gerätename aus `meta:device` galten bis 0.10.0
+ * im Store. Abweichende Werte gehen nach userConfig, danach werden die alten Einträge markiert (0.12.1). Im Hintergrund.
+ */
+async function migrate($: EngineInterface) {
+  let planRaw: unknown, syncRawOld: unknown, devRaw: unknown
+  try {
+    planRaw = await $.store.get('meta:plan')
+    syncRawOld = await $.store.get('meta:sync')
+    devRaw = await $.store.get('meta:device')
+  } catch {
+    return
+  }
+  // Markiert statt gelöscht (0.12.1, wie sidekick 0.23.0 Review S1): Ein Chat, der nach dem Update bis `/reload-plugins` noch mit
+  // 0.10.x läuft, liest Plan, Sync-Ordner und Gerätenamen weiter aus dem Store; gelöscht verlöre er sie. 0.10.x übergeht das Feld
+  // `migrated` und schreibt ohne es; dann zieht der nächste Start jedes Feld um, das von userConfig abweicht (auch eins, das inzwischen auf der Seite geändert wurde).
+  const fresh = (v: unknown) => v !== undefined && v !== null && !(typeof v === 'object' && (v as { migrated?: unknown }).migrated === true)
+  if (!fresh(planRaw)) planRaw = undefined
+  if (!fresh(syncRawOld)) syncRawOld = undefined
+  const dev = devRaw as { id?: unknown; name?: unknown; migrated?: unknown } | undefined
+  const id = typeof dev?.id === 'string' ? dev.id : ''
+  const oldName = typeof dev?.name === 'string' && dev.migrated !== true ? dev.name.trim() : ''
+  const named = !!oldName && oldName !== T.en.deviceDefault(id) && oldName !== T.de.deviceDefault(id)
+  if (planRaw === undefined && syncRawOld === undefined && !oldName) return
+  const legacy: Partial<Values> = {}
+  const p = cleanPlan(planRaw)
+  if (p) Object.assign(legacy, { plan: p.plan, billingDay: p.day, planPrice: p.price ?? 0 })
+  const sy = cleanSync(syncRawOld)
+  if (sy) legacy.syncFolder = sy.dir
+  if (named) legacy.deviceName = oldName
+  const clear = async () => {
+    if (planRaw !== undefined) await markIfSame($, 'meta:plan', planRaw)
+    if (syncRawOld !== undefined) await markIfSame($, 'meta:sync', syncRawOld)
+    if (oldName && id) await markIfSame($, 'meta:device', devRaw)
+  }
+  const before = { ...ucfg }
+  const { apply } = await migrateSettings($, SELF, SETTINGS, ucfg, legacy, clear, settings.lang)
+  // Ein /ledger plan … während des Umzugs gewinnt (Review 0.11.0 K2)
+  for (const [k, v] of Object.entries(apply)) if (ucfg[k] === before[k]) ucfg = { ...ucfg, [k]: v }
+  if (apply.syncFolder !== undefined) rescan($, true)
+}
+
+/** `meta:planRenamed`: letzter Umzug eines alten Plannamens; `shown` = Toast gezeigt. */
+type Renamed = { from: string; to: string; shown: boolean }
+
+/** Gespeicherte Markierung prüfen; `null` bei fehlender oder kaputter (Review 0.12.0 K4). */
+function cleanRenamed(v: unknown): Renamed | null {
+  const o = v as Partial<Renamed> | null | undefined
+  return o && typeof o === 'object' && typeof o.from === 'string' && typeof o.to === 'string' ? { from: o.from, to: o.to, shown: o.shown === true } : null
+}
+
+/**
+ * Toast zum Umzug, wenn er noch aussteht. Die Markierung kommt vor den Toast, damit ihn ein zweiter Aufruf nicht wiederholt.
+ * Ohne Oberfläche (`claude -p`) sieht ihn niemand: dann wartet er auf den nächsten Chat (Review 0.12.0 K2).
+ */
+async function renameToast($: EngineInterface, r: Renamed) {
+  if (r.shown || !(await $.session.surfaces()).length) return
+  await $.store.set('meta:planRenamed', { ...r, shown: true })
+  const t = T[settings.lang]
+  $.ui.toast(t.planRenamed(LEGACY_LABELS[r.from] ?? r.from, planLabel(r.to)), { timeoutMs: 15000 })
+}
+
+/**
+ * Alte Plannamen (SPEC Nachtrag 0.12.0): ein gespeichertes `max5` wird `max`, ein `max20` wird `ultra`. Einmal je Start im
+ * Hintergrund, über den Weg der SETTINGS-SPEC (nur `plan`, ein eigener Preis bleibt). Eine per --plugin-dir geladene Kopie
+ * (`@inline`) zieht nicht um. Toast einmal: nach Weg 2 hier, nach Weg 1 in der neu geladenen Instanz (session.start läuft
+ * dort erneut, docs/LANGUAGE-SPEC.md §2c).
+ */
+async function migratePlan($: EngineInterface) {
+  const done = cleanRenamed(await $.store.get('meta:planRenamed'))
+  const old = String(ucfg.plan ?? '')
+  if (!Object.prototype.hasOwnProperty.call(LEGACY_PLANS, old)) {
+    if (done && done.to === old) await renameToast($, done)
+    return
+  }
+  // Weg 1 schriebe in einer @inline-Kopie deren eigene Zeile, Weg 2 lehnt sie selbst ab (settings.ts viaCli)
+  let rows: ConfigRow[] = []
+  try {
+    rows = await $.config.list()
+  } catch {
+    rows = []
+  }
+  const owner = rows.find((r) => r.key === `${SELF}.plan`)?.provider?.plugin
+  if (typeof owner === 'string' && owner.endsWith('@inline')) return
+  const next = LEGACY_PLANS[old]!
+  const mark: Renamed = done && done.from === old && done.to === next ? done : { from: old, to: next, shown: false }
+  await $.store.set('meta:planRenamed', mark)
+  const r = await writeSettings($, SELF, SETTINGS, { plan: next }, settings.lang)
+  if (!r.ok) {
+    log($, `Planname ${old} → ${next} nicht umgezogen: ${r.reason}`)
+    if (!done || done.from !== old) await $.store.delete('meta:planRenamed')
+    return
+  }
+  if (r.way === 'config') return // die neu geladene Instanz zeigt den Toast
+  if (ucfg.plan === old) ucfg = { ...ucfg, plan: next }
+  await renameToast($, mark)
 }
 
 /** Alle Datensätze dieses Geräts, nur lesend (das Aufräumen bleibt bei `/ledger`). */
@@ -451,7 +610,8 @@ async function syncRound($: EngineInterface, cfg: SyncCfg, own: { id: string; re
   try {
     if (await ownConflict($, cfg, entries)) {
       cfg = { dir: cfg.dir, device: { id: newDeviceId(), name: cfg.device.name } }
-      await $.store.set('meta:device', cfg.device)
+      // Nur die ID: der Name liegt in userConfig (sonst sähe der Umzug ihn als eigenen Namen, Review 0.11.0 S2)
+      await setDeviceId($, cfg.device.id)
       info.dupId = true
     }
   } catch (err) {
@@ -501,7 +661,7 @@ async function syncCommand($: EngineInterface, rest: string): Promise<string> {
   const first = (words[0] ?? '').toLowerCase()
   if (!first) {
     const cfg = await syncConfig($)
-    if (!cfg) return t.syncOffState
+    if (!cfg) return syncRaw() ? t.syncCfgInvalid(syncRaw()) : t.syncOffState
     const lines = [t.syncState(cfg.dir, cfg.device.name, cfg.device.id)]
     try {
       const p = await readPeers($, cfg, await $.fs.list(cfg.dir))
@@ -515,8 +675,9 @@ async function syncCommand($: EngineInterface, rest: string): Promise<string> {
     return lines.join('\n\n')
   }
   if (OFF_WORDS.includes(first) && words.length === 1) {
-    await $.store.delete('meta:sync')
-    return t.syncOffDone
+    const r = await writeSettings($, SELF, SETTINGS, { syncFolder: '' }, lang)
+    if (r.ok && r.way === 'cli') ucfg = { ...ucfg, syncFolder: '' }
+    return r.ok ? `${t.syncOffDone}\n\n${writeNote(r, lang)}` : writeNote(r, lang)
   }
   const now = await $.clock.now()
   if (first === NAME_WORD) {
@@ -525,7 +686,10 @@ async function syncCommand($: EngineInterface, rest: string): Promise<string> {
     const old = cleanDevice(await $.store.get('meta:device'), deviceDefault)
     const id = old?.id ?? newDeviceId()
     const device = { id, name: cleanDeviceName(raw, id, deviceDefault) }
-    await $.store.set('meta:device', device)
+    if (!old) await $.store.set('meta:device', { id })
+    const r = await writeSettings($, SELF, SETTINGS, { deviceName: device.name }, lang)
+    if (!r.ok) return writeNote(r, lang)
+    ucfg = { ...ucfg, deviceName: device.name }
     const cfg = await syncConfig($)
     if (cfg)
       try {
@@ -533,14 +697,17 @@ async function syncCommand($: EngineInterface, rest: string): Promise<string> {
         const own = await ownRecs($)
         await writeOwn($, cfg, own.recs, own.since)
       } catch (err) {
-        return `${t.syncNamed(device.name)}\n\n${t.syncFailed(msg(err))}`
+        return `${t.syncNamed(device.name)}\n\n${t.syncFailed(msg(err))}\n\n${writeNote(r, lang)}`
       }
-    return t.syncNamed(device.name)
+    return `${t.syncNamed(device.name)}\n\n${writeNote(r, lang)}`
   }
   const dir = validDir(rest, /^[A-Za-z]:/.test(await $.session.root()))
   if (!dir) return t.syncInvalid(rest.trim())
-  let device = cleanDevice(await $.store.get('meta:device'), deviceDefault) ?? { id: newDeviceId(), name: '' }
-  if (!device.name) device = { id: device.id, name: deviceDefault(device.id) }
+  const stored = cleanDevice(await $.store.get('meta:device'), deviceDefault)
+  let device = stored ? { id: stored.id, name: deviceName(stored.id) } : (() => {
+    const fresh = newDeviceId()
+    return { id: fresh, name: deviceName(fresh) }
+  })()
   let entries: FsEntry[] = []
   try {
     entries = await $.fs.list(dir)
@@ -563,15 +730,18 @@ async function syncCommand($: EngineInterface, rest: string): Promise<string> {
   } catch (err) {
     return t.syncUnreachable(msg(err))
   }
-  await $.store.set('meta:device', device)
-  await $.store.set('meta:sync', { v: 1, dir, at: now })
+  await setDeviceId($, device.id)
+  // Erst nach dem gelungenen Schreiben: der Ordner geht nach userConfig (SETTINGS-SPEC §4)
+  const r = await writeSettings($, SELF, SETTINGS, { syncFolder: dir }, lang)
+  if (!r.ok) return writeNote(r, lang)
+  if (r.way === 'cli') ucfg = { ...ucfg, syncFolder: dir }
   let n = 0
   try {
     n = (await readPeers($, { dir, device }, await $.fs.list(dir))).peers.length
   } catch (err) {
     log($, `Sync lesen: ${msg(err)}`)
   }
-  return `${t.syncOn(dir, device.name, n, renewed)}\n\n${t.syncPrivacy}`
+  return `${t.syncOn(dir, device.name, n, renewed)}\n\n${t.syncPrivacy}\n\n${writeNote(r, lang)}`
 }
 
 // ---------- $.state `cost-ledger.here` für limit-bars (SPEC Nachtrag 0.10.0) ----------
@@ -721,7 +891,7 @@ async function reset($: EngineInterface): Promise<string> {
   })
   // Löschen außerhalb der Kette: Mod-Aufrufe warten nur auf das eigene Schreiben (SPEC Verhalten 5).
   // `meta:plan` bleibt: eine Einstellung, keine Buchung (SPEC Nachtrag 0.5.0, Verhalten 5); ebenso Sync und Gerät (0.7.0)
-  const keep = ['meta:resetAt', 'meta:plan', 'meta:sync', 'meta:device', 'meta:syncAt']
+  const keep = ['meta:resetAt', 'meta:plan', 'meta:sync', 'meta:device', 'meta:syncAt', 'meta:planRenamed']
   let n = 0
   let hadLimits = false
   for (const key of await $.store.keys()) {
@@ -747,8 +917,13 @@ async function reset($: EngineInterface): Promise<string> {
 
 export function register(on: On, options: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
   settings = cleanSettings(options)
+  ucfg = readSettings(SETTINGS, options)
 
   on('session.start', async ($, e, next) => {
+    // Erst der Umzug aus dem Store (0.11.0), dann die alten Plannamen (0.12.0)
+    void migrate($)
+      .then(() => migratePlan($))
+      .catch((err) => log($, `Umzug der Einstellungen: ${msg(err)}`))
     try {
       await serial(async () => {
         const root = await $.session.root()

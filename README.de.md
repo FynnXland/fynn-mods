@@ -5,7 +5,7 @@ Senden mitdenkt, Schnellantworten, eine Musikleiste für Spotify (Windows) und e
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.318_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.319_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
 [![Mods](https://img.shields.io/badge/mods-6-555)](#die-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#die-mods)
 
@@ -37,7 +37,7 @@ Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mod
 |---|---|
 | [clawd-buddy](#clawd-buddy) | Animiertes Pixel-Maskottchen über dem Prompt, das auf Claudes Arbeit reagiert |
 | [limit-bars](#limit-bars) | Balken für das 5-Stunden- und das Wochenlimit, ein Ring, wie lange der Prompt-Cache noch warm ist, optional Kostenring und Systemwerte |
-| [sidekick](#sidekick) | Prüft deine Nachricht vor dem Senden: Kosten bei kaltem Cache, falscher Chat, klarere Fassung, fällige Wartung |
+| [sidekick](#sidekick) | Prüft deine Nachricht vor dem Senden: Kosten bei kaltem Cache, falscher Chat, klarere Fassung, fällige Wartung; dazu gespeicherte Prompts, eine Nachrichten-Warteschlange, Übergaben und Skill-Vorschläge |
 | [quick-replies](#quick-replies) | Der Vorschlag von Claude Code für die nächste Nachricht als Knopf |
 | [tune-strip](#tune-strip) | Musikleiste für Spotify über dem Prompt mit Cover, Position und Knöpfen (nur Windows) |
 | [cost-ledger](#cost-ledger) | Kostenbuch über alle Chats, nach Tag, Projekt, Chat und Modell |
@@ -46,9 +46,13 @@ Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mod
 eine Tabelle mit allen Befehlen, was gerade an oder aus ist und wie man es umschaltet, und den Einstellungen des Mods
 mit ihren Werten. In `claude -p` und VS Code kommt dasselbe als kurzer Text.
 
+**Einstellungen:** Alle Einstellungen aller Mods stehen auf der Plugin-Einstellungsseite von Claude Code (Desktop-App:
+Einstellungen → Plugins → der Mod → Einstellungen; Terminal: `/plugin configure <mod>@fynn-mods`). Die
+Slash-Befehle ändern dieselben Einstellungen, und von früheren Versionen gespeicherte Werte ziehen einmalig um.
+
 ## Voraussetzungen
 
-- Claude Code **v2.1.309 oder neuer** (ältere Versionen laden diese Mods nicht); getestet mit **v2.1.318**. Prüfen mit
+- Claude Code **v2.1.309 oder neuer** (ältere Versionen laden diese Mods nicht); getestet mit **v2.1.319**. Prüfen mit
   `claude --version`.
 - Läuft im Terminal und im Code-Tab der Claude-Desktop-App. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen
   die meisten Mods nichts; Details in der README des jeweiligen Mods.
@@ -101,7 +105,10 @@ Drei Mods lösen Modellaufrufe **über dein Konto** aus (im Abo zählen sie auf 
 
 - **sidekick** fragt Haiku 5.5 (Effort `medium`) nur, wenn sich eine Prüfung lohnen kann (erste Nachricht eines Chats,
   großer Kontext, kalter Cache): etwa 0,001 $ und 3 Sekunden je Prüfung (API-Wert). Eine Übergabe in einen neuen Chat
-  ist ein größerer Sonnet-Aufruf, nur wenn du ihn wählst. Die Stufe `cache` ruft gar kein Modell auf. `/savings`
+  ist ein größerer Aufruf, nur wenn du ihn wählst: das Modell deiner Session aus dem warmen Cache (etwa 0,06 $ bei 150k
+  Kontext mit Opus 5.5) oder, bei kaltem Cache, Sonnet 5.5 aus dem Verlauf (etwa 0,08 $). Gespeicherte Prompts, die
+  Warteschlange und der Skill-Katalog kommen mit winzigen Haiku-Aufrufen aus (ein Bruchteil eines Cents). Die Stufe
+  `cache` ruft gar kein Modell auf. `/savings`
   stellt beides der gemessenen Ersparnis gegenüber. Abschalten mit `/sidekick off`. *Gut zu wissen* (standardmäßig
   aus, `/sidekick notes on`) fragt bei längeren Aufgaben das Modell deiner Session, großteils aus dem Cache: etwa
   0,04 $ je Prüfung bei 150k Kontext mit Opus 5.5.
@@ -128,14 +135,15 @@ zu traurigen Balladen schwenkt er ein Feuerzeug. In der Desktop-App läuft er hi
 Limit-Balken schieben ihn also nicht mehr zur Seite.
 
 Ab und zu friert ihn ein kalter Cache oder ein neuer Chat in einen Eisklumpen ein (höchstens einmal pro Chat): Tippen
-lässt das Eis reißen, Senden bricht es auf, manchmal schmilzt es.
+lässt das Eis reißen, Senden bricht es auf, manchmal schmilzt es. In den Einstellungen lässt sich das Eis abschalten (`/clawd freeze` geht
+weiterhin).
 
 - **Befehle:** `/clawd` (Status), `/clawd on|off`, `/clawd list`, `/clawd demo <name>`, `/clawd nap`, `/clawd boop`,
   `/clawd freeze`, `/clawd language de|en`, `/clawd help`
 - **Rechte kurz:** beobachtet Ereignisse und gibt sie unverändert weiter; zeichnet nur seine eigene Tabelle zu
-  `/clawd help`; merkt sich an/aus und ein paar Zähler im eigenen Plugin-Speicher; liest von tune-strip, ob Musik
-  läuft, das Tempo und die Gruppe des Songs, nie den Titel; liest von sidekick nur, was er gerade tut, seine Stufe und
-  ob der Cache kalt ist. Sonst nur der [Sprachschalter](#rechte-und-vertrauen).
+  `/clawd help`; merkt sich ein paar Zähler im eigenen Plugin-Speicher (an/aus ist eine Einstellung); liest von
+  tune-strip, ob Musik läuft, das Tempo und die Gruppe des Songs, nie den Titel; liest von sidekick nur, was er gerade
+  tut, warum er fragt, seine Stufe und ob der Cache kalt ist. Sonst nur die [Einstellungsbefehle](#rechte-und-vertrauen).
   Keine Dateien, kein Netzwerk, keine Modellaufrufe.
 - **Details:** [mods/clawd-buddy](mods/clawd-buddy/README.md) (englisch)
 
@@ -154,7 +162,7 @@ Kontext neu schreiben würdest.
 
 Ein optionaler dritter Ring zeigt, wie voll ein Laufwerk ist, aufgeteilt nach Dateiart (Programme, Medien, KI-Modelle,
 Code …); `/disk` zeigt die Einzelheiten. Er ist **standardmäßig aus** und läuft bisher nur unter Windows: Zum
-Einschalten `storagePath` in `/config` setzen.
+Einschalten `storagePath` in den Einstellungen setzen.
 
 Ist [cost-ledger](#cost-ledger) installiert, zeigt ein Kostenring, was dieser Chat als Anteil am ganzen Projekt
 gekostet hat, als API-Wert. `/bars show cpu on` ergänzt live Systemwerte (CPU, RAM, GPU-Last und Grafikspeicher, eine
@@ -163,22 +171,23 @@ klappt mit jeder Karte, deren Treiber die Windows-GPU-Zähler liefert; der Grafi
 
 **Nach deinem Geschmack:** Jeder Teil (5-Stunden-Balken, Wochen-Balken, Cache-Ring, Speicher-Ring, Kostenring,
 Systemwerte) lässt sich einzeln ausblenden, mit `/bars show cache off` (wirkt sofort in allen offenen Chats) oder
-dauerhaft über `showFiveHour`, `showWeekly`, `showCache`, `showStorage`, `showCost` und `showSystem` in `/config`. Ohne Cache-Ring bleibt die Rückfrage vor kaltem Senden an;
+dauerhaft über `showFiveHour`, `showWeekly`, `showCache`, `showStorage`, `showCost` und `showSystem` auf der Einstellungsseite. Ohne Cache-Ring bleibt die Rückfrage vor kaltem Senden an;
 die schaltest du mit `/cache warn off` ab.
 
 Alle offenen Chats auf demselben Rechner teilen sich den neuesten Limit-Stand und prüfen ihn alle 2 s, die Balken laufen also
 ohne Flackern mit.
 
-- **Befehle:** `/cache` (Überblick und Einstellungen), `/handoff [continue|show]` (Übergabe schreiben und in einem
-  frischen Chat weitermachen), `/keepwarm [stunden|off]`, `/disk [refresh]`, `/bars [show <teil> on|off | style bar|ring | reset]`,
+- **Befehle:** `/cache` (Überblick und Einstellungen), `/keepwarm [stunden|off]`, `/disk [refresh]`, `/bars [show <teil> on|off | style bar|ring | reset]`,
   `/bars language de|en`, `/bars help`
 - **Rechte kurz:** liest Limits, Kontextgröße und Cache-Werte; kann eine Nachricht für eine Rückfrage anhalten; führt
-  `/clear` und `/compact` aus und sendet eine Übergabe nur auf deine Wahl; `$.model.fork` nur, solange `/keepwarm`
+  `/compact` nur auf deine Wahl aus; `$.model.fork` nur, solange `/keepwarm`
   läuft; nur mit gesetztem `storagePath` startet er Windows PowerShell mit zwei festen, nur lesenden Skripten
   (Laufwerksgröße, Größen nach Dateiendung); nur mit eingeschalteten Systemwerten einen Windows-PowerShell-Prozess mit
   festem, nur lesendem Skript (und `nvidia-smi`); liest die Chat- und Projektkosten von cost-ledger und die Stufe von
-  sidekick und teilt tune-strip über `$.state` nur mit, wie breit die Balken sind. Sonst nur der [Sprachschalter](#rechte-und-vertrauen). Keine
+  sidekick und teilt tune-strip über `$.state` nur mit, wie breit die Balken sind. Sonst nur die [Einstellungsbefehle](#rechte-und-vertrauen). Keine
   Dateien, kein Netzwerk, keine Umgebungsvariablen.
+- **Übergabe:** `/handoff` ist zu [sidekick](#sidekick) umgezogen (limit-bars 0.15.0, sidekick 0.22.0); es braucht
+  sidekick.
 - **Details:** [mods/limit-bars](mods/limit-bars/README.md) (englisch)
 
 ### sidekick
@@ -192,8 +201,9 @@ Nachricht oder fragt nach.
 
 - **Kalter Cache im großen Chat:** Bevor du einen großen, kalt gewordenen Kontext neu sendest, zeigt er beide Preise,
   etwa „Senden schreibt alles neu (≈ 2,40 $)“ gegenüber „Neuer Chat mit Übergabe (≈ 0,26 $)“. Mit *Neuer Chat mit
-  Übergabe* schreibt Sonnet die Übergabe, der Chat wird geleert und deine Nachricht geht im frischen Chat weiter; der
-  alte bleibt über `/resume` erreichbar.
+  Übergabe* wird die Übergabe auf dem günstigsten guten Weg geschrieben, der Chat wird geleert und deine Nachricht geht
+  im frischen Chat weiter; der alte bleibt über `/resume` erreichbar. `/handoff` macht dasselbe auf Wunsch (siehe
+  unten).
 - **Ein besserer Weg:** verweist auf einen passenden Skill, schlägt bei neuem Thema einen frischen Chat vor oder bietet
   eine klarere Fassung deiner Nachricht an, die du mit einem Klick sendest.
 - **Falscher Chat:** Gehört eine Nachricht klar zu einem anderen Projekt als der Chat, hält sidekick sie an und fragt,
@@ -217,16 +227,32 @@ Nachricht oder fragt nach.
 - **Korrektur-Schleife:** Bei der dritten Korrektur in Folge („geht immer noch nicht“) bietet er einen neuen Chat mit
   einer Übergabe dessen an, was nicht geklappt hat, oder einen kurzen Anstoß an Claude, einen Schritt zurückzutreten.
   Nach der zweiten und vierten Zusammenfassung (Compaction) eines Chats bietet er einmal einen neuen Chat an.
+- **Übergabe:** `/handoff` (von limit-bars hierher umgezogen) schreibt eine kurze Übergabe und fragt, ob du in einem
+  frischen Chat weitermachen willst. Solange der Prompt-Cache warm ist, schreibt sie das Modell deiner Session aus dem
+  Cache; bei kaltem Cache schreibt Sonnet 5.5 sie aus dem Verlauf. Eine Zeile über dem Prompt kann sie kurz vor Ablauf
+  des Caches eines großen Chats vorschlagen.
+- **Gespeicherte Prompts:** Eine Anweisung, die du immer wieder schickst, kann dein eigener Befehl werden, z. B.
+  `/p tidy-chats`, in der Desktop-App mit einem Knopf in der Fußzeile. Speichern mit `/sidekick save <name>` oder
+  indem du das Angebot von sidekick annimmst, nachdem dieselbe Art Anweisung in drei Chats vorkam.
+- **Warteschlange:** Schreibst du, während Claude noch arbeitet, einen klar getrennten späteren Punkt, geht er direkt
+  rein, mit einem Hinweis an Claude, erst die laufende Aufgabe fertig zu machen. Selbst entscheiden: in der
+  Desktop-Fußzeile auf **Danach** klicken oder die Nachricht mit `later:` beginnen.
+- **Skill-Katalog:** Verlangt eine Nachricht klar das, was ein handverlesener Skill von Dritten tut, fragt sidekick vor
+  dem Senden einmal pro Chat nach. Drei reine Markdown-Skills von Emil Kowalski liegen sidekick bei (MIT, mit ihrer
+  Lizenz); bei den übrigen kopiert er nur den Installationsbefehl und installiert nie etwas.
+- **Gemeinsame Gründe:** Ist clawd-buddy installiert, zeigt Clawd, warum sidekick eine Nachricht anhält.
 
 Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unverändert raus.
 
 - **Befehle:** `/sidekick` (Status und Einstellungen), `/sidekick off|cache|guide|on`,
-  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick tips …`, `/sidekick loop on|off`, `/sidekick language de|en`,
-  `/sidekick help`, `/savings [today|week|all]`, `/savings detail`
+  `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick tips …`, `/sidekick loop on|off`,
+  `/sidekick queue on|off`, `/sidekick catalog …`, `/sidekick save|prompts|forget …`, `/p <name>`,
+  `/handoff [fork|text|show|continue]`, `/sidekick language de|en`, `/sidekick help`, `/savings [today|week|all]`,
+  `/savings detail`
 - **Rechte kurz:** liest deine Nachricht vor dem Senden; hält sie nur an oder ersetzt sie nur nach deiner Wahl im
   Dialog; Haiku 5.5 und Sonnet 5.5 über `$.model.complete` mit einer laufenden Kurzfassung, deinen letzten 3 Nachrichten und dem Ende von Claudes letzter Antwort, nie dem
-  ganzen Verlauf; nur mit Gut zu wissen an eine Frage über `$.model.fork` an das Modell deiner Session über den
-  Gesprächsverlauf, mit allen Tools gesperrt; auf Knopfdruck führt er den Befehl der Zeile aus (Befehle aus Plugins und eigene, `/skill-doctor`, `/init`;
+  ganzen Verlauf; `$.model.fork` an das Modell deiner Session über den Gesprächsverlauf, mit allen Tools gesperrt, nur
+  mit Gut zu wissen an oder um eine Übergabe aus dem warmen Cache zu schreiben; gespeicherte Prompts und Übergaben werden (`$.prompt.submit`) nur auf deinen Befehl oder Klick gesendet; bei einer Nachricht, die du schreibst, während Claude arbeitet, kann er einen versteckten Hinweis an Claude anfügen (Warteschlange) oder, nachdem du „Mit … senden“ gewählt hast, den Text eines mitgelieferten Skills; auf Knopfdruck führt er den Befehl der Zeile aus (Befehle aus Plugins und eigene, `/skill-doctor`, `/init`;
   nie MCP-Prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`); zeichnet sein Label in die Fußzeile; füllt
   das leere Eingabefeld mit einem Wartungsbefehl bei *In Prompt einfügen* oder wenn ein Befehl abgelehnt wird; legt ihn
   bei *Kopieren* in die Zwischenablage (`$.ui.copy`);
@@ -234,7 +260,8 @@ Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unveränd
   nie deine Nachricht. Für den Modell-Tipp liest er das Hauptmodell (`$.session.model`), ändert das Modell je Anfrage
   nur in einem Chat, in dem du ein günstigeres gewählt hast, und setzt mit `tips auto` das Modell eingebauter Subagenten
   (`agent.spawn`) und von `start_session` und zeigt dazu eine Zeile im Agent-Fenster (`$.ui.notice`). Sonst nur der
-  [Sprachschalter](#rechte-und-vertrauen). Keine Dateien, Umgebung, kein Netzwerk.
+  [Einstellungsbefehle](#rechte-und-vertrauen). Kein Netzwerk, keine Umgebung; Dateien nur, um nach deinem Klick die
+  `SKILL.md` eines mitgelieferten Skills zu lesen, geschrieben wird nichts.
 - **Details:** [mods/sidekick](mods/sidekick/README.md) (englisch)
 
 ### quick-replies
@@ -249,7 +276,7 @@ Mit `/replies more on` füllt ein Fork der Session bis zu vier Plätze; Claude C
   `/replies help`
 - **Rechte kurz:** liest den Vorschlag von Claude Code; sendet einen Vorschlag nur auf Klick oder Taste als deine
   Nachricht, nie automatisch; `$.model.fork` nur mit `more` an; teilt tune-strip über `$.state` nur mit, ob die Pille
-  steht, nie ihren Text. Sonst nur der [Sprachschalter](#rechte-und-vertrauen). Keine Dateien, kein Netzwerk.
+  steht, nie ihren Text. Sonst nur die [Einstellungsbefehle](#rechte-und-vertrauen). Keine Dateien, kein Netzwerk.
 - **Details:** [mods/quick-replies](mods/quick-replies/README.md) (englisch)
 
 ### tune-strip
@@ -276,7 +303,7 @@ ausgewertet; nichts wird aufgenommen, gespeichert oder gesendet.** `/tune beat o
   senden), der Befehl geht nur als Umgebungsvariable hinein; solange Spotify spielt und das Band zu sehen ist, einen
   Takt-Helfer (PowerShell mit festem Text, gibt nur Zahlen aus); teilt clawd-buddy über `$.state` mit, ob Musik läuft,
   Tempo, Schlagzeit und Gruppe, ohne Titel oder Interpret; liest, wie breit limit-bars und Clawd sind und ob
-  quick-replies seine Pille zeigt. Sonst nur der [Sprachschalter](#rechte-und-vertrauen). Keine Dateien, kein
+  quick-replies seine Pille zeigt. Sonst nur die [Einstellungsbefehle](#rechte-und-vertrauen). Keine Dateien, kein
   Netzwerk, keine Tokens, keine Modellaufrufe.
 - **Umbenannt:** Bis 0.3.1 hieß der Mod `spotify` mit dem Befehl `/spotify`. Zum Umstieg
   `claude plugin marketplace update fynn-mods` und danach einmal `claude plugin install tune-strip@fynn-mods`; der
@@ -292,7 +319,7 @@ Modell und die Modellaufrufe anderer Mods. `/ledger` zeigt heute, 7 und 30 Tage 
 deine Projekte und die teuersten Chats, gezeichnet im Stil von Claude Code. `/ledger here` zeigt, was dieses Projekt
 gekostet hat und welchen Anteil dieser Chat daran hat, in der Desktop-App als Ring. Im Abo zeigt `/ledger limits`, wie viel
 API-Wert ins aktuelle 5-Stunden- und Wochenfenster und in deinen Abo-Monat geflossen ist; dein Abo trägst du einmal mit
-`/ledger plan` ein. Dazu schätzt es, wie viel von jedem Fenster außerhalb des Ledgers verbraucht wurde (claude.ai, Handy-App, Chats ohne den Mod).
+`/ledger plan` (Pro, Max, Ultra, Team oder Enterprise) oder auf der Einstellungsseite ein. Dazu schätzt es, wie viel von jedem Fenster außerhalb des Ledgers verbraucht wurde (claude.ai, Handy-App, Chats ohne den Mod).
 
 **Mehrere Rechner:** Der Sync ist standardmäßig aus. So siehst du PC und Laptop zusammen in einem `/ledger`:
 
@@ -310,8 +337,8 @@ Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost
   `/ledger language de|en`, `/ledger help`
 - **Rechte kurz:** liest Kosten, Verbrauch und Limitfenster der Session; beobachtet die Modellaufrufe anderer Mods und
   gibt sie unverändert weiter; speichert Projektname, Git-Remote als `host/owner/repo`, die ersten 50 Zeichen der ersten
-  Nachricht eines Chats und deine Abo-Angabe im lokalen Plugin-Speicher; teilt limit-bars über `$.state` die Kosten
-  dieses Chats und Projekts mit (nur Beträge und der Ordnername). Sonst nur der [Sprachschalter](#rechte-und-vertrauen).
+  Nachricht eines Chats im lokalen Plugin-Speicher (Abo, Sync-Ordner und Gerätename sind Plugin-Einstellungen); teilt limit-bars über `$.state` die Kosten
+  dieses Chats und Projekts mit (nur Beträge und der Ordnername). Sonst nur die [Einstellungsbefehle](#rechte-und-vertrauen).
   Keine Modellaufrufe oder Netzwerkzugriffe. Dateien nur für den optionalen Sync (`$.fs`, begrenzt auf den gewählten Ordner und die eigene Datei `cost-ledger-<id>.json`).
 - **Details:** [mods/cost-ledger](mods/cost-ledger/README.md) (englisch)
 
@@ -331,10 +358,11 @@ Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost
   fynn-mods auf einmal um.
 - **limit-bars lässt sidekick den Vortritt.** Beide können vor kaltem Senden fragen. Läuft sidekick auf `cache` oder
   `guide`, schweigt limit-bars von selbst (`/cache` zeigt „an (übernimmt gerade sidekick)“), damit nie zwei Dialoge
-  hintereinander kommen.
+  hintereinander kommen. `/handoff` wohnt in sidekick.
 - **Clawd spielt sidekick mit.** Sind beide installiert, hält Clawd die Lupe ans Eingabefeld, während sidekick prüft,
   zeigt bei einer Rückfrage ein Stoppschild und schreibt einen Brief, wenn sidekick einen neuen Chat mit Übergabe
-  startet.
+  startet. Sie zeigt auch, warum sidekick fragt (kalter Cache, falscher Chat, Modell-Tipp, klarere Fassung, neues
+  Thema).
 - **cost-ledger bucht die anderen.** Modellaufrufe von sidekick, quick-replies und limit-bars stehen nicht in
   `/cost`; cost-ledger bucht sie getrennt, so zeigt `/ledger`, was jeder Mod kostet.
 
@@ -343,15 +371,18 @@ Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost
 Ein Mod ist Code, der in Claude Code mit deinen Rechten läuft. Jeder Mod hier legt offen, an welche Ereignisse er sich
 hängt und welche API-Aufrufe er macht; `claude plugin validate mods/<mod>` zeigt die genaue Liste, und jede README
 erklärt in Klartext, wofür sie da sind. Keiner dieser Mods liest oder speichert Anmeldedaten oder Tokens, keiner hat einen
-eigenen Netzwerkzugang, und keiner schreibt irgendwohin außer in seinen eigenen Plugin-Speicher, mit zwei Ausnahmen:
-cost-ledger schreibt seine eigene Datei in den Ordner, den du wählst, aber nur, wenn du `/ledger sync` einschaltest; und
-der Sprachschalter ändert die Einstellung `language` der sechs fynn-mods, sonst nichts.
+eigenen Netzwerkzugang, und keiner schreibt irgendwohin außer in seinen eigenen Plugin-Speicher und seine
+Plugin-Einstellungen, mit zwei Ausnahmen: cost-ledger schreibt seine eigene Datei in den Ordner, den du wählst, aber
+nur, wenn du `/ledger sync` einschaltest; und der Sprachschalter ändert die Einstellung `language` der sechs
+fynn-mods, sonst nichts.
 
-**Sprachschalter:** `/<befehl> language de|en` liest die Plugin-Einstellungen und ändert nur das Feld `language` der
-sechs fynn-mods (`$.config`). In der Desktop-App und in `claude -p`, wo Claude Code keine Plugin-Einstellungen
-auflistet, ruft er stattdessen die `claude`-CLI auf, nur `claude plugin list --json` und
-`claude plugin configure <mod>@fynn-mods` für die sechs fynn-mods. Das ist der einzige Prozess, den clawd-buddy,
-cost-ledger, quick-replies und sidekick je starten.
+**Einstellungsbefehle:** `/<befehl> language de|en` liest die Plugin-Einstellungen und ändert nur das Feld `language`
+der sechs fynn-mods (`$.config`). Die Befehle, die eine Einstellung spiegeln (`/clawd on|off`, `/replies on|off`,
+`/tune size`, `/ledger plan`, `/sidekick cache` und so weiter), ändern nur die Felder ihres eigenen Mods. In der
+Desktop-App und in `claude -p`, wo Claude Code keine Plugin-Einstellungen auflistet, rufen sie stattdessen die
+`claude`-CLI auf, nur `claude plugin list --json` und `claude plugin configure <mod>@fynn-mods` (für die sechs
+fynn-mods, nur eigene Felder). Das ist der einzige Prozess, den clawd-buddy, cost-ledger, quick-replies und sidekick
+je starten.
 
 **Weitere Prozesse,** alle Windows PowerShell mit festen Skripten: tune-strip, um die Spotify-Sitzung der
 Windows-Mediensteuerung zu lesen und zu steuern und für den Takt nur den Ton von Spotify zu hören (nur das Tempo,
@@ -368,7 +399,7 @@ Sicherheitsproblem gefunden? Siehe [SECURITY.md](SECURITY.md) (englisch).
 | Zwei Rückfragen hintereinander vor dem Senden mit kaltem Cache | limit-bars auf 0.14.0 oder neuer aktualisieren; dann überlässt es sidekick die Frage. Bei älterem limit-bars die Rückfrage mit `/cache warn off` abschalten. |
 | Alles ist englisch | `/clawd language de` (oder der Befehl eines anderen Mods) stellt alle fynn-mods um; für einen einzelnen Mod die Option `language` mit `/plugin configure <mod>@fynn-mods` auf `de` stellen. In der Desktop-App wirkt das ab dem nächsten Chat oder sofort nach `/reload-plugins`. |
 | tune-strip zeigt nichts | Er läuft nur unter Windows und braucht die Spotify-Desktop-App (der Web-Player wird nicht erkannt). Ist Spotify geschlossen, zeichnet er nichts; `/tune` sagt, was er sieht. Falls ausgeschaltet: `/tune on`. |
-| Der Speicher-Ring fehlt oder bleibt leer | Er läuft nur unter Windows und ist standardmäßig aus: `storagePath` (z. B. `D:\`) in `/config` setzen und prüfen, ob `/bars show storage on` gilt. Bleibt er leer, zeigt `/disk` den Fehler. |
+| Der Speicher-Ring fehlt oder bleibt leer | Er läuft nur unter Windows und ist standardmäßig aus: `storagePath` (z. B. `D:\`) in den Einstellungen von limit-bars setzen und prüfen, ob `/bars show storage on` gilt. Bleibt er leer, zeigt `/disk` den Fehler. |
 | cost-ledger zeigt einen Chat mit Haiku 5.5 etwa zehnfach zu teuer an | Claude Code v2.1.291 berechnete Haiku 5.5 in `/cost` wie Haiku 4.5, und cost-ledger bucht diesen Wert für den Chat. Claude Code aktualisieren; v2.1.295 rechnet richtig. Modellaufrufe der Mods rechnet cost-ledger mit eigenen Preisen. |
 
 Warum ein Mod nichts tut, zeigt das Debug-Log: Claude Code mit `claude --debug-file mod-debug.log` starten und die

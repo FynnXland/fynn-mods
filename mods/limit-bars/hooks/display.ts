@@ -1,7 +1,7 @@
 // limit-bars: welche Teile der Anzeige zu sehen sind (SPEC.md, Ausbau v0.6.0), reine Funktionen ohne `$`.
-// Zwei Quellen: userConfig (`showFiveHour`, `showWeekly`, `showCache`, `showStorage`, dazu das alte `onlyFiveHour`) und
-// `/bars` (in `$.store` unter `display`, wirkt in allen offenen Chats). Vorrang: ein per Befehl gesetzter Wert, sonst die
-// Einstellung. Abgeschaltet wird nur die Anzeige; Rückfrage, Hinweise und Befehle des Caches bleiben (Fynn, 2026-10-06).
+// Seit 0.16.0 eine Quelle: userConfig (`show*`, dazu das alte `onlyFiveHour`); `/bars` schreibt dorthin. `cleanOverrides` und
+// `cleanStyle` lesen nur noch den alten Store-Wert `display` für den Umzug. Abgeschaltet wird nur die Anzeige; Rückfrage,
+// Hinweise und Befehle des Caches bleiben (Fynn, 2026-10-06).
 
 // Seit 0.12.0 auch der Kostenring (`cost`) und die CPU/RAM-Säulen (`system`); Reihenfolge wie im Band (SPEC Ausbau 0.12.0, 3.)
 export const PARTS = ['fiveHour', 'weekly', 'cache', 'storage', 'cost', 'system'] as const
@@ -85,7 +85,7 @@ export type BarsCommand =
   | { kind: 'bad' }
 
 // Wortlisten des Parsers, exportiert für den Vollständigkeitstest der Hilfe (docs/HELP-SPEC.md §6 Punkt 5)
-/** `help` und `?`, nur als einziges Wort (HELP-SPEC §2); gilt auch für die Nebenbefehle `/cache`, `/handoff`, `/keepwarm`, `/disk`. */
+/** `help` und `?`, nur als einziges Wort (HELP-SPEC §2); gilt auch für die Nebenbefehle `/cache`, `/keepwarm`, `/disk`. */
 export const HELP_WORDS: readonly string[] = ['help', '?']
 export const STATUS_WORDS: readonly string[] = ['status', 'show']
 export const RESET_WORDS: readonly string[] = ['reset', 'zurücksetzen', 'zuruecksetzen']
@@ -94,8 +94,6 @@ export const ON_OFF_WORDS: readonly string[] = ['on', 'off', 'an', 'aus']
 export const PART_WORDS: readonly string[] = PART_ALIASES.flatMap(([, names]) => names)
 
 // Wortlisten der Nebenbefehle (register.ts nutzt sie; Vollständigkeitstest der Hilfe)
-export const HANDOFF_SHOW_WORDS: readonly string[] = ['show', 'zeigen']
-export const HANDOFF_CONTINUE_WORDS: readonly string[] = ['continue', 'weiter']
 export const KEEP_OFF_WORDS: readonly string[] = ['off', 'aus']
 export const DISK_WORDS: readonly string[] = ['refresh']
 

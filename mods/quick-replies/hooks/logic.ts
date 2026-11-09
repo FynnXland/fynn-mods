@@ -121,12 +121,12 @@ export const TOGGLE_WORDS: readonly string[] = ['on', 'off']
 export const MORE_WORD = 'more'
 export const HELP_WORDS: readonly string[] = ['help', '?']
 
-/** Was die Hilfe zeigt: Zustand dieser Session (`enabled`, `more` nach /replies) und die Werte aus userConfig. */
+/** Was die Hilfe zeigt: die geltenden Einstellungen (userConfig, seit 0.7.0 die einzige Quelle). */
 export type HelpInput = {
   lang: Lang
   enabled: boolean
   more: boolean
-  config: { more: boolean; layout: 'auto' | 'grid' | 'list' }
+  layout: 'auto' | 'grid' | 'list'
 }
 
 /** Schnappschuss für `/replies help` (docs/HELP-SPEC.md §5): Befehle genau so, wie der Parser sie annimmt. */
@@ -145,7 +145,7 @@ export function repliesHelp(s: HelpInput): HelpData {
       languageHelp('replies', s.lang), // docs/LANGUAGE-SPEC.md §6 Punkt 4
       { cmd: '/replies help', does: t.helpHelp },
     ],
-    notes: [t.helpForkCost, t.helpMoreOverrides],
+    notes: [t.helpForkCost, t.helpSameSettings],
     controls: [
       { cmd: t.ctlClick, does: t.ctlClickDoes },
       { cmd: t.ctlKey, does: t.ctlKeyDoes },
@@ -155,12 +155,14 @@ export function repliesHelp(s: HelpInput): HelpData {
       { name: t.featReplies, state: { kind: s.enabled ? 'on' : 'off' }, toggle: s.enabled ? '/replies off' : '/replies on' },
       // Bei ausgeschalteten Vorschlägen läuft auch der Fork nicht (register.ts, turn.complete): „an (pausiert)“
       { name: t.featMore, state: s.more ? { kind: 'on', ...(s.enabled ? {} : { text: t.paused }) } : { kind: 'off' }, toggle: s.more ? '/replies more off' : '/replies more on' },
-      { name: t.featLayout, state: { kind: 'value', text: s.config.layout, isDefault: s.config.layout === 'auto' }, toggle: t.setting },
+      { name: t.featLayout, state: { kind: 'value', text: s.layout, isDefault: s.layout === 'auto' }, toggle: t.setting },
     ],
+    // Reihenfolge wie in plugin.json
     settings: [
+      { title: t.setEnabled, value: s.enabled ? t.on : t.off, isDefault: s.enabled },
+      { title: t.setMore, value: s.more ? t.on : t.off, isDefault: !s.more },
+      { title: t.setLayout, value: s.layout, isDefault: s.layout === 'auto' },
       { title: t.setLanguage, value: s.lang, isDefault: s.lang === 'en' },
-      { title: t.setMore, value: s.config.more ? t.on : t.off, isDefault: !s.config.more },
-      { title: t.setLayout, value: s.config.layout, isDefault: s.config.layout === 'auto' },
     ],
     footer: { terminal: t.helpFooterTerminal, desktop: t.helpFooterDesktop },
   }

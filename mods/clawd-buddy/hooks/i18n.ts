@@ -30,7 +30,7 @@ type Texts = {
    * Eis-Zeile in /clawd status (0.13.0, SPEC Teil A): Quelle des letzten kalten Moments, gewürfelt ja/nein, Ergebnis, schon in diesem
    * Chat gefroren. `at` = Beginn einer geplanten Schätzung (Uhrzeit HH:MM), sonst leer.
    */
-  frost: (o: { src: '' | 'new' | 'resume' | 'sidekick' | 'estimate' | 'manual'; rolled: boolean; result: '' | 'frozen' | 'no' | 'music' | 'already' | 'turn' | 'warm'; at: string; chat: boolean }) => string
+  frost: (o: { src: '' | 'new' | 'resume' | 'sidekick' | 'estimate' | 'manual'; rolled: boolean; result: '' | 'frozen' | 'no' | 'music' | 'already' | 'turn' | 'warm' | 'off'; at: string; chat: boolean }) => string
   unknown: (sub: string) => string
   status: (o: { on: boolean; mood: string; temper: string; tired: number; annoy: number; desk: string; beat: string }) => string
   /** Takt aus tune-strip für /clawd status (0.11.0) */
@@ -65,7 +65,7 @@ type Texts = {
     buddy: string
     reduced: string
     setting: string
-    titles: { nightStart: string; nightEnd: string; idleSeconds: string; reducedMotion: string; side: string; birthday: string; language: string }
+    titles: { enabled: string; nightStart: string; nightEnd: string; idleSeconds: string; reducedMotion: string; side: string; ice: string; birthday: string; language: string }
     sides: { right: string; left: string }
     birthdayOff: string
     footerTerminal: string
@@ -88,7 +88,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     freezeFail: 'clawd-buddy: could not freeze (the clock could not be read). Try again in a moment.',
     frost: (o) => {
       const src = { '': 'no cold moment yet', new: 'new chat', resume: 'resumed chat', sidekick: 'sidekick says cold', estimate: 'own estimate (60 min)', manual: '/clawd freeze' }[o.src]
-      const res = { '': '', frozen: o.at ? `freezes at ${o.at}` : 'frozen', no: 'stays warm', music: 'music is playing, no freezing', already: 'already frozen in this chat', turn: 'Claude is working', warm: 'cache still warm' }[o.result]
+      const res = { '': '', frozen: o.at ? `freezes at ${o.at}` : 'frozen', no: 'stays warm', music: 'music is playing, no freezing', already: 'already frozen in this chat', turn: 'Claude is working', warm: 'cache still warm', off: 'ice is off in the settings' }[o.result]
       return `Ice: ${src}${o.src ? `, rolled: ${o.rolled ? 'yes' : 'no'}` : ''}${res ? `, ${res}` : ''}; frozen in this chat: ${o.chat ? 'yes' : 'no'}.`
     },
     unknown: (sub) => `unknown: ${sub}.`,
@@ -133,18 +133,20 @@ export const T: Readonly<Record<Lang, Texts>> = {
       reduced: 'Reduced motion',
       setting: 'setting',
       titles: {
+        enabled: 'Show Clawd',
         nightStart: 'Night starts (hour)',
         nightEnd: 'Night ends (hour)',
         idleSeconds: 'Idle time before pastimes (s)',
         reducedMotion: 'Reduced motion',
-        side: 'Position in the band',
+        side: 'Side',
+        ice: 'Ice when the cache is cold',
         birthday: 'Birthday (DD.MM.)',
         language: 'Language',
       },
       sides: { right: 'right', left: 'left' },
       birthdayOff: 'off (empty)',
       footerTerminal: 'Change settings: /plugin configure clawd-buddy · Turn the mod off: /plugin disable clawd-buddy',
-      footerDesktop: 'Turn the mod off: + → Plugins → Manage plugins · Change settings: /plugin configure clawd-buddy in a terminal',
+      footerDesktop: 'Change settings: Settings → Plugins → clawd-buddy → Settings · Turn the mod off: + → Plugins → Manage plugins',
     },
   },
   de: {
@@ -161,7 +163,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     freezeFail: 'clawd-buddy: Einfrieren ging nicht (die Uhr ließ sich nicht lesen). Versuch es gleich noch einmal.',
     frost: (o) => {
       const src = { '': 'noch kein kalter Moment', new: 'neuer Chat', resume: 'fortgesetzter Chat', sidekick: 'sidekick meldet kalt', estimate: 'eigene Schätzung (60 min)', manual: '/clawd freeze' }[o.src]
-      const res = { '': '', frozen: o.at ? `friert um ${o.at} ein` : 'eingefroren', no: 'bleibt warm', music: 'Musik läuft, kein Einfrieren', already: 'in diesem Chat schon gefroren', turn: 'Claude arbeitet', warm: 'Cache noch warm' }[o.result]
+      const res = { '': '', frozen: o.at ? `friert um ${o.at} ein` : 'eingefroren', no: 'bleibt warm', music: 'Musik läuft, kein Einfrieren', already: 'in diesem Chat schon gefroren', turn: 'Claude arbeitet', warm: 'Cache noch warm', off: 'Eis ist in den Einstellungen aus' }[o.result]
       return `Eis: ${src}${o.src ? `, gewürfelt: ${o.rolled ? 'ja' : 'nein'}` : ''}${res ? `, ${res}` : ''}; in diesem Chat gefroren: ${o.chat ? 'ja' : 'nein'}.`
     },
     unknown: (sub) => `unbekannt: ${sub}.`,
@@ -206,18 +208,20 @@ export const T: Readonly<Record<Lang, Texts>> = {
       reduced: 'Weniger Bewegung',
       setting: 'Einstellung',
       titles: {
+        enabled: 'Clawd zeigen',
         nightStart: 'Nacht beginnt (Stunde)',
         nightEnd: 'Nacht endet (Stunde)',
         idleSeconds: 'Leerlauf bis Zeitvertreib (s)',
         reducedMotion: 'Weniger Bewegung',
-        side: 'Position im Band',
+        side: 'Seite',
+        ice: 'Eis bei kaltem Cache',
         birthday: 'Geburtstag (TT.MM.)',
         language: 'Sprache',
       },
       sides: { right: 'rechts', left: 'links' },
       birthdayOff: 'aus (leer)',
       footerTerminal: 'Einstellungen ändern: /plugin configure clawd-buddy · Mod abschalten: /plugin disable clawd-buddy',
-      footerDesktop: 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure clawd-buddy',
+      footerDesktop: 'Einstellungen ändern: Einstellungen → Plugins → clawd-buddy → Einstellungen · Mod abschalten: + → Plugins → Manage plugins',
     },
   },
 }

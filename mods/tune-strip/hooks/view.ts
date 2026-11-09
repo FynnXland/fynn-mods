@@ -29,7 +29,8 @@ const SEG = 3
 const SEG_H = 8
 const INFO_W = 340 // Balken (176), Fuge, Zeit; der Titel darf bis zur vollen Breite gehen
 const INFO_H = 32
-const AHEAD_S = 15 // so viele Sekunden läuft die Zeit nach einer Zeichnung von allein weiter (Zeichnungen kommen alle 5 s, mit Reserve)
+/** So weit (Sekunden) rechnet die Leiste höchstens voraus (0.10.0); längere Titel zeichnen danach einmal neu. */
+export const HORIZON_S = 3600
 const CHAR_PX = 7.2 // Breite eines Zeichens der Mono-Schrift bei 12 px, großzügig gerechnet
 const SEP_W = 2400 // die Trennlinie ist breiter als jedes Fenster; ihre Box schneidet sie ab
 const SEP_H = 26
@@ -58,6 +59,34 @@ export function clip(text: string, max: number): string {
 }
 
 /**
+ * Bis zu welcher vollen Sekunde die Leiste ab `pos` vorausrechnet (0.10.0): bis zum Titelende, höchstens `HORIZON_S` weit. `capped`:
+ * die Voranimation endet vor dem Titel, danach muss einmal neu gezeichnet werden. Ohne Länge gilt nur die Grenze.
+ */
+export function aheadOf(pos: number, end: number): { first: number; last: number; capped: boolean } {
+  const p = Math.max(0, pos)
+  const endSec = end > 0 ? Math.floor(end) : Infinity
+  const first = Math.min(Math.floor(p), endSec)
+  const last = Math.min(endSec, first + HORIZON_S)
+  return { first, last, capped: last < endSec }
+}
+
+/** Unsichtbarer Vorsatz aus `k` Ziffern: In der Mono-Schrift steht das Zeichen danach genau in Spalte k, gleich welche Breite die Schrift hat. */
+const pad = (k: number) => (k > 0 ? `<tspan fill-opacity="0">${'0'.repeat(k)}</tspan>` : '')
+
+/**
+ * Sichtbarkeit einer Angabe auf einer Zeitleiste aus `n` gleich langen Abschnitten: sichtbar in [a, b) (in Abschnitten), sonst verborgen.
+ * `b === n` heißt: bis zum Ende, und dort bleibt sie stehen (fill="freeze"). Liefert den Startwert und das `<animate>` (leer, wenn sich nichts ändert).
+ */
+function shownIn(a: number, b: number, n: number, timing: string): { vis: string; anim: string } {
+  const vis = a === 0 ? 'visible' : 'hidden'
+  if (a === 0 && b >= n) return { vis, anim: '' }
+  const kt = (k: number) => String(+(k / n).toFixed(6))
+  const keys = a === 0 ? [0, b] : b >= n ? [0, a] : [0, a, b]
+  const vals = a === 0 ? ['visible', 'hidden'] : b >= n ? ['hidden', 'visible'] : ['hidden', 'visible', 'hidden']
+  return { vis, anim: `<animate attributeName="visibility" calcMode="discrete"${timing} fill="freeze" values="${vals.join(';')}" keyTimes="${keys.map(kt).join(';')}"/>` }
+}
+
+/**
  * Titel und Position im Stil der Stats-Leiste von limit-bars: oben der Titel in Orange mit dem Interpreten in Grau, darunter ein
  * Segmentbalken (grün, Rest dunkelgrau) und rechts die Zeit (verstrichen grün, Länge grau).
  */
@@ -66,16 +95,13 @@ export function infoSvg(title: string, artist: string, pos: number, end: number,
   const t = clip(title, max)
   const a = artist ? clip(` – ${artist}`, Math.max(0, max - [...t].length)) : ''
   const on = Math.round(ratio(pos, end) * SEGMENTS)
-  // Voranimation (0.8.0): Das Band zeichnet nur alle paar Sekunden neu (öfter flackert es), die Zeit soll aber jede Sekunde weiterlaufen.
-  // Darum liegt für jede der nächsten Sekunden eine eigene Zeitangabe im Bild, und SMIL blendet sie im Sekundentakt um; der Beginn
-  // liegt `frac` Sekunden in der Vergangenheit (negatives `begin`, wie bei clawd-buddy), damit der Sprung genau auf die volle Sekunde fällt.
-  const first = Math.floor(Math.max(0, pos))
-  const frac = Math.max(0, pos) - first
-  const last = end > 0 ? Math.floor(end) : Infinity
-  const n = run ? Math.max(1, Math.min(AHEAD_S, last - first) + 1) : 1 // Zeitangaben im Bild
-  const dur = `${n}s`
-  const kt = (k: number) => String(+(k / n).toFixed(5))
-  const begin = ` begin="-${frac.toFixed(3)}s"`
+  // Voranimation (0.8.0, 0.10.0 bis zum Titelende): Das Band zeichnet beim Abspielen nicht mehr neu (jede Zeichnung lässt die Aktionsleiste
+  // im Desktop flackern), die Zeit läuft trotzdem jede Sekunde weiter. Zeitleiste: Sekunde k (ab `first`) gilt in [k − frac, k + 1 − frac);
+  // der Beginn liegt `frac` Sekunden in der Vergangenheit (negatives `begin`, wie bei clawd-buddy desk.ts), damit jeder Sprung auf die
+  // volle Sekunde fällt.
+  const { first, last } = aheadOf(pos, end)
+  const frac = Math.max(0, Math.max(0, pos) - first)
+  const n = run ? last - first + 1 : 1 // Sekunden der Zeitleiste
   let segs = ''
   for (let i = 0; i < SEGMENTS; i++) {
     let anim = ''
@@ -88,20 +114,45 @@ export function infoSvg(title: string, artist: string, pos: number, end: number,
     }
     segs += `<rect x="${i * PITCH}" y="20" width="${SEG}" height="${SEG_H}" rx="0.5" fill="${i < on ? GREEN : EMPTY}">${anim}</rect>`
   }
-  let time = ''
-  for (let k = 0; k < n; k++) {
-    const shown = `<text x="${SEGMENTS * PITCH + 8}" y="28" font-family="${FONT}" font-size="12"`
-    const body = `<tspan fill="${GREEN}">${fmtTime(first + k)}</tspan><tspan fill="${GREY}"> / ${fmtTime(end)}</tspan></text>`
-    if (n === 1) {
-      time = `${shown}>${body}`
-      break
-    }
-    // Sichtbar von Sekunde k bis k + 1 der Zeitleiste; die letzte bleibt stehen (fill="freeze")
-    const keys = k === 0 ? [0, k + 1] : k === n - 1 ? [0, k] : [0, k, k + 1]
-    const vals = k === 0 ? ['visible', 'hidden'] : k === n - 1 ? ['hidden', 'visible'] : ['hidden', 'visible', 'hidden']
-    time += `${shown} visibility="${vals[0]}"><animate attributeName="visibility" calcMode="discrete"${begin} dur="${dur}" fill="freeze" values="${vals.join(';')}" keyTimes="${keys.map(kt).join(';')}"/>${body}`
-  }
   const head = `<text x="0" y="12" font-family="${FONT}" font-size="12"><tspan fill="${ORANGE}" font-weight="700">${esc(t)}</tspan>${a ? `<tspan fill="${GREY}">${esc(a)}</tspan>` : ''}</text>`
+  const at = `x="${SEGMENTS * PITCH + 8}" y="28"`
+  const total = `<tspan fill="${GREY}"> / ${fmtTime(end)}</tspan>`
+  let time: string
+  if (n === 1) {
+    time = `<text ${at} font-family="${FONT}" font-size="12"><tspan fill="${GREEN}">${fmtTime(first)}</tspan>${total}</text>`
+  } else {
+    // Ziffernspalten (0.10.0): Einer der Sekunden (10 Zustände, Kreis von 10 s) und Zehner (6 Zustände, 60 s) wiederholen sich, der Teil
+    // davor („3:“, „12:“, „1:02:“) hat einen Zustand je Minute. Jede Spalte ist ein eigenes <text> an derselben Stelle; ein unsichtbarer
+    // Vorsatz schiebt ihr Zeichen in ihre Spalte. Die Breite richtet sich nach der längsten Angabe im Bild, kürzere stehen rechtsbündig.
+    const w = fmtTime(last).length
+    const hw = w - 2 // Breite des Teils vor den Sekunden, mit Doppelpunkt
+    const cell = (k: number, vis: string, anim: string, body: string) => `<text ${at} visibility="${vis}">${anim}${pad(k)}${body}</text>`
+    const digit = (d: number) => `<tspan fill="${GREEN}">${d}</tspan>`
+    let cols = ''
+    // Minuten: je Minute im Bild ein Zustand, der letzte bleibt stehen
+    const span = ` begin="-${frac.toFixed(3)}s" dur="${n}s"`
+    for (let m = Math.floor(first / 60); m <= Math.floor(last / 60); m++) {
+      const h = fmtTime(Math.max(first, m * 60)).slice(0, -2)
+      const s = shownIn(Math.max(0, m * 60 - first), Math.min(n, (m + 1) * 60 - first), n, span)
+      cols += cell(hw - h.length, s.vis, s.anim, `<tspan fill="${GREEN}">${h}</tspan>`)
+    }
+    // Zehner und Einer: ein Kreis, der in der laufenden Sekunde beginnt und nach der letzten Sekunde des Bilds stehen bleibt
+    // (Ende mitten in der letzten Sekunde, damit kein Sprung auf der Grenze liegt: Dokumentzeit last − first − frac + ½, ab begin = −into
+    // gerechnet also into + last − first − frac + ½)
+    const ring = (len: number, step: number, col: number) => {
+      const into = (first % len) + frac
+      const timing = ` begin="-${into.toFixed(3)}s" dur="${len}s" repeatCount="indefinite" repeatDur="${((first % len) + (last - first) + 0.5).toFixed(3)}s"`
+      const states = len / step
+      const now = Math.floor((first % len) / step)
+      for (let d = 0; d < states; d++) {
+        const s = shownIn(d, d + 1, states, timing)
+        cols += cell(col, d === now ? 'visible' : 'hidden', s.anim, digit(d))
+      }
+    }
+    ring(60, 10, hw)
+    ring(10, 1, hw + 1)
+    time = `<g font-family="${FONT}" font-size="12">${cols}<text ${at}>${pad(w)}${total}</text></g>`
+  }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${INFO_W}" height="${INFO_H}" viewBox="0 0 ${INFO_W} ${INFO_H}">${head}${segs}${time}</svg>`
 }
 

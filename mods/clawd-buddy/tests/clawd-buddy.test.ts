@@ -5,6 +5,8 @@ import { ALL_CLIPS } from '../hooks/library.ts'
 import { CLIP_EN, T, clipLabel, langOf, num } from '../hooks/i18n.ts'
 import type { Facts, Strain } from '../hooks/mood.ts'
 import { joinBand, layer, slot as bandSlot, splitBand } from '../hooks/band.ts'
+// Ordner der Mod, wie `$.plugin.root` ihn im Test meldet: Weg 2 schreibt nur für die installierte Kopie (hooks/settings.ts)
+const MOD_ROOT = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
 
 const BAND = {
   plugin: 'clawd-buddy',
@@ -26,6 +28,15 @@ const LAYERED = (ground: unknown) => ({
 
 function stubs(on: any, initial: Record<string, unknown> = {}, layered = false) {
   const store = new Map<string, unknown>(Object.entries(initial))
+  // Einstellungen (0.14.0): ohne Plugin-Zeilen schreibt /clawd on|off über `claude plugin configure` (Weg 2); hier angenommen
+  const cli: Record<string, string>[] = []
+  on('process.run', ($: unknown, e: any) => {
+    if (e.argv.join(' ') === 'claude plugin list --json') return { value: { exitCode: 0, stdout: JSON.stringify([{ id: 'clawd-buddy@fynn-mods', enabled: true, installPath: MOD_ROOT }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (e.argv.join(' ') !== 'claude plugin configure clawd-buddy@fynn-mods --values-stdin --json') return { value: { exitCode: 9, stdout: '', stderr: 'unerwartet', isStdoutTruncated: false, isStderrTruncated: false } }
+    const values = JSON.parse(e.init?.stdin ?? '{}')
+    cli.push(values)
+    return { value: { exitCode: 0, stdout: JSON.stringify({ saved: Object.keys(values) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   const logs: string[] = []
   on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
   on('store.set', ($: unknown, e: any) => {
@@ -39,7 +50,7 @@ function stubs(on: any, initial: Record<string, unknown> = {}, layered = false) 
   const text = { type: 'Text', props: {}, children: ['von anderen'] }
   // layered: weiter innen liegt quick-replies und hat seine Pille als Ebene über den Grund gesetzt (band.ts, docs/BAND.md)
   on('ui.render', () => (layered ? LAYERED(text) : text))
-  return { store, logs }
+  return { store, logs, cli }
 }
 
 async function clientProps(ui: any): Promise<any> {
@@ -143,7 +154,7 @@ test('Band: Desktop zeigt die Figur als animiertes Svg (SMIL im Bild) und zeichn
   expect(await svgOf(ui)).not.toBe(s3)
   // Aus: der Wächter ist sofort beendet (kein invalidate mehr), und nichts wirft ins Debug-Log
   const offRes = await $.command.run({ command: 'clawd', args: 'off' })
-  expect(offRes.text).toMatch(/: off$/)
+  expect(offRes.text).toMatch(/: off\n/)
   const n = invalidates
   await clock.advance(60_000)
   expect(invalidates).toBe(n)
@@ -373,7 +384,7 @@ test('Band: auf vscode/mobile nichts Eigenes; zu schmal oder zu flach: nichts ge
 
 test('/clawd off blendet aus, on zeigt wieder; list und demo antworten; Zustand liegt im Speicher', async ($, on) => {
   mock.clock(on)
-  const { store } = stubs(on)
+  const { store, cli } = stubs(on)
   on('ui.invalidate', () => ({ value: undefined }))
   const list = await $.command.run({ command: 'clawd', args: 'list' })
   expect(list.text).toMatch(/idle_breathe/)
@@ -382,7 +393,9 @@ test('/clawd off blendet aus, on zeigt wieder; list und demo antworten; Zustand 
   const nope = await $.command.run({ command: 'clawd', args: 'demo gibtsnicht' })
   expect(nope.text).toMatch(/no animation/)
   await $.command.run({ command: 'clawd', args: 'off' })
-  expect((store.get('buddy') as any).enabled).toBe(false)
+  // 0.14.0: an/aus liegt in userConfig (Weg 2 per Stub), nicht mehr im Speicher
+  expect(cli.at(-1)).toEqual({ enabled: 'false' })
+  expect((store.get('buddy') as any)?.enabled).toBeUndefined()
   const off = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await off.find({ type: 'Client' })).toBeUndefined()
   expect(await off.find({ type: 'Text', text: 'von anderen' })).toBeDefined()
@@ -583,7 +596,7 @@ test('Laune im Mod: Tool meldet isError bzw. abgelehnt → Rückschlag, Turn ohn
 })
 
 test('session.start: liest an/aus und Ärger aus dem Speicher, meldet /clawd an; abgelehnter Speicher und Befehl sind kein Absturz (Deutsch)', { options: { language: 'de' } }, async ($, on) => {
-  mock.clock(on)
+  const clock = mock.clock(on)
   const { logs } = stubs(on, { buddy: { enabled: false, annoy: 3 } })
   on('session.start', () => ({ cwd: '/work' }))
   let registered = ''
@@ -592,6 +605,7 @@ test('session.start: liest an/aus und Ärger aus dem Speicher, meldet /clawd an;
     return { value: undefined }
   })
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  await clock.advance(10) // der Umzug von `enabled` (0.14.0) läuft im Hintergrund
   expect(registered).toBe('clawd')
   const st = await $.command.run({ command: 'clawd', args: '' } as any)
   expect(st.text).toMatch(/clawd-buddy: aus, .*Ärger 3/)
@@ -834,7 +848,7 @@ test('Konfiguration: Nachtzeiten, Leerlauf, reduzierte Bewegung und Seite kommen
   await ui.unmount()
 })
 
-test('Fehlerpfad: wirft das Speichern, bleibt das Band gezeichnet und der Befehl antwortet', async ($, on) => {
+test('Fehlerpfad: lässt sich die Einstellung nicht schreiben, bleibt Clawd an und der Befehl sagt warum', async ($, on) => {
   mock.clock(on)
   on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ deny: 'gesperrt' }))
@@ -842,7 +856,7 @@ test('Fehlerpfad: wirft das Speichern, bleibt das Band gezeichnet und der Befehl
   on('ui.invalidate', () => ({ value: undefined }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['von anderen'] }))
   const r = await $.command.run({ command: 'clawd', args: 'off' })
-  expect(r.text).toMatch(/: off$/)
+  expect(r.text).toMatch(/^Not saved: /)
   await $.command.run({ command: 'clawd', args: 'on' })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   expect(await ui.find({ type: 'Client', key: 'buddy' })).toBeDefined()
@@ -916,7 +930,7 @@ test('Sprache de: Befehle, Status und alt-Text deutsch wie bisher; Suche findet 
   expect((await $.command.run({ command: 'clawd', args: 'demo' })).text).toMatch(/Mit \/clawd list/)
   const st = (await $.command.run({ command: 'clawd', args: 'status' })).text
   expect(st).toMatch(/^clawd-buddy: an, ausgeglichen \(0,00\), Müdigkeit 0 %, Ärger 0\. Kein Takt von tune-strip\. Desktop-Zeichnung/)
-  expect((await $.command.run({ command: 'clawd', args: 'off' })).text).toBe('clawd-buddy: aus')
+  expect((await $.command.run({ command: 'clawd', args: 'off' })).text).toMatch(/^clawd-buddy: aus\n\nGespeichert/)
   await ui.unmount()
 })
 
@@ -1210,6 +1224,7 @@ test('0.8.0: die Platzbreite geht als $.state clawd-buddy.band an tune-strip: 40
     writes.push(e.value)
     return { value: undefined } as never
   })
+  on('process.run', ($: unknown, e: any) => ({ value: { exitCode: 0, stdout: e.argv.join(' ') === 'claude plugin list --json' ? JSON.stringify([{ id: 'clawd-buddy@fynn-mods', enabled: true, installPath: MOD_ROOT }]) : JSON.stringify({ saved: Object.keys(JSON.parse(e.init?.stdin ?? '{}')) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('session.start', () => ({ cwd: '/work' }))
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
   expect(writes.at(-1)).toEqual({ width: 400 })
@@ -1392,4 +1407,49 @@ test('0.10.0 language: Zeile in der Hilfe (de)', { options: { language: 'de' } }
   stubs(on)
   const de = String((await $.command.run({ command: 'clawd', args: 'help' } as any)).text).split('\n')
   expect(de).toContain('- `/clawd language de|en`: Sprache aller fynn-mods umstellen')
+})
+
+test('0.14.0 Umzug: `enabled` aus dem Speicher geht einmal nach userConfig, Laune bleibt im Speicher; Clawd bleibt aus', async ($, on) => {
+  const clock = mock.clock(on)
+  const { store, cli } = stubs(on, { buddy: { enabled: false, annoy: 3, seenAt: 5 } })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', () => ({ value: undefined }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  await clock.advance(10)
+  const st = await $.command.run({ command: 'clawd', args: '' } as any)
+  expect(st.text).toMatch(/clawd-buddy: off/)
+  expect(cli).toEqual([{ enabled: 'false' }])
+  // Markiert statt gelöscht (0.14.2, sidekick 0.23.0 Review S1): ein Chat mit 0.13.x liest `enabled` bis /reload-plugins weiter
+  expect(store.get('buddy')).toEqual({ enabled: false, annoy: 3, seenAt: 5, enabledMigrated: false })
+  // Zweiter Start: nichts mehr umzuziehen; schaltet ein alter Chat danach um, weicht `enabled` ab und zieht einmal um
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  await clock.advance(10)
+  expect(cli).toEqual([{ enabled: 'false' }])
+  store.set('buddy', { enabled: true, annoy: 3, seenAt: 5, enabledMigrated: false })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  await clock.advance(10)
+  expect(cli).toEqual([{ enabled: 'false' }, { enabled: 'true' }])
+  expect(store.get('buddy')).toMatchObject({ enabled: true, enabledMigrated: true })
+})
+
+test('0.14.0 Umzug: gleicht der Speicher schon userConfig, wird nur markiert (0.14.2)', async ($, on) => {
+  mock.clock(on)
+  const { store, cli } = stubs(on, { buddy: { enabled: true, annoy: 1 } })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', () => ({ value: undefined }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  await $.command.run({ command: 'clawd', args: '' } as any)
+  expect(cli).toEqual([])
+  expect(store.get('buddy')).toEqual({ enabled: true, annoy: 1, enabledMigrated: true })
+})
+
+test('0.14.0 iceWhenCold aus: kein Einfrieren bei einem neuen Chat, Status nennt den Grund; enabled aus userConfig', { options: { iceWhenCold: false, enabled: false } }, async ($, on) => {
+  mock.clock(on)
+  stubs(on)
+  on('session.start', () => ({ cwd: '/work' }))
+  on('command.register', () => ({ value: undefined }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as any)
+  const st = String((await $.command.run({ command: 'clawd', args: '' } as any)).text)
+  expect(st).toMatch(/clawd-buddy: off/)
+  expect(st).toMatch(/ice is off in the settings/)
 })

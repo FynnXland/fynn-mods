@@ -15,6 +15,10 @@ import type { ForkState, Lang, Position } from './i18n.ts'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import { isLanguage, languageCommand } from './language.ts'
+import { changed, migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
+import { storeOffDefaults } from './offdefaults.ts'
+import type { Values } from './settings.ts'
+import { SETTINGS } from './fields.ts'
 import { forkPrompt, heldDigit, HELP_WORDS, MIN_ANSWER, merge, MORE_WORD, parseFork, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from './logic.ts'
 import type { Reply } from './logic.ts'
 import { chooseLayout, GAP, label } from './view.ts'
@@ -37,10 +41,11 @@ const USER_ORIGINS: ReadonlySet<string> = new Set(['composer', 'sdk'])
 
 type Settings = { enabled: boolean; more: boolean }
 
-// Einstellungen: userConfig als Standard, /replies überschreibt in $.store. Der Store ist eine Datei des Plugins im Benutzerordner
-// (types@2.1.289:3243-3248), gilt also für alle Projekte und Sessions; jede Session liest ihn nach jeder Antwort neu.
-let defaults: Settings = { enabled: true, more: false }
-let settings: Settings = { ...defaults }
+// Einstellungen (0.7.0, docs/SETTINGS-SPEC.md §4): einzige Quelle ist userConfig. /replies on|off|more schreibt das Feld über
+// hooks/settings.ts (Terminal: $.config.set, die Mod lädt neu; Desktop/-p: claude plugin configure, hier sofort nachgezogen).
+const SELF = 'quick-replies'
+let cfg: Values = {}
+let settings: Settings = { enabled: true, more: false }
 let layoutPref: LayoutPref = 'auto'
 let lang: Lang = 'en'
 
@@ -94,20 +99,49 @@ function remember(data: HelpData): string {
   return tag
 }
 
-/** Einstellungen aus dem Store; ohne Store oder ohne Eintrag gilt der Standard aus userConfig. */
-async function load($: EngineInterface) {
-  try {
-    settings = cleanSettings(await $.store.get('settings'), defaults)
-  } catch {
-    // bleibt beim Stand dieser Session
+/** Werte übernehmen (aus `options`, nach einem Schreiben über Weg 2 oder dem Umzug). */
+function applyCfg(values: Values) {
+  cfg = { ...cfg, ...values }
+  settings = { enabled: cfg.enabled === true, more: cfg.more === true }
+  layoutPref = cfg.layout === 'grid' || cfg.layout === 'list' ? cfg.layout : 'auto'
+}
+
+/** Store `settings` bis 0.6.2 (`/replies` überschrieb userConfig): Felder, die dort standen, galten. */
+export function legacySettings(v: unknown): Partial<Values> {
+  const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
+  return {
+    ...(typeof o.enabled === 'boolean' ? { enabled: o.enabled } : {}),
+    ...(typeof o.more === 'boolean' ? { more: o.more } : {}),
   }
 }
 
-function cleanSettings(v: unknown, base: Settings): Settings {
-  const o = v && typeof v === 'object' ? (v as Record<string, unknown>) : {}
-  return {
-    enabled: typeof o.enabled === 'boolean' ? o.enabled : base.enabled,
-    more: typeof o.more === 'boolean' ? o.more : base.more,
+/** `settings` markieren, nur wenn es seit dem Lesen niemand geändert hat; sonst zieht der nächste Start die Änderung um (Review K1). */
+async function markIfSame($: EngineInterface, raw: unknown) {
+  const now = await $.store.get('settings')
+  if (JSON.stringify(now) === JSON.stringify(raw)) await $.store.set('settings', { ...(raw as object), migrated: true })
+}
+
+/**
+ * Einmal je Start: alte Store-Werte nach userConfig (SETTINGS-SPEC §4), danach `settings` mit `migrated: true` markiert statt geleert
+ * (0.7.2, wie sidekick 0.23.0 Review S1): Ein Chat, der nach dem Update bis `/reload-plugins` noch mit 0.6.x läuft, liest die echten
+ * Werte weiter; geleert arbeitete er mit Standards, und sein nächstes Schreiben brächte diese als Altwerte zurück. 0.6.x übergeht
+ * das unbekannte Feld und schreibt ohne Markierung; dann zieht der nächste Start jedes Feld um, das von userConfig abweicht (auch eins, das inzwischen auf der Seite geändert wurde). Im Hintergrund.
+ */
+async function migrate($: EngineInterface) {
+  let legacy: Partial<Values> = {}
+  let raw: unknown
+  try {
+    raw = await $.store.get('settings')
+    if (!raw || typeof raw !== 'object' || (raw as { migrated?: unknown }).migrated === true) return
+    legacy = legacySettings(raw)
+  } catch {
+    return
+  }
+  const { apply } = await migrateSettings($, SELF, SETTINGS, cfg, legacy, () => markIfSame($, raw), lang)
+  if (Object.keys(apply).length) {
+    applyCfg(apply)
+    publishBand($)
+    redraw($)
   }
 }
 
@@ -293,13 +327,13 @@ function status(): string {
 }
 
 export function register(on: On, options: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
-  defaults = { enabled: true, more: options.more === true }
-  settings = { ...defaults }
-  layoutPref = options.layout === 'grid' || options.layout === 'list' ? options.layout : 'auto'
+  cfg = {}
+  applyCfg(readSettings(SETTINGS, options))
   lang = langOf(options.language)
 
   on('session.start', async ($, e, next) => {
-    await load($)
+    // Danach (nicht gleichzeitig, beide schreiben settings.json) die Aus-Standards einmal speichern (hooks/offdefaults.ts)
+    void migrate($).catch(() => {}).then(() => storeOffDefaults($, SELF, SETTINGS))
     try {
       sid = await $.session.id()
     } catch {
@@ -336,8 +370,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       } catch {
         // bleibt beim bisherigen Wert
       }
-      // Eine andere Session kann /replies umgestellt haben: die Einstellung gilt global
-      await load($)
       // Die Vorschläge kommen danach: der von Claude Code über prompt.suggest, die weiteren aus dem Fork
       ready = true
       pending = false
@@ -449,25 +481,23 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // oben bleibt davor: Wo nichts umgestellt wird (Desktop, -p), stünde die Pille sonst bis zur nächsten Eingabe nicht da.
     if (isLanguage(e.args)) return { text: await languageCommand($, { mod: 'quick-replies', cmd: CMD, lang }, e.args) }
     const args = e.args.trim().toLowerCase().split(/\s+/).filter(Boolean)
-    // Vorher neu lesen, damit eine zweite Session ihre Einstellung nicht verliert
-    const change = async (patch: Partial<Settings>) => {
-      try {
-        settings = cleanSettings(await $.store.get('settings'), settings)
-      } catch {
-        // bleibt beim Stand dieser Session
+    // Schreibt das Feld in userConfig (SETTINGS-SPEC §4). Weg 1 lädt die Mod neu, Weg 2 zieht die Werte hier nach. Antwort mit Hinweis.
+    const change = async (want: Values, done: () => string): Promise<string> => {
+      // Schon so eingestellt: nichts schreiben (Review 0.7.0 K6)
+      const patch = changed(SETTINGS, cfg, want)
+      if (!Object.keys(patch).length) return done()
+      const r = await writeSettings($, SELF, SETTINGS, patch, lang)
+      if (r.ok && r.way === 'cli') {
+        applyCfg(patch)
+        publishBand($)
+        redraw($)
       }
-      settings = { ...settings, ...patch }
-      try {
-        await $.store.set('settings', settings)
-      } catch {
-        // gilt dann nur bis zum Reload
-      }
-      redraw($)
+      return r.ok ? `${done()}\n\n${writeNote(r, lang)}` : writeNote(r, lang)
     }
     const t = T[lang]
     // Hilfe nur als einziges Wort (docs/HELP-SPEC.md §2); Zustand beim Aufruf, die Zeichnung schreibt sich nicht um
     if (args.length === 1 && HELP_WORDS.includes(args[0]!)) {
-      const data = repliesHelp({ lang, enabled: settings.enabled, more: settings.more, config: { more: defaults.more, layout: layoutPref } })
+      const data = repliesHelp({ lang, enabled: settings.enabled, more: settings.more, layout: layoutPref })
       return { text: helpMarkdown(data, remember(data)) }
     }
     if (args.length === 0 || (args.length === 1 && STATUS_WORDS.includes(args[0]!))) {
@@ -484,12 +514,12 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       return { text: status() }
     }
     if (args.length === 1 && TOGGLE_WORDS.includes(args[0]!)) {
-      await change({ enabled: args[0] === 'on' })
-      return { text: `quick-replies ${settings.enabled ? t.on : t.off}` }
+      const want = args[0] === 'on'
+      return { text: await change({ enabled: want }, () => `quick-replies ${want ? t.on : t.off}`) }
     }
     if (args.length === 2 && args[0] === MORE_WORD && TOGGLE_WORDS.includes(args[1]!)) {
-      await change({ more: args[1] === 'on' })
-      return { text: settings.more ? t.moreOn : t.moreOff }
+      const want = args[1] === 'on'
+      return { text: await change({ more: want }, () => (want ? t.moreOn : t.moreOff)) }
     }
     return { text: t.usage }
   })

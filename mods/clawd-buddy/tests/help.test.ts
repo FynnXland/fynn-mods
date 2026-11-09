@@ -3,12 +3,23 @@ import { expect, mock, test } from 'claude-code/testing'
 import { ACCENT, DEFAULTS, HELP_WORDS, SUBCOMMANDS, clawdHelp, isHelp } from '../hooks/clawdhelp.ts'
 import { stateText } from '../hooks/help.ts'
 import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
+// Ordner der Mod, wie `$.plugin.root` ihn im Test meldet: Weg 2 schreibt nur für die installierte Kopie (hooks/settings.ts)
+const MOD_ROOT = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
 
 const DE = { options: { language: 'de' } }
 
 /** Speicher, Log und ein fremder Inhalt für `next(e)` bei jedem ui.render (wie in clawd-buddy.test.ts). */
 function stubs(on: any) {
   const store = new Map<string, unknown>()
+  // Einstellungen (0.14.0): ohne Plugin-Zeilen schreibt /clawd on|off über `claude plugin configure` (Weg 2); hier angenommen
+  const cli: Record<string, string>[] = []
+  on('process.run', ($: unknown, e: any) => {
+    if (e.argv.join(' ') === 'claude plugin list --json') return { value: { exitCode: 0, stdout: JSON.stringify([{ id: 'clawd-buddy@fynn-mods', enabled: true, installPath: MOD_ROOT }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (e.argv.join(' ') !== 'claude plugin configure clawd-buddy@fynn-mods --values-stdin --json') return { value: { exitCode: 9, stdout: '', stderr: 'unerwartet', isStdoutTruncated: false, isStderrTruncated: false } }
+    const values = JSON.parse(e.init?.stdin ?? '{}')
+    cli.push(values)
+    return { value: { exitCode: 0, stdout: JSON.stringify({ saved: Object.keys(values) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   const logs: string[] = []
   on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
   on('store.set', ($: unknown, e: any) => {
@@ -20,7 +31,7 @@ function stubs(on: any) {
     return { value: undefined }
   })
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['ENGINE'] }))
-  return { store, logs }
+  return { store, logs, cli }
 }
 
 const clawd = async ($: any, args: string): Promise<string> => String(((await $.command.run({ command: 'clawd', args })) as { text?: string }).text)
@@ -63,7 +74,7 @@ test('Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstellungen un
   expect(lines).toContain('- `Klick auf Clawd`: Terminal: kichert; viele Klicks ärgern ihn (zählt in status)')
   expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Buddy ● an \(\/clawd off\) · Weniger Bewegung ○ aus \(Einstellung\)$/m)
   expect(text).toMatch(
-    /^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Nacht beginnt \(Stunde\) 23 \(Standard\) · Nacht endet \(Stunde\) 6 \(Standard\) · Leerlauf bis Zeitvertreib \(s\) 45 \(Standard\) · Weniger Bewegung aus \(Standard\) · Position im Band rechts \(Standard\) · Geburtstag \(TT\.MM\.\) 05\.01\. \(Standard\) · Sprache de$/m,
+    /^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Clawd zeigen an \(Standard\) · Seite rechts \(Standard\) · Weniger Bewegung aus \(Standard\) · Leerlauf bis Zeitvertreib \(s\) 45 \(Standard\) · Nacht beginnt \(Stunde\) 23 \(Standard\) · Nacht endet \(Stunde\) 6 \(Standard\) · Eis bei kaltem Cache an \(Standard\) · Geburtstag \(TT\.MM\.\) aus \(leer\) \(Standard\) · Sprache de$/m,
   )
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure clawd-buddy · Mod abschalten: /plugin disable clawd-buddy')
   // Leerzeile vor jedem Block, sonst hängt CommonMark ihn an den letzten Listenpunkt (templates/help/README.md, 0.7.1)
@@ -73,13 +84,13 @@ test('Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstellungen un
   expect(await clawd($, 'hilfe')).toBe('unbekannt: hilfe. Befehle: on | off | list | demo <animation> | nap | boop | freeze | status | flicker | help → /clawd help')
 })
 
-test('Hilfe: Einstellungen abweichend vom Standard (Optionen) erscheinen mit ihrem Wert, ohne „(Standard)“', { options: { language: 'de', nightStart: 22, nightEnd: 7, idleSeconds: 90, reducedMotion: true, side: 'left', birthday: '' } }, async ($, on) => {
+test('Hilfe: Einstellungen abweichend vom Standard (Optionen) erscheinen mit ihrem Wert, ohne „(Standard)“', { options: { language: 'de', nightStart: 22, nightEnd: 7, idleSeconds: 90, reducedMotion: true, side: 'left', birthday: '24.12.', iceWhenCold: false } }, async ($, on) => {
   mock.clock(on)
   stubs(on)
   const text = await clawd($, '?')
   expect(text).toMatch(/Weniger Bewegung ● an \(Einstellung\)/)
   expect(text).toMatch(
-    /Nacht beginnt \(Stunde\) 22 · Nacht endet \(Stunde\) 7 · Leerlauf bis Zeitvertreib \(s\) 90 · Weniger Bewegung an · Position im Band links · Geburtstag \(TT\.MM\.\) aus \(leer\) · Sprache de$/m,
+    /Clawd zeigen an \(Standard\) · Seite links · Weniger Bewegung an · Leerlauf bis Zeitvertreib \(s\) 90 · Nacht beginnt \(Stunde\) 22 · Nacht endet \(Stunde\) 7 · Eis bei kaltem Cache aus · Geburtstag \(TT\.MM\.\) 24\.12\. · Sprache de$/m,
   )
 })
 
@@ -103,7 +114,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect(texts.some((x: any) => x.children?.[0] === '○ ' && x.props.color === 'inactive')).toBe(true)
     expect(await ui.find({ type: 'Text', text: ' (Standard)' })).toBeDefined()
     const footer =
-      surface === 'desktop' ? 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure clawd-buddy' : 'Einstellungen ändern: /plugin configure clawd-buddy · Mod abschalten: /plugin disable clawd-buddy'
+      surface === 'desktop' ? 'Einstellungen ändern: Einstellungen → Plugins → clawd-buddy → Einstellungen · Mod abschalten: + → Plugins → Manage plugins' : 'Einstellungen ändern: /plugin configure clawd-buddy · Mod abschalten: /plugin disable clawd-buddy'
     expect(await ui.find({ type: 'Text', text: footer })).toBeDefined()
     await ui.unmount()
   })
@@ -168,7 +179,7 @@ test('Hilfe UI (en): englische Überschriften, Titel und Fußzeile', async ($, o
     expect((await ui.find({ type: 'Text', text: h }))?.props.color, h).toBe(ACCENT)
   expect(await ui.find({ type: 'Text', text: 'Click on Clawd' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'Idle time before pastimes (s)' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: 'Turn the mod off: + → Plugins → Manage plugins · Change settings: /plugin configure clawd-buddy in a terminal' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Change settings: Settings → Plugins → clawd-buddy → Settings · Turn the mod off: + → Plugins → Manage plugins' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -218,8 +229,8 @@ test('Hilfe Vollständigkeit: jeder Unterbefehl und jedes Hilfe-Wort, das der Pa
     expect(cmds.length, lang).toBe(SUBCOMMANDS.length + 2)
     const helpTokens = new Set(d.commands.flatMap((c) => `${c.cmd} ${c.does}`.split(/[\s()[\]]+/).filter(Boolean)))
     for (const word of HELP_WORDS) expect(helpTokens.has(word), `${lang}: ${word}`).toBe(true)
-    // Jede Einstellung aus plugin.json steht da (sieben Felder)
-    expect(d.settings.length).toBe(7)
+    // Jede Einstellung aus plugin.json steht da (neun Felder seit 0.14.0)
+    expect(d.settings.length).toBe(9)
   }
 })
 
@@ -232,6 +243,6 @@ test('Hilfe: isHelp, Standardwerte und Zustandstexte', () => {
   expect(isHelp('hilfe')).toBe(false)
   const en = clawdHelp({ ...DEFAULTS, lang: 'en', enabled: false, side: 'right' })
   expect(en.features[0]).toEqual({ name: 'Buddy', state: { kind: 'off' }, toggle: '/clawd on' })
-  expect(en.settings.map((s) => [s.value, s.isDefault])).toEqual([['23', true], ['6', true], ['45', true], ['off', true], ['right', true], ['05.01.', true], ['en', true]])
+  expect(en.settings.map((s) => [s.value, s.isDefault])).toEqual([['off', false], ['right', true], ['off', true], ['45', true], ['23', true], ['6', true], ['on', true], ['off (empty)', true], ['en', true]])
   expect(stateText(en.features[1]!.state, 'en')).toBe('○ off')
 })

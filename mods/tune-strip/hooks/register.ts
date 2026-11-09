@@ -15,27 +15,44 @@ import { Tracker, needsWrite, parseLine, sameBeat, splitLines } from './beat.ts'
 import type { Beat } from './beat.ts'
 import { actionFor, desktopRoom, desktopStage, fmtTime, OFFSET_MAX, parseTune, pickStage, pollInterval, positionNow, SIZES } from './model.ts'
 import { isLanguage, languageCommand, languageHelp } from './language.ts'
+import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
+import { storeOffDefaults } from './offdefaults.ts'
+import type { Values } from './settings.ts'
+import { SETTINGS } from './fields.ts'
 import type { Action, ControlWord, Size, Stage } from './model.ts'
 import { CONTROL_SCRIPT, PS_ABS, PS_ARGS, QUERY_SCRIPT, REPEAT_MODES, parseQuery, trackKey } from './ps.ts'
 import type { Query, Track } from './ps.ts'
-import { BAR_LEVEL, DESKTOP_WIDTHS, TERMINAL_WIDTHS, desktopTree, terminalTree } from './view.ts'
+import { BAR_LEVEL, DESKTOP_WIDTHS, TERMINAL_WIDTHS, aheadOf, desktopTree, terminalTree } from './view.ts'
 import type { Els, Handlers } from './view.ts'
 
 const ACCENT = 'success' // Akzent der Hilfe (Theme-Key, HELP-SPEC §4); Spotify-Grün
 const TICK = 1000 // Takt in ms; gelesen wird alle pollSeconds
-const POS_REDRAW = 5000 // Zeit und Balken der Leiste höchstens so oft neu zeichnen (öfter flackert es und verschluckt Klicks)
+// 0.10.0: Im Desktop zählt die Leiste selbst (Voranimation bis zum Titelende, view.ts infoSvg); jede Zeichnung lässt dort die Aktionsleiste
+// unter den eigenen Nachrichten flackern (clawd-buddy SPEC.md:278). Nur das Terminal zeigt die Zeit als Text und zeichnet dafür alle 5 s neu.
+const TERM_REDRAW = 5000
+const JUMP_S = 1.5 // weicht die abgefragte Position so weit von der vorausgerechneten ab, wurde in Spotify gesprungen: neu zeichnen
+// Lebenszeichen: Jede Zeichnung des Bands läuft durch tune-strip, auch die der anderen Mods. Kam so lange keine, zeichnet tune-strip selbst
+// einmal neu; bleibt auch die aus, gilt das Band als verdeckt und der Takt hält an (RENDER_GRACE). Früher erledigte das Neuzeichnen alle 5 s.
+// Beim Abspielen kürzer: dann kann der Takt-Helfer laufen, und der soll bald nach der letzten Zeichnung enden (SPEC „Takt-Helfer“, Review 0.10.0 S1).
+const LIVE_MS = 120_000
+const LIVE_PLAY_MS = 20_000
 const BACK_RESTART = 3 // „Zurück“ springt über 3 s an den Anfang des Titels, darunter zum vorigen Titel (wie Spotify)
 const HOLD_MS = 10000 // so lange bleibt die Leiste stehen, wenn die Mediensteuerung keine Sitzung meldet (Titelwechsel)
 const WAIT_MS = { track: 1500, other: 200 } // Wartezeit im Steuer-Skript, bis die Mediensteuerung den neuen Stand meldet
 
 // Optionen aus userConfig, in register() gesetzt
 let lang: Lang = 'en'
-let optSize: Size | 'off' = 'auto'
+// Einstellungen (0.11.0, docs/SETTINGS-SPEC.md §4): einzige Quelle ist userConfig (`options`). /tune size|on|off|beat schreibt das
+// Feld über hooks/settings.ts (Terminal: $.config.set, die Mod lädt neu; Desktop/-p: claude plugin configure, hier sofort nachgezogen).
+const SELF = 'tune-strip'
+let cfg: Values = {}
+let size: Size | 'off' = 'auto'
 let pollSeconds = 4
 let extraButtons = false
-// Einstellungen aus `$.store` (`/tune size|on|off|beat`), gelten in allen offenen Chats
-type Saved = { size?: Size; enabled?: boolean; beat?: boolean; offset?: number }
-let saved: Saved = {}
+let beatSetting = true
+let beatOffset = 0
+// Letzte Größe vor `/tune off`, damit `/tune on` sie wiederherstellt (Store `lastSize`, kein Einstellungswert)
+let lastSize: Size = 'auto'
 
 // Sitzungsstand
 let surface: string | null = null
@@ -58,9 +75,16 @@ let renderMissed = 0 // Takte in Folge, in denen ein angefordertes Neuzeichnen a
 // 1 s; vorher hielt der Takt dann an, der Takt-Helfer endete 15 s später und musste neu einmessen („wartet“ trotz Musik, Fynn 2026-11-04)
 const RENDER_GRACE = 4
 let bandDrawn = false // zeichnet tune-strip gerade etwas ins Band (Stufe nicht „aus“)? Nur dann läuft der Takt-Helfer (Review 0.6.0 K3)
-let drawsTime = false
+let drawsTime = false // Terminal, volle Stufe: die Zeit steht als Text da und braucht TERM_REDRAW
 let lastSig = ''
 let lastDrawAt = 0
+// 0.10.0 Teil A: Die erste Abfrage aus dem Zeichnen läuft höchstens einmal je Modul-Lebenszeit. Vorher hing sie an `queryAt === 0`, das
+// ohne Spotify-Sitzung nie gesetzt wird: Zeichnen → Abfrage → Neuzeichnen … ≈ 3/s (Fynn 2026-11-06: 202 Zeichnungen/min)
+let renderQueried = false
+// Die zuletzt gezeichnete Voranimation (Desktop-Leiste beim Abspielen): ab Position `pos` zur Uhrzeit `at`, bis `until` (ms);
+// `capped`: sie endet vor dem Titel (sehr lange Titel), dann wird nach ihrem Ende einmal neu gezeichnet
+type Anim = { pos: number; at: number; until: number; capped: boolean; end: number }
+let anim: Anim | null = null
 // Haltezeit der Trennlinie (0.9.0): „etwas darunter“ gilt sofort, „nichts darunter“ erst nach SEP_HOLD_MS. Beim Turnwechsel ist
 // `quick-replies.band` kurz null, und ein abgelehntes `$.state.get` zählte wie „nichts“; beides ließ die Linie kurz verschwinden (Fynn, 2026-11-05)
 const SEP_HOLD_MS = 3000
@@ -71,34 +95,88 @@ let sepHeld = false // die Linie steht nur noch wegen der Haltezeit; der Takt ze
 let epoch = 0
 let ctlChain: Promise<unknown> = Promise.resolve()
 
-const enabled = () => saved.enabled ?? optSize !== 'off'
-const sizeNow = (): Size => saved.size ?? (optSize === 'off' ? 'auto' : optSize)
+const enabled = () => size !== 'off'
+const sizeNow = (): Size => (size === 'off' ? lastSize : size)
 
-function cleanSaved(v: unknown): Saved {
-  if (!v || typeof v !== 'object') return {}
+/** Werte übernehmen (aus `options`, nach einem Schreiben über Weg 2 oder dem Umzug). */
+function applyCfg(values: Values) {
+  cfg = { ...cfg, ...values }
+  size = cfg.size === 'off' ? 'off' : (SIZES.find((s) => s === cfg.size) ?? 'auto')
+  pollSeconds = Math.max(3, Math.min(10, Number(cfg.pollSeconds) || 4))
+  extraButtons = cfg.extraButtons === true
+  beatSetting = cfg.beat !== false
+  // Die Seite erlaubt Kommazahlen (rel/plugins-manifest-reference.md:447): gerundet (Review 0.11.0 K3)
+  const off = Math.round(Number(cfg.beatOffset))
+  beatOffset = Number.isFinite(off) && Math.abs(off) <= OFFSET_MAX ? off : 0
+}
+
+/** Store `settings` bis 0.10.0: `/tune` überschrieb userConfig, die Felder dort galten. Ergibt die Werte nach dem neuen Schema. */
+export function legacySettings(v: unknown, current: Size | 'off'): { values: Partial<Values>; last?: Size } {
+  if (!v || typeof v !== 'object') return { values: {} }
   const o = v as Record<string, unknown>
-  const out: Saved = {}
-  const size = SIZES.find((s) => s === o.size)
-  if (size) out.size = size
-  if (typeof o.enabled === 'boolean') out.enabled = o.enabled
-  if (typeof o.beat === 'boolean') out.beat = o.beat
-  if (typeof o.offset === 'number' && Number.isInteger(o.offset) && Math.abs(o.offset) <= OFFSET_MAX) out.offset = o.offset
-  return out
+  const values: Partial<Values> = {}
+  const sz = SIZES.find((s) => s === o.size)
+  if (o.enabled === false) values.size = 'off'
+  else if (sz) values.size = sz
+  else if (o.enabled === true && current === 'off') values.size = 'auto'
+  if (typeof o.beat === 'boolean') values.beat = o.beat
+  if (typeof o.offset === 'number' && Number.isInteger(o.offset) && Math.abs(o.offset) <= OFFSET_MAX) values.beatOffset = o.offset
+  // Aus ohne gespeicherte Größe: die Größe aus userConfig galt (Review 0.11.0 K1)
+  const last = o.enabled === false ? (sz ?? (current !== 'off' ? current : undefined)) : undefined
+  return { values, ...(last ? { last } : {}) }
 }
 
-async function loadSaved($: EngineInterface): Promise<void> {
+/** `settings` markieren, nur wenn es seit dem Lesen niemand geändert hat; sonst zieht der nächste Start die Änderung um (Review K1). */
+async function markIfSame($: EngineInterface, raw: unknown) {
+  const now = await $.store.get('settings')
+  if (JSON.stringify(now) === JSON.stringify(raw)) await $.store.set('settings', { ...(raw as object), migrated: true })
+}
+
+/** Einmal je Start: `lastSize` lesen und alte Store-Werte nach userConfig ziehen (SETTINGS-SPEC §4). Im Hintergrund. */
+async function migrate($: EngineInterface) {
   try {
-    saved = cleanSaved(await $.store.get('settings'))
+    const stored = await $.store.get('lastSize')
+    const last = SIZES.find((s) => s === stored)
+    if (last) lastSize = last
   } catch {
-    // Standard
+    // bleibt
   }
+  let raw: unknown
+  try {
+    raw = await $.store.get('settings')
+  } catch {
+    return
+  }
+  // Markiert statt geleert (0.11.2, wie sidekick 0.23.0 Review S1): Ein Chat mit 0.10.x liest bis `/reload-plugins` die echten Werte
+  // weiter; schreibt er neu, fällt die Markierung weg und der nächste Start zieht jedes abweichende Feld um
+  if (!raw || typeof raw !== 'object' || (raw as { migrated?: unknown }).migrated === true) return
+  const { values, last } = legacySettings(raw, size)
+  if (last) {
+    lastSize = last
+    try {
+      await $.store.set('lastSize', last)
+    } catch {
+      // nur für /tune on
+    }
+  }
+  const { apply } = await migrateSettings($, SELF, SETTINGS, cfg, values, () => markIfSame($, raw), lang)
+  if (Object.keys(apply).length) await afterChange($, apply)
 }
 
-async function saveSaved($: EngineInterface, next: Saved): Promise<void> {
-  // Vor dem Schreiben neu lesen: andere Sitzungen teilen den Store
-  await loadSaved($)
-  saved = { ...saved, ...next }
-  await $.store.set('settings', saved)
+/** Nach einer Änderung (Weg 2, Umzug): Werte übernehmen, Helfer, Meldungen und Band nachziehen. */
+async function afterChange($: EngineInterface, values: Values) {
+  applyCfg(values)
+  if (!enabled() || !beatOn()) stopHelper()
+  // Gespeichert ist schon: ein Fehler beim Nachziehen darf den Befehl nicht scheitern lassen (Review 0.11.0 K13)
+  try {
+    if (enabled() && isWindows) await runQuery($)
+    const now = await $.clock.now()
+    await publishPlaying($, now)
+    await publishBeat($, now)
+    await redraw($)
+  } catch {
+    // der Takt holt es nach
+  }
 }
 
 /** Ein Stand, an dem man erkennt, ob sich für die Zeichnung etwas geändert hat. */
@@ -260,8 +338,23 @@ async function pressButton($: EngineInterface, word: ControlWord): Promise<void>
 
 async function redraw($: EngineInterface): Promise<void> {
   lastSig = sigOf()
+  anim = null // das nächste Zeichnen legt die Voranimation neu an
   awaitingRender = true
   $.ui.invalidate('ui.render')
+}
+
+/** Weicht der abgefragte Stand von der gezeichneten Voranimation ab (Sprung in Spotify selbst)? */
+function jumped(now: number): boolean {
+  if (!anim || !track || track.status !== 'Playing') return false
+  const expected = Math.min(anim.end > 0 ? anim.end : Infinity, anim.pos + Math.max(0, now - anim.at) / 1000)
+  return Math.abs(positionNow(track, queryAt, now) - expected) > JUMP_S
+}
+
+/** Nach einer Abfrage: neu zeichnen nur, wenn sich für die Zeichnung etwas geändert hat oder gesprungen wurde (0.10.0). */
+async function redrawIfChanged($: EngineInterface, now: number): Promise<boolean> {
+  if (sigOf() === lastSig && !jumped(now)) return false
+  await redraw($)
+  return true
 }
 
 /** Takt starten, wenn das Band gezeichnet wird; eine Periode, die die Engine ablehnt, beendet ihn still (limit-bars: gleiche Lehre). */
@@ -332,8 +425,8 @@ let publishedBeat: Beat | null | undefined = undefined // undefined = noch nicht
 let beatWrittenAt = 0
 let beatCheckedAt = 0
 
-const beatOn = () => saved.beat ?? true
-const offsetMs = () => saved.offset ?? 0
+const beatOn = () => beatSetting
+const offsetMs = () => beatOffset
 const visibleSurface = () => [surface, drawSurface].some((s) => s === 'terminal' || s === 'desktop')
 
 /** Soll gerade ein Helfer laufen? Nur unter Windows, Band an, Takt an, Spotify spielt, das Band wird gezeichnet (Takt läuft). */
@@ -538,13 +631,9 @@ async function tick($: EngineInterface, getLast: () => number, setLast: (v: numb
   const every = pollInterval({ pollSeconds, failures, hasSession })
   if (now - getLast() >= every) {
     setLast(now)
-    await loadSaved($)
     await runQuery($)
     await publishPlaying($, now)
-    if (sigOf() !== lastSig) {
-      await redraw($)
-      return
-    }
+    if (await redrawIfChanged($, await $.clock.now())) return
   }
   // Haltezeit der Trennlinie vorbei: einmal neu zeichnen, damit die Linie geht, falls darunter weiter nichts steht
   if (sepHeld && now - sepLostAt >= SEP_HOLD_MS) {
@@ -552,8 +641,19 @@ async function tick($: EngineInterface, getLast: () => number, setLast: (v: numb
     await redraw($)
     return
   }
-  // Position läuft zwischen den Abfragen weiter: nur neu zeichnen, wenn die Zeit sichtbar ist und gespielt wird, und nicht öfter als alle POS_REDRAW ms
-  if (drawsTime && track?.status === 'Playing' && now - lastDrawAt >= POS_REDRAW) await redraw($)
+  // Voranimation vor dem Titelende abgelaufen (Titel länger als HORIZON_S): einmal neu zeichnen. Am Titelende selbst nicht: dort kommt
+  // ohnehin der nächste Titel (Änderung von sigOf)
+  if (anim?.capped && now >= anim.until) {
+    await redraw($)
+    return
+  }
+  // Terminal: die Zeit ist Text und läuft nur mit dem Neuzeichnen weiter (wie bis 0.9.0)
+  if (drawsTime && track?.status === 'Playing' && now - lastDrawAt >= TERM_REDRAW) {
+    await redraw($)
+    return
+  }
+  // Lebenszeichen, siehe LIVE_MS
+  if (!awaitingRender && now - lastDrawAt >= (track?.status === 'Playing' ? LIVE_PLAY_MS : LIVE_MS)) await redraw($)
 }
 
 /**
@@ -639,10 +739,13 @@ function helpData(): HelpData {
       { name: h.featBeat, state: { kind: beatOn() ? 'on' : 'off' }, toggle: beatOn() ? '/tune beat off' : '/tune beat on' },
     ],
     settings: [
-      { title: h.settings.language, value: lang, isDefault: lang === 'en' },
-      { title: h.settings.size, value: optSize, isDefault: optSize === 'auto' },
-      { title: h.settings.pollSeconds, value: String(pollSeconds), isDefault: pollSeconds === 4 },
+      // Reihenfolge wie in plugin.json
+      { title: h.settings.size, value: size, isDefault: size === 'auto' },
       { title: h.settings.extraButtons, value: extraButtons ? t.on : t.off, isDefault: !extraButtons },
+      { title: h.settings.beat, value: beatSetting ? t.on : t.off, isDefault: beatSetting },
+      { title: h.settings.beatOffset, value: String(beatOffset), isDefault: beatOffset === 0 },
+      { title: h.settings.pollSeconds, value: String(pollSeconds), isDefault: pollSeconds === 4 },
+      { title: h.settings.language, value: lang, isDefault: lang === 'en' },
     ],
     footer: { terminal: h.footerTerminal, desktop: h.footerDesktop },
   }
@@ -650,7 +753,7 @@ function helpData(): HelpData {
 
 export function register(on: On, options?: Readonly<Record<string, unknown>>) {
   // Frischer Stand je Laden des Moduls (Tests laden es mehrfach in einem Prozess)
-  saved = {}
+  lastSize = 'auto'
   surface = null
   drawSurface = null
   isWindows = true
@@ -667,7 +770,9 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
   renderMissed = 0
   bandDrawn = false
   drawsTime = false
-  lastSig = ''
+  lastDrawAt = 0
+  renderQueried = false
+  anim = null
   sepOn = false
   sepLostAt = 0
   sepHeld = false
@@ -687,12 +792,11 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
   beatCheckedAt = 0
   publishedPlaying = ''
   playingCheckedAt = 0
+  // Der leere Stand gilt als gezeichnet: ohne Spotify-Sitzung ändert die erste Abfrage nichts und zeichnet nicht neu (0.10.0 Teil A)
+  lastSig = sigOf()
   lang = langOf(options?.language)
-  const sz = options?.size
-  optSize = sz === 'off' ? 'off' : (SIZES.find((s) => s === sz) ?? 'auto')
-  const ps = Number(options?.pollSeconds)
-  pollSeconds = Number.isFinite(ps) ? Math.max(3, Math.min(10, ps)) : 4
-  extraButtons = options?.extraButtons === true
+  cfg = {}
+  applyCfg(readSettings(SETTINGS, options))
 
   // /clear, /resume und /branch setzen $.state zurück, ohne dass session.start erneut feuert (docs/raw/en/troubleshoot.md:260-264):
   // tune-strip.playing sofort wieder melden statt erst beim 30-s-Abgleich (docs/raw/en/interface.md:818-846; Review 0.3.0 S1, Fynn 2026-11-03)
@@ -717,7 +821,8 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
     surface = e.surface
     // Die Mediensteuerung gibt es nur unter Windows; ein Laufwerksbuchstabe im Arbeitsordner ist das Zeichen dafür
     isWindows = /^[A-Za-z]:[\\/]/.test(e.cwd)
-    await loadSaved($)
+    // Danach (nicht gleichzeitig, beide schreiben settings.json) die Aus-Standards einmal speichern (hooks/offdefaults.ts)
+    void migrate($).catch(() => {}).then(() => storeOffDefaults($, SELF, SETTINGS))
     // Takt des Helfers (0.6.0): unter Windows immer; ob gezeichnet wird, sagt erst `ui.render`. Eine abgelehnte Uhr heißt nur „kein Takt“
     // Auch ohne Oberfläche beim Start (Desktop, SDK): billig (eine Uhrabfrage je Sekunde); einen Prozess startet er nur, wenn gezeichnet wird
     if (isWindows && !beatTimer) {
@@ -750,32 +855,30 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
     }
     if (p.kind === 'unknown') return { text: `${t.unknown(p.word)} ${t.seeHelp}` }
     if (p.kind === 'badArg') return { text: `${t.badArg(p.word, p.arg)} ${t.seeHelp}` }
-    if (p.kind === 'size') {
-      await saveSaved($, { size: p.size, enabled: true })
-      await redraw($)
-      return { text: t.sizeSet(p.size === 'auto' ? t.auto : p.size) }
+    // Schreibt Felder in userConfig (SETTINGS-SPEC §4). Weg 1 lädt die Mod neu, Weg 2 zieht die Werte hier nach. Antwort mit Hinweis.
+    const change = async (patch: Values, done: string): Promise<{ text: string }> => {
+      const r = await writeSettings($, SELF, SETTINGS, patch, lang)
+      if (r.ok && r.way === 'cli') await afterChange($, patch)
+      return { text: r.ok ? `${done}\n\n${writeNote(r, lang)}` : writeNote(r, lang) }
     }
+    if (p.kind === 'size') return change({ size: p.size }, t.sizeSet(p.size === 'auto' ? t.auto : p.size))
     if (p.kind === 'enabled') {
-      await saveSaved($, { enabled: p.value })
-      if (p.value) await runQuery($)
-      else stopHelper()
-      const now = await $.clock.now()
-      await publishPlaying($, now)
-      await publishBeat($, now)
-      await redraw($)
-      return { text: t.enabled(p.value) }
+      if (!p.value && size !== 'off') {
+        lastSize = size
+        try {
+          await $.store.set('lastSize', size)
+        } catch {
+          // nur für /tune on
+        }
+      }
+      return change({ size: p.value ? sizeNow() : 'off' }, t.enabled(p.value))
     }
     if (p.kind === 'beat') return { text: beatLine(await $.clock.now()) }
-    if (p.kind === 'beatOn' || p.kind === 'beatOffset') {
-      await saveSaved($, p.kind === 'beatOn' ? { beat: p.value } : { offset: p.ms })
-      if (p.kind === 'beatOn' && !p.value) stopHelper()
-      await publishBeat($, await $.clock.now())
-      if (p.kind === 'beatOn') return { text: t.beat.set(p.value) }
-      return { text: t.beat.offsetSet(p.ms > 0 ? `+${p.ms}` : String(p.ms)) }
-    }
+    if (p.kind === 'beatOn') return change({ beat: p.value }, t.beat.set(p.value))
+    if (p.kind === 'beatOffset') return change({ beatOffset: p.ms }, t.beat.offsetSet(p.ms > 0 ? `+${p.ms}` : String(p.ms)))
     if (p.kind === 'status') {
       await runQuery($)
-      await redraw($)
+      await redrawIfChanged($, await $.clock.now())
       if (!track) return { text: hasSession ? t.unreadable : t.noSession }
       const state = t.stateOf[track.status] ?? t.stateOther
       const time = `${fmtTime(positionNow(track, queryAt, await $.clock.now()))}/${fmtTime(track.end)}`
@@ -822,14 +925,25 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
       lastDrawAt = now
       ensureTimer($, now)
       if (!track || failures >= 3) {
-        // Beim ersten Zeichnen steht noch nichts da: einmal lesen, dann kommt das Band per Neuzeichnen
-        if (queryAt === 0) void runQuery($).then(() => redraw($)).catch(() => {})
+        drawsTime = false
+        anim = null
+        // Beim ersten Zeichnen steht noch nichts da: einmal lesen (je Modul-Lebenszeit nur einmal, 0.10.0 Teil A); kam ein Titel, kommt
+        // das Band per Neuzeichnen. Danach fragt nur der Takt.
+        if (!renderQueried) {
+          renderQueried = true
+          void runQuery($)
+            .then(async () => {
+              await redrawIfChanged($, await $.clock.now())
+            })
+            .catch(() => {})
+        }
         return theirs
       }
       const { room } = await roomFor($, e.surface, e.props.bodyColumns)
       const stage: Stage = e.surface === 'desktop' ? desktopStage(room, sizeNow(), DESKTOP_WIDTHS) : pickStage(room, sizeNow(), TERMINAL_WIDTHS)
-      drawsTime = stage === 'full'
+      drawsTime = e.surface === 'terminal' && stage === 'full'
       bandDrawn = stage !== 'off'
+      anim = null
       if (stage === 'off') return theirs
       const { Box, Text, Button, Svg } = $.ui.resolve(e)
       const els = { Box, Text, Button, Svg } as unknown as Els
@@ -859,7 +973,13 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
         }
       }
       sepHeld = stage === 'full' && sepOn && !below
-      const input = { lang, stage, track, cover, pos: positionNow(track, queryAt, drawNow), extraButtons, sep: sepOn }
+      const pos = positionNow(track, queryAt, drawNow)
+      // Desktop-Leiste beim Abspielen: das Bild zählt selbst bis `last` (view.ts aheadOf); merken, wovon es ausging (Sprung, Ende)
+      if (e.surface === 'desktop' && stage === 'full' && track.status === 'Playing') {
+        const ahead = aheadOf(pos, track.end)
+        anim = { pos, at: drawNow, until: drawNow + Math.max(0, ahead.last + 1 - pos) * 1000, capped: ahead.capped, end: track.end }
+      }
+      const input = { lang, stage, track, cover, pos, extraButtons, sep: sepOn }
       const mine = (e.surface === 'desktop' ? desktopTree(els, handlers, input) : terminalTree(els, handlers, input)) as unknown as RenderNode
       // Desktop, volle Stufe: eigene Leiste über allen Mods (kein Platz in der Zeile); sonst der Platz 20
       if (e.surface === 'desktop' && stage === 'full') return joinBand([...layers, layer(BAR_LEVEL, 'tune-strip', mine)], base, slots)

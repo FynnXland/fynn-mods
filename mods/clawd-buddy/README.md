@@ -4,7 +4,7 @@ An animated pixel mascot ("Clawd") sits to the right above the prompt. It reacts
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.318** (terminal) and in the desktop app · Plugin version **0.13.1**
+Tested with Claude Code **v2.1.319** (terminal) and in the desktop app · Plugin version **0.14.5**
 
 ## What it does
 
@@ -35,9 +35,9 @@ Clawd runs on his own. What he does depends on what is happening:
 | Input | Effect |
 |---|---|
 | `/clawd` or `/clawd status` | on/off, mood, tiredness, annoyance, the beat from tune-strip (tempo, group, sure or not), one line about the ice (source of the last cold moment, whether the dice were rolled, the result or the planned time, and whether he froze in this chat already); in the desktop app also measurements since the last call (draws per minute, animation length and frame changes, size, compute and drawing time, how often it redrew because the band layout changed or the session was shown again, and how many events needed no redraw) |
-| `/clawd on` / `/clawd off` | show or hide him (persists) |
+| `/clawd on` / `/clawd off` | show or hide him (setting `enabled`) |
 | `/clawd list` | all animations by group |
-| `/clawd demo <name>` | play one animation, e.g. `/clawd demo type_laptop` |
+| `/clawd demo <name>` | play one animation, e.g. `/clawd demo type_laptop` (shows him for this session if he was off) |
 | `/clawd nap` | sends him to sleep |
 | `/clawd boop` | pokes him |
 | `/clawd freeze` | freezes him in a block of ice right away (no dice, does not count as the chat's one freeze): type to crack the ice, send to break it |
@@ -52,21 +52,27 @@ Runs in: the terminal (half-block pixels, with mouse) and the desktop app's Code
 
 ## Configuration
 
-`/config` → clawd-buddy:
+Desktop app: **Settings → Plugins → clawd-buddy → Settings**. Terminal: `/config` → clawd-buddy, or `/plugin configure clawd-buddy`.
 
-| Key | Title in `/config` | Meaning | Default |
+| Key | Title | Meaning | Default |
 |---|---|---|---|
+| `enabled` | Show Clawd | Show or hide him; also `/clawd on\|off` | on |
+| `side` | Side | `right` or `left` above the prompt | `right` |
+| `reducedMotion` | Reduced motion | Only the base pose and calm variants, no pastimes | off |
+| `idleSeconds` | Idle time before pastimes (s) | Seconds without activity before he starts a pastime (10 to 600) | 45 |
 | `nightStart` | Night starts (hour) | Hour (0 to 23) from which he gets tired and falls asleep when idle | 23 |
 | `nightEnd` | Night ends (hour) | Hour (0 to 23) until which it counts as night; if it is before the start, the night spans midnight | 6 |
-| `idleSeconds` | Idle time before pastimes (seconds) | Seconds without activity before he starts a pastime (10 to 600) | 45 |
-| `reducedMotion` | Reduced motion | Only the base pose and calm variants, no pastimes | off |
-| `side` | Position in the band | `right` or `left` above the prompt | `right` |
-| `birthday` | Birthday (DD.MM.) | Day (DD.MM.) on which he celebrates with you; empty = off. New Year's Eve is always on | `05.01.` |
-| `language` | Language / Sprache | Language of the mod's texts: `en` English, `de` German | `en` |
+| `iceWhenCold` | Ice when the cache is cold | Now and then he freezes in a block of ice while the prompt cache is cold; off: never (`/clawd freeze` still works) | on |
+| `birthday` | Birthday (DD.MM.) | Day on which he celebrates with you; empty = off. New Year's Eve is always on | empty (since 0.14.0; before `05.01.`) |
+| `language` | Language / Sprache | Language of the mod's texts: `en` English, `de` German; also `/clawd language de\|en` | `en` |
+
+Since 0.14.0 `/clawd on|off` and the settings page change the same setting. In a terminal session the command applies at once (Claude Code reloads the mod). In the desktop app and `claude -p` it applies in the current chat at once and in other open chats after `/reload-plugins` or in the next chat. An on/off value saved by an earlier version is moved over once at the next start. After an update, run `/reload-plugins` in chats that are already open; until then they keep running the old version with its old values.
+
+Known issue: the desktop settings page may show switches that were never saved as on, even when their default is off, and saving the page then turns them on. This plugin stores its off defaults once at the first start, so the page shows them correctly.
 
 ## Language
 
-Texts are English by default; set `language` to `de` for German (`/config` → clawd-buddy → Language / Sprache), or run `/clawd language de` in a terminal session to switch all fynn-mods at once. This covers everything the mod writes: the output of `/clawd` (status, help, list, demo, nap, errors), the animation names and the image's alt text. Clawd himself shows no text. `/clawd demo` finds animations by their English and German names in both languages. Commands and arguments are English either way.
+Texts are English by default; set `language` to `de` for German (settings page or `/config` → clawd-buddy → Language / Sprache), or run `/clawd language de` in a terminal session to switch all fynn-mods at once. This covers everything the mod writes: the output of `/clawd` (status, help, list, demo, nap, errors), the animation names and the image's alt text. Clawd himself shows no text. `/clawd demo` finds animations by their English and German names in both languages. Commands and arguments are English either way.
 
 ## Rights
 
@@ -84,7 +90,7 @@ Apart from drawing the `/clawd help` table (see below), all event hooks **only o
 In plain language:
 
 - `$.command.register`: registers the `/clawd` command.
-- `$.store.get` / `$.store.set`: stores only on/off, the annoyance counter, and when you were last around (one timestamp, written at most every 5 min, for the welcome after a break). The plugin's own storage.
+- `$.store.get` / `$.store.set`: stores only the annoyance counter and when you were last around (since 0.14.0 on/off lives in the settings; an old on/off value is moved there once) (one timestamp, written at most every 5 min, for the welcome after a break). The plugin's own storage. Since this version also the key `offDefaults2`: which off switches were already saved as `false` (see the known issue under the settings).
 - `$.ui.invalidate`: redraws the band when something changes (turn, tool, typing at most once per second; in the desktop app typing at most every 3 s, plus once before each animation runs out, usually every 15 to 30 s; 2 to 3 times a minute when idle).
 - `$.ui.resolve`: fetches the drawing components (Box, Client, Svg).
 - Hook `ui.render` on `CommandOutput` (only `/clawd`): draws the answer of `/clawd help` as a table in place of the text. It reads only the reference mark in its own command output; every other output of `/clawd` stays plain text.
@@ -100,8 +106,8 @@ In plain language:
 - `$.state.get` (`tune-strip.playing`): reads only whether the tune-strip mod is playing music right now (true/false), no title or artist. Without tune-strip he never bobs along. Since 0.13.0 also read once at session start, so that he does not freeze while music is already playing.
 - `$.state.get` (`tune-strip.beat`, since 0.11.0): reads the tempo, the time of a beat, whether the beat is sure, and the group of the song (calm, groove, hard, sad) from tune-strip; no title or artist. Anything malformed counts as no beat.
 - `$.state.set` (`clawd-buddy.band`): publishes only the pixel width of his band slot in the desktop app (400, or null when he is off or in the terminal), so tune-strip can make room. No other data. Written at session start, on `/clawd on|off`, and again right after `/clear`, `/resume` or `/branch` (which reset it).
-- `$.config.list`, `$.config.set`: only for `/clawd language` (since 0.10.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone.
-- `$.process.run`: for `/clawd language` in the desktop app and `claude -p` (since 0.10.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `clawd-buddy@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `clawd-buddy@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
+- `$.config.list`, `$.config.set`: for `/clawd language` (since 0.10.0), which changes nothing but the `language` field of the six fynn-mods, and since 0.14.0 for `/clawd on|off`, which changes only clawd-buddy's own `enabled` field. Other plugins are left alone.
+- `$.process.run`: in the desktop app and `claude -p`, for `/clawd language` (since 0.10.1) and for clawd-buddy's own `enabled` field (since 0.14.0: `claude plugin configure clawd-buddy@fynn-mods --values-stdin --json`), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"` for the six fynn-mods, and with this mod's own fields for this mod only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `clawd-buddy@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `clawd-buddy@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod. Since 0.14.5 a settings command reads the value back after saving; if another mod overwrote it at the same moment, it saves once more, otherwise it answers “Not saved”. Once per new off switch (store key `offDefaults2`), the installed copy also reads its own unset fields with `claude plugin configure <mod>@fynn-mods --json` and saves those whose default is off as `false` (see the known issue under the settings). Settings commands save through `claude plugin configure` only when this is the installed copy (its folder is the `readFromFolder` or `installPath` that `claude plugin list` reports); a copy loaded with `--plugin-dir` answers “Not saved: this copy is loaded from another folder …” and changes nothing.
 
 From tool results he reads only the "error" (`isError`) and "denied" (`deny`) flags, never contents or texts.
 

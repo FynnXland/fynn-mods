@@ -2,6 +2,8 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { cleanShared, mergeWins } from '../hooks/view.ts'
+import { cliAnswer } from './cli.ts'
+import type { Cli } from './cli.ts'
 
 const NOW = new Date(2026, 9, 19, 10, 0, 0).getTime()
 const MIN = 60000
@@ -32,6 +34,8 @@ const band = { plugin: 'limit-bars', component: 'AbovePrompt', requestId: 'above
 function world(on: On, o: { own?: Limit[]; saved?: Map<string, unknown>; denyStore?: boolean } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
+  const cli: Cli = { writes: [], fail: '' }
+  on('process.run', ($: unknown, e: any) => cliAnswer(e, cli) ?? { deny: 'kein Prozess im Test' })
   const state = { own: o.own ?? [], sets: 0 }
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.measure', ($, e) => ({ changed: e.changed }))

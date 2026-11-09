@@ -24,15 +24,19 @@ export function isHelp(args: string): boolean {
 export type HelpInput = {
   lang: Lang
   enabled: boolean
+  /** Wert der Einstellung `enabled` (ohne Angabe: `enabled`); demo/nap/freeze zeigen Clawd nur für die Sitzung */
+  enabledSetting?: boolean
   nightStart: number
   nightEnd: number
   idleSeconds: number
   reduced: boolean
   side: 'right' | 'left'
   birthday: string
+  ice: boolean
 }
 
-export const DEFAULTS = { nightStart: 23, nightEnd: 6, idleSeconds: 45, reduced: false, side: 'right', birthday: '05.01.', lang: 'en' } as const
+/** Standardwerte wie in plugin.json bzw. hooks/fields.ts. */
+export const DEFAULTS = { nightStart: 23, nightEnd: 6, idleSeconds: 45, reduced: false, side: 'right', birthday: '', ice: true, lang: 'en' } as const
 
 export function clawdHelp(o: HelpInput): HelpData {
   const t = T[o.lang]
@@ -65,12 +69,15 @@ export function clawdHelp(o: HelpInput): HelpData {
       { name: x.buddy, state: { kind: o.enabled ? 'on' : 'off' }, toggle: o.enabled ? '/clawd off' : '/clawd on' },
       { name: x.reduced, state: { kind: o.reduced ? 'on' : 'off' }, toggle: x.setting },
     ],
+    // Reihenfolge wie in plugin.json
     settings: [
+      { title: x.titles.enabled, value: onOff(o.enabledSetting ?? o.enabled), isDefault: o.enabledSetting ?? o.enabled },
+      { title: x.titles.side, value: x.sides[o.side], isDefault: o.side === DEFAULTS.side },
+      { title: x.titles.reducedMotion, value: onOff(o.reduced), isDefault: o.reduced === DEFAULTS.reduced },
+      { title: x.titles.idleSeconds, value: String(o.idleSeconds), isDefault: o.idleSeconds === DEFAULTS.idleSeconds },
       { title: x.titles.nightStart, value: String(o.nightStart), isDefault: o.nightStart === DEFAULTS.nightStart },
       { title: x.titles.nightEnd, value: String(o.nightEnd), isDefault: o.nightEnd === DEFAULTS.nightEnd },
-      { title: x.titles.idleSeconds, value: String(o.idleSeconds), isDefault: o.idleSeconds === DEFAULTS.idleSeconds },
-      { title: x.titles.reducedMotion, value: onOff(o.reduced), isDefault: o.reduced === DEFAULTS.reduced },
-      { title: x.titles.side, value: x.sides[o.side], isDefault: o.side === DEFAULTS.side },
+      { title: x.titles.ice, value: onOff(o.ice), isDefault: o.ice === DEFAULTS.ice },
       { title: x.titles.birthday, value: o.birthday || x.birthdayOff, isDefault: o.birthday === DEFAULTS.birthday },
       { title: x.titles.language, value: o.lang, isDefault: o.lang === DEFAULTS.lang },
     ],

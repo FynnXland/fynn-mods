@@ -39,6 +39,7 @@ import {
   rankChoices,
   triggerOf,
   cleanSettings,
+  whyOf,
 } from '../hooks/logic.ts'
 import type { Ledger, Level } from '../hooks/logic.ts'
 import { DEFAULT_HINTS, fillOutcome, applyHints, availOf, cleanWartung, doneFromSkill, doneFromText, memoryMeasure, normModel, pickHint, projectKey, rebase, rootFromFiles, unusedSkills } from '../hooks/wartung.ts'
@@ -54,11 +55,18 @@ import { HINTS_WORDS, RULE_IDS } from '../hooks/wartung.ts'
 import { sidekickHelp } from '../hooks/helpdata.ts'
 import type { HelpFacts } from '../hooks/helpdata.ts'
 import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
+import { cliStubs, settingsNow, written } from './cli.ts'
+import type { Cli } from './cli.ts'
+import { MIN_OF, legacyOf } from '../hooks/logic.ts'
+import { SETTINGS } from '../hooks/fields.ts'
 
 // Die bisherigen Tests prüfen die deutschen Texte (language: de, Fynns Einstellung); eigene Tests unten prüfen Englisch.
 const DE = { options: { language: 'de' } }
-function deTest(name: string, body: ($: Engine, on: On) => unknown) {
-  test(name, DE, async ($, on) => {
+/** Deutscher Test; `cfg`: weitere userConfig-Felder (seit 0.23.0 die einzige Quelle der Einstellungen). */
+function deTest(name: string, a: Record<string, string | number | boolean> | (($: Engine, on: On) => unknown), b?: ($: Engine, on: On) => unknown) {
+  const cfg = typeof a === 'function' ? {} : a
+  const body = typeof a === 'function' ? a : b!
+  test(name, { options: { ...DE.options, ...cfg } }, async ($, on) => {
     setLang('de')
     return body($, on)
   })
@@ -296,13 +304,14 @@ type W = {
   runFails?: boolean // ein anderer Befehl als /clear scheitert (Nachtrag 0.8.1)
   usageFails?: boolean
   noBreakdown?: boolean // breakdown fehlt in der Antwort
-  level?: Level // Stufe in den gespeicherten Einstellungen (Nachtrag 0.10.0)
+  noCli?: boolean // ohne Stubs für `claude plugin` (der Test stubbt config.list/process.run selbst)
 }
 
 function world(on: On, o: W = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
-  if (o.level && !saved.has('settings')) saved.set('settings', { ...DEFAULT_SETTINGS, level: o.level, lastOn: o.level === 'off' ? 'guide' : o.level })
+  // Einstellungen kommen seit 0.23.0 als userConfig (Test-Optionen); Schreiben über `claude plugin configure` (Weg 2)
+  const cli: Cli = o.noCli ? { writes: [], fail: '' } : cliStubs(on)
   const toasts: string[] = []
   const asks: { question: string; options: string[] }[] = []
   const sent: string[] = []
@@ -314,6 +323,7 @@ function world(on: On, o: W = {}) {
   const handoffReqs: unknown[] = []
   const handoffSystems: string[] = []
   let answer: string | null = 'Trotzdem senden'
+  let onAsk: (() => Promise<unknown>) | null = null
   let reply: unknown = { isAnswered: true, text: verdict({}), usage: MODEL_USAGE }
   // Antworten je Aufruf der Prüfung, danach wieder `reply`
   let replies: unknown[] = []
@@ -416,12 +426,14 @@ function world(on: On, o: W = {}) {
     if (e.command === 'clear') id = 'sess-2'
     return { text: '' }
   })
-  on('tool.call', ($, e) => {
+  on('tool.call', async ($, e) => {
     if (e.tool === 'PowerShell') return { result: { stdout: '', stderr: '', interrupted: false, gitOperation: { commit: { sha: 'ps99999', kind: 'committed' } } } }
     if (e.tool === 'Bash') return { result: { stdout: '[main abc1234] x', stderr: '', interrupted: false, isImage: false, gitOperation: { commit: { sha: 'abc1234', kind: 'committed', branch: 'main' } } } }
     if (e.tool !== 'AskUserQuestion') return { result: '' }
     const q = (e as unknown as { questions: { question: string; options: { label: string }[] }[] }).questions[0]!
     asks.push({ question: q.question, options: q.options.map((x) => x.label) })
+    // Ausbau 0.20.0: nachsehen, was ein anderer Mod liest, solange der Dialog offen ist
+    if (onAsk) await onAsk()
     if (answer === null) return { deny: 'Dialog geschlossen' }
     return { result: { answers: { [q.question]: answer } } }
   })
@@ -439,6 +451,9 @@ function world(on: On, o: W = {}) {
   const buddy: (string | null)[] = []
   let buddyVersion = 0
   const status: string[] = []
+  // Ausbau 0.20.0: die geschriebenen Werte ganz (Grund `why`, `cold`)
+  const buddyVals: unknown[] = []
+  const statusVals: unknown[] = []
   const stateVals = new Map<string, unknown>()
   on('state.get', ($: unknown, e: any) => {
     if (o.stateGetFails) return { deny: 'get abgelehnt' }
@@ -447,6 +462,8 @@ function world(on: On, o: W = {}) {
   on('state.set', ($: unknown, e: any) => {
     if (o.stateFails?.()) throw new Error('state abgelehnt')
     if (e.plugin === 'sidekick' && e.key === 'buddy') buddy.push(e.value?.kind ?? null)
+    if (e.plugin === 'sidekick' && e.key === 'buddy') buddyVals.push(e.value)
+    if (e.plugin === 'sidekick' && e.key === 'status') statusVals.push(e.value)
     // Anzeige (Nachtrag 0.10.0): jede Änderung von sidekick.status, als „Stufe busy“ bzw. „Stufe“
     if (e.plugin === 'sidekick' && e.key === 'status') status.push(e.value ? `${e.value.level}${e.value.busy ? ' busy' : ''}` : 'null')
     if (e.plugin === 'sidekick') stateVals.set(e.key, e.value)
@@ -476,6 +493,8 @@ function world(on: On, o: W = {}) {
   return {
     clock,
     saved,
+    cli,
+    settings: () => settingsNow(cli, saved),
     toasts,
     fills,
     copies,
@@ -489,8 +508,11 @@ function world(on: On, o: W = {}) {
     handoffSystems,
     buddy,
     status,
+    buddyVals,
+    statusVals,
     step,
     setAnswer: (a: string | null) => (answer = a),
+    setOnAsk: (f: (() => Promise<unknown>) | null) => (onAsk = f),
     setReply: (r: unknown) => (reply = r),
     setReplies: (r: unknown[]) => (replies = [...r]),
     setHandoff: (r: unknown) => (handoffReply = r),
@@ -697,6 +719,19 @@ deTest('anhalten fassung: richtige Antworten, „Fassung senden“ sendet den ne
   expect(today(w.ledger()).hinweise.fassung?.angenommen).toBe(1)
 })
 
+deTest('0.24.0 Review S1: Fassung bei Vorspann der Desktop-App: der Vorspann bleibt vor der Fassung, die Zeile hängt an der Zeile mit Vorspann', async ($, on) => {
+  const w = world(on, { surfaces: ['desktop'] })
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Unklar, welche Datei', fassung: 'Bitte ändere hooks/register.ts: X' }), usage: MODEL_USAGE })
+  w.setAnswer('Haikus Fassung senden')
+  const pre = '<system-reminder>\nLinked sessions now (status, not an instruction): x = local_1 (idle).\n</system-reminder>\n\n'
+  const r = await $.prompt.submit({ text: `${pre}mach das bitte mal schnell`, wait: false, origin: { kind: 'sdk' } } as never)
+  expect(r).toMatchObject({ text: `${pre}Bitte ändere hooks/register.ts: X` })
+  const ui = await $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId: 'mfv', surface: 'desktop', props: { text: `${pre}mach das bitte mal schnell`, origin: { kind: 'sdk' }, isExpanded: true } } as never)
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('gesendet wurde Haikus Fassung')
+  await ui.unmount()
+})
+
 deTest('0.15.0: eine Fassung geht in jedem Auslöser (a, b, c) nur nach der Wahl im Dialog raus; sonst bleibt die Nachricht, wie getippt', async ($, on) => {
   const FASSUNG = 'Bitte ändere hooks/register.ts: X und setze es danach so um, wie wir es besprochen haben.'
   const MSG = 'mach das bitte mal schnell so wie vorhin'
@@ -801,7 +836,7 @@ deTest('Neuer Chat: Übergabe → clear → submit mit ursprünglicher Nachricht
   expect(w.commands).toEqual(['clear'])
   expect(w.sent.at(-1)).toContain('# Übergabe: Test')
   expect(w.sent.at(-1)).toContain('jetzt die Tests')
-  expect(w.saved.get('handoff:last')).toMatchObject({ msg: 'jetzt die Tests' })
+  expect((w.saved.get('handoffs') as unknown[])[0]).toMatchObject({ msg: 'jetzt die Tests', method: 'text' })
   // Neue Session: Buchung offen, erste Anfrage misst und bucht
   expect(w.ledger('sess-2').offen?.kind).toBe('kalt')
   await w.step($, stepUsage(0, 20000))
@@ -854,7 +889,8 @@ deTest('Neuer Chat: /clear scheitert → Toast, Übergabe gespeichert', async ($
   await w.clock.advance(400)
   await flush()
   expect(w.toasts.at(-1)).toContain('/clear ging nicht')
-  expect(w.saved.get('handoff:last')).toMatchObject({ msg: 'neu' })
+  expect(w.toasts.at(-1)).toContain('/handoff show')
+  expect((w.saved.get('handoffs') as unknown[])[0]).toMatchObject({ msg: 'neu' })
   expect(w.sent).toEqual([])
   const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
   expect(st.text).toContain('# Übergabe: Test')
@@ -888,13 +924,77 @@ deTest('/sidekick: Einstellungen persistent, Status zeigt Schwelle, Unbekanntes 
   const w = world(on)
   const r1 = await $.command.run({ command: 'sidekick', args: 'threshold 5k' } as never)
   expect(r1.text).toContain('| **Schwelle** | 5,0k')
-  expect(w.saved.get('settings')).toMatchObject({ threshold: 5000 })
+  // Seit 0.23.0 in userConfig (Weg 2: claude plugin configure), gilt hier sofort
+  expect(r1.text.split('\n')[0]).toBe('Gespeichert. Gilt in diesem Chat sofort, in anderen offenen Chats nach `/reload-plugins`.')
+  expect(written(w.cli)).toEqual({ threshold: '5000' })
+  expect(w.saved.has('settings')).toBe(false)
   const r2 = await $.command.run({ command: 'sidekick', args: 'quatsch' } as never)
   expect(r2.text).toContain('Unbekannt')
   await $.command.run({ command: 'sidekick', args: 'off' } as never)
   w.setCtx(500000)
   await $.prompt.submit(userPrompt('aus'))
   expect(w.checks.length).toBe(0)
+})
+
+deTest('0.23.0 Befehl: Schreiben scheitert → „Nicht gespeichert“ mit Grund, Wert bleibt; zu klein → Minimum genannt (Review K1, K4)', async ($, on) => {
+  const w = world(on)
+  w.cli.fail = 'N: It takes a number from 1000.'
+  const r = String((await $.command.run({ command: 'sidekick', args: 'threshold 5k' } as never)).text)
+  expect(r).toBe('Nicht gespeichert: N: It takes a number from 1000..')
+  expect(String((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text)).toContain('| **Schwelle** | 80k')
+  w.cli.fail = ''
+  expect(String((await $.command.run({ command: 'sidekick', args: 'big 500' } as never)).text)).toBe('Zu klein: „big 500“. Mindestens 1,0k.')
+  expect(String((await $.command.run({ command: 'sidekick', args: 'hints audit-min 50' } as never)).text)).toBe('Zu klein: „audit-min 50“. Mindestens 100.')
+  expect(w.cli.writes).toEqual([])
+})
+
+test('0.23.0 Befehl: Weg 1 (Plugin-Zeilen da) → $.config.set nur für das eigene Feld (Review K4)', { options: { language: 'de' } }, async ($, on) => {
+  setLang('de')
+  const w = world(on, { noCli: true })
+  const sets: { key: string; value: unknown }[] = []
+  on('config.list', () => ({ value: [{ key: 'sidekick.notes', value: false, provider: { plugin: 'sidekick@fynn-mods' } }, { key: 'sidekick.threshold', value: 80000, provider: { plugin: 'sidekick@fynn-mods' } }] as never }))
+  on('config.set', ($: unknown, e: any) => {
+    sets.push({ key: e.key, value: e.value })
+    return { value: e.value }
+  })
+  const r = String((await $.command.run({ command: 'sidekick', args: 'notes on' } as never)).text)
+  expect(r.split('\n')[0]).toBe('Gespeichert, gilt sofort.')
+  expect(sets).toEqual([{ key: 'sidekick.notes', value: true }])
+  expect(w.cli.writes).toEqual([])
+})
+
+test('0.23.0 Befehl: fremde Kopie (--plugin-dir) schreibt nicht in die installierten Einstellungen (Review K4)', { options: { language: 'de' } }, async ($, on) => {
+  setLang('de')
+  world(on, { noCli: true })
+  const runs: string[] = []
+  on('config.list', () => ({ value: [] }))
+  on('process.run', ($: unknown, e: any) => {
+    runs.push(e.argv.join(' '))
+    return { value: { exitCode: 0, stdout: JSON.stringify([{ id: 'sidekick@fynn-mods', enabled: true, installPath: 'C:/anderer/Ordner/sidekick' }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const r = String((await $.command.run({ command: 'sidekick', args: 'notes on' } as never)).text)
+  expect(r).toContain('Nicht gespeichert: diese Kopie ist aus einem anderen Ordner geladen')
+  expect(runs).toEqual(['claude plugin list --json'])
+})
+
+test('0.24.0 Umzug: ändert ein alter Chat den Schlüssel während des Umzugs, wird er nicht markiert (SETTINGS-SPEC §4, K1)', { options: { language: 'de' } }, async ($, on) => {
+  setLang('de')
+  on('session.start', () => ({ cwd: '/work' }))
+  const saved = new Map<string, unknown>([['settings', { on: false, threshold: 80000 }]])
+  world(on, { noCli: true, saved })
+  const root = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
+  on('config.list', () => ({ value: [] }))
+  on('process.run', ($: unknown, e: any) => {
+    const ok = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (e.argv.join(' ') === 'claude plugin list --json') return ok(JSON.stringify([{ id: 'sidekick@fynn-mods', enabled: true, installPath: root }]))
+    // Während das Schreiben läuft, schreibt ein Chat mit 0.22.0 den Schlüssel neu
+    saved.set('settings', { on: false, threshold: 60000 })
+    return ok(JSON.stringify({ saved: ['level'] }))
+  })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await flush(400)
+  // nicht markiert: der nächste Start zieht die Änderung (60k) um
+  expect(saved.get('settings')).toEqual({ on: false, threshold: 60000 })
 })
 
 deTest('Persistenz: Bilanz und Einstellungen überleben einen Neustart (Store-Stub), Verdichtung beim Start', async ($, on) => {
@@ -914,7 +1014,7 @@ deTest('Persistenz: Bilanz und Einstellungen überleben einen Neustart (Store-St
   expect(all.text).toContain('Prüfungen: **5**')
   const tdy = await $.command.run({ command: 'savings', args: 'today detail' } as never)
   expect(tdy.text).toContain('Prüfungen: **2**')
-  // Einstellung aus dem Store gilt: 6k Kontext löst (b) aus
+  // Alte Einstellung aus dem Store (bis 0.22.0) wird beim Start umgezogen und gilt sofort: 6k Kontext löst (b) aus
   w.setCtx(6000)
   await $.prompt.submit(userPrompt('x'))
   expect(w.checks.length).toBe(1)
@@ -1453,7 +1553,8 @@ deTest('Wartung: getipptes /claude-api prompt-audit nach dem Hinweis → erledig
 deTest('Wartung: skill.prompt von claude-api mit prompt-audit erledigt den Audit, auch ohne vorherigen Hinweis', async ($, on) => {
   const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS })
   await $.skill.prompt({ skill: 'claude-api', text: 'Anleitung …\n\n## User Request\n\nprompt-audit' })
-  await flush(120)
+  // Läuft im Hintergrund; seit 0.20.0 reiht bindSession die Aufrufe ein (ein paar Mikrotasks mehr)
+  await flush(200)
   expect(wStore(w).regeln.audit?.doneAt).toBe(NOW)
   expect(today(w.ledger()).wartung.audit).toBe(undefined)
 })
@@ -1500,9 +1601,8 @@ deTest('Wartung stumm: Befehl fehlt, der Chat-Tag zählt trotzdem', async ($, on
   expect(wStore(w).sessions).toEqual([dayKey(NOW)])
 })
 
-deTest('Wartung stumm: hints off', async ($, on) => {
-  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS })
-  w.saved.set('hints', { on: false })
+deTest('Wartung stumm: hints off', { maintenanceHints: false }, async ($, on) => {
+  world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS })
   await $.prompt.submit(userPrompt('aus'))
   expect(await lineUnder($, 'aus', 'w1')).not.toContain('sidekick')
 })
@@ -1547,9 +1647,16 @@ deTest('/sidekick hints: status, Regel aus, done, audit-min, unbekannt', async (
   expect(status).toContain('prompt-audit')
   expect(status).toContain('3,4k (ab 2,0k)')
   await $.command.run({ command: 'sidekick', args: 'hints audit off' })
-  expect((w.saved.get('hints') as { off: string[] }).off).toEqual(['audit'])
-  await $.command.run({ command: 'sidekick', args: 'hints audit-min 2k' })
-  expect((w.saved.get('hints') as { auditMin: number }).auditMin).toBe(2000)
+  // Einzelne Regeln bleiben im Store `hints`, Schalter und Schwelle gehen seit 0.23.0 nach userConfig
+  expect(w.saved.get('hints')).toEqual({ off: ['audit'] })
+  expect(w.cli.writes).toEqual([])
+  const min = String((await $.command.run({ command: 'sidekick', args: 'hints audit-min 3k' }) as { text?: string }).text)
+  expect(min.split('\n')[0]).toBe('Gespeichert. Gilt in diesem Chat sofort, in anderen offenen Chats nach `/reload-plugins`.')
+  expect(written(w.cli)).toEqual({ auditMin: '3000' })
+  expect(w.saved.get('hints')).toEqual({ off: ['audit'] })
+  await $.command.run({ command: 'sidekick', args: 'hints off' })
+  expect(written(w.cli)).toEqual({ auditMin: '3000', maintenanceHints: 'false' })
+  await $.command.run({ command: 'sidekick', args: 'hints on' })
   await $.command.run({ command: 'sidekick', args: 'hints done memory' })
   expect(wStore(w).regeln.memory?.doneAt).toBe(NOW)
   const bad = String((await $.command.run({ command: 'sidekick', args: 'hints quatsch' }) as { text?: string }).text)
@@ -1634,6 +1741,25 @@ deTest('0.2.2: <system-reminder> vom Host verbraucht die Wartungs-Prüfung nicht
   w.setCtx(1000)
   await $.prompt.submit({ text: 'erste echte', wait: false, origin: { kind: 'sdk' } } as never)
   expect(await lineUnder($, 'erste echte', 'w1')).toContain('prompt-audit')
+})
+
+deTest('0.24.0: Vorspann der Desktop-App vor eigenem Text wird geprüft; nur Vorspann und Vorspann vor Host-Meldungen → durch', async ($, on) => {
+  const w = world(on, { surfaces: ['desktop'], memory: [projectFile(3400)], cmds: ALL_CMDS })
+  w.setCtx(1000)
+  const pre = '<system-reminder>\nLinked sessions now (status, not an instruction): x = local_1 (idle).\n</system-reminder>\n\n'
+  // nur Vorspann: wie 0.2.2, keine Prüfung, Wartung nicht verbraucht
+  expect(await $.prompt.submit({ text: pre, wait: false, origin: { kind: 'sdk' } } as never)).toMatchObject({ text: pre })
+  for (const m of [
+    '<cross-session-message from="local_1" name="Planung">bitte die README anpassen und danach testen</cross-session-message>',
+    '<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n</task-notification>',
+    '[Cross-session idle notice] "Release", which you asked to be notified about, is idle now',
+  ])
+    expect(await $.prompt.submit({ text: pre + m, wait: false, origin: { kind: 'sdk' } } as never)).toMatchObject({ text: pre + m })
+  expect(w.checks.length).toBe(0)
+  // eigener Text hinter dem Vorspann: geprüft wie ohne, die Zeile steht unter der Zeile mit Vorspann
+  const r = await $.prompt.submit({ text: `${pre}erste echte`, wait: false, origin: { kind: 'sdk' } } as never)
+  expect(r).toMatchObject({ text: `${pre}erste echte` })
+  expect(await lineUnder($, `${pre}erste echte`, 'w1')).toContain('prompt-audit')
 })
 
 deTest('0.2.2: /sidekick hints … setzt die Prüfung des laufenden Chats zurück', async ($, on) => {
@@ -2066,7 +2192,8 @@ deTest('0.5.0 Review S1: nach Abbrechen beim falschen Chat sieht die nächste Pr
   await $.prompt.submit(userPrompt(WRONG_MSG))
   w.setReply({ isAnswered: true, text: verdict({}), usage: MODEL_USAGE })
   await $.prompt.submit(userPrompt('jetzt die gegnerwellen bitte'))
-  const p = w.checks[2]!.prompt
+  // Seit 0.21.0 kann dazwischen ein Aufruf der Prompt-Erkennung liegen: die Prüfung der dritten Nachricht suchen
+  const p = w.checks.map((c) => c.prompt).find((x) => x.includes('<<<\njetzt die gegnerwellen'))!
   expect(p).toContain('Kurzfassung bisher: Game.')
   expect(p).not.toContain('landingpage')
   expect(p).toContain('mach den joystick größer bitte')
@@ -2479,9 +2606,9 @@ deTest('0.8.1: lineCommand findet Befehle im Satz, Kurznamen, die Übergabe übe
   const cmds = [UEBERGABE, HANDOFF_CMD, { name: 'mod-review', source: 'user' }, { name: 'clear', source: 'builtin' }, { name: 'a:dup', source: 'plugin' }, { name: 'b:dup', source: 'plugin' }]
   const z = 'Kontext ist mit 437k Tokens sehr groß; für neue Arbeit bald /uebergabe und frischen Chat erwägen.'
   expect(lineCommand(z, '', cmds)).toEqual({ line: 'Kontext ist mit 437k Tokens sehr groß; für neue Arbeit bald /handoff und frischen Chat erwägen.', cmd: '/handoff' })
-  // Ohne /handoff von limit-bars: der volle Skill-Name
-  expect(lineCommand(z, '', [UEBERGABE])?.cmd).toBe('/limit-bars:uebergabe')
-  expect(lineCommand(z, '', [UEBERGABE])?.line).toContain('bald /limit-bars:uebergabe und')
+  // Seit 0.22.0 immer der eigene /handoff, auch ohne Eintrag in der Liste und ohne limit-bars
+  expect(lineCommand(z, '', [UEBERGABE])?.cmd).toBe('/handoff')
+  expect(lineCommand(z, '', [])?.line).toContain('bald /handoff und')
   // Skill-Hinweis: Name ohne Schrägstrich im Satz
   expect(lineCommand('limit-bars:uebergabe nutzen: Stand dokumentieren.', 'limit-bars:uebergabe', cmds)).toEqual({ line: '/handoff nutzen: Stand dokumentieren.', cmd: '/handoff' })
   expect(lineCommand('Ein Skill prüft Mods.', 'mod-review', cmds)).toEqual({ line: 'Ein Skill prüft Mods. (/mod-review)', cmd: '/mod-review' })
@@ -2546,7 +2673,7 @@ deTest('0.8.1 Review: eingebaute Befehle außer Wartung, MCP, Pfade und Wörter 
   expect(lineCommand('Am Satzende /init.', '', cmds)?.line).toBe('Am Satzende /init.')
   // K1: ein Wort ohne Schrägstrich wird nicht zum Befehl
   expect(lineCommand('Mit /init anlegen, init dauert kurz.', '', cmds)?.line).toBe('Mit /init anlegen, init dauert kurz.')
-  // K2: /handoff auch mit Plugin-ID samt Marketplace
+  // K2: /handoff auch mit Plugin-ID samt Marketplace (seit 0.22.0 ohnehin immer der eigene)
   const viaId = [{ ...UEBERGABE, plugin: 'limit-bars@fynn-mods' }, { ...HANDOFF_CMD, plugin: 'limit-bars@fynn-mods' }]
   expect(lineCommand('Bald /uebergabe machen.', '', viaId)?.cmd).toBe('/handoff')
   expect(lineCommand('Die uebergabe bald machen.', 'limit-bars:uebergabe', viaId)?.line).toBe('Die /handoff bald machen.')
@@ -2601,6 +2728,14 @@ deTest('0.15.0: gespeicherte Stufe plan oder auto (auch als lastOn) wird still z
   }
   expect('long' in cleanSettings({ long: 0 })).toBe(false)
   const w = world(on, { saved: new Map<string, unknown>([['settings', { level: 'auto', lastOn: 'auto', long: 800, threshold: 60000 }]]) })
+  // Seit 0.23.0 zieht der Start die alten Werte nach userConfig um (nur die abweichenden), lokal sofort
+  on('session.start', () => ({ cwd: '/work' }))
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await flush(400)
+  expect(written(w.cli)).toEqual({ threshold: '60000' })
+  // Markiert statt geleert (Review 0.23.0 S1): Chats mit 0.22.0 lesen die echten Werte weiter
+  expect(w.saved.get('settings')).toMatchObject({ threshold: 60000, migrated: true })
+  expect(w.saved.get('runtime')).toMatchObject({ lastOn: 'guide' })
   w.setCtx(70000)
   // Wie im Begleiter: 70k liegen über der gespeicherten Schwelle 60k, also wird geprüft
   await $.prompt.submit(userPrompt('mittel'))
@@ -2610,28 +2745,81 @@ deTest('0.15.0: gespeicherte Stufe plan oder auto (auch als lastOn) wird still z
 })
 
 deTest('0.15.0: Begleiter prüft (b) erst ab der Schwelle, lange Nachrichten lösen nichts aus', async ($, on) => {
-  const w = world(on, { level: 'guide' })
+  const w = world(on)
   w.setCtx(45000)
   await $.prompt.submit(userPrompt('mittel'))
   expect(w.checks.length).toBe(0)
   await $.prompt.submit(userPrompt('lang '.repeat(400)))
-  expect(w.checks.length).toBe(0)
+  // Die Prompt-Erkennung (Nachtrag 0.21.0) gibt langen eigenen Nachrichten im Hintergrund eine Absicht; das ist keine Prüfung
+  expect(w.checks.filter((c) => !c.system.includes('Liste von Absichten')).length).toBe(0)
   expect(triggerOf({ first: false, ctx: 79999, cold: false, settings: DEFAULT_SETTINGS })).toBe(null)
   expect(triggerOf({ first: false, ctx: 80000, cold: false, settings: DEFAULT_SETTINGS })).toBe('b')
 })
 
-deTest('0.10.0: Alte Einstellung on:false → Aus, keine Prüfung; on:true → Begleiter', async ($, on) => {
+deTest('0.10.0: Alte Einstellung on:false → Aus, keine Prüfung; on:true → Begleiter (seit 0.23.0 beim Start umgezogen)', async ($, on) => {
+  on('session.start', () => ({ cwd: '/work' }))
   const w = world(on, { saved: new Map<string, unknown>([['settings', { on: false, threshold: 80000 }]]) })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await flush(400)
+  expect(written(w.cli)).toEqual({ level: 'off' })
+  expect(w.saved.get('settings')).toEqual({ on: false, threshold: 80000, migrated: true })
   w.setCtx(500000)
   await $.prompt.submit(userPrompt('aus'))
   expect(w.checks.length).toBe(0)
+  // Markiert: der nächste Start zieht nichts noch einmal um (Review 0.23.0 S1)
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await flush(400)
+  expect(w.cli.writes.length).toBe(1)
+  // Schreibt eine noch laufende 0.22.0 danach neu (ohne Markierung, auf den echten Werten), zieht der nächste Start ihre Änderung um
   w.saved.set('settings', { on: true, threshold: 5000 })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await flush(400)
+  expect(written(w.cli)).toEqual({ level: 'guide', threshold: '5000' })
+  w.setId('sess-2')
   await $.prompt.submit(userPrompt('an'))
   expect(w.checks.length).toBe(1)
 })
 
-deTest('0.10.0: Cache: (c) mit Dialog ohne Modellaufruf; (a)/(b) ohne Aufruf, ohne Zeile, ohne Wartung', async ($, on) => {
-  const w = world(on, { level: 'cache', memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
+deTest('0.23.0 Umzug: hints on/auditMin nach userConfig, abgeschaltete Regeln bleiben; Zähler nach runtime; ohne Altwerte nichts', async ($, on) => {
+  on('session.start', () => ({ cwd: '/work' }))
+  const saved = new Map<string, unknown>([
+    ['hints', { on: false, auditMin: 5000, off: ['audit'] }],
+    ['settings', { ...DEFAULT_SETTINGS, level: 'off', lastOn: 'cache', notes: true, tips: { first: false, auto: true, haiku: true, declined: 2, restUntil: NOW + DAY }, loop: { on: false, declined: 1, restUntil: 0 } }],
+  ])
+  const w = world(on, { saved })
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await flush(400)
+  expect(written(w.cli)).toEqual({ level: 'off', notes: 'true', modelTip: 'false', modelTipAuto: 'true', retryLoop: 'false', maintenanceHints: 'false', auditMin: '5000' })
+  expect(w.cli.writes.length).toBe(1) // ein Schreiben für alle Felder
+  // Markiert statt geleert: Chats mit 0.22.0 lesen on/auditMin weiter (Review 0.23.0 S1)
+  expect(saved.get('hints')).toEqual({ on: false, auditMin: 5000, off: ['audit'], migrated: true })
+  expect(saved.get('settings')).toMatchObject({ level: 'off', migrated: true })
+  expect(saved.get('runtime')).toEqual({ lastOn: 'cache', tips: { declined: 2, restUntil: NOW + DAY }, loop: { declined: 1, restUntil: 0 } })
+  // Gilt sofort: Stufe Aus, `/sidekick on` holt die zuletzt aktive Stufe Cache zurück
+  const st = String((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text)
+  expect(st).toContain('**Aus** · Status')
+  expect(st).toContain('**Wartungs-Hinweise:** aus (aus: audit)')
+  const back = String((await $.command.run({ command: 'sidekick', args: 'on' } as never)).text)
+  expect(back).toContain('**Cache** · Status')
+  // Zweiter Start: nichts mehr umzuziehen
+  const n = w.cli.writes.length
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await flush(400)
+  expect(w.cli.writes.length).toBe(n)
+})
+
+deTest('0.23.0 Umzug: Schreiben scheitert → Werte gelten trotzdem hier, alter Store bleibt für den nächsten Start', async ($, on) => {
+  on('session.start', () => ({ cwd: '/work' }))
+  const w = world(on, { saved: new Map<string, unknown>([['settings', { ...DEFAULT_SETTINGS, level: 'cache' }]]) })
+  w.cli.fail = 'kaputt'
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await flush(400)
+  expect(w.saved.get('settings')).toMatchObject({ level: 'cache' })
+  expect(String((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text)).toContain('**Cache** · Status')
+})
+
+deTest('0.10.0: Cache: (c) mit Dialog ohne Modellaufruf; (a)/(b) ohne Aufruf, ohne Zeile, ohne Wartung', { level: 'cache' }, async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS, skills: AUDIT_SKILL })
   w.setMessages([])
   await $.prompt.submit(userPrompt('Hallo, erste Nachricht'))
   w.setMessages([{ role: 'assistant', text: 'ok', toolUses: [] }])
@@ -2655,7 +2843,7 @@ deTest('0.10.0: Cache: (c) mit Dialog ohne Modellaufruf; (a)/(b) ohne Aufruf, oh
 })
 
 deTest('0.10.0 Anzeige: Label an modes angehängt, fremde bleiben; Kreis je Zustand; Aus rot; nur Terminal und Desktop', async ($, on) => {
-  const w = world(on, { level: 'guide' })
+  const w = world(on)
   on('session.start', () => ({ cwd: '/work' }))
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
   await flush(200)
@@ -2678,7 +2866,7 @@ deTest('0.10.0 Anzeige: Label an modes angehängt, fremde bleiben; Kreis je Zust
 })
 
 deTest('0.10.0 Anzeige: busy (orange) bei Prüfung, Rückfrage und Übergabe, danach wieder grün', async ($, on) => {
-  const w = world(on, { level: 'guide', handoffDelayMs: 3000 })
+  const w = world(on, { handoffDelayMs: 3000 })
   w.setCtx(90000)
   await $.prompt.submit(userPrompt('prüf mich'))
   await flush()
@@ -2703,7 +2891,7 @@ deTest('0.10.0 Anzeige: busy (orange) bei Prüfung, Rückfrage und Übergabe, da
 })
 
 deTest('0.10.0 Anzeige: Schreiben scheitert → Prüfung und Nachricht laufen normal', async ($, on) => {
-  const w = world(on, { level: 'guide', stateFails: () => true })
+  const w = world(on, { stateFails: () => true })
   w.setCtx(90000)
   expect(await $.prompt.submit(userPrompt('trotzdem'))).toMatchObject({ text: 'trotzdem' })
   expect(w.checks.length).toBe(1)
@@ -2713,9 +2901,9 @@ deTest('0.10.0 Anzeige: Schreiben scheitert → Prüfung und Nachricht laufen no
   await ui.unmount()
 })
 
-test('0.10.0 en: levels and footer label in English', async ($, on) => {
+test('0.10.0 en: levels and footer label in English', { options: { level: 'cache' } }, async ($, on) => {
   setLang('en')
-  world(on, { level: 'cache' })
+  world(on)
   const r = await $.command.run({ command: 'sidekick', args: 'status' } as never)
   expect(r.text).toContain('**Cache** · status')
   expect(r.text).toContain('| **Level** | Cache (only the cold-cache question by rules')
@@ -2731,7 +2919,7 @@ test('0.10.0 en: levels and footer label in English', async ($, on) => {
 // ---------- 0.10.1: Anzeige robuster, Diagnose ----------
 
 deTest('0.10.1: $.state.get scheitert → Label aus der eingestellten Stufe, Fehler in /sidekick status', async ($, on) => {
-  world(on, { level: 'guide', stateGetFails: true })
+  world(on, { stateGetFails: true })
   const before = await $.command.run({ command: 'sidekick', args: 'status' } as never)
   expect(before.text).toContain('**Anzeige in der Fußzeile:** von Claude Code noch nie angefragt')
   const ui = await mountMode($)
@@ -2743,7 +2931,7 @@ deTest('0.10.1: $.state.get scheitert → Label aus der eingestellten Stufe, Feh
 })
 
 deTest('0.10.1: Diagnose nennt die Oberfläche, auch ohne Label (VS Code)', async ($, on) => {
-  world(on, { level: 'guide' })
+  world(on)
   const ui = await mountMode($, 'terminal')
   await ui.unmount()
   await flush()
@@ -2755,14 +2943,15 @@ deTest('0.10.1: Diagnose nennt die Oberfläche, auch ohne Label (VS Code)', asyn
 })
 
 deTest('0.10.2: Desktop: eigener Baum mit farbigem ● neben der Zeichnung der Engine; Kreis je Zustand', async ($, on) => {
-  const w = world(on, { level: 'guide', handoffDelayMs: 3000 })
+  const w = world(on, { handoffDelayMs: 3000 })
   on('session.start', () => ({ cwd: '/work' }))
   await $.session.start({ surface: 'desktop', isInteractive: true, cwd: '/work' })
   await flush(200)
   const desk = async () => {
     const ui = await mountMode($, 'desktop')
     const mine = JSON.stringify(await ui.find({ key: 'sidekick-mode' }))
-    const theirs = await modeText(ui)
+    // Das Engine-Label gezielt suchen: das ●-Label steht vor dem Engine-Anteil (Knöpfe links davon, Stand 0.21.3)
+    const theirs = String(((await ui.find({ type: 'Text', text: 'plan mode' })) as { children?: unknown[] } | undefined)?.children ?? '')
     await ui.unmount()
     return { mine, theirs }
   }
@@ -3044,9 +3233,9 @@ deTest('0.12.0 Wartung: /sidekick hints … setzt den offenen Hinweis zurück wi
   expect(w.saved.get('sitzung:sess-1')).toMatchObject({ wartung: false, wartungOffen: null })
 })
 
-deTest('0.12.0 Wartung: Stufe Cache → nie, auch kein offener Hinweis aus dem Store', async ($, on) => {
+deTest('0.12.0 Wartung: Stufe Cache → nie, auch kein offener Hinweis aus dem Store', { level: 'cache' }, async ($, on) => {
   const saved = new Map<string, unknown>([['sitzung:sess-1', { own: 1, wartung: true, wartungOffen: OFFEN }]])
-  const w = world(on, { saved, level: 'cache', memory: [projectFile(3400)], cmds: ALL_CMDS })
+  const w = world(on, { saved, memory: [projectFile(3400)], cmds: ALL_CMDS })
   await $.prompt.submit(userPrompt('erste'))
   await $.prompt.submit(userPrompt('zweite'))
   expect(await lineUnder($, 'zweite', 'x2')).not.toContain('sidekick')
@@ -3057,12 +3246,14 @@ deTest('0.12.0 Wartung: Stufe Cache → nie, auch kein offener Hinweis aus dem S
 deTest('0.12.0: handoffPrompt mit neuer Nachricht in eigenen Markern, Projektwurzel, Commit (ohne: „keiner“), Anfang und Ende', async () => {
   const p = handoffPrompt('Kurz.', '[Nutzer] Auftrag', '[Assistent] fertig', 'Im Lektor bitte Resets eintragen', { root: 'C:\\Proj\\App', commit: 'abc1234 vor 5 min', model: 'Opus 5.5' })
   expect(p).toContain('[NACHRICHT]\nIm Lektor bitte Resets eintragen\n[/NACHRICHT]')
-  expect(p).toContain('Projektwurzel: C:\\Proj\\App; letzter Commit: abc1234 vor 5 min; Modell: Opus 5.5')
+  // Seit 0.22.0 nur die Wurzel im Prompt; Projekt und Commit setzt sidekick als Tabelle ein
+  expect(p).toContain('Projektwurzel: C:\\Proj\\App')
+  expect(p).not.toContain('abc1234')
   expect(p).toContain('du beantwortest sie nicht')
   expect(p.indexOf('Anfang des Verlaufs') < p.indexOf('Ende des Verlaufs')).toBe(true)
   expect(p.indexOf('Ende des Verlaufs') < p.indexOf('[NACHRICHT]')).toBe(true)
   const q = handoffPrompt('', '', '[Nutzer] kurz', 'weiter', { root: '', commit: '', model: '' })
-  expect(q).toContain('letzter Commit: keiner')
+  expect(q).not.toContain('letzter Commit')
   expect(q).toContain('Projektwurzel: unbekannt')
   expect(q).not.toContain('Anfang des Verlaufs')
 })
@@ -3092,8 +3283,10 @@ deTest('0.12.0: historyParts: Anfang (2 eigene Nachrichten, je ≤ 2 000 Zeichen
 deTest('0.12.0: handoffSystem: Tabelle Projekt/Commit, „Weiter mit“ nach der neuen Nachricht, 350 Wörter (de und en)', async () => {
   const de = handoffSystem()
   expect(de).toContain('> **Weiter mit:** <ein Satz: was die neue Nachricht verlangt>')
-  expect(de).toContain('| **Projekt** | `<absoluter Pfad>` |')
-  expect(de).toContain('| **Letzter Commit** |')
+  // Seit 0.22.0 setzt sidekick die Tabelle selbst ein (Entscheidung Fynn 2026-11-07)
+  expect(de).not.toContain('| **Projekt**')
+  expect(de).toContain('Projekt und letzten Commit setzt sidekick selbst als Tabelle ein')
+  expect(de).toContain('Jeder Dateipfad absolut')
   expect(de).toContain('Höchstens 350 Wörter')
   expect(de).toContain('Der Nutzer diktiert oft')
   expect(de).toContain('bist du bei etwas unsicher, lass es weg')
@@ -3103,8 +3296,7 @@ deTest('0.12.0: handoffSystem: Tabelle Projekt/Commit, „Weiter mit“ nach der
   setLang('en')
   const en = handoffSystem()
   expect(en).toContain('> **Next:** <one sentence: what the new message asks for>')
-  expect(en).toContain('| **Project** | `<absolute path>` |')
-  expect(en).toContain('| **Last commit** |')
+  expect(en).not.toContain('| **Project**')
   expect(en).toContain('„Done“')
   expect(en).toContain('Schreibe auf Englisch.')
   setLang('de')
@@ -3128,14 +3320,17 @@ deTest('0.12.0: „Neuer Chat mit Übergabe“: Übergabe bekommt die neue Nachr
   expect(w.handoffs.length).toBe(1)
   const p = w.handoffs[0]!
   expect(p).toContain('[NACHRICHT]\nIm Lektor bitte die Resets eintragen\n[/NACHRICHT]')
-  expect(p).toContain('Projektwurzel: C:\\Proj\\App; letzter Commit: abc1234 vor 5 min; Modell: Opus 5.5')
+  // Seit 0.22.0 nur die Wurzel im Prompt; Projekt und Commit setzt sidekick als Tabelle ein
+  expect(p).toContain('Projektwurzel: C:\\Proj\\App')
+  expect(p).not.toContain('abc1234')
+  expect(w.sent.at(-1)).toContain('| **Letzter Commit** | `abc1234` |')
   expect(p).toContain('[Nutzer] Baue den Sidekick')
   expect(w.handoffSystems[0]).toContain('> **Weiter mit:** <ein Satz: was die neue Nachricht verlangt>')
   expect(w.sent.at(-1)).toContain('Im Lektor bitte die Resets eintragen')
 })
 
 deTest('0.12.0 Review S2: „anhalten“ ohne Dialog (Fassung über 600 Zeichen, Autonom) zeigt keine Zeile mit Kontext-Rede', async ($, on) => {
-  const w = world(on, { level: 'auto' })
+  const w = world(on)
   w.setCtx(90000)
   const msg = 'also ich hätte gern beim sidekick, dass die zeile kürzer wird, '.repeat(6).trim()
   const lang = 'Bitte kürze die Zeile von sidekick. '.repeat(20).trim()
@@ -3182,7 +3377,9 @@ deTest('0.12.0 Review K6: Übergabe mit werfendem $.session.root() → „Projek
   await w.clock.advance(400)
   await flush()
   expect(w.handoffs.length).toBe(1)
-  expect(w.handoffs[0]).toContain('Projektwurzel: unbekannt; letzter Commit: keiner')
+  expect(w.handoffs[0]).toContain('Projektwurzel: unbekannt')
+  // Seit 0.22.0 setzt sidekick die Tabelle ein: ohne Commit „keiner in diesem Chat“
+  expect(w.sent.at(-1)).toContain('| **Letzter Commit** | keiner in diesem Chat |')
   expect(w.sent.at(-1)).toContain('Im Lektor bitte die Resets eintragen')
 })
 
@@ -3605,7 +3802,12 @@ deTest('0.13.0: /sidekick notes on|off|forget|status; off räumt den Hinweis ab;
   expect(r.text).toContain('**Gut zu wissen:** aus · bekannte Themen: 2')
   r = await notesOn($)
   expect(r.text).toContain('**Gut zu wissen:** an')
-  expect((w.saved.get('settings') as { notes: boolean }).notes).toBe(true)
+  expect(r.text.split('\n')[0]).toBe('Gespeichert. Gilt in diesem Chat sofort, in anderen offenen Chats nach `/reload-plugins`.')
+  expect(written(w.cli)).toEqual({ notes: 'true' })
+  // Schon an: nichts geschrieben, keine Speicher-Zeile
+  r = await notesOn($)
+  expect(r.text.split('\n')[0]).toContain('**Gut zu wissen:** an')
+  expect(w.cli.writes.length).toBe(1)
   r = await $.command.run({ command: 'sidekick', args: 'status' } as never)
   expect(r.text).toContain('| **Gut zu wissen** | an · 2 bekannte Themen · `/sidekick notes` |')
   r = await $.command.run({ command: 'sidekick', args: 'notes off' } as never)
@@ -3723,7 +3925,8 @@ deTest('0.14.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstel
   expect(lines).toContain('- `1 Erklären`: Hinweis aufklappen (Ziffern nur, solange Claude arbeitet)')
   expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Stufe Begleiter \(Standard\) \(\/sidekick off\|cache\|guide\) · Schwelle 80k \(Standard\)/m)
   expect(text).toContain('Gut zu wissen ○ aus (Standard) (/sidekick notes on)')
-  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Sprache de$/m)
+  // Seit 0.23.0 alle userConfig-Felder in der Reihenfolge von plugin.json, Sprache zuletzt
+  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Stufe guide \(Standard\) · Prüfung ab \(Tokens\) 80k \(Standard\) · .* · Korrektur-Schleife an \(Standard\) · Warteschlange an \(Standard\) · Skill-Katalog an \(Standard\) · Sprache de$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure sidekick · Mod abschalten: /plugin disable sidekick')
 })
 
@@ -3744,7 +3947,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     const texts = (await ui.findAll({ type: 'Text' })) as { children?: unknown[]; props: Record<string, unknown> }[]
     expect(texts.some((x) => x.children?.[0] === '● ' && x.props.color === 'success')).toBe(true) // Skill-Liste
     expect(texts.some((x) => x.children?.[0] === '○ ' && x.props.color === 'inactive')).toBe(true) // Gut zu wissen
-    const footer = surface === 'desktop' ? 'Mod abschalten: + → Plugins → Manage plugins · Einstellungen ändern: im Terminal /plugin configure sidekick' : 'Einstellungen ändern: /plugin configure sidekick · Mod abschalten: /plugin disable sidekick'
+    const footer = surface === 'desktop' ? 'Einstellungen ändern: Einstellungen → Plugins → sidekick → Einstellungen · Mod abschalten: + → Plugins → Manage plugins' : 'Einstellungen ändern: /plugin configure sidekick · Mod abschalten: /plugin disable sidekick'
     expect(await ui.find({ type: 'Text', text: footer })).toBeDefined()
     await ui.unmount()
   })
@@ -3876,15 +4079,24 @@ deTest('0.14.0: /savings help und ? verweisen auf /sidekick help; Unbekanntes ne
   expect(await helpRun($, 'hints everything off')).toContain('Alle Befehle: `/sidekick help`')
 })
 
+deTest('0.23.0 Hilfe: EINSTELLUNGEN zeigt die Werte aus userConfig, geänderte ohne (Standard)', { level: 'cache', notes: true, threshold: 5000 }, async ($, on) => {
+  world(on)
+  const line = (await helpRun($)).split('\n').find((l) => l.startsWith('**EINSTELLUNGEN'))!
+  expect(line).toContain('Stufe cache ·')
+  expect(line).toContain('Prüfung ab (Tokens) 5,0k ·')
+  expect(line).toContain('Gut zu wissen an ·')
+  expect(line).toContain('Kalt-Cache-Frage ab (Tokens) 150k (Standard)')
+})
+
 test('0.14.0 Hilfe (en): Funktionen und Einstellungen in Englisch, Desktop-Fußzeile', async ($, on) => {
   setLang('en')
   world(on)
   const text = await helpRun($)
   expect(text).toContain('Level Guide (default) (/sidekick off|cache|guide)')
   expect(text).toContain('Good to know ○ off (default) (/sidekick notes on)')
-  expect(text).toMatch(/^\*\*SETTINGS \(\/plugin\):\*\* Language en \(default\)$/m)
+  expect(text).toMatch(/^\*\*SETTINGS \(\/plugin\):\*\* Level guide \(default\) · .* · Retry loop on \(default\) · Queue on \(default\) · Skill catalog on \(default\) · Language en \(default\)$/m)
   const ui = await mountHelp($, text, 'desktop')
-  expect(await ui.find({ type: 'Text', text: 'Turn the mod off: + → Plugins → Manage plugins · Change settings: /plugin configure sidekick in a terminal' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Change settings: Settings → Plugins → sidekick → Settings · Turn the mod off: + → Plugins → Manage plugins' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'CONTROLS' })).toBeDefined()
   await ui.unmount()
 })
@@ -4139,7 +4351,7 @@ test('0.17.0 language: Wort im argumentHint von /sidekick, nicht in /savings', a
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await flush(200)
   const hint = (name: string) => w.registered.find((c) => c.name === name)?.argumentHint ?? ''
-  expect(hint('sidekick')).toBe('[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|language|help]')
+  expect(hint('sidekick')).toBe('[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|save <name> [text]|prompts [name]|forget <name>|language|help]')
   expect(hint('savings')).not.toContain('language')
 })
 
@@ -4158,7 +4370,7 @@ deTest('0.17.0 language: Zeile in der Hilfe (de)', async ($, on) => {
 })
 
 deTest('0.17.0 language: /sidekick language ist kein unbekanntes Argument und ändert keine sidekick-Einstellung', async ($, on) => {
-  const w = world(on)
+  const w = world(on, { noCli: true })
   let lists = 0
   on('config.list', () => {
     lists++
@@ -4174,4 +4386,332 @@ deTest('0.17.0 language: /sidekick language ist kein unbekanntes Argument und ä
   // Unbekannte Wörter bleiben unbekannt, die Liste darunter nennt language
   expect(await helpRun($, 'languages')).toContain('Unbekannt: „languages“')
   expect(await helpRun($, 'languages')).toContain('`language de|en`')
+})
+
+// ---------- Ausbau 0.20.0: Schnittstelle zu clawd-buddy 0.13.0 (Grund, Hinweis, Wartung, Cache kalt) ----------
+
+type BV = { kind: string; at: number; why?: string } | null
+type SV = { level: string; busy: boolean; tip?: string; cold?: true } | null
+const stops = (w: ReturnType<typeof world>) => (w.buddyVals as BV[]).filter((v) => v?.kind === 'stop')
+const lastStatus = (w: ReturnType<typeof world>) => (w.statusVals as SV[]).at(-1)
+const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as never
+/** Die Welt mit Antwort auf `session.start` (Takt und Neuladen); die übrigen Tests stubben den Start selbst. */
+function coldWorld(on: On, o: W = {}) {
+  const w = world(on, o)
+  on('session.start', ($, e) => ({ cwd: (e as { cwd: string }).cwd }))
+  return w
+}
+
+deTest('0.20.0: whyOf: falscher Chat vor Kälte vor Fassung vor neuem Thema; Schleife, verdichtet, Skill ohne Grund', async () => {
+  expect(whyOf('falscher_chat', 'c')).toBe('wrong')
+  expect(whyOf('falscher_chat', 'b')).toBe('wrong')
+  expect(whyOf('neuer_chat', 'c')).toBe('cold')
+  expect(whyOf('fassung', 'b')).toBe('rewrite')
+  expect(whyOf('fassung', 'c')).toBe('rewrite')
+  expect(whyOf('neuer_chat', 'b')).toBe('topic')
+  expect(whyOf('neuer_chat', 'a')).toBe('topic')
+  for (const art of ['schleife', 'verdichtet', 'skill', 'sonstiges', 'modell'] as const) expect(whyOf(art, 'b')).toBeUndefined()
+})
+
+deTest('0.20.0: Grund je Frage: kalt, falscher Chat, Fassung, neues Thema; danach wieder null', async ($, on) => {
+  // kalt (Auslöser c), auch wenn Haikus Fassung im Dialog steht: Kälte vor Fassung
+  {
+    const w = world(on)
+    w.setCtx(undefined)
+    w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Unklar', fassung: 'Bitte X tun.' }), usage: MODEL_USAGE })
+    await w.step($, stepUsage(0, 300000))
+    await w.clock.advance(70 * MIN)
+    await $.prompt.submit(userPrompt('weiter mit Ports'))
+    await flush(200)
+    expect(w.asks[0]!.question).toContain('Cache seit')
+    expect(w.asks[0]!.question).toContain('Bitte X tun.')
+    expect(stops(w).map((v) => v?.why)).toEqual(['cold'])
+    expect(w.buddyVals.at(-1)).toBeNull()
+  }
+})
+
+deTest('0.20.0: Grund: falscher Chat, auch im kalten Chat (falscher Chat vor Kälte)', async ($, on) => {
+  const w = world(on)
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict(WRONG), usage: MODEL_USAGE })
+  w.setAnswer('Trotzdem senden')
+  await $.prompt.submit(userPrompt(WRONG_MSG))
+  await flush(200)
+  expect(stops(w).map((v) => v?.why)).toEqual(['wrong'])
+  // Kalt und falscher Chat in einem Dialog: wrong
+  w.setCtx(undefined)
+  await w.step($, stepUsage(0, 300000))
+  await w.clock.advance(70 * MIN)
+  await $.prompt.submit(userPrompt(WRONG_MSG + ' bitte'))
+  await flush(200)
+  expect(w.asks.at(-1)!.question).toContain('Cache seit')
+  expect(stops(w).map((v) => v?.why)).toEqual(['wrong', 'wrong'])
+})
+
+deTest('0.20.0: Grund: Fassung (rewrite) und neues Thema (topic); der Wert trägt Art, Zeit und Grund', async ($, on) => {
+  const w = world(on)
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'fassung', zeile: 'Unklar, welche Datei', fassung: 'Bitte ändere hooks/register.ts: X' }), usage: MODEL_USAGE })
+  w.setAnswer('Trotzdem senden')
+  await $.prompt.submit(userPrompt('mach das bitte mal schnell'))
+  await flush(200)
+  expect(stops(w)).toEqual([{ kind: 'stop', at: NOW, why: 'rewrite' }])
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema?' }), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt('jetzt etwas ganz anderes'))
+  await flush(200)
+  expect(stops(w).map((v) => v?.why)).toEqual(['rewrite', 'topic'])
+  // Die übrigen Arten tragen nie einen Grund
+  expect((w.buddyVals as BV[]).filter((v) => v && v.kind !== 'stop' && 'why' in v)).toEqual([])
+})
+
+deTest('0.20.0: hint: Hinweiszeile gesetzt → hint, nach 4 s wieder null', async ($, on) => {
+  const w = world(on)
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'skill', skill: 'mod-review', zeile: 'Vor dem Ship prüfen' }), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt('ship it'))
+  await flush(200)
+  expect(w.buddy).toEqual(['check', null, 'hint'])
+  expect(w.buddyVals.at(-1)).toEqual({ kind: 'hint', at: NOW })
+  await w.clock.advance(3900)
+  await flush(200)
+  expect((w.buddyVals.at(-1) as BV)?.kind).toBe('hint')
+  await w.clock.advance(200)
+  await flush(200)
+  expect(w.buddyVals.at(-1)).toBeNull()
+  // Ohne Zeile (durch) kein hint
+  w.buddyVals.length = 0
+  w.setReply({ isAnswered: true, text: verdict({}), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt('weiter'))
+  await flush(200)
+  expect((w.buddyVals as BV[]).some((v) => v?.kind === 'hint')).toBe(false)
+})
+
+deTest('0.20.0: upkeep: Wartungshinweis gesetzt → upkeep, nach 5 s wieder null', async ($, on) => {
+  const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS })
+  await $.prompt.submit(userPrompt('los gehts'))
+  await flush(200)
+  expect(await lineUnder($, 'los gehts', 'w1')).toContain('prompt-audit')
+  expect((w.buddyVals.at(-1) as BV)?.kind).toBe('upkeep')
+  await w.clock.advance(4900)
+  await flush(200)
+  expect((w.buddyVals.at(-1) as BV)?.kind).toBe('upkeep')
+  await w.clock.advance(200)
+  await flush(200)
+  expect(w.buddyVals.at(-1)).toBeNull()
+})
+
+deTest('0.20.0: hint: ein check/stop dazwischen überschreibt, die alte Rücksetzung schreibt danach nichts mehr; ein zweiter hint gilt neu 4 s', async ($, on) => {
+  const w = world(on)
+  w.setCtx(90000)
+  const hint = { isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'skill', skill: 'mod-review', zeile: 'Vor dem Ship prüfen' }), usage: MODEL_USAGE }
+  w.setReply(hint)
+  await $.prompt.submit(userPrompt('ship it'))
+  await flush(200)
+  await w.clock.advance(1000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema?' }), usage: MODEL_USAGE })
+  w.setAnswer('Trotzdem senden')
+  w.buddy.length = 0
+  await $.prompt.submit(userPrompt('jetzt etwas ganz anderes'))
+  await w.clock.advance(5000)
+  await flush(200)
+  // check → stop → null, kein weiteres null aus der Rücksetzung
+  expect(w.buddy).toEqual(['check', 'stop', null])
+  // Zweiter hint 2 s nach dem ersten: die erste Rücksetzung (bei 4 s) nimmt ihn nicht vorzeitig, seine eigene bei 6 s schon
+  // Ein Commit dazwischen: der ignorierte Skill-Hinweis darf wiederkommen (sonst ruht er, Verhalten 3.2); der dritte ist eine andere Art
+  w.setReply(hint)
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m x' } as never)
+  await $.prompt.submit(userPrompt('ship it nochmal'))
+  await flush(200)
+  await w.clock.advance(2000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'sonstiges', zeile: 'Die Tests fehlen noch' }), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt('ship it ein drittes Mal'))
+  await flush(200)
+  expect(w.buddy.at(-1)).toBe('hint')
+  w.buddy.length = 0
+  await w.clock.advance(2500)
+  await flush(200)
+  expect(w.buddy).toEqual([])
+  await w.clock.advance(2000)
+  await flush(200)
+  expect(w.buddy).toEqual([null])
+})
+
+deTest('0.20.0: hint: ein offener Dialog (stop) bleibt über die 4 s hinaus stehen', async ($, on) => {
+  const w = world(on)
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'skill', skill: 'mod-review', zeile: 'Vor dem Ship prüfen' }), usage: MODEL_USAGE })
+  await $.prompt.submit(userPrompt('ship it'))
+  await flush(200)
+  // Der Dialog der nächsten Nachricht bleibt 10 s offen
+  w.setOnAsk(() => w.clock.sleep(10000))
+  w.setAnswer('Trotzdem senden')
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema?' }), usage: MODEL_USAGE })
+  const p = $.prompt.submit(userPrompt('jetzt etwas ganz anderes'))
+  await flush(200)
+  await w.clock.advance(5000)
+  await flush(200)
+  expect(w.buddyVals.at(-1)).toMatchObject({ kind: 'stop', why: 'topic' })
+  await w.clock.advance(6000)
+  await p
+  await flush(200)
+  expect(w.buddyVals.at(-1)).toBeNull()
+})
+
+deTest('0.20.0: status.cold: kippt nach Ablauf der TTL auf true, mit der nächsten Hauptanfrage zurück; kein Schreiben ohne Änderung', async ($, on) => {
+  const w = coldWorld(on)
+  await $.session.start(START)
+  await w.step($, stepUsage(0, 300000))
+  await flush(200)
+  expect(lastStatus(w)?.cold).toBeUndefined()
+  // 60 min TTL (Standard): bei 59 min noch warm
+  await w.clock.advance(59 * MIN)
+  await flush(200)
+  expect(lastStatus(w)?.cold).toBeUndefined()
+  await w.clock.advance(2 * MIN)
+  await flush(200)
+  expect(lastStatus(w)).toEqual({ level: 'guide', busy: false, cold: true })
+  // Weitere Minuten ohne Änderung: kein neues Schreiben
+  const n = w.statusVals.length
+  await w.clock.advance(10 * MIN)
+  await flush(200)
+  expect(w.statusVals.length).toBe(n)
+  // Die nächste Hauptanfrage setzt es zurück, auch während sie noch läuft
+  await w.step($, stepUsage(0, 300000))
+  expect(lastStatus(w)?.cold).toBeUndefined()
+  await w.clock.advance(30 * MIN)
+  await flush(200)
+  expect(lastStatus(w)?.cold).toBeUndefined()
+  // Subagenten-Schritte wärmen den Hauptchat nicht
+  await w.clock.advance(31 * MIN)
+  await flush(200)
+  expect(lastStatus(w)?.cold).toBe(true)
+  await w.step($, stepUsage(0, 1000), 'ag1')
+  expect(lastStatus(w)?.cold).toBe(true)
+})
+
+deTest('0.20.0: status.cold: 5-min-TTL (gesetzt) kippt nach 5 min; auf off fehlt das Feld, zurück auf guide ist es wieder da', async ($, on) => {
+  const w = coldWorld(on)
+  await $.session.start(START)
+  await $.command.run({ command: 'sidekick', args: 'ttl 5' } as never)
+  await w.step($, stepUsage(0, 300000))
+  await w.clock.advance(6 * MIN)
+  await flush(200)
+  expect(lastStatus(w)?.cold).toBe(true)
+  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await flush(200)
+  expect(lastStatus(w)).toEqual({ level: 'off', busy: false })
+  await w.clock.advance(5 * MIN)
+  await flush(200)
+  expect((w.statusVals as SV[]).filter((s) => s?.level === 'off' && s.cold)).toEqual([])
+  await $.command.run({ command: 'sidekick', args: 'cache' } as never)
+  await flush(200)
+  expect(lastStatus(w)).toEqual({ level: 'cache', busy: false, cold: true })
+})
+
+deTest('0.20.0: status.cold: ein neuer Chat ohne Anfrage ist nicht kalt; nach Neuladen aus dem Store neu berechnet', async ($, on) => {
+  // Neuer Chat: kein `cache:<session>`, auch nach Stunden nicht kalt
+  {
+    const w = coldWorld(on)
+    await $.session.start(START)
+    await w.clock.advance(3 * 60 * MIN)
+    await flush(200)
+    expect((w.statusVals as SV[]).some((s) => s?.cold)).toBe(false)
+  }
+})
+
+deTest('0.20.0: status.cold nach /reload-plugins: der gespeicherte Cache-Stand (vor 70 min) zählt sofort', async ($, on) => {
+  const saved = new Map<string, unknown>([['cache:sess-1', { lastActivity: NOW - 70 * MIN, ttl: 60, ttlSource: 'Standard', ctx: 300000, model: 'claude-opus-5-5', savedAt: NOW - 70 * MIN }]])
+  const w = coldWorld(on, { saved })
+  await $.session.start(START)
+  await flush(200)
+  expect(lastStatus(w)).toEqual({ level: 'guide', busy: false, cold: true })
+  // /clear: neuer Chat ohne Anfrage, nicht mehr kalt
+  w.setId('sess-9')
+  await w.clock.advance(MIN)
+  await flush(200)
+  expect(lastStatus(w)?.cold).toBeUndefined()
+})
+
+deTest('0.20.0: status.cold: nach einer Compaction nicht kalt (die nächste Anfrage schreibt nur die Zusammenfassung)', async ($, on) => {
+  const w = coldWorld(on)
+  on('session.compact', () => ({ messages: [{ role: 'user', text: 'Zusammenfassung', toolUses: [] }], tokensBefore: 300000, tokensAfter: 25000 }) as never)
+  await $.session.start(START)
+  await w.step($, stepUsage(0, 300000))
+  await w.clock.advance(61 * MIN)
+  await flush(200)
+  expect(lastStatus(w)?.cold).toBe(true)
+  await $.session.compact({ trigger: 'auto', messages: [{ role: 'user', text: 'Zusammenfassung', toolUses: [] }] } as never)
+  await flush(200)
+  expect(lastStatus(w)?.cold).toBeUndefined()
+  await w.clock.advance(5 * MIN)
+  await flush(200)
+  expect(lastStatus(w)?.cold).toBeUndefined()
+})
+
+// Zusammenspiel mit clawd-buddy 0.13.x: Der Test-Kit lädt keine Dateien außerhalb dieses Mods („outside the plugin's folder“), und
+// Partner-Mods laufen in eigener Umgebung. Darum liest ein Partner namens clawd-buddy die Werte über `$.state` und deutet sie nach den
+// Regeln von clawd-buddy (mods/clawd-buddy/hooks/mood.ts: sidekickValue, sidekickStatus, deriveMood; ein kalter Status beginnt den
+// kalten Moment mit dem Würfel, register.ts coldMoment). Die Abbildung selbst prüfen die Tests von clawd-buddy.
+const clawdProbe = (tier: Tier) => ({
+  name: 'clawd-buddy',
+  tier,
+  register(on: On) {
+    on('command.run', { command: 'clawdprobe' }, async ($) => {
+      const b = (await $.state.get({ plugin: 'sidekick', key: 'buddy' } as never)).value as { kind?: unknown; at?: unknown; why?: unknown } | null
+      const s = (await $.state.get({ plugin: 'sidekick', key: 'status' } as never)).value as { level?: unknown; cold?: unknown } | null
+      let mood = 'idle'
+      if (b && typeof b.at === 'number') {
+        if (b.kind === 'stop') mood = ['cold', 'wrong', 'model', 'rewrite', 'topic'].includes(String(b.why)) ? `sk_stop_${b.why}` : 'sk_stop'
+        else if (['check', 'handoff', 'fresh', 'hint', 'upkeep'].includes(String(b.kind))) mood = `sk_${b.kind}`
+      }
+      // Nur ein brauchbarer Status mit level ≠ off und cold === true beginnt einen kalten Moment (Würfel)
+      const cold = !!s && ['cache', 'guide'].includes(String(s.level)) && s.cold === true
+      return { text: `${mood} ${cold ? 'roll' : 'warm'}` }
+    })
+  },
+})
+
+for (const tier of ['prepend', 'append'] as const) {
+  test(`0.20.0: Zusammenspiel mit clawd-buddy (${tier}): Clawd liest sk_stop_cold, sk_hint, und ein kalter Chat führt zum Würfel`, { ...DE, plugins: [clawdProbe(tier)] }, async ($, on) => {
+    setLang('de')
+    const w = coldWorld(on)
+    const probe = async () => String(((await $.command.run({ command: 'clawdprobe' } as never)) as { text?: string }).text)
+    await $.session.start(START)
+    w.setCtx(undefined)
+    await w.step($, stepUsage(0, 300000))
+    expect(await probe()).toBe('idle warm')
+    await w.clock.advance(70 * MIN)
+    await flush(200)
+    // Kalter Chat: Clawd würfelt
+    expect(await probe()).toBe('idle roll')
+    // Die Kalt-Rückfrage: Clawd bibbert, solange der Dialog offen ist
+    const seen: string[] = []
+    w.setOnAsk(async () => {
+      await flush(200)
+      seen.push(await probe())
+    })
+    await $.prompt.submit(userPrompt('weiter mit Ports'))
+    await flush(200)
+    w.setOnAsk(null)
+    expect(seen).toEqual(['sk_stop_cold roll'])
+    // Die Anfrage wärmt den Cache: kein Würfel mehr
+    await w.step($, stepUsage(300000, 100))
+    expect(await probe()).toBe('idle warm')
+    // Hinweiszeile: Glühbirne, nach 4 s wieder nichts
+    w.setCtx(90000)
+    w.setReply({ isAnswered: true, text: verdict({ urteil: 'hinweis', art: 'skill', skill: 'mod-review', zeile: 'Vor dem Ship prüfen' }), usage: MODEL_USAGE })
+    await $.prompt.submit(userPrompt('ship it'))
+    await flush(200)
+    expect(await probe()).toBe('sk_hint warm')
+    await w.clock.advance(4100)
+    await flush(200)
+    expect(await probe()).toBe('idle warm')
+  })
+}
+
+deTest('0.23.0 MIN_OF gleich min in fields.ts; Altwerte unter dem Minimum werden angehoben, markierte nicht noch einmal umgezogen (Review K1, S1)', () => {
+  for (const k of Object.keys(MIN_OF) as (keyof typeof MIN_OF)[]) expect((SETTINGS[k] as { min?: number }).min, k).toBe(MIN_OF[k])
+  expect(legacyOf({ threshold: 500, big: 200 }, { auditMin: 50 })?.values).toMatchObject({ threshold: 1000, bigTokens: 1000, auditMin: 100 })
+  expect(legacyOf({ threshold: 500, migrated: true }, { on: false, migrated: true })).toBe(null)
+  expect(legacyOf({ threshold: 500, migrated: true }, { on: false })?.values).toEqual({ maintenanceHints: false })
 })

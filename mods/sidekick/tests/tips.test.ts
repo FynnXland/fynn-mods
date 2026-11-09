@@ -2,6 +2,7 @@
 import type { Engine, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { MIN, completeCost, dayKey } from '../hooks/cache.ts'
+import { cliStubs, settingsNow, written } from './cli.ts'
 import {
   DEFAULT_SETTINGS,
   DEFAULT_TIPS,
@@ -46,8 +47,11 @@ const SONNET = 'claude-sonnet-5-5'
 const HAIKU = 'claude-haiku-5-5'
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9
 const DE = { options: { language: 'de' } }
-function deTest(name: string, body: ($: Engine, on: On) => unknown) {
-  test(name, DE, async ($, on) => {
+/** Deutscher Test; `cfg`: weitere userConfig-Felder (seit 0.23.0 die einzige Quelle der Einstellungen). */
+function deTest(name: string, a: Record<string, string | number | boolean> | (($: Engine, on: On) => unknown), b?: ($: Engine, on: On) => unknown) {
+  const cfg = typeof a === 'function' ? {} : a
+  const body = typeof a === 'function' ? a : b!
+  test(name, { options: { ...DE.options, ...cfg } }, async ($, on) => {
     setLang('de')
     return body($, on)
   })
@@ -206,10 +210,12 @@ deTest('Einstellungen: tips aus altem Store mit Standardwerten; /sidekick tips �
 
 type Spawn = { prompt: string; description: string; subagentType: string; provider: { plugin: string; tier: string }; model?: string; parentModel: string; fork: boolean; background: boolean; tool_use_id: string; resume?: { agentId: string } }
 
-function world(on: On, o: { tips?: Partial<typeof DEFAULT_TIPS>; level?: string; main?: string; forced?: string; rateFails?: boolean; onAsk?: (saved: Map<string, unknown>) => void } = {}) {
+// Schalter und Stufe kommen seit 0.23.0 als userConfig (Test-Optionen), Zähler und Ruhe aus dem Store `runtime`
+function world(on: On, o: { tips?: { declined?: number; restUntil?: number }; main?: string; forced?: string; rateFails?: boolean; onAsk?: (saved: Map<string, unknown>) => void } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = new Map<string, unknown>()
-  saved.set('settings', { ...DEFAULT_SETTINGS, level: o.level ?? 'guide', tips: { ...DEFAULT_TIPS, ...o.tips } })
+  if (o.tips) saved.set('runtime', { tips: { declined: 0, restUntil: 0, ...o.tips } })
+  const cli = cliStubs(on)
   const asks: { question: string; options: string[] }[] = []
   const notices: { id: string; text: string | undefined }[] = []
   const rates: { prompt: string; req: unknown }[] = []
@@ -318,7 +324,8 @@ function world(on: On, o: { tips?: Partial<typeof DEFAULT_TIPS>; level?: string;
     setId: (s: string) => (id = s),
     setMessages: (m: unknown[]) => (messages = m),
     ledger: (sid = 'sess-1') => cleanLedger(saved.get(`bilanz:${sid}`)),
-    settings: () => cleanSettings(saved.get('settings')),
+    cli,
+    settings: () => settingsNow(cli, saved),
   }
 }
 
@@ -329,7 +336,7 @@ const userPrompt = (text: string) => ({ text, wait: false, origin: { kind: 'comp
 const today = (l: Ledger) => l.tage[dayKey(NOW)] ?? emptyDay()
 const STEP_U = { input_tokens: 2, output_tokens: 500, cache_read_input_tokens: 30000, cache_creation_input_tokens: 2000 }
 const spawnIn = (o: Partial<Spawn> = {}): Spawn => ({ prompt: 'Lies README.md und nenne die Überschriften.', description: 'Überschriften lesen', subagentType: 'general-purpose', provider: { plugin: 'engine', tier: 'core' }, parentModel: OPUS, fork: false, background: false, tool_use_id: 'tu1', ...o })
-const autoOn = { tips: { auto: true } }
+const AUTO = { modelTipAuto: true }
 
 deTest('Erste Nachricht: Prüfung mit echtem Hauptmodell; Rückfrage mit Sonnet zuerst bei einfach, dann Opus und „Nicht mehr fragen“', async ($, on) => {
   const w = world(on)
@@ -342,6 +349,20 @@ deTest('Erste Nachricht: Prüfung mit echtem Hauptmodell; Rückfrage mit Sonnet 
   expect(w.asks[0]!.options).toEqual(['Mit Sonnet 5.5 senden (empfohlen)', 'Mit Opus 5.5 senden', 'Nicht mehr fragen'])
 })
 
+deTest('0.20.0: Rückfrage des Modell-Tipps meldet clawd-buddy stop mit Grund model, danach null', async ($, on) => {
+  const w = world(on)
+  const vals: unknown[] = []
+  on('state.set', ($: unknown, e: any) => {
+    if (e.plugin === 'sidekick' && e.key === 'buddy') vals.push(e.value)
+    return { value: { isSet: true, version: vals.length } }
+  })
+  await $.prompt.submit(userPrompt('Lies die README und fasse sie in drei Sätzen zusammen'))
+  await flush()
+  expect(w.asks.length).toBe(1)
+  expect(vals.filter((v) => (v as { kind?: string } | null)?.kind === 'stop')).toEqual([{ kind: 'stop', at: NOW, why: 'model' }])
+  expect(vals.at(-1)).toBeNull()
+})
+
 deTest('Rückfrage sehr_einfach: Haiku zuerst, dann Sonnet, Opus, „Nicht mehr fragen“; haiku off → Sonnet empfohlen', async ($, on) => {
   const w = world(on)
   w.setCheck({ isAnswered: true, text: verdict({ aufwand: 'sehr_einfach', grund: 'nur nachsehen' }), usage: USAGE })
@@ -349,8 +370,8 @@ deTest('Rückfrage sehr_einfach: Haiku zuerst, dann Sonnet, Opus, „Nicht mehr 
   expect(w.asks[0]!.options).toEqual(['Mit Haiku 5.5 senden (empfohlen)', 'Mit Sonnet 5.5 senden', 'Mit Opus 5.5 senden', 'Nicht mehr fragen'])
 })
 
-deTest('Rückfrage: haiku off → bei sehr_einfach Sonnet empfohlen, nur drei Antworten', async ($, on) => {
-  const w = world(on, { tips: { haiku: false } })
+deTest('Rückfrage: haiku off → bei sehr_einfach Sonnet empfohlen, nur drei Antworten', { modelTipHaiku: false }, async ($, on) => {
+  const w = world(on)
   w.setCheck({ isAnswered: true, text: verdict({ aufwand: 'sehr_einfach' }), usage: USAGE })
   await $.prompt.submit(userPrompt('Wie spät ist es in Tokio? Antworte kurz.'))
   expect(w.asks[0]!.options[0]).toBe('Mit Sonnet 5.5 senden (empfohlen)')
@@ -376,8 +397,8 @@ deTest('Keine Rückfrage bei mittel, bei kurzen Nachrichten und bei Slash-Befehl
   expect(w.asks.length).toBe(0)
 })
 
-deTest('Keine Rückfrage auf Stufe Cache', async ($, on) => {
-  const w = world(on, { level: 'cache' })
+deTest('Keine Rückfrage auf Stufe Cache', { level: 'cache' }, async ($, on) => {
+  const w = world(on)
   await $.prompt.submit(userPrompt('Lies die README und fasse sie zusammen'))
   expect(w.asks.length).toBe(0)
 })
@@ -391,14 +412,17 @@ deTest('Keine Rückfrage, wenn die Prüfung schon eine Fassung zur Wahl stellt (
   expect(w.asks[0]!.question).not.toContain('Womit senden')
 })
 
-deTest('Keine Rückfrage mit tips off, in Ruhe und mit langem # -Auftrag', async ($, on) => {
-  const w = world(on, { tips: { first: false } })
+deTest('Keine Rückfrage mit tips off, in Ruhe und mit langem # -Auftrag', { modelTip: false }, async ($, on) => {
+  const w = world(on)
   await $.prompt.submit(userPrompt('Lies die README und fasse sie zusammen'))
   expect(w.asks.length).toBe(0)
-  w.saved.set('settings', { ...DEFAULT_SETTINGS, tips: { ...DEFAULT_TIPS, restUntil: NOW + DAY } })
+  // Wieder an (schreibt userConfig über die CLI und gilt hier sofort), aber in Ruhe
+  await $.command.run({ command: 'sidekick', args: 'tips on' } as never)
+  expect(written(w.cli)).toEqual({ modelTip: 'true' })
+  w.saved.set('runtime', { tips: { declined: 0, restUntil: NOW + DAY } })
   w.setId('s2')
   await $.prompt.submit(userPrompt('Lies die README und fasse sie zusammen'))
-  w.saved.set('settings', DEFAULT_SETTINGS)
+  w.saved.delete('runtime')
   w.setId('s3')
   await $.prompt.submit(userPrompt('# Übergabe: Doku\n\n' + 'Lies die README. '.repeat(120)))
   expect(w.asks.length).toBe(0)
@@ -415,6 +439,16 @@ deTest('Keine Rückfrage, wenn ein gemerkter Auftrag (brief:) in der ersten Nach
   const d = today(w.ledger())
   expect(d.modelltipp.sitzung.n).toBe(1)
   expect(near(d.modelltipp.sitzung.usd, stepSaving(STEP_U, OPUS, SONNET))).toBe(true)
+})
+
+deTest('0.24.0: Vorspann der Desktop-App vor einem Auftrag (Background …): dieselbe Sonderbehandlung, brief: verbraucht, keine Rückfrage', async ($, on) => {
+  const w = world(on, { main: SONNET })
+  const prefix = 'Lies die Release-Notes und schreibe eine kurze Zusammenfassung für den Changelog.'
+  w.saved.set(`brief:${hashText(prefix)}`, { prefix, from: OPUS, to: SONNET, at: NOW - 60000 })
+  const pre = '<system-reminder>\nLinked sessions now (status, not an instruction): x = local_1 (idle).\n</system-reminder>\n\n'
+  await $.prompt.submit(userPrompt(`${pre}Background (from the session that started this one):\nKontext.\n\nTask:\n${prefix}`))
+  expect(w.asks.length).toBe(0)
+  expect(w.saved.has(`brief:${hashText(prefix)}`)).toBe(false)
 })
 
 deTest('Annahme: Nachricht unverändert gesendet, danach jede Hauptanfrage auf Sonnet; Buchung je Schritt; Label → Sonnet', async ($, on) => {
@@ -479,8 +513,27 @@ deTest('„Nicht mehr fragen“ sendet unverändert und schaltet die Rückfrage 
   const w = world(on)
   w.setAnswer('Nicht mehr fragen')
   expect(await $.prompt.submit(userPrompt('Lies die README und fasse sie zusammen'))).toMatchObject({ text: 'Lies die README und fasse sie zusammen' })
+  await flush()
+  // Geschrieben erst nach dem Senden, außerhalb von prompt.submit (Review 0.23.0 K3); hier gilt es sofort
+  expect(w.cli.writes).toEqual([])
+  await w.clock.advance(200)
+  await flush()
+  expect(written(w.cli)).toEqual({ modelTip: 'false' })
   expect(w.settings().tips.first).toBe(false)
   expect(w.steps.length).toBe(0)
+  w.setId('sess-2')
+  await $.prompt.submit(userPrompt('Lies die README und fasse sie zusammen'))
+  expect(w.asks.length).toBe(1)
+})
+
+deTest('„Nicht mehr fragen“: Schreiben scheitert → Toast mit Grund, im Chat trotzdem aus (Review 0.23.0 K4)', async ($, on) => {
+  const w = world(on)
+  w.cli.fail = 'kaputt'
+  w.setAnswer('Nicht mehr fragen')
+  await $.prompt.submit(userPrompt('Lies die README und fasse sie zusammen'))
+  await w.clock.advance(200)
+  await flush()
+  expect(w.toasts).toContain('Nicht gespeichert: kaputt.')
   w.setId('sess-2')
   await $.prompt.submit(userPrompt('Lies die README und fasse sie zusammen'))
   expect(w.asks.length).toBe(1)
@@ -509,8 +562,8 @@ deTest('Dreimal „Mit Opus senden“ → Tipp ruht 7 Tage, ein Toast sagt es', 
   expect(w.asks.length).toBe(3)
 })
 
-deTest('Leitsatz: nur mit tips auto, einmal je Session, auf Deutsch; ohne auto keiner', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('Leitsatz: nur mit tips auto, einmal je Session, auf Deutsch; ohne auto keiner', AUTO, async ($, on) => {
+  const w = world(on)
   w.setCheck({ isAnswered: true, text: verdict({ aufwand: 'schwer' }), usage: USAGE })
   await $.prompt.submit(userPrompt('Baue das neue Feature mit allen Tests'))
   await $.prompt.submit(userPrompt('und noch etwas dazu bitte'))
@@ -524,16 +577,16 @@ deTest('Leitsatz: ohne auto keiner, bei Sonnet als Hauptmodell keiner', async ($
   expect(w.sentCtx[0] ?? []).toEqual([])
 })
 
-test('Leitsatz (en): englischer Text', { options: { language: 'en' } }, async ($, on) => {
+test('Leitsatz (en): englischer Text', { options: { language: 'en', modelTipAuto: true } }, async ($, on) => {
   setLang('en')
-  const w = world(on, autoOn)
+  const w = world(on)
   w.setCheck({ isAnswered: true, text: verdict({ aufwand: 'schwer' }), usage: USAGE })
   await $.prompt.submit(userPrompt('Build the new feature with all tests'))
   expect(w.sentCtx[0]?.some((c) => c.startsWith('sidekick: For simple'))).toBe(true)
 })
 
-deTest('agent.spawn: Urteil → Modell + Zeile im Agent-Fenster; Schritte gebucht beim Ende', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('agent.spawn: Urteil → Modell + Zeile im Agent-Fenster; Schritte gebucht beim Ende', AUTO, async ($, on) => {
+  const w = world(on)
   const r = (await $.agent.spawn(spawnIn() as never)) as { model: string; agentId: string }
   expect(w.rates.length).toBe(1)
   expect(w.rates[0]!.req).toEqual({ model: HAIKU, effort: 'low', maxTokens: 800, timeoutMs: 6000 })
@@ -554,8 +607,8 @@ deTest('agent.spawn: Urteil → Modell + Zeile im Agent-Fenster; Schritte gebuch
   expect(d.modelltipp.urteile).toMatchObject({ n: 1, stufen: { sehr_einfach: 1 } })
 })
 
-deTest('agent.spawn: einfach → Sonnet; haiku off → sehr_einfach auf Sonnet', async ($, on) => {
-  const w = world(on, { tips: { auto: true, haiku: false } })
+deTest('agent.spawn: einfach → Sonnet; haiku off → sehr_einfach auf Sonnet', { modelTipAuto: true, modelTipHaiku: false }, async ($, on) => {
+  const w = world(on)
   await $.agent.spawn(spawnIn() as never)
   expect(w.spawned[0]!.model).toBe('sonnet')
 })
@@ -567,15 +620,15 @@ deTest('agent.spawn ohne auto → kein RATE, unverändert', async ($, on) => {
   expect(w.spawned[0]!.model).toBe(undefined)
 })
 
-deTest('agent.spawn mit Fork, Resume, gesetztem Modell, Plugin-Agent, Elternmodell Sonnet → kein RATE, unverändert', async ($, on) => {
-  const w2 = world(on, autoOn)
+deTest('agent.spawn mit Fork, Resume, gesetztem Modell, Plugin-Agent, Elternmodell Sonnet → kein RATE, unverändert', AUTO, async ($, on) => {
+  const w2 = world(on)
   for (const s of [spawnIn({ fork: true }), spawnIn({ resume: { agentId: 'x' } }), spawnIn({ model: 'opus' }), spawnIn({ provider: { plugin: 'ClaudeMods', tier: 'project' } }), spawnIn({ parentModel: SONNET }), spawnIn({ subagentType: 'claude-code-guide' })]) await $.agent.spawn(s as never)
   expect(w2.rates.length).toBe(0)
   expect(w2.spawned.slice(-6).map((s) => s.model ?? null)).toEqual([null, null, 'opus', null, null, null])
 })
 
-deTest('agent.spawn: mittel, Timeout/Fehler, JSON kaputt → unverändert; Urteil trotzdem gebucht', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('agent.spawn: mittel, Timeout/Fehler, JSON kaputt → unverändert; Urteil trotzdem gebucht', AUTO, async ($, on) => {
+  const w = world(on)
   w.setRate({ isAnswered: true, text: rateJson('mittel'), usage: USAGE })
   await $.agent.spawn(spawnIn() as never)
   w.setRate({ isAnswered: false, reason: 'timeout', usage: USAGE })
@@ -588,15 +641,15 @@ deTest('agent.spawn: mittel, Timeout/Fehler, JSON kaputt → unverändert; Urtei
   expect(w.notices.length).toBe(0)
 })
 
-deTest('agent.spawn: RATE scheitert (deny) → unverändert gestartet', async ($, on) => {
-  const w = world(on, { ...autoOn, rateFails: true })
+deTest('agent.spawn: RATE scheitert (deny) → unverändert gestartet', AUTO, async ($, on) => {
+  const w = world(on, { rateFails: true })
   const r = (await $.agent.spawn(spawnIn() as never)) as { model: string }
   expect(w.spawned[0]!.model).toBe(undefined)
   expect(r.model).toBe(OPUS)
 })
 
-deTest('agent.spawn: Session erzwingt ein Modell (result.model ≠ Wunsch) → keine Buchung, keine Zeile', async ($, on) => {
-  const w = world(on, { ...autoOn, forced: OPUS })
+deTest('agent.spawn: Session erzwingt ein Modell (result.model ≠ Wunsch) → keine Buchung, keine Zeile', AUTO, async ($, on) => {
+  const w = world(on, { forced: OPUS })
   const r = (await $.agent.spawn(spawnIn() as never)) as { agentId: string }
   await w.step($, OPUS, STEP_U, r.agentId)
   await $.turn.complete({ turnId: 't9', agentId: r.agentId, answer: 'ok', reason: 'answer' } as never)
@@ -605,8 +658,8 @@ deTest('agent.spawn: Session erzwingt ein Modell (result.model ≠ Wunsch) → k
   expect(today(w.ledger()).modelltipp.agent.n).toBe(0)
 })
 
-deTest('Gegenprobe Subagent: Ende mit error/aborted → daneben; gleiche Beschreibung binnen 30 min auf Opus → gestrichen', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('Gegenprobe Subagent: Ende mit error/aborted → daneben; gleiche Beschreibung binnen 30 min auf Opus → gestrichen', AUTO, async ($, on) => {
+  const w = world(on)
   const a = (await $.agent.spawn(spawnIn({ description: 'Fehlerlauf' }) as never)) as { agentId: string }
   await w.step($, HAIKU, STEP_U, a.agentId)
   await $.turn.complete({ turnId: 't9', agentId: a.agentId, answer: '', reason: 'error' } as never)
@@ -628,8 +681,8 @@ deTest('Gegenprobe Subagent: Ende mit error/aborted → daneben; gleiche Beschre
   expect(d.modelltipp.daneben.n).toBe(2)
 })
 
-deTest('Neuladen: beobachteter Subagent aus spawn:<id> zurückgeholt, sein Ende bucht (Review 0.18.0 K4)', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('Neuladen: beobachteter Subagent aus spawn:<id> zurückgeholt, sein Ende bucht (Review 0.18.0 K4)', AUTO, async ($, on) => {
+  const w = world(on)
   w.saved.set('spawn:ag9', { kind: 'agent', from: OPUS, to: HAIKU, grund: '', description: 'x', at: NOW, usd: 0, booked: 0, counted: false, struck: false, wayBooked: '' })
   await w.step($, HAIKU, STEP_U, 'ag9')
   await $.turn.complete({ turnId: 't9', agentId: 'ag9', answer: 'ok', reason: 'answer' } as never)
@@ -652,8 +705,8 @@ deTest('/clear: der neue Chat hat keinen Tipp, „→ Sonnet“ verschwindet aus
   expect(JSON.stringify(await ui.find({ type: 'Text' }))).not.toContain('→')
 })
 
-deTest('Rückblick: nicht umgestellter Subagent auf Opus zählt mit Kosten unter opus, nicht in der Summe', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('Rückblick: nicht umgestellter Subagent auf Opus zählt mit Kosten unter opus, nicht in der Summe', AUTO, async ($, on) => {
+  const w = world(on)
   w.setRate({ isAnswered: true, text: rateJson('schwer'), usage: USAGE })
   const r = (await $.agent.spawn(spawnIn() as never)) as { agentId: string }
   await w.step($, OPUS, STEP_U, r.agentId)
@@ -665,8 +718,8 @@ deTest('Rückblick: nicht umgestellter Subagent auf Opus zählt mit Kosten unter
   expect(tipSaved(d)).toBe(0)
 })
 
-deTest('Claude wählt nach dem Leitsatz selbst Sonnet → selbst, nicht in der Summe', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('Claude wählt nach dem Leitsatz selbst Sonnet → selbst, nicht in der Summe', AUTO, async ($, on) => {
+  const w = world(on)
   w.setCheck({ isAnswered: true, text: verdict({ aufwand: 'schwer' }), usage: USAGE })
   await $.prompt.submit(userPrompt('Baue das neue Feature mit allen Tests'))
   const r = (await $.agent.spawn(spawnIn({ model: 'sonnet' }) as never)) as { agentId: string }
@@ -681,8 +734,8 @@ deTest('Claude wählt nach dem Leitsatz selbst Sonnet → selbst, nicht in der S
 
 const START = { tool: 'mcp__ccd_session__start_session', tool_use_id: 'tu5', title: 'Changelog', initiation: 'own_initiative', context: 'fresh', prompt: 'Lies die Release-Notes und schreibe eine kurze Zusammenfassung für den Changelog.', background: 'Projekt X' }
 
-deTest('start_session: ohne model → RATE, volle ID als model, effort bleibt, brief: gemerkt, Zeile', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('start_session: ohne model → RATE, volle ID als model, effort bleibt, brief: gemerkt, Zeile', AUTO, async ($, on) => {
+  const w = world(on)
   await $.tool.call({ ...START, effort: 'high' } as never)
   expect(w.rates.length).toBe(1)
   expect(w.rates[0]!.prompt).toContain('Neuer Chat')
@@ -693,8 +746,8 @@ deTest('start_session: ohne model → RATE, volle ID als model, effort bleibt, b
   expect(w.notices[0]?.text).toBe('sidekick: neuer Chat auf Haiku 5.5 statt Opus 5.5')
 })
 
-deTest('start_session: Fork, gesetztes Modell, ohne auto, Elternmodell Sonnet → unverändert', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('start_session: Fork, gesetztes Modell, ohne auto, Elternmodell Sonnet → unverändert', AUTO, async ($, on) => {
+  const w = world(on)
   await $.tool.call({ ...START, context: 'fork' } as never)
   await $.tool.call({ ...START, model: 'claude-opus-5-5' } as never)
   expect(w.rates.length).toBe(0)
@@ -712,16 +765,16 @@ deTest('start_session ohne auto → unverändert', async ($, on) => {
   expect(w.starts[0]!.model).toBe(undefined)
 })
 
-deTest('start_session: RATE scheitert (deny) oder Timeout → unverändert, kein brief: (Review 0.18.0 K2)', async ($, on) => {
-  const w = world(on, { ...autoOn, rateFails: true })
+deTest('start_session: RATE scheitert (deny) oder Timeout → unverändert, kein brief: (Review 0.18.0 K2)', AUTO, async ($, on) => {
+  const w = world(on, { rateFails: true })
   await $.tool.call(START as never)
   expect(w.starts[0]!.model).toBe(undefined)
   expect([...w.saved.keys()].some((k) => k.startsWith('brief:'))).toBe(false)
   expect(w.notices.length).toBe(0)
 })
 
-deTest('start_session: Timeout ohne Antwort → unverändert', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('start_session: Timeout ohne Antwort → unverändert', AUTO, async ($, on) => {
+  const w = world(on)
   w.setRate({ isAnswered: false, reason: 'timeout', usage: USAGE })
   await $.tool.call(START as never)
   expect(w.starts[0]!.model).toBe(undefined)
@@ -738,15 +791,17 @@ deTest('Frei getippter Text im Dialog: wie das Hauptmodell gesendet, zählt nich
   expect(w.settings().tips.declined).toBe(0)
 })
 
-deTest('Dialog: eine andere Session ändert die Stufe, während die Rückfrage offen ist → bleibt erhalten (Review 0.18.0 S2)', async ($, on) => {
-  const w = world(on, { onAsk: (saved) => saved.set('settings', { ...DEFAULT_SETTINGS, notes: true }) })
+deTest('Dialog: eine andere Session ändert Laufzeitwerte, während die Rückfrage offen ist → bleiben erhalten (Review 0.18.0 S2)', async ($, on) => {
+  const w = world(on, { onAsk: (saved) => saved.set('runtime', { lastOn: 'guide', tips: { declined: 0, restUntil: 0 }, loop: { declined: 2, restUntil: 0 } }) })
   w.setAnswer('Mit Sonnet 5.5 senden (empfohlen)')
   await $.prompt.submit(userPrompt('Lies die README und fasse sie zusammen'))
-  expect(w.settings().notes).toBe(true)
+  expect(w.settings().loop.declined).toBe(2)
+  // Die Annahme schreibt keine Einstellung
+  expect(w.cli.writes).toEqual([])
 })
 
-deTest('start_session: mittel → unverändert, kein brief:', async ($, on) => {
-  const w = world(on, autoOn)
+deTest('start_session: mittel → unverändert, kein brief:', AUTO, async ($, on) => {
+  const w = world(on)
   w.setRate({ isAnswered: true, text: rateJson('mittel'), usage: USAGE })
   await $.tool.call(START as never)
   expect(w.starts[0]!.model).toBe(undefined)
@@ -860,9 +915,9 @@ deTest('tableCheck erkennt die alte Zelle mit on|off in Backticks', () => {
 })
 
 for (const lang of ['de', 'en'] as const) {
-  test(`Jede Tabellenzeile hat so viele Spalten wie ihre Kopfzeile: /sidekick tips, /sidekick, /savings (${lang})`, { options: { language: lang } }, async ($, on) => {
+  test(`Jede Tabellenzeile hat so viele Spalten wie ihre Kopfzeile: /sidekick tips, /sidekick, /savings (${lang})`, { options: { language: lang, modelTipAuto: true } }, async ($, on) => {
     setLang(lang)
-    const w = world(on, autoOn)
+    const w = world(on)
     const run = async (command: string, args: string) => String((await $.command.run({ command, args } as never)).text)
     // Freitext mit `|` und Zeilenumbruch landet in der Liste der letzten Umstellungen
     await $.agent.spawn(spawnIn({ description: 'Lies a | b\nund c' }) as never)

@@ -1,10 +1,26 @@
 # sidekick
 
-Checks your message just before it is sent: first with fixed rules, and only where it can pay off, also with a quick model call (Haiku 5.5). If there is a clearly better move, a blue line appears under your message, or sidekick asks you. Examples of better moves: a new chat with a handoff (always as a question), a clearer version, a skill your message doesn't point to, or a gap only you can fill. If a message clearly belongs to a different project than the chat ("wrong chat?"), sidekick holds it back and recommends cancelling. sidekick never rewrites or sends anything without asking: a clearer version only goes out after you choose it in the dialog. Three levels, from off to guide, and a colored label in the prompt footer show how much sidekick does. sidekick never chats on its own. `/savings` shows what it costs and what it demonstrably saves. Optional and off by default: **Good to know**, a note above the prompt while Claude works, when you likely missed something with consequences.
+Checks your message just before it is sent: first with fixed rules, and only where it can pay off, also with a quick model call (Haiku 5.5). If there is a clearly better move, a blue line appears under your message, or sidekick asks you. Examples of better moves: a new chat with a handoff (always as a question), a clearer version, a skill your message doesn't point to, or a gap only you can fill. If a message clearly belongs to a different project than the chat ("wrong chat?"), sidekick holds it back and recommends cancelling. sidekick never changes your words or sends anything without asking: a clearer version only goes out after you choose it in the dialog; the only thing it adds on its own is a short hidden note for Claude when you write a later item while Claude works (Queue, switchable). Three levels, from off to guide, and a colored label in the prompt footer show how much sidekick does. sidekick never chats on its own. `/savings` shows what it costs and what it demonstrably saves. Optional and off by default: **Good to know**, a note above the prompt while Claude works, when you likely missed something with consequences.
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.318** · Plugin version **0.19.0**
+Tested with Claude Code **v2.1.319** · Plugin version **0.25.1**
+
+**New in 0.25.0: Skill catalog.** sidekick knows a small, hand-picked list of good third-party open-source skills. When your message clearly asks for what one of them does ("make the design feel more like Apple"), it asks once per chat before sending: **Send with apple-design (recommended)**, **Send anyway** or **Don't suggest again**. Three plain-Markdown skills by Emil Kowalski ship with sidekick (MIT, with their license); for the rest it only copies the install command from the source's README, it never installs anything itself. See [Skill catalog](#skill-catalog-since-0250).
+
+**Fixed in 0.25.1:** in the desktop app, clicking **Later ✓** a second time made the button disappear; it now goes back to **Later** and stays until Claude's turn ends.
+
+**Fixed in 0.24.2:** the Later button shows its state as text again (**Later ✓**, German **Danach ✓**); the color of 0.24.0 was not drawn by the desktop app's button.
+
+**New in 0.24.0: Queue.** When you write while Claude is still working and the message is clearly a separate, later item ("after that, update the README"), it still goes straight in, but Claude gets a note to finish the running task first and take up your message afterwards; if the task ends with a question to you or an error, Claude asks or reports first and waits for your answer. Under your message, sidekick's grey line says "comes after this task". Corrections, stops and anything that belongs to the running work go in as before, without a note. To decide yourself, click **Later** in the desktop footer while Claude works, or start the message with `later:`. See [Queue](#queue-since-0240).
+
+**Fixed in 0.24.0: checks in chats that started other chats.** In such chats the desktop app puts a hidden status block (`<system-reminder>`, "Linked sessions now …") in front of every message you type. sidekick took the whole message for a note from the app and skipped it. It now removes that block first and handles the rest like any message of yours. So in those chats the message check (hint lines, questions, model tip on the first message), maintenance hints, the retry loop and the repeat detection of saved prompts now run as well. A message that is only such a block, or a notice from another chat or a background task behind it, still goes through unchecked.
+
+**New in 0.23.0: all settings on the desktop settings page.** Level, thresholds, the model tip, the retry loop and the other switches are now `userConfig` fields, so you can change them under Settings → Plugins → sidekick → Settings. The `/sidekick` commands still work and write the same fields. Your old values move over once at the next start. See [Configuration](#configuration).
+
+**New in 0.21.0: Saved prompts.** An instruction you send again and again in different chats can become your own command, say `/p tidy-chats`, that sends it right away; in the desktop app it also gets a small button in the footer, just before "● sidekick". Save one yourself with `/sidekick save <name>`, or let sidekick notice: when you send the same kind of instruction in three chats, it offers to save it under your message. See [Saved prompts](#saved-prompts-since-0210).
+
+**New in 0.20.0: clawd-buddy knows why.** With clawd-buddy 0.13 or later, Clawd now shows *why* sidekick holds a message back (cold cache, wrong chat, model tip, a clearer version, a new topic), lights a bulb when a hint line appears, oils a gear for a maintenance hint, and can freeze in a block of ice while your chat's cache is cold. sidekick only passes the kind and the reason, never your text. See [Working with other mods](#working-with-other-mods).
 
 **New in 0.19.0: Retry loop and compaction count.** When you write the third correction in a row ("still doesn't work"), sidekick asks before sending whether a fresh chat with a handoff or a short nudge to Claude to step back would help more than a fourth attempt. After the second and the fourth compaction of a chat, the new-chat question comes once on your next message, because each compaction loses details. A compaction also no longer triggers a wrong cold-cache question. See [Retry loop](#retry-loop-since-0190).
 
@@ -12,7 +28,7 @@ Tested with Claude Code **v2.1.318** · Plugin version **0.19.0**
 
 **All commands at a glance:** `/sidekick help` (or `/sidekick ?`) draws a table of every command, the buttons, each feature with its current state and how to change it, and your settings.
 
-**Cost:** sidekick calls Haiku 5.5 and Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. With **Good to know** turned on, it also asks your session's own model (see below). All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
+**Cost:** sidekick calls Haiku 5.5 and Sonnet 5.5 through your own Claude Code session, so those calls count toward your usage or plan like any other request. With **Good to know** turned on, it also asks your session's own model (see below). Since 0.21.0 the repeat detection of **Saved prompts** gives each longer message of yours a short Haiku call in the background (about $0.0004 each, at most 80 a day). All amounts sidekick shows (in its dialogs and in `/savings`) are estimates at API prices.
 
 ## Levels and the footer label (since 0.10.0)
 
@@ -146,17 +162,96 @@ On the **third** correction in a row, sidekick asks before sending: *This is the
 - **In `/savings detail`:** *Retry loop* in the hints (shown, accepted, ignored, cancelled). A new chat from it books its savings like any new chat. The nudge books no amount, because its effect can't be measured; it is counted, together with how often the next message was a correction again.
 - **Limit:** the owner's transcripts of 14 days (819 own messages) held 11 corrections and no series of three, so the question will be rare.
 
+## Saved prompts (since 0.21.0)
+
+Some instructions come back in chat after chat, worded differently each time (often dictated): "sort the chats under you by what they are really for and archive the ones we no longer need". sidekick turns such an instruction into a command of your own.
+
+- **Save it yourself:** `/sidekick save <name>` saves your last message in this chat unchanged; `/sidekick save <name> <text>` saves the text. You send it with `/p <name>`, so a name never collides with other commands. Names are `a-z`, `0-9` and `-`, at most 24 characters. Saving under one of your own names replaces it. At most 12 prompts.
+- **Send it:** `/p <name>` (the menu lists your names after `/p`; `/p` alone lists them too). It sends the text right away as your message (marked "Prompt from the sidekick plugin" in the transcript), and Claude reads it like anything you type. While Claude is still answering, it goes out after the answer. What the prompt asks for (archiving chats, say) Claude does with its own tools and their permission prompts; sidekick only sends the text.
+- **Buttons:** in the desktop app, up to 4 saved prompts get a small button in the footer, just before "● sidekick", in the order you saved them. One click sends, a second click before it went out does not send twice. The terminal has no buttons there; the commands work everywhere except `claude -p`.
+- **Repeats noticed (level Guide only, never in `claude -p`):** in the background, Haiku 5.5 gives each longer message of yours (60 characters and 8 words or more, not a slash command) a short intent like "tidy up chats", reusing one it gave before when it is the same kind of request. One-off requests (a specific bug, an answer to a question) are not kept. When the same intent shows up in **three different chats**, a second Haiku call checks whether the messages really give the same recurring instruction and, if so, proposes a name and a general version of it. A line under your message then reads *You send this often. Save it as /p tidy-chats?* with **Save** and **No**. The message itself is never held up. If the line under that message is already taken by the message check, the offer comes under your next message. **No**, or a "not the same" from Haiku, retires that group for good.
+- **Manage them:** `/sidekick prompts` lists them (in the terminal and the desktop app with **Send**, **Button on/off** and **Delete** per row), `/sidekick prompts <name>` shows the full text, `/sidekick prompts <name> on|off` switches its button, `/sidekick forget <name>` deletes it. A prompt saved in one chat can be sent with `/p <name>` in other open chats right away; their menu hint and footer buttons catch up with their next start or `/sidekick prompts` there.
+- **All chats, all projects:** the set is shared, like sidekick's settings.
+- **Cost:** about $0.0004 per intent call, at most 80 a day, and at most 5 proposal calls a day; with about 50 longer messages a day roughly 2 cents a day. `/savings` lists them under the role *Prompts*.
+- **How well it finds repeats:** tried on the owner's real messages (1,550 desktop messages over 30 days): a word comparison could not tell dictated rewordings of the same instruction from unrelated messages, so sidekick asks Haiku instead. In that trial 2 of 3 versions of the chat-tidying instruction got the same intent; one borderline message (archive two specific chats) joined the group, which the proposal call or your **No** can still turn down.
+
+## Queue (since 0.24.0)
+
+Claude Code already hands a message you send mid-turn to Claude as soon as the running tool calls finish, inside the same turn. That is right for "no, take the other file", but a separate request like "after that, also update the README" can then pull Claude away from the work it has nothing to do with. sidekick marks such messages for Claude.
+
+- **When:** only on level **Guide**, only for messages you write while a turn runs, never in `claude -p`. A message you send with `ctrl+x enter` (wait its turn) is left to Claude Code's own queue. Messages from other chats, plugins and the app itself never get a note.
+- **No note (no model call):** attachments, images, `@file`, slash commands, three words or fewer ("ok", "go on"), a start with a stop, no or correction word (stop, wait, no, don't, instead, cancel; German too), a correction like "still doesn't work", and messages that ask for something now or in parallel ("now", "meanwhile", "in parallel"; German too).
+- **Note without a model call:** a message that starts with "after that", "next,", "when you're done", "later", "afterwards" (German: „danach“, „anschließend“, „als Nächstes“, „wenn du fertig bist“, „später“, „zum Schluss“).
+- **Otherwise Haiku 5.5 decides** in one short call (about $0.00025), from your new message, the message that started the turn and the end of what Claude wrote so far. It marks a message only when it is clearly a separate, later item, with a confidence of at least 0.7. Any error, a timeout (4 s) or an unclear answer lets the message in without a note.
+- **What happens:** the message goes in unchanged and right away, as before. Claude also reads, hidden from you: finish the running task completely without interrupting it; if it ends with a question to the user or an error, ask or report first and take up this item only after the answer; otherwise do it afterwards. Under your message, sidekick's grey line says "comes after this task · reason".
+- **Decide yourself:** in the desktop app, while Claude works, a **Later** button (German: **Danach**) sits left in the footer. Click it and your next message in this turn counts as a later item, with no model call (the button then reads **Later ✓**); a second click undoes it, and it expires when the turn ends. Anywhere, also in the terminal: start the message with `later:` or `danach:`; sidekick removes the prefix before sending.
+- **Switch:** `/sidekick queue` shows the state, `/sidekick queue on|off` switches it right away (the setting `queue`, on by default). A change on the desktop settings page applies in new chats only. With the queue off there is no button and the prefix stays in your message.
+- **How well it works:** tried with 9 cases in a stream like the desktop app's, on Opus 5.5: Claude never interrupted the running task; when the task ended with a question or an error (6 cases), it did not do the later item unasked but said it would after your answer. The decision itself was tried on 40 real messages the owner wrote mid-turn, marked blind: 1 of 40 was marked although it belonged to the running work, and 2 to 3 of the 5 real "later" messages were marked. In doubt sidekick adds no note; a missed "later" just behaves as before.
+
+## Skill catalog (since 0.25.0)
+
+There are good skills out there that Claude only uses if you have them and remember to ask. sidekick carries a short, curated list of them (`hooks/catalog.ts`): name, author, license, source pinned to a commit, risk, a one-line summary and a few keywords. It never searches the web.
+
+- **When:** only on level **Guide**, only for messages you type while Claude is idle, never in `claude -p`. Not for slash commands, messages under 4 words, handoffs or briefs from another chat, and not for a skill you already have installed.
+- **Cheap first step:** a keyword filter (no model call) looks for words such as "Apple", "iOS", "GSAP", "ScrollTrigger", "worst case", "playwright" (German too). Only on a hit does Haiku 5.5 judge in one short call (about $0.00024) whether the message itself asks for that skill's task; it needs a confidence of at least 0.7. If the message check runs anyway (first message, large or cold chat), the candidates go into that call instead of a second one. Any error, a timeout (4 s) or an unclear answer lets the message through unchanged.
+- **One thing at a time:** if the message check already shows a line or asks a question, the catalog stays quiet. Each entry is offered at most once per chat, and there is at most one catalog question per 10 of your messages.
+- **Bundled skill:** "There is *apple-design* by Emil Kowalski for this (MIT, ships with sidekick): … How to send?" **Send with apple-design (recommended)** sends your message as typed, with the skill's text attached for Claude (hidden from you; the message is not held, attachments go along). The question says what that costs in context: about 5.8k tokens for apple-design, 6.9k for emil-design-eng, 3.6k for break-ui (plus about 2k if Claude reads its `CATALOG.md`). Under your message it says "sent with apple-design". You can also run the skill yourself any time: `/sidekick:apple-design <your text>`.
+- **Reference:** "There is *gsap-skills* by GreenSock for this (MIT, not installed) …" **Copy the install command, hold the message (recommended)** copies the line from the source's README and holds your message; the reason shown contains your text. Paste the command, confirm it in Claude Code, run `/reload-plugins`, then send again.
+- **Heavy reference** (large download, global behaviour change or telemetry): no question, the message goes through; a line under it names the skill with its risk and has a **Copy** button. Shown only at a confidence of 0.9.
+- **Don't suggest again** mutes the entry in all chats. `/sidekick catalog` lists all entries with buttons **Copy command** and **Mute/Unmute**; `/sidekick catalog mute|unmute <id>` does the same as text. `/sidekick catalog off` turns the catalog off (setting `catalog`, on by default).
+
+| Entry | Author | License | Way | Command copied |
+|---|---|---|---|---|
+| apple-design | Emil Kowalski | MIT | bundled | `/sidekick:apple-design` |
+| emil-design-eng | Emil Kowalski | MIT | bundled | `/sidekick:emil-design-eng` |
+| break-ui | Emil Kowalski | MIT | bundled | `/sidekick:break-ui` |
+| animate, review-animations | Emil Kowalski | MIT | reference | `npx skills@latest add emilkowalski/skills` (unpinned) |
+| mobile-native | Emil Kowalski | MIT | reference | `npx skills@latest add emilkowalski/skills` (unpinned) |
+| impeccable | Paul Bakaus | Apache-2.0 | reference | `/plugin marketplace add pbakaus/impeccable` |
+| gsap-skills | GreenSock | MIT | reference | `/plugin marketplace add greensock/gsap-skills` |
+| earshot | Leon Lin | MIT | heavy (Python, ≈ 1 GB models) | `uv tool install "earshot[mcp] @ git+https://github.com/Leonxlnx/earshot"` |
+| superpowers | Jesse Vincent | MIT | heavy (hooks, changes behaviour everywhere) | `/plugin install superpowers@claude-plugins-official` |
+| mattpocock-skills | Matt Pocock | MIT | reference | `claude plugin install mattpocock-skills@claude-plugins-official` |
+| playwright | Microsoft ([playwright-mcp](https://github.com/microsoft/playwright-mcp), via claude-plugins-official) | Apache-2.0 | reference (runs `npx @playwright/mcp@latest`, Chromium) | `/plugin install playwright@claude-plugins-official` |
+| hyperframes | HeyGen | Apache-2.0 | heavy (telemetry) | `claude plugin marketplace add heygen-com/hyperframes` |
+
+**Origin and licenses.** The three bundled skills are copies from [emilkowalski/skills](https://github.com/emilkowalski/skills) at commit `5206a95` (MIT, Copyright 2026 Emil Kowalski), each folder with the original `LICENSE`. The only change is in the frontmatter: a line naming the source and `disable-model-invocation: true`, so Claude never loads them on its own and their descriptions take no room in the context. sidekick reads these files but runs no code from them. Licenses were read from the GitHub API, install lines from each source's README (checked 2026-11-09). Details in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+
+**How well it works:** tried on 300 real messages of the owner (all keyword hits plus a random sample of about 3,300), marked blind: no unneeded question in three runs; of the two messages that would really have fit, one was found (the other mixed several tasks). The keyword filter fires on about 1 in 100 messages.
+
+## Handoff (since 0.22.0, moved here from limit-bars)
+
+`/handoff` writes a short handoff so a fresh chat can carry on without the old history, then asks: **New chat with handoff (recommended)** or **Keep working here**. A new chat runs `/clear` (the old chat stays reachable via `/resume`) and sends the handoff as its first message ("Handoff from my previous chat: …"). The question names the way it was written, what it cost and its **Next** line.
+
+- **The cheapest good way, chosen per chat:**
+  - **From the chat (fork):** while the prompt cache is warm, your main model writes the handoff itself over the whole conversation, tool results included, reading it from the cache (≈ $0.06 for 150k context on Opus 5.5, about 12 s). It runs without tools and without its own effort level, so the cache is read on every model (measured: about 100 % read).
+  - **From the history (text):** when the cache is cold or unknown, Sonnet 5.5 writes it from sidekick's running summary and the start and end of the conversation as text (up to 100,000 characters, no tool results, ≈ $0.08). A cold fork would rewrite the whole context (≈ $1.20 for 150k on Opus 5.5 with the 1-hour cache).
+  - The rule: fork when it costs at most 3 × the text way, because it sees everything. In practice: warm → fork, cold → text, a cold fork only in very small chats. A fork that fails, gives no handoff or takes over 60 s falls back to the text way. The same choice applies to **New chat with handoff** in sidekick's questions.
+  - `/handoff fork` and `/handoff text` force a way (for comparing).
+- **Template (fork and skill):** goal, status, **Next** (exactly one step: the agreed next step, otherwise "wait for the user"; from a question: what your held-back message asks for), the user's constraints, done, ruled out, work state (unsaved, verified), read first (at most 5 files), open. At most 350 words, absolute paths, nothing from CLAUDE.md or memory, no secrets.
+- **Template (text way):** the shorter one from earlier versions (task, done, read first, open; on the retry loop also *What didn't work*), now with absolute paths. In a test on real chats it kept the user's constraints and ruled-out approaches better when only the text is available.
+- Both: sidekick inserts the project root and the last commit of this chat as a table itself.
+- **Skill `write-handoff`** (for Claude only, not in the `/` menu): when you ask in the chat for a handoff ("wrap up the chat", „Übergabe“), Claude writes it visibly in that turn; sidekick catches it and asks the same question.
+- **Suggestion before the cache expires:** on `cache` and `guide`, in a chat of at least `big` (150k) that is idle in its last 5 minutes of cache (last minute with the 5-minute cache), one line appears above the prompt once per cache window: when the cache expires, what `/handoff` costs now and what the next message would cost after that. Buttons: **/handoff**, **/keepwarm** (only with limit-bars) and **Later**. It disappears on a click, with the next turn or when the cache goes cold, and is drawn only when it appears or disappears. limit-bars' own notice stays quiet meanwhile.
+- **Saved:** the last 3 handoffs. `/handoff show` prints the last one, `/handoff continue` starts a new chat with it. `/sidekick status` shows it too.
+- **Where:** in every level, also Off (it is an explicit command). In `claude -p` only `show` and `help` work. During an answer it starts after the answer.
+- **In `/savings detail`:** handoffs by way (fork and text with their cost, a fork that read less than half of the context from the cache although it was expected warm, the skill only counted) and the suggestion (shown, `/handoff` clicked, ignored).
+
 ## Commands
 
 | Input | Effect |
 |---|---|
+| `/handoff` | write a handoff the cheapest good way, then ask about a new chat (see [Handoff](#handoff-since-0220-moved-here-from-limit-bars)) |
+| `/handoff fork` · `text` | force the way |
+| `/handoff show` · `continue` | print the last handoff, or start a new chat with it (`zeigen`, `weiter` work too) |
+| `/handoff help` | points to `/sidekick help`, starts nothing |
 | `/sidekick help` or `/sidekick ?` | help table (since 0.14.0): commands, buttons, features with their current state and the command that changes them, settings. Drawn in the terminal and the desktop app with the theme's blue (theme key `ide`, readable in Claude Code's built-in light and dark themes), Markdown elsewhere. The state is the one at the time you run it; run it again after a change. |
 | `/sidekick` or `/sidekick status` | settings, cache and context, latest summary, latest hint, latest handoff with message |
-| `/sidekick off` · `cache` · `guide` | set the level (applies to all sessions) |
+| `/sidekick off` · `cache` · `guide` | set the level (applies now in this chat, in other open chats after `/reload-plugins`) |
 | `/sidekick on` | back to the last active level |
 | `/sidekick threshold 80k` · `big 150k` | trigger (b) or (c) |
 | `/sidekick skills on` · `off` | send the skill list to the model check or not |
-| `/sidekick ttl 5` · `60` · `auto` | force the cache lifetime. `auto` measures it the way limit-bars does, default 60 min. limit-bars' own setting (`/cache ttl`) does not apply here, because each plugin has its own `$.store`. |
+| `/sidekick ttl 5` · `60` · `auto` | force the cache lifetime. `auto` measures it the way limit-bars does, default 60 min. limit-bars' own setting (`/cache ttl`) does not apply here; each mod has its own field. |
 | `/sidekick hints status` | maintenance hints for this project: value per rule, last done and shown, earliest next time |
 | `/sidekick hints on` · `off` | all maintenance hints on/off |
 | `/sidekick hints <rule> on` · `off` | one rule on/off (`skills-cut`, `audit`, `memory`, `skills-heavy`, `init`) |
@@ -172,6 +267,15 @@ On the **third** correction in a row, sidekick asks before sending: *This is the
 | `/sidekick tips stop` | this chat back to the main model (the booking is struck) |
 | `/sidekick loop` · `loop status` | Retry loop: on or off, corrections in a row in this chat (since 0.19.0) |
 | `/sidekick loop on` · `off` | ask on the third correction in a row (default on); `on` also ends a pause |
+| `/sidekick save <name> [text]` | save your last message in this chat, or the text, as the command `/p <name>` (since 0.21.0) |
+| `/sidekick prompts [name]` | the saved prompts with their buttons; with a name the full text |
+| `/sidekick prompts <name> on` · `off` | button for this prompt on or off (at most 4 are shown) |
+| `/sidekick forget <name>` | delete a saved prompt |
+| `/p <name>` | send a saved prompt right away as your message; during an answer, after it. `/p` alone lists the names |
+| `/sidekick catalog` | skill catalog (since 0.25.0): every entry with author, license, bundled or reference, installed or muted, with buttons **Copy command** and **Mute** |
+| `/sidekick catalog on` · `off` | suggest fitting third-party skills once per chat before sending (default on) |
+| `/sidekick catalog mute <id>` · `unmute <id>` | mute an entry or suggest it again |
+| `/sidekick:apple-design`, `/sidekick:emil-design-eng`, `/sidekick:break-ui` `[text]` | run a bundled skill yourself (since 0.25.0; Claude never loads them on its own) |
 | `/sidekick language [de\|en]` | switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language (since 0.17.0). Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.17.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/savings [today\|week\|all]` | short balance, default `week`: cost, savings, ratio and the savings items; drawn as a framed card in the terminal and the desktop app (like cost-ledger's `/ledger`), Markdown elsewhere |
 | `/savings detail [today\|week\|all]` | everything, default `all`: also how it is computed, models, checks compared per model, by day, hints and counts (`details` works too, words in any order) |
@@ -192,6 +296,9 @@ An unknown argument to `/sidekick`, `/sidekick hints`, `/sidekick notes` or `/sa
 - **Models** (since 0.5.0): sidekick's own calls per model ID, e.g. *Haiku 5.5*, with a bar for its share of the cost; per role (check, handoff; older history may also show split) the number of calls, average duration and cost per call, plus tokens in and out. Useful when the model per role changes: old and new model stand side by side. Costs booked before 0.5.0 have no model and appear as *earlier*. Each model also shows the days it was used.
 - **Checks compared** (since 0.6.0, from two rows on): per model the number of checks, average price per check (4 decimals), average duration and a factor relative to the cheapest row; below, average tokens and the days used. Tokens are booked per model, not per role: with handoffs they are an average per call (check and handoff). *Earlier* (booked before 0.5.0: Haiku until 0.3, already Sonnet from 0.4) also contains the handoffs of that time, so its price per check is an upper bound (`≤`, rounded up); a factor against it is a lower bound (`≥`, rounded down).
 - **By day** (since 0.6.0): per day with activity, newest first (at most 14): cost with a bar, savings, checks and the models used with their calls.
+- **Prompts** (since 0.21.0): the detection's Haiku calls are part of the cost and appear under their own role *Prompts* in the models block; the short view shows one line when there were calls.
+- **Queue** (since 0.24.0): the Haiku calls of the queue are part of the cost and appear under the role *Queue*; one line counts how often a message was passed to Claude as a later item. No savings in $, because that cannot be measured.
+- **Catalog** (since 0.25.0): the Haiku calls of the skill catalog are part of the cost and appear under the role *Catalog*; one line counts offered, sent with a skill, command copied, sent anyway and muted. No savings in $.
 - **Good to know** (since 0.13.0, separate): checks, cost, average duration, and what came of them (shown, explained, known, later, in chat, ignored, no topic, dropped, errors). The short view shows one line when there were checks. The models block lists them under the role *Good to know*.
 - The detailed view starts with the date range of the data.
 - **Counts:**
@@ -199,6 +306,7 @@ An unknown argument to `/sidekick`, `/sidekick hints`, `/sidekick notes` or `/sa
   - hints by type (shown, accepted, ignored, cancelled)
   - handoffs and model hints
   - nudges from the retry loop and how often the next message was a correction again (since 0.19.0)
+  - saved prompts (since 0.21.0): detection calls with their cost, offered, saved, declined, sent
   - cold starts without a question, with their cost
   - skills used, with a pointer to `/skill-doctor`
   - maintenance hints per rule (shown, accepted)
@@ -208,8 +316,8 @@ An unknown argument to `/sidekick`, `/sidekick hints`, `/sidekick notes` or `/sa
 Maintenance lines have their own buttons since 0.16.0 (**Insert in prompt** / **Copy** and **?**, see [Maintenance hints](#maintenance-hints)). This section is about the lines from the message check: when such a line names a command, a button sits next to it. That is a skill sidekick suggests, or since 0.8.1 a command in the sentence that exists in this session (from a plugin, your own command or skill, or `/skill-doctor` and `/init`; other built-in commands and MCP prompts get no button):
 
 - **Run /command**: the default. The button names the command, one click runs it, as if you had typed it and pressed Enter. If Claude is still working, it runs once the current turn is done. The line then reads "✓ ran"; a maintenance command run this way counts as done.
-- **Handoff:** a line that suggests the handoff skill (`/uebergabe`, `limit-bars:uebergabe`) shows and runs limit-bars' **`/handoff`** instead: the skill writes the handoff, then you are asked whether to start a new chat with it. Without `/handoff` the full skill name is used.
-- Short names are resolved: `/uebergabe` finds `limit-bars:uebergabe` when exactly one plugin has it. Unknown or ambiguous names, file paths like `/hooks/hooks.json` or `/init.ts`, and words without a slash get no button. `/clear`, `/exit`, `/quit`, `/login`, `/logout` and `/rewind` never get one.
+- **Handoff:** a line that suggests a handoff (`/uebergabe`, `limit-bars:uebergabe`, `sidekick:write-handoff`) shows and runs sidekick's own **`/handoff`** (since 0.22.0).
+- Short names are resolved: `/name` finds `plugin:name` when exactly one plugin has it. Unknown or ambiguous names, file paths like `/hooks/hooks.json` or `/init.ts`, and words without a slash get no button. `/clear`, `/exit`, `/quit`, `/login`, `/logout` and `/rewind` never get one.
 - What the button says is what it does: the target is decided when the line is drawn.
 - Lines without a command (e.g. "Unclear which of the three projects is meant.") get no button. Other surfaces (VS Code) show the line as text, without a button.
 - If Claude Code refuses the command, it goes into the prompt box at the cursor and a toast says so (Enter sends it). If that is not possible either (a dialog is open), the toast shows the command so you can type it.
@@ -217,7 +325,11 @@ Maintenance lines have their own buttons since 0.16.0 (**Insert in prompt** / **
 ## Working with other mods
 
 - **clawd-buddy** shows what sidekick does: while it checks your message, holds it back with a question, or starts a new chat. sidekick writes only the kind of state and a timestamp to `$.state` (`sidekick.buddy`), which clawd-buddy reads. Neither mod needs the other.
-- **limit-bars** stays a display. Since limit-bars 0.14.0 its cold-cache warning steps aside by itself while sidekick runs on `cache` or `guide`, so there are no two dialogs in a row; with an older limit-bars, turn it off once with **`/cache warn off`** (the German `/cache warnung aus` works too).
+  - Since 0.20.0 (for clawd-buddy 0.13 or later) a question also carries its reason: `cold` (cold-cache question), `wrong` (wrong chat), `model` (model tip), `rewrite` (the question offers the clearer version), `topic` (new chat for a new topic). If several apply, the first in this order wins. The retry loop and the compaction question carry no reason, so Clawd shows the plain stop sign there.
+  - Two short moments, also since 0.20.0: `hint` when a hint line appears under your message and `upkeep` when a maintenance hint appears. Both clear after 4 and 5 seconds.
+  - `sidekick.status` also says `cold: true` while sidekick's own cache estimate for this chat has run out (last request plus TTL, on `cache` and `guide`; never on `off`, never in a new chat before its first request). It is checked at most once a minute and written only when it changes; the next request of the chat clears it. Clawd may then freeze in a block of ice.
+  - An older clawd-buddy ignores the new values, so nothing changes there.
+- **limit-bars** stays a display. Since limit-bars 0.14.0 its cold-cache warning steps aside by itself while sidekick runs on `cache` or `guide`, so there are no two dialogs in a row; with an older limit-bars, turn it off once with **`/cache warn off`** (the German `/cache warnung aus` works too). Since sidekick 0.22.0 and limit-bars 0.15.0, `/handoff` lives only in sidekick, and limit-bars' notice before expiry stays quiet while sidekick suggests it. Update both together: with limit-bars 0.14 still installed, whichever plugin loads first owns `/handoff`.
 - Claude Code's built-in plugin **`cc-plugin-you-should-know`** (off by default, availability depends on your organization) does what sidekick's **Good to know** does. Use one of them: with both on, every check runs twice. `/savings` only includes sidekick's own.
 - **tune-strip** (since 0.15.2): in the desktop app, the handoff box and the Good-to-know note stand above the full tune-strip bar, with a thin blue line below them that disappears with them. In the terminal nothing changed.
 - **quick-replies:** its suggestions use the digits 1, 2, 3 … after a turn; a Good-to-know note only carries digits while Claude is working, so they never clash.
@@ -228,7 +340,7 @@ Everything lives in the plugin's `$.store`:
 
 | Key | Content | Lifetime |
 |---|---|---|
-| `settings` | `level`, `lastOn`, `threshold`, `big`, `skills`, `ttl`, `notes`, `tips` (since 0.18.0: `first`, `auto`, `haiku`, Opus answers in a row, pause until), `loop` (since 0.19.0: on, *Send unchanged* in a row, pause until) | permanent |
+| `runtime` | since 0.23.0: the last level that was on (for `/sidekick on`), model tip and retry loop: answers in a row and pause until. The settings themselves are in `userConfig` (see [Configuration](#configuration)); the `settings` key of 0.22.0 and older is moved there once and then marked `migrated` (kept for chats still running 0.22.0) | permanent |
 | `tip:<session>` | model tip of this chat: from, to, when, reason, estimated savings so far | 7 days |
 | `spawn:<agent>` | a watched subagent: from, to, reason, description, estimated savings | 2 days |
 | `brief:<hash>` | a brief Claude passed to a new chat: its first 200 characters, from and to model | 2 days or until the new chat starts |
@@ -239,23 +351,48 @@ Everything lives in the plugin's `$.store`:
 | `notes:ignored`, `notes:skip` | Good to know: ignored notes in a row, checks still to skip | until the next answer |
 | `bilanz:<session>` | daily values of this session, pending savings booking | until compacted |
 | `bilanz:tage` | daily totals of finished sessions (older than 7 days) | permanent |
-| `handoff:last`, `basis` | latest handoff with message; measured base load of a new chat | until the next one |
+| `handoffs` | the last 3 handoffs (time, chat, text, way, cost, held-back message); since 0.22.0, the older `handoff:last` is taken over once | the last 3 |
+| `basis` | measured base load of a new chat | until the next one |
 | `wartung:<project>` | per rule: last done (with size and model), last shown; the last 10 chat days | permanent |
 | `wartung:nutzung` | skill usage of the last 30 days, read from the balances at most once a day | until the next day |
-| `hints` | maintenance hints on/off, disabled rules, audit threshold | permanent |
+| `hints` | disabled maintenance rules (on/off and the audit threshold moved to `userConfig` in 0.23.0) | permanent |
+| `catalog:muted` | since 0.25.0: catalog entries you muted (ids only) | until unmuted |
+| `offDefaults2` | since 0.24.1: which off switches were already saved as `false` (see the known issue under the settings) | permanent |
 | `held:last` | a held-back message longer than 1,800 characters, in full (up to 20,000) | until the next one |
+| `prompts:saved` | saved prompts (since 0.21.0): name, text, button on/off, when, saved by you or offered | until deleted (at most 12) |
+| `prompts:recent` | repeat detection: your longer messages that got an intent, first 1,000 characters, intent, chat and time | 30 days, at most 300 |
+| `prompts:seen` | groups Haiku turned down, you declined or saved, by their entries | at most 100 |
+| `prompts:budget`, `prompts:budget-intent` | Haiku calls of the detection today | until the next day |
 
 Each session writes only its own `bilanz:` key, because the store is not atomic. Compaction at startup records compacted sessions in `bilanz:tage.aus`, so a session starting at the same time skips them and nothing is counted twice. A source is deleted only after re-reading shows the entry. **Residual risk:** if two startups overwrite `bilanz:tage` at the same time, usually just one compaction is lost; its source remains and is compacted on the next start. In a very unlikely sequence the first startup has already deleted the source before the second overwrites; those old days are then missing from `/savings`. Nothing is ever counted twice.
 
 ## Configuration
 
-`userConfig` (set under `/plugin` → sidekick → configure, or `/config`):
+Desktop app: **Settings → Plugins → sidekick → Settings**. Terminal: `/config` → sidekick, or `/plugin configure sidekick`. Since 0.23.0 every setting lives here; the `/sidekick` commands write the same fields.
 
-| Option | Values | Default | Effect |
-|---|---|---|---|
-| `language` | `en`, `de` | `en` | Language of all texts sidekick shows (hint lines, questions and answers, `/sidekick`, `/savings`, notices, number and date format) and of the model's hints, summary and handoff. The rewrite of your message stays in the language you wrote it in. |
+| Key | Title | Meaning | Default | Command |
+|---|---|---|---|---|
+| `level` | Level | `off`: nothing · `cache`: only the cold-cache question, no model calls · `guide`: all checks and hints | `guide` | `/sidekick off\|cache\|guide` |
+| `threshold` | Check from (tokens) | from this context size every message gets a short check (at least 1000) | 80000 | `/sidekick threshold 80k` |
+| `bigTokens` | Cold-cache question from (tokens) | asks before a cold send from this context size (at least 1000) | 150000 | `/sidekick big 150k` |
+| `cacheTtl` | Cache lifetime (min) | `auto` (measured, otherwise 60), `5` or `60` | `auto` | `/sidekick ttl 5\|60\|auto` |
+| `skills` | Suggest skills | sends your skill list along with the check, so it can suggest one | on | `/sidekick skills on\|off` |
+| `maintenanceHints` | Maintenance hints | names due maintenance such as `/skill-doctor` or `/init`; single rules stay a command | on | `/sidekick hints on\|off` |
+| `auditMin` | Prompt audit from (tokens) | size of your instructions from which the audit hint appears (at least 100) | 2000 | `/sidekick hints audit-min 2k` |
+| `notes` | Good to know | a note while Claude works when you likely missed something; asks your main model every 6 steps | off | `/sidekick notes on\|off` |
+| `modelTip` | Model tip | on the first message on Opus or Fable, asks whether a cheaper model fits | on | `/sidekick tips on\|off` |
+| `modelTipAuto` | Switch subagents automatically | simple subagents and chats Claude starts run on a cheaper model | off | `/sidekick tips auto on\|off` |
+| `modelTipHaiku` | Use Haiku for simple tasks | off: Sonnet is the cheapest target | on | `/sidekick tips haiku on\|off` |
+| `retryLoop` | Retry loop | on the third correction in a row, offers a new chat or a step back | on | `/sidekick loop on\|off` |
+| `queue` | Queue | while Claude works, a message that is clearly a later item still goes straight in, with a note to Claude to finish the running task first; plus the Later button and the `later:` prefix (since 0.24.0) | on | `/sidekick queue on\|off` |
+| `catalog` | Skill catalog | when a message fits a skill from the catalog, suggests it once per chat before sending; installs nothing (since 0.25.0) | on | `/sidekick catalog on\|off` |
+| `language` | Language / Sprache | `en`, `de`: all texts sidekick shows (hint lines, questions and answers, `/sidekick`, `/savings`, notices, number and date format) and the model's hints, summary and handoff. The rewrite of your message stays in the language you wrote it in. | `en` | `/sidekick language` |
 
-Everything else goes through `/sidekick` and is stored in `$.store` (`settings`).
+A command applies at once in the chat where you run it. Other open chats pick it up after `/reload-plugins` or in the next chat; up to 0.22.0, a `/sidekick` setting applied in all open chats within seconds. Single maintenance rules (`/sidekick hints <rule> on|off`) and saved prompts stay commands and are kept in `$.store`.
+
+**Updating from 0.22.0 or older:** run `/reload-plugins` in every open chat after the update. The first chat on 0.23.0 copies your old values into these fields; a chat still running 0.22.0 keeps reading the old values and does not see what you change on the settings page.
+
+Known issue: the desktop settings page may show switches that were never saved as on, even when their default is off, and saving the page then turns them on. sidekick stores its off defaults (Good to know, Switch subagents automatically) once at the first start, so the page shows them correctly.
 
 ## Language
 
@@ -266,15 +403,20 @@ Texts are English by default. For German, set `language` to `de`, or run `/sidek
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.step, agent.spawn, turn.complete, session.compact, tool.call{tool=Bash|PowerShell|mcp__ccd_session__start_session}, prompt.submit, skill.prompt, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, ui.render{component=SessionMode}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
-calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.config.list, $.config.set, $.model.complete, $.model.fork, $.process.run, $.prompt.fill, $.prompt.read, $.prompt.submit, $.session.id, $.session.messages, $.session.model, $.session.root, $.session.surfaces, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.copy, $.ui.invalidate, $.ui.notice, $.ui.resolve, $.ui.toast
-state writes: sidekick.buddy, sidekick.status
-state reads: sidekick.status
+hooks: session.start, turn.step, agent.spawn, turn.complete, session.compact, tool.call{tool=Bash|PowerShell|mcp__ccd_session__start_session}, prompt.submit, skill.prompt, command.run{command=handoff}, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, ui.render{component=SessionMode}, command.run{command=p}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
+calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.config.list, $.config.set, $.fs.read, $.model.complete, $.model.fork, $.process.run, $.prompt.fill, $.prompt.read, $.prompt.submit, $.session.id, $.session.messages, $.session.model, $.session.root, $.session.surfaces, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.copy, $.ui.invalidate, $.ui.notice, $.ui.resolve, $.ui.toast
+state writes: sidekick.buddy, sidekick.prompts, sidekick.status
+state reads: sidekick.prompts, sidekick.status
 ```
 
 In plain language:
 
-- `prompt.submit`: reads your message before sending; can hold it back (`drop`) or replace it with the rewritten version, **only after you choose so in the dialog**. Nothing is ever sent without asking. Detects typed maintenance commands as done.
+- `prompt.submit` (since 0.24.0, no new hook or call): for a message you write while Claude works that is clearly a later item, sidekick adds a hidden note for Claude to the message (only on level Guide, see [Queue](#queue-since-0240)); the message itself goes in unchanged, except that a `later:`/`danach:` prefix you typed is removed. For the decision, Haiku 5.5 gets your new message, the message that started the turn and the end of what Claude wrote so far, through your session's login like the message check. Since 0.24.0 sidekick also reads messages that the desktop app prefixes with a hidden status block (see *Fixed in 0.24.0* above).
+- `command.run{command=handoff}` (since 0.22.0): the command `/handoff`, moved here from limit-bars, plus the skill `write-handoff` (Claude only; not named `handoff`, because a skill of that name would hide the command). When the way is the fork, `$.model.fork` now also runs without `/sidekick notes on`: your session's own model writes the handoff over its own conversation, every tool denied; nothing leaves your session's login. `$.command.run` also runs `/handoff` or `/keepwarm` when you click them in the suggestion line, and `/clear` for the new chat, only after you chose it. No new call.
+- `command.run{command=p}` (since 0.21.0): the command `/p <name>` sends a saved prompt; `/p` alone lists the names. It sends only when you run it yourself; if another plugin runs `/p`, nothing is sent. One fixed command, because a hook on every command (or on a pattern) would put sidekick's name over every other plugin command's output.
+- `prompt.submit` (since 0.21.0): for the repeat detection, keeps your longer messages that got an intent (see [Stored data](#stored-data)), in the background; the message is never held up. Saved prompts are sent with `$.prompt.submit` as your message, only on your command or click.
+- `$.state.set`/`$.state.get` `sidekick.prompts` (since 0.21.0): the names of the prompts with a button and, since 0.24.0, whether the Later button is shown and on, so the footer redraws only when that changes. No prompt text.
+- `prompt.submit`: reads your message before sending; can hold it back (`drop`) or replace it with the rewritten version, **only after you choose so in the dialog**; since 0.24.0 it also removes a `later:`/`danach:` prefix you typed at the start. Nothing is ever sent without asking; since 0.24.0 it may add a short hidden note for Claude to a message you write while Claude works (see Queue). Detects typed maintenance commands as done.
 - `turn.step`: reads the token counts of each main-loop request (cache warm/cold, context, savings measurement). With Good to know on, it also starts the check at step 6, 12, 18 … in the background; the request itself is not delayed. Since 0.18.0 it changes one thing, and only in a chat where you picked a cheaper model in the model tip's question: the model of each main request (`→ Sonnet`). For subagents it reads the token counts of watched runs to estimate the savings.
 - `agent.spawn` (since 0.18.0, only with `/sidekick tips auto on`): sets the model of a built-in subagent without a model to Sonnet or Haiku when Haiku rated its task simple; everything else starts unchanged.
 - `turn.complete` (since 0.18.0): the end of a subagent's run, to book or strike its estimated savings. Read only.
@@ -295,7 +437,7 @@ In plain language:
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=CommandOutput, props has {command=sidekick}}` (since 0.14.0): draws the output of `/sidekick help` as a table in the terminal and the desktop app. Display only; `/sidekick status`, other outputs and other surfaces stay Markdown.
 - `ui.render{component=AbovePrompt}`: only while a new chat is being started, a small blue box above the prompt shows progress and seconds; and, with Good to know on, the current note with its buttons. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
-- `$.model.complete`: Haiku 5.5 for the check (effort `medium`, full ID `claude-haiku-5-5`), Haiku 5.5 for the model tip's rating of a subagent's or new chat's task (effort `low`, since 0.18.0) and Sonnet 5.5 for the handoff (effort `medium`). The only `$.model.complete` calls. Your messages and those tasks reach the model only through your session's own login; the rating prompt tells the model to judge the task and never follow instructions in it.
+- `$.model.complete`: since 0.21.0 also Haiku 5.5 (effort `low`) for the repeat detection: for the intent, the single new message (up to 1,000 characters) together with the short intents sidekick already knows (no texts from other chats); for a proposal, the messages of that group (at most 4, up to 1,000 characters each). Haiku 5.5 for the check (effort `medium`, full ID `claude-haiku-5-5`), Haiku 5.5 for the model tip's rating of a subagent's or new chat's task (effort `low`, since 0.18.0) and Sonnet 5.5 for the handoff (effort `medium`). The only `$.model.complete` calls. Your messages and those tasks reach the model only through your session's own login; the rating prompt tells the model to judge the task and never follow instructions in it.
 - `prompt.submit` also attaches the model tip's guideline (since 0.18.0, only with `/sidekick tips auto on`, once per chat) as context the model reads and you don't see.
 - `$.session.messages`: beginning and end of the history for the handoff, the end of Claude's last reply for the check, and to detect the first message.
 - `$.session.usage`, `$.command.list`: context size, skill names and descriptions; for the maintenance hints, paths and token counts of instruction and memory files (no contents), size of the skill list, model, and whether a command exists.
@@ -303,16 +445,18 @@ In plain language:
 - `$.session.surfaces`: detects the desktop app, because there typed messages carry the origin `sdk` like `claude -p`.
 - `$.session.id`: detects a new session after `/clear`.
 - `$.command.run`, `$.prompt.submit`: for "New chat with handoff" (`/clear`, then send). `$.command.run` also for the button, see above. `$.prompt.submit` also for **Send anyway** after writing the handoff failed (your message as typed), and for **Ask in chat** in the desktop app (the note and a short request to explain it, as a message from sidekick, only on that click).
-- `$.store.*`: settings, summary, cache measurement, balance.
-- `$.config.list`, `$.config.set`: only for `/sidekick language` (since 0.17.0). Reads the settings rows and changes nothing but the `language` field of the six fynn-mods; other plugins and other fields are left alone.
-- `$.process.run`: for `/sidekick language` in the desktop app and `claude -p` (since 0.17.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `sidekick@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `sidekick@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod.
+- `$.store.*`: summary, cache measurement, balance, disabled maintenance rules, the counters of model tip and retry loop.
+- `$.config.list`, `$.config.set`: for `/sidekick language` (since 0.17.0) and, since 0.23.0, for sidekick's own fields when you change one with a `/sidekick` command. Reads the settings rows and changes only the `language` field of the six fynn-mods and sidekick's own fields; other plugins are left alone.
+- `$.process.run`: for `/sidekick language` in the desktop app and `claude -p` (since 0.17.1), and only these commands: `claude plugin list --json` (which fynn-mods are installed and on) and `claude plugin configure <mod>@fynn-mods` with `--json` (read the current language) or `--values-stdin --json` with `{"language":"de"}` or `"en"`, for the six fynn-mods only, and since 0.23.0 with sidekick's own fields for sidekick only. Needs the `claude` CLI on the PATH of the app. It saves the settings of `sidekick@fynn-mods`; if your desktop app loads the mod under another plugin ID (such as `sidekick@inline`), that copy keeps its language. An organization policy that blocks `$.process.run` refuses the whole mod. Settings commands save through `claude plugin configure` only when this is the installed copy (its folder is the `readFromFolder` or `installPath` that `claude plugin list` reports); a copy loaded with `--plugin-dir` answers “Not saved: this copy is loaded from another folder …” and changes nothing. Once per new off switch (store key `offDefaults2`), the installed copy also reads its own unset fields with `claude plugin configure sidekick@fynn-mods --json` and saves those whose default is off as `false`. Since 0.24.1 a settings command reads the value back after saving; if another mod overwrote it at the same moment, it saves once more, otherwise it answers “Not saved”.
 - `$.ui.ask`, `$.ui.toast`, `$.ui.invalidate`: question dialog, notices, redrawing the line.
-- `$.clock.*`: time and a one-off timer for `/clear` and for writing the handoff.
+- `$.clock.*`: time, and timers only: the seconds in the handoff box, a one-off timer for `/clear` and for writing the handoff, and since 0.20.0 the `cold` check once a minute and clearing `hint` and `upkeep` after a few seconds.
 - `ui.render{component=SessionMode}`: appends sidekick's label to the footer labels next to the model picker; other labels stay.
 - `$.state.get`: reads its own value `sidekick.status` while drawing that label, so the label redraws when the value changes.
-- `$.state.set`: writes `sidekick.status` (level, whether sidekick is busy, and since 0.18.0 the name of the tip's target model, no text) for the footer label, and `sidekick.buddy` for clawd-buddy: only `check`, `stop`, `handoff` or `fresh` and a timestamp, never your message.
+- `$.state.set`: writes `sidekick.status` (level, whether sidekick is busy, since 0.18.0 the name of the tip's target model, since 0.20.0 `cold: true` while the chat's cache estimate has run out; no text) for the footer label and clawd-buddy, and `sidekick.buddy` for clawd-buddy: only `check`, `stop`, `handoff`, `fresh`, and since 0.20.0 `hint` and `upkeep`, a timestamp, and for `stop` the reason of the question (`cold`, `wrong`, `model`, `rewrite`, `topic`), never your message.
+- `$.fs.read` (since 0.25.0): after you click **Send with …**, reads exactly one file, the `SKILL.md` of that bundled skill inside sidekick's own folder, and attaches its text to your message for Claude. No other path, no writing.
+- `prompt.submit`, `$.ui.ask`, `$.ui.copy`, `$.model.complete` (since 0.25.0, skill catalog): Haiku 5.5 gets your new message, the chat's short summary and the one to three catalog candidates the keyword filter found. **Copy the install command** puts the line from the source's README on your clipboard and holds the message (`drop`, with your text in the reason). sidekick never runs an install command and changes no settings.
 
-Explicitly not used: `$.fs`, `$.env`, `$.http`, `$.settings`; no tokens or credentials.
+Explicitly not used: `$.fs` beyond the one read above, `$.env`, `$.http`, `$.settings`; no tokens or credentials.
 
 ## Installation
 
@@ -343,6 +487,40 @@ claude --plugin-dir <path-to-clone>/mods/sidekick
 **Status and pause:** `/sidekick status` shows the current state and level; `/sidekick off` turns sidekick off without uninstalling it, `/sidekick on` brings it back.
 
 ## Known limitations
+
+- **Skill catalog (0.25.0):**
+  - The bundled copies are frozen at commit `5206a95` of emilkowalski/skills. They go stale until someone updates the pinned commit by hand (new copy, `node scripts/check-bundled-skills.mjs <source>` in the project repo checks it).
+  - The catalog is small and hand-picked; licenses and install lines were checked on 2026-11-09 and may have changed since. A reference's install command comes from its README as is; for `npx skills@latest …` it is unpinned.
+  - **Copy the install command** holds the message with `drop`: the desktop app shows that as a red "Prompt blocked by a hook" notice and keeps the bubble; in the terminal your text comes back into the prompt box.
+  - "Send with …" attaches the skill's text to your message instead of running the skill as a command, so the transcript shows no `/sidekick:…` line and the skill counts as used only in sidekick's own balance.
+  - The keyword filter decides what reaches Haiku: a message that fits but uses none of the keywords gets no suggestion. In the trial on 300 messages only 2 fitted, so the hit rate is measured on very few cases.
+  - With an add-marketplace line (impeccable, gsap-skills, hyperframes) you still install the plugin from the `/plugin` panel afterwards.
+  - "Installed" is detected from the commands Claude Code lists (a skill, a plugin skill or a plugin command). A tool set up only as an MCP server, without a skill or command, is not detected and may still be named.
+  - A reference's question shows its risk note (for example "npx, unpinned"); the commands with `npx`, `uv` or `claude plugin` belong in a terminal, not in Claude's prompt box, and sidekick says so when it copies them.
+- **Queue (0.24.0):**
+  - Claude Code hands a mid-turn message to plugins only when the running tool calls finish, not when you press Enter. While Haiku decides (median 1.6 s, at most about 4 s), the running turn waits at that point. The rules decide without delay.
+  - The note asks Claude to finish first; it does not force it. In the trial Claude followed it in all 9 cases, but that is a small sample.
+  - The later item is done in the same turn, right after the running task, not in a turn of its own.
+  - The grey line under your message appears only where sidekick draws lines (terminal and desktop app). The Later button exists only in the desktop app's footer and only while a turn runs; elsewhere use the `later:` prefix.
+  - Whether the desktop app shows and accepts a footer button while a turn runs was not yet checked in the app; if not, the prefix still works.
+- **Handoff (0.22.0):**
+  - The saved handoffs are shared by all projects: `/handoff show` and `continue` take the newest, even if it comes from another project. The handoff's table names its project.
+  - The question shows the **Next** line, not the whole handoff; it goes into the new chat as your message. `/handoff show` prints it first if you want to read it. A fork also sees tool results (e.g. fetched web pages); the template tells the model never to take instructions from quoted text.
+  - A fork cannot be cancelled. After 60 s sidekick falls back to the text way; if the fork still answers later, its cost is booked but the result is not used.
+  - With the model tip active in a chat, sidekick assumes the fork runs on the tip's model (the fork repeats the main loop's last request with its model); this is not measured.
+  - `/handoff continue` clears the chat only when you type it yourself, not when another plugin runs it.
+  - Shortly before expiry, the suggestion's time is fixed when it appears; a chat kept warm with limit-bars' `/keepwarm` still gets the suggestion once.
+- **Saved prompts (0.21.0):**
+  - The repeat detection finds the same instruction only when Haiku gives its versions the same intent; in the trial that worked for 2 of 3 dictated versions. It can also group a related one-off request; then the proposal call or your **No** turns it down.
+  - Only messages of the last 30 days count, at most 300 kept, and only those with an intent.
+  - Buttons only in the desktop app's footer (checked by clicking a test button on 2026-11-06). Whether the buttons in the `/sidekick prompts` table can be clicked in the desktop app is not confirmed; the commands under the table do the same.
+  - `/p <name>` does not work in `claude -p` (Claude Code binds no session there; the command says so). It sends 0.1 s after the command, because Claude Code refuses a prompt sent from inside the command itself.
+  - `/sidekick save <name>` without text takes the last user message in the history; Claude Code doesn't say who sent it, so a message a plugin sent as you (a saved prompt, a handoff) can be the one saved. Check with `/sidekick prompts <name>`.
+  - Before you click **Save** on an offer you see the first 80 characters of the version Haiku wrote; `/sidekick prompts <name>` shows all of it, and that is what the command sends as your message.
+  - The offer under a message is bound by the message text; two identical messages in a row can put it under the other one.
+  - In the terminal the offer's **Save** and **No** are buttons in the transcript; whether those can be reached there is not confirmed (the same holds for the hint-line buttons since 0.7.0). `/sidekick save <name> <text>` saves by hand.
+
+- **Cold cache after `/resume`** (since 0.20.0): after resuming a chat whose cache has run out, `cold` for clawd-buddy appears with the next once-a-minute check, so up to a minute late. Doing it at once would need the `classic.SessionStart` hook, a new right.
 
 - **Model tip (0.18.0):**
   - Picking the same Opus again in the desktop app's model picker is not visible to a mod; to go back, use `/sidekick tips stop` or type `/model`.

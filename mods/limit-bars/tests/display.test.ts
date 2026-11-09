@@ -4,6 +4,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import { cleanOverrides, displayFromOptions, effectiveDisplay, parseBars } from '../hooks/display.ts'
 import { PROBE_SCRIPT, SCAN_SCRIPT } from '../hooks/storage.ts'
 import { T } from '../hooks/i18n.ts'
+import { cliAnswer } from './cli.ts'
+import type { Cli } from './cli.ts'
 
 const NOW = new Date(2026, 9, 6, 10, 0, 0).getTime()
 const MIN = 60000
@@ -19,7 +21,7 @@ const band = (surface: 'terminal' | 'desktop' | 'vscode', bodyColumns = 120) =>
 const opt = (o: Record<string, unknown> = {}) => ({ options: { language: 'de', ...o } }) as const
 const ALL_OFF = { showFiveHour: false, showWeekly: false, showCache: false, showStorage: false }
 
-function world(on: On, o: { saved?: Map<string, unknown>; noLimits?: boolean; inner?: string; denyDisplayWrite?: boolean } = {}) {
+function world(on: On, o: { saved?: Map<string, unknown>; noLimits?: boolean; inner?: string } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>([
     // Warmer Cache, damit der Cache-Ring auch im Terminal einen Block hat
@@ -40,7 +42,6 @@ function world(on: On, o: { saved?: Map<string, unknown>; noLimits?: boolean; in
   }))
   on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
-    if (o.denyDisplayWrite && e.key === 'display') return { deny: 'Speicher voll' }
     saved.set(e.key, e.value)
     return { value: undefined }
   })
@@ -50,7 +51,10 @@ function world(on: On, o: { saved?: Map<string, unknown>; noLimits?: boolean; in
     return { value: undefined }
   })
   on('command.register', () => ({ value: undefined }))
+  const cli: Cli = { writes: [], fail: '' }
   on('process.run', ($, e) => {
+    const c = cliAnswer(e as never, cli)
+    if (c) return c as never
     runs.push(e.argv[4] === PROBE_SCRIPT ? 'probe' : e.argv[4] === SCAN_SCRIPT ? 'scan' : '?')
     return { value: { exitCode: 0, stdout: e.argv[4] === PROBE_SCRIPT ? probeOut : scanOut, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
@@ -63,6 +67,7 @@ function world(on: On, o: { saved?: Map<string, unknown>; noLimits?: boolean; in
   return {
     clock,
     saved,
+    cli,
     seen,
     runs,
     async start($: any, surface: 'desktop' | 'terminal' = 'desktop') {
@@ -128,8 +133,9 @@ for (const surface of ['desktop', 'terminal'] as const)
     expect(await svg(ui)).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^5h$/ })).toBeUndefined()
     expect(w.seen.cols).toBe(120)
-    // Der Takt läuft weiter: ein /bars aus einem anderen Chat kommt binnen 2 s an
-    w.saved.set('display', { fiveHour: true })
+    // Wieder einschalten: /bars schreibt das Feld, die Anzeige folgt sofort in diesem Chat
+    expect(await bars($, '5h on')).toContain('5-Stunden-Balken: an.')
+    expect(w.cli.writes).toEqual([{ showFiveHour: 'true' }])
     await w.clock.advance(10000)
     await ui.redraw()
     if (surface === 'desktop') expect((await svg(ui))?.props.alt).toContain('5-Stunden-Limit')
@@ -239,28 +245,34 @@ test('VS Code: kein Band, unverändert', opt(), async ($, on) => {
 
 // ---------- /bars ----------
 
-test('/bars: Befehl schlägt Einstellung, gilt sofort; Status zeigt Quelle; reset geht zurück', opt({ showCache: false }), async ($, on) => {
+test('/bars: schreibt die Einstellung (userConfig), gilt sofort in diesem Chat; reset schreibt alle Standards zurück', opt({ showCache: false }), async ($, on) => {
   const w = world(on)
   await w.start($)
   const ui = await $.ui.mount(band('desktop'))
   expect((await svg(ui))?.props.alt).not.toContain('Cache')
   const t1 = await bars($, 'show cache on')
   expect(t1).toContain('Cache-Ring: an.')
-  expect(t1).toContain('| Cache-Ring | an | /bars |')
-  expect(t1).toContain('| 5-Stunden-Balken | an | Einstellung |')
-  expect(w.saved.get('display')).toEqual({ cache: true })
-  await ui.redraw()
-  expect((await svg(ui))?.props.alt).toContain('Cache warm')
-  const t2 = await bars($, 'reset')
-  expect(t2).toContain(T.de.barsReset)
-  expect(t2).toContain('| Cache-Ring | aus | Einstellung |')
+  expect(t1).toContain('| Cache-Ring | an |')
+  expect(t1).toContain('| 5-Stunden-Balken | an |')
+  expect(t1).not.toContain('Einstellung |')
+  expect(t1).toContain('Gespeichert. Gilt in diesem Chat sofort, in anderen offenen Chats nach `/reload-plugins`.')
+  expect(w.cli.writes).toEqual([{ showCache: 'true' }])
   expect(w.saved.has('display')).toBe(false)
   await ui.redraw()
-  expect((await svg(ui))?.props.alt).not.toContain('Cache')
+  expect((await svg(ui))?.props.alt).toContain('Cache warm')
+  await bars($, 'show cache off')
+  const t2 = await bars($, 'reset')
+  expect(t2).toContain(T.de.barsReset)
+  // reset schreibt alle Anzeige-Felder auf den Standard (auch showCache, das in den Optionen aus war)
+  expect(w.cli.writes[2]).toEqual({ style: 'bar', onlyFiveHour: 'false', showFiveHour: 'true', showWeekly: 'true', showCache: 'true', showStorage: 'true', showCost: 'true', showSystem: 'false' })
+  expect(t2).toContain('| Cache-Ring | an |')
+  expect(w.saved.has('display')).toBe(false)
+  await ui.redraw()
+  expect((await svg(ui))?.props.alt).toContain('Cache warm')
   await ui.unmount()
 })
 
-test('/bars: Wert aus einem anderen Chat (Store) kommt mit dem nächsten Takt an', opt(), async ($, on) => {
+test('/bars: ein Wert im Store (aus einem anderen Chat) wirkt seit 0.16.0 nicht mehr, auch nicht mit dem Takt', opt(), async ($, on) => {
   const w = world(on)
   await w.start($, 'terminal')
   const ui = await $.ui.mount(band('terminal'))
@@ -268,7 +280,8 @@ test('/bars: Wert aus einem anderen Chat (Store) kommt mit dem nächsten Takt an
   w.saved.set('display', { weekly: false })
   await w.clock.advance(10000)
   await ui.redraw()
-  expect(await ui.find({ type: 'Text', text: /^7d$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^7d$/ })).toBeDefined()
+  expect(w.cli.writes).toEqual([])
   await ui.unmount()
 })
 
@@ -277,10 +290,12 @@ test('/bars: Cache-Ring aus lässt Rückfrage und Hinweise; /cache antwortet wei
   await w.start($)
   const text = await bars($, 'cache aus')
   expect(text).toContain(T.de.barsCacheNote)
-  expect(w.saved.get('display')).toEqual({ cache: false })
+  expect(w.cli.writes).toEqual([{ showCache: 'false' }])
   const cache = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
   expect(cache.length).toBeGreaterThan(0)
-  expect((w.saved.get('settings') as { guard?: boolean } | undefined)?.guard).not.toBe(false)
+  // Rückfrage und Hinweise bleiben an: der Cache-Ring ist nur Anzeige
+  expect(w.cli.writes.length).toBe(1)
+  expect(cache).toContain('Rückfrage vor kaltem Senden: **an**')
 })
 
 test('/bars: Speicher aus → kein PowerShell im Hintergrund; /disk scannt auf Aufruf; wieder an startet den Ring', opt({ showStorage: false, storagePath: 'E:\\' }), async ($, on) => {
@@ -309,8 +324,8 @@ test('/bars show storage on ohne storagePath: Hinweis, nichts gespeichert', opt(
   const w = world(on)
   await w.start($)
   expect(await bars($, 'show storage on')).toBe(T.de.storageOff)
-  expect(w.saved.has('display')).toBe(false)
-  expect(await bars($)).toContain('| Speicher-Ring | an, aber ohne `storagePath` | Einstellung |')
+  expect(w.cli.writes).toEqual([])
+  expect(await bars($)).toContain('| Speicher-Ring | an, aber ohne `storagePath` |')
 })
 
 test('/bars: unbekanntes Argument, Englisch, -p (ohne Oberfläche) antwortet mit Text', opt({ language: 'en' }), async ($, on) => {
@@ -319,8 +334,9 @@ test('/bars: unbekanntes Argument, Englisch, -p (ohne Oberfläche) antwortet mit
   expect(await bars($, 'show clawd off')).toContain('Unknown: "show clawd off"')
   const text = await bars($, 'show week off')
   expect(text).toContain('Weekly bar: off.')
-  expect(text).toContain('| Weekly bar | off | /bars |')
-  expect(w.saved.get('display')).toEqual({ weekly: false })
+  expect(text).toContain('| Weekly bar | off |')
+  expect(text).toContain('Saved. Applies in this chat now, in other open chats after `/reload-plugins`.')
+  expect(w.cli.writes).toEqual([{ showWeekly: 'false' }])
 })
 
 test('Review S1: Start ohne Oberfläche mit gespeichertem /bars-Wert „Speicher aus“ → kein PowerShell, nichts sichtbar', opt({ storagePath: 'E:\\' }), async ($, on) => {
@@ -337,20 +353,96 @@ test('Review S1: Start ohne Oberfläche mit gespeichertem /bars-Wert „Speicher
   await ui.unmount()
 })
 
-test('Review S2: /bars kann nicht speichern → Hinweis, der Wert gilt in diesem Chat weiter (auch nach dem Takt)', opt(), async ($, on) => {
-  const w = world(on, { denyDisplayWrite: true })
+test('Review S2: /bars kann nicht speichern (CLI lehnt ab) → Hinweis, der Wert gilt nicht (auch nach dem Takt)', opt(), async ($, on) => {
+  const w = world(on)
   await w.start($, 'terminal')
   const ui = await $.ui.mount(band('terminal'))
+  w.cli.fail = 'Speicher voll'
   const text = await bars($, 'show 7d off')
-  expect(text).toContain('Nicht gespeichert')
+  expect(text).toBe('Nicht gespeichert: Speicher voll.')
+  expect(w.cli.writes).toEqual([])
   await w.clock.advance(10000)
   await ui.redraw()
-  expect(await ui.find({ type: 'Text', text: /^7d$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^7d$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^5h$/ })).toBeDefined()
+  expect(await bars($)).toContain('| Wochen-Balken | an |')
   await ui.unmount()
 })
 
 test('Statuszeile: storagePath ohne Laufwerksbuchstaben', opt({ storagePath: '/home/x' }), async ($, on) => {
   world(on)
-  expect(await bars($)).toContain('| Speicher-Ring | an, aber `storagePath` ohne Laufwerksbuchstaben | Einstellung |')
+  expect(await bars($)).toContain('| Speicher-Ring | an, aber `storagePath` ohne Laufwerksbuchstaben |')
+})
+
+// ---------- Umzug alter Store-Werte nach userConfig (0.16.0) ----------
+
+test('0.16.0 Umzug: gespeichertes display und settings wandern einmal per CLI nach userConfig, Store-Schlüssel werden markiert (0.16.2), Wirkung sofort', opt(), async ($, on) => {
+  const w = world(on, {
+    saved: new Map<string, unknown>([
+      ['cache:sess-1', { lastActivity: NOW - 10 * MIN, ttl: 60, ttlSource: 'gemessen', ctx: 212000, model: 'claude-opus-5-5', savedAt: NOW - 10 * MIN }],
+      ['display', { cost: false, style: 'ring' }],
+      ['settings', { guard: false, bigTokens: 300000 }],
+    ]),
+  })
+  await w.start($)
+  // Genau ein Schreiben mit den abweichenden Werten (Strings, wie `claude plugin configure` sie nimmt)
+  expect(w.cli.writes.length).toBe(1)
+  expect(w.cli.writes[0]).toEqual({ showCost: 'false', style: 'ring', askBeforeColdSend: 'false', bigTokens: '300000' })
+  // Markiert statt geleert (sidekick 0.23.0 Review S1): ein Chat mit 0.15.x liest die echten Werte bis /reload-plugins weiter
+  expect(w.saved.get('display')).toEqual({ cost: false, style: 'ring', migrated: true })
+  expect(w.saved.get('settings')).toEqual({ guard: false, bigTokens: 300000, migrated: true })
+  const text = await bars($)
+  expect(text).toContain('| Kosten-Ring | aus |')
+  expect(text).toContain('| Stil | Ringe |')
+  const cache = (await $.command.run({ command: 'cache', args: '' } as never)).text as string
+  expect(cache).toContain('Rückfrage vor kaltem Senden: **aus** ab 300k')
+  // ein zweiter Start findet nichts mehr
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await w.clock.advance(2000)
+  await w.clock.settle()
+  expect(w.cli.writes.length).toBe(1)
+})
+
+test('0.16.0 Umzug: die veraltete Einstellung onlyFiveHour wird zu showWeekly aus und onlyFiveHour aus', opt({ onlyFiveHour: true }), async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  expect(w.cli.writes).toEqual([{ showWeekly: 'false', onlyFiveHour: 'false' }])
+  expect(await bars($)).toContain('| Wochen-Balken | aus |')
+})
+
+test('0.16.0 Umzug gescheitert: der alte Wert gilt in dieser Session, der Store bleibt für den nächsten Start', opt(), async ($, on) => {
+  const w = world(on, {
+    saved: new Map<string, unknown>([
+      ['cache:sess-1', { lastActivity: NOW - 10 * MIN, ttl: 60, ttlSource: 'gemessen', ctx: 212000, model: 'claude-opus-5-5', savedAt: NOW - 10 * MIN }],
+      ['display', { cost: false }],
+    ]),
+  })
+  w.cli.fail = 'kaputt'
+  await w.start($)
+  expect(w.cli.writes).toEqual([])
+  expect(w.saved.get('display')).toEqual({ cost: false })
+  expect(await bars($)).toContain('| Kosten-Ring | aus |')
+})
+
+test('0.16.0 /bars week on schreibt onlyFiveHour aus mit', opt({ showWeekly: false }), async ($, on) => {
+  const w = world(on)
+  await w.start($)
+  await $.command.run({ command: 'bars', args: 'week on' } as never)
+  expect(w.cli.writes.at(-1)).toEqual({ showWeekly: 'true', onlyFiveHour: 'false' })
+})
+
+test('0.16.0 Weg 1 (eigene Zeilen gelistet): /bars cache off über $.config.set, die Tabelle zeigt sofort den neuen Stand', opt(), async ($, on) => {
+  const w = world(on)
+  const sets: { key: string; value: unknown }[] = []
+  on('config.list', () => ({ value: [{ key: 'limit-bars.showCache', label: 'Cache ring', kind: 'boolean', value: true, provider: { plugin: 'limit-bars@fynn-mods', tier: 'user' }, isLocked: false }] }))
+  on('config.set', ($2: unknown, e: any) => {
+    sets.push({ key: e.key, value: e.value })
+    return { value: e.value }
+  })
+  await w.start($)
+  const text = (await $.command.run({ command: 'bars', args: 'cache off' } as never)).text as string
+  expect(sets).toEqual([{ key: 'limit-bars.showCache', value: false }])
+  expect(w.cli.writes).toEqual([])
+  expect(text).toContain('| Cache-Ring | aus |')
+  expect(text).toContain('Gespeichert, gilt sofort.')
 })

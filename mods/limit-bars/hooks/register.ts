@@ -4,7 +4,7 @@
 // aller Chats auf dem Rechner liegt in `$.store` unter `limits` (docs/raw/en/reference.md:221).
 // Cache: `turn.step` der Hauptschleife (usage mit cache_read/cache_creation, types@2.1.289:12837-12869), gespeichert in `$.store`.
 // Dazu die Cache-Wache nach Nate Herks Cache Keeper (docs/vorlagen/nateherk-cache-keeper, MIT): Rückfrage vor kaltem Senden,
-// Hinweis kurz vor Ablauf, /cache, /handoff mit Skill „uebergabe“, /keepwarm (Standard aus).
+// Hinweis kurz vor Ablauf, /cache, /keepwarm (Standard aus).
 // Texte en/de nach `userConfig.language` (i18n.ts); Argumente englisch, die deutschen gelten weiter als Alias.
 // Fail-open: Ein Fehler heißt nur „keine Anzeige“ bzw. „Nachricht geht unverändert durch“; was andere Mods zeichnen, bleibt erhalten.
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
@@ -31,28 +31,29 @@ import {
   ttlOf,
 } from './cache.ts'
 import type { CacheMem, KeepWarm, ReportLimit, Settings, StepUsage } from './cache.ts'
-import { BARS_HINT, CACHE_ARGS, CACHE_HINT, HANDOFF_HINT, T, hhmm, langOf, usd } from './i18n.ts'
+import { BARS_HINT, CACHE_ARGS, CACHE_HINT, T, hhmm, langOf, usd } from './i18n.ts'
 import {
   DISK_WORDS,
   HELP_WORDS,
-  HANDOFF_CONTINUE_WORDS,
-  HANDOFF_SHOW_WORDS,
   KEEP_OFF_WORDS,
   PARTS,
   cleanOverrides,
   cleanStyle,
   displayFromOptions,
-  effectiveDisplay,
   isHelp,
   parseBars,
   styleFromOptions,
 } from './display.ts'
-import type { Display, Overrides, Style } from './display.ts'
+import type { Display, Style } from './display.ts'
 import { helpMarkdown, helpTree } from './help.ts'
 import type { HelpData } from './help.ts'
 import { HELP_ACCENT, barsHelpData } from './helpdata.ts'
 import type { Lang } from './i18n.ts'
 import { isLanguage, languageCommand } from './language.ts'
+import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
+import { storeOffDefaults } from './offdefaults.ts'
+import type { Values } from './settings.ts'
+import { PART_FIELD, SETTINGS } from './fields.ts'
 import { ringFilled } from './ring.ts'
 import {
   PROBE_SCRIPT,
@@ -71,8 +72,8 @@ import type { Drive, Scan, StorageReport } from './storage.ts'
 import { desktopSvg } from './svg.ts'
 import { cleanHere, costBlock, costFilled, costText, costView } from './cost.ts'
 import type { Here } from './cost.ts'
-import { CELL_W, SYS_SCRIPT, cellText, levelColor, parseSample, sysTermWidth, sysView, takeLines, termColumns } from './system.ts'
-import type { Sample } from './system.ts'
+import { CELL_W, SYS_SCRIPT, cellText, levelColor, parseSample, shownPrev, sysAdopt, sysTermWidth, sysView, sysViewOf, takeLines, termColumns } from './system.ts'
+import type { Sample, SysRow } from './system.ts'
 import {
   GREY,
   NO_FIVE_AFTER,
@@ -94,21 +95,15 @@ import type { Opts, ResetStyle, Shared, Shown, Win } from './view.ts'
 // Optionen aus userConfig, in register() gesetzt
 let lang: Lang = 'en'
 let opts: Opts = { resetStyle: 'mixed', highlightAt: 90, onlyFiveHour: false, lang }
-// Welche Teile zu sehen sind (display.ts): userConfig, darüber die `/bars`-Werte aus `$.store` (`display`), die jeder Takt
-// neu liest, damit ein `/bars` in einem anderen Chat hier binnen 2 s wirkt
+// Welche Teile zu sehen sind (display.ts): seit 0.16.0 nur userConfig; `/bars` schreibt dorthin (SETTINGS-SPEC §4)
 let baseDisplay: Display = displayFromOptions({})
-let overrides: Overrides = {}
-const shownParts = () => effectiveDisplay(baseDisplay, overrides)
-let displayPinned = false // /bars konnte nicht speichern: der lokale Wert gilt, der Takt liest ihn nicht neu
-// Balken oder Ringe (Ausbau 0.10.0): userConfig `style`, darüber `/bars style` (`display.style` im Store); Ringe nur im Desktop
+const shownParts = () => baseDisplay
+// Balken oder Ringe (Ausbau 0.10.0): userConfig `style`; Ringe nur im Desktop
 let baseStyle: Style = 'bar'
-let styleOverride: Style | undefined
-const styleNow = (): Style => styleOverride ?? baseStyle
+const styleNow = (): Style => baseStyle
 // Zuletzt gezeichnete Oberfläche: `/bars style ring` sagt im Terminal, dass Ringe nur im Desktop erscheinen (command.run nennt
 // keine Oberfläche, types@2.1.295 CommandRunInput)
 let lastSurface: string | null = null
-/** Was unter `display` gespeichert wird: die Schalter und, falls per Befehl gesetzt, der Stil. */
-const displayValue = () => (styleOverride ? { ...overrides, style: styleOverride } : { ...overrides })
 
 // Limits: flüchtig (Kontingent gehört zum Konto und kommt mit jeder Messung neu)
 let wins: Win[] = []
@@ -132,6 +127,7 @@ const TICK = 2000
 let timer: Timer | null = null
 let drawnKey = '' // was zuletzt gezeichnet wurde (Texte, Farben, Füllstufen)
 let awaitingRender = false // ein Neuzeichnen ist angefordert, aber noch nicht gekommen
+let awaitingSince = 0 // seit wann (erste offene Anforderung)
 let lastTick = 0 // Uhrzeit des letzten Ticks (bzw. des Starts)
 // Lehnt eine Claude-Code-Version das Umschreiben von bodyColumns ab, stapelt limit-bars danach über dem Rest (SPEC.md, Phase 0)
 let noRewrite = false
@@ -142,7 +138,6 @@ let mem: CacheMem = emptyMem()
 let settings: Settings = { ...DEFAULT_SETTINGS }
 let justCompacted = false
 let working = false // ein Turn der Hauptschleife läuft (turn.step … turn.complete)
-let currentTurn = ''
 let cold = { count: 0, usd: 0 } // kalte Neustarts dieser Sitzung
 let last: { read: number; written: number; at: number } | null = null
 let sessionUsd: number | null = null
@@ -156,8 +151,6 @@ let keepTimer: Timer | null = null
 let keepFor = ''
 let pinging = false
 let forking = false // ein Warmhalte-Ping ist unterwegs
-// Übergabe: /handoff startet den Skill, turn.complete fängt dessen Antwort ab
-const H = { pending: false, armed: false, notTurn: '', text: '', continuing: false }
 
 // Speicher-Ring (SPEC.md, Ausbau v0.4.0): Laufwerk aus `userConfig.storagePath` (leer = aus, nur Windows). Gesamt/frei über
 // `probe`, Bytes je Dateiart über `scan` (beides `powershell.exe` per `$.process.run`, Pfad nur über LB_PATH). Der Stand liegt
@@ -180,7 +173,13 @@ let costHere: Here | null = null
 let isWindows = false
 // Systemwerte (Ausbau 0.13.0): ein dauerhafter PowerShell-Prozess je Chat, solange das Band gezeichnet wird und die Liste an ist
 let sysCur: Sample | undefined // letzte Messung
-let sysPrev: Sample | undefined // die davor, für den Trendpfeil
+// Nachtrag 0.14.1: Was das Band zeigt, getrennt von der Messung. Neu übernommen nur nach den Regeln in `sysAdopt` oder von
+// einem Zeichnen aus anderem Grund; `keyOf`, Terminal-Text und `/bars` lesen nur diesen Stand.
+let sysShown: SysRow[] | undefined
+let sysShownAt = 0 // Zeitpunkt der letzten Übernahme (für SYS_REDRAW)
+let sysShownFrom: number | null = null // `at` der übernommenen Messung, -1 = Zeilen ohne frische Messung („–“), null = noch nichts
+let sysRedraws = 0 // Neuzeichnen wegen Systemwerten seit `sysRedrawsFrom` (Zeile in `/bars`)
+let sysRedrawsFrom = 0
 let sysStream: { return: (v?: never) => Promise<unknown> } | null = null
 let sysStartedAt = 0 // Start des laufenden Prozesses, für den Wächter
 // Im Terminal passt die Liste neben langen Limits nicht in die 44 Spalten: dann kein Prozess und kein Neuzeichnen für sie
@@ -191,10 +190,11 @@ let sysFails = 0 // Fehlstarts in Folge (Prozess endet ohne eine Messung)
 let sysPausedUntil = 0
 let sysErr = ''
 let sysErrAt = 0
-let lastRenderAt = 0 // letztes Zeichnen des Bands: ohne Zeichnen endet der Prozess
 const SYS_FAILS = 3
 const SYS_PAUSE = 60 * 60_000
-const SYS_IDLE = 15_000 // so lange ohne Zeichnen, dann endet der Prozess
+// So lange ein angefordertes Neuzeichnen ausbleibt, dann endet der Prozess. Gemessen ab der Anforderung (`awaitingSince`), nicht
+// ab dem letzten Zeichnen: seit 0.14.1 liegt das oft länger zurück, ohne dass etwas fehlt (Nachtrag 0.14.1, Regel 6)
+const SYS_IDLE = 15_000
 
 const reports = new Map<string, StorageReport>()
 let reportNo = 0
@@ -203,6 +203,88 @@ const helps = new Map<string, HelpData>()
 let helpNo = 0
 // userConfig, wie register() sie bekommt: für die Spalte EINSTELLUNGEN der Hilfe
 let rawOptions: Readonly<Record<string, unknown>> = {}
+
+// Einstellungen (0.16.0, docs/SETTINGS-SPEC.md §4): einzige Quelle ist userConfig. /bars und /cache schreiben die Felder über
+// hooks/settings.ts (Terminal: $.config.set, die Mod lädt neu; Desktop/-p: claude plugin configure, hier sofort nachgezogen).
+// Die Store-Werte `display` und `settings` (bis 0.15.0) werden einmal umgezogen.
+const SELF = 'limit-bars'
+let cfg: Values = readSettings(SETTINGS, undefined)
+
+/** Cache-Einstellungen aus userConfig. */
+function cacheSettings(c: Values): Settings {
+  const ttl = c.cacheTtl === '5' ? 5 : c.cacheTtl === '60' ? 60 : 0
+  const big = Number(c.bigTokens)
+  return { ttl, guard: c.askBeforeColdSend !== false, bigTokens: Number.isFinite(big) && big > 0 ? big : DEFAULT_SETTINGS.bigTokens, alerts: c.expiryNotice !== false }
+}
+
+/** Die Felder zu geänderten Cache-Einstellungen (`/cache warn|hints|big|ttl`). */
+function cachePatch(n: Settings): Values {
+  return { askBeforeColdSend: n.guard, expiryNotice: n.alerts, bigTokens: n.bigTokens, cacheTtl: n.ttl === 0 ? 'auto' : String(n.ttl) }
+}
+
+/** Werte übernehmen (aus `options`, nach einem Schreiben über Weg 2 oder dem Umzug). */
+function applyCfg(values: Values) {
+  cfg = { ...cfg, ...values }
+  baseDisplay = displayFromOptions(cfg)
+  baseStyle = styleFromOptions(cfg)
+  settings = cacheSettings(cfg)
+  rawOptions = cfg
+  opts = { ...opts, onlyFiveHour: cfg.onlyFiveHour === true }
+}
+
+/**
+ * Store bis 0.15.0: `display` (/bars, schlug userConfig) und `settings` (/cache). Was dort stand, galt. Ergibt die Felder;
+ * `onlyFiveHour` (veraltet) geht dabei in `showWeekly` auf.
+ */
+export function legacyValues(display: unknown, cache: unknown, current: Values): Partial<Values> {
+  const out: Partial<Values> = {}
+  const ov = cleanOverrides(display)
+  for (const p of PARTS) if (ov[p] !== undefined) out[PART_FIELD[p]] = ov[p]!
+  const st = cleanStyle(display)
+  if (st) out.style = st
+  if (current.onlyFiveHour === true) {
+    if (out.showWeekly === undefined) out.showWeekly = false
+    out.onlyFiveHour = false
+  }
+  if (cache && typeof cache === 'object') Object.assign(out, cachePatch(cleanSettings(cache)))
+  return out
+}
+
+/**
+ * Alten Schlüssel markieren (0.16.2), nur wenn ihn seit dem Lesen niemand geändert hat; sonst zieht der nächste Start die Änderung um
+ * (Review K1). Kein Objekt (kaputter Eintrag): leeren wie bis 0.16.1.
+ */
+async function markIfSame($: EngineInterface, key: string, raw: unknown) {
+  const now = await $.store.get(key)
+  if (JSON.stringify(now) !== JSON.stringify(raw)) return
+  await $.store.set(key, raw && typeof raw === 'object' ? { ...raw, migrated: true } : null)
+}
+
+/** Einmal je Start (SETTINGS-SPEC §4), im Hintergrund. */
+async function migrate($: EngineInterface) {
+  let display: unknown, cache: unknown
+  try {
+    display = await $.store.get('display')
+    cache = await $.store.get('settings')
+  } catch {
+    return
+  }
+  // Markiert statt geleert (0.16.2, wie sidekick 0.23.0 Review S1): Ein Chat, der nach dem Update bis `/reload-plugins` noch mit
+  // 0.15.x läuft, liest `display` und `settings` im Takt bzw. vor jedem Senden neu; geleert arbeitete er mit Standards, und sein
+  // nächstes Schreiben brächte diese als Altwerte zurück. 0.15.x übergeht das Feld `migrated` und schreibt ohne es.
+  const had = (v: unknown) => v !== undefined && v !== null && !(typeof v === 'object' && (v as { migrated?: unknown }).migrated === true)
+  if (!had(display) && !had(cache) && cfg.onlyFiveHour !== true) return
+  const clear = async () => {
+    if (had(display)) await markIfSame($, 'display', display)
+    if (had(cache)) await markIfSame($, 'settings', cache)
+  }
+  const { apply } = await migrateSettings($, SELF, SETTINGS, cfg, legacyValues(had(display) ? display : undefined, had(cache) ? cache : undefined, cfg), clear, lang)
+  if (Object.keys(apply).length) {
+    applyCfg(apply)
+    maybeStartDisk($)
+    $.ui.invalidate('ui.render')
+  }
+}
 
 /** Schnappschuss unter einer neuen Kennung `#…` ablegen; die älteste fällt heraus. */
 function rememberHelp(now: number, data: HelpData): string {
@@ -214,10 +296,6 @@ function rememberHelp(now: number, data: HelpData): string {
 
 const STYLES: readonly ResetStyle[] = ['mixed', 'clock', 'countdown']
 const KEEP_MAX_H = 4
-const SKILL = /(^|:)uebergabe$/
-// Überschrift der Übergabe in beiden Sprachen (skills/uebergabe/SKILL.md); wie bisher auch als `##`/`###`
-const HANDOFF_TITLE = /^#{1,3} (Handoff|Übergabe)\b/m
-
 const msg = (err: unknown) => String((err as Error)?.message ?? err).slice(0, 140)
 
 /**
@@ -326,12 +404,11 @@ async function readShared($: EngineInterface): Promise<void> {
   }
 }
 
-/** Ein Tick: Session, /bars-Werte, eigene Messung, gemeinsamer Stand; neu gezeichnet wird nur bei sichtbarer Änderung. */
+/** Ein Tick: Session, eigene Messung, gemeinsamer Stand; neu gezeichnet wird nur bei sichtbarer Änderung. */
 async function pollStep($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
   lastTick = now
   await bindSession($)
-  await readDisplay($)
   maybeStartDisk($)
   try {
     // Kostenlos ohne `breakdown`; leer heißt "noch keine Antwort", dann bleibt der bisherige Stand
@@ -346,8 +423,10 @@ async function pollStep($: EngineInterface): Promise<void> {
   }
   await readShared($)
   await readCostState($)
-  alertStep($, now)
-  refresh($, now)
+  await alertStep($, now).catch(() => {})
+  // Systemwerte: eine veraltete Messung („–“) gilt sofort, eine wartende Abweichung ab 5 s (Nachtrag 0.14.1)
+  const sysTook = takeSys(now, false)
+  if (refresh($, now) && sysTook) sysRedraws += 1
   sysStep($, now)
   // Speicher-Ring: Gesamt/frei alle 10 min (nur solange gezeichnet wird, wie der ganze Takt)
   if (probedAt > 0 && now - probedAt >= PROBE_MS && driveOf(storagePath) && shownParts().storage) {
@@ -493,90 +572,18 @@ function keepStep($: EngineInterface) {
     })
 }
 
-/** Hinweis, sobald ein großer Chat in die gelbe Phase geht; einmal je Phase (SPEC, Vorwarnung). */
-function alertStep($: EngineInterface, now: number) {
+/**
+ * Hinweis, sobald ein großer Chat in die gelbe Phase geht; einmal je Phase (SPEC, Vorwarnung). Ausbau 0.15.0: Schlägt sidekick
+ * selbst vor (`sidekickAsks`), kommt kein Toast. `alerted` wird vor dem Warten gesetzt, damit ein zweiter Tick nicht doppelt prüft.
+ */
+async function alertStep($: EngineInterface, now: number): Promise<void> {
   if (!settings.alerts || keep || mem.ctx < settings.bigTokens || alerted === mem.lastActivity) return
   const ttl = ttlOf(mem, settings)
   const st = cacheState(mem.lastActivity, ttl, now, false)
   if (st.kind !== 'cooling') return
   alerted = mem.lastActivity
+  if (await sidekickAsks($)) return
   $.ui.toast(T[lang].alert(spanText(st.left, lang), tokensText(mem.ctx, lang), usd(rewriteCost(mem.ctx, mem.model, ttl), lang)), { timeoutMs: 20000 })
-}
-
-/** Die Übergabe ohne Vorrede vor der Überschrift (`# Handoff` bzw. `# Übergabe`). */
-function handoffBody(answer: string): string {
-  const t = String(answer || '').trim()
-  const i = t.search(HANDOFF_TITLE)
-  return i > 0 ? t.slice(i) : t
-}
-
-async function loadHandoffs($: EngineInterface): Promise<{ at: number; session: string; text: string }[]> {
-  try {
-    const v = await $.store.get('handoffs')
-    return Array.isArray(v) ? v.filter((h) => h && typeof h.text === 'string' && typeof h.at === 'number') : []
-  } catch {
-    return []
-  }
-}
-
-function captureHandoff($: EngineInterface, answer: string, now: number) {
-  const t = T[lang]
-  H.armed = false
-  const body = handoffBody(answer)
-  if (body.length < 200) {
-    $.ui.toast(t.handoffEmpty, { timeoutMs: 8000 })
-    return
-  }
-  H.text = body
-  // Die letzten 3 Übergaben in `$.store`; scheitert /clear, holt `/handoff show` sie zurück
-  loadHandoffs($)
-    .then((list) => $.store.set('handoffs', [{ at: now, session: sessionId, text: body }, ...list].slice(0, 3)))
-    .catch(() => {})
-  // Nicht im Hook fragen: der Turn endet gerade, ein Dialog hielte ihn offen
-  later($, 300, () => {
-    $.ui
-      // Die Frage endet mit „?“ (types@2.1.289:2340); Optionen tragen keine Beschreibung, darum steht die Erklärung im Fragetext
-      .ask(t.handoffQuestion, { options: [t.clearGo, t.keepChat], header: t.handoffHeader })
-      .then((a) => (a === t.clearGo ? clearAndContinue($) : undefined))
-      .catch(() => $.ui.toast(t.handoffSavedLater, { timeoutMs: 12000 }))
-  })
-}
-
-async function clearAndContinue($: EngineInterface) {
-  const t = T[lang]
-  if (H.continuing) return
-  if (!H.text) {
-    const list = await loadHandoffs($)
-    if (!list[0]) {
-      $.ui.toast(t.handoffNone, { timeoutMs: 8000 })
-      return
-    }
-    H.text = list[0].text
-  }
-  if (working) {
-    $.ui.toast(t.handoffBusy, { timeoutMs: 8000 })
-    return
-  }
-  H.continuing = true
-  const text = `${t.handoffPrefix}\n\n${H.text}`
-  try {
-    try {
-      await $.command.run({ command: 'clear' })
-    } catch (err) {
-      $.ui.toast(t.clearFailed(msg(err)), { timeoutMs: 15000 })
-      return
-    }
-    H.text = ''
-    try {
-      await $.prompt.submit({ text, asUser: true })
-      // /clear startet eine neue Session, die alte bleibt erhalten (docs/raw/related/interactive-mode.md:276)
-      $.ui.toast(t.handoffStarted, { timeoutMs: 8000 })
-    } catch {
-      $.ui.toast(t.handoffSendFailed, { timeoutMs: 15000 })
-    }
-  } finally {
-    H.continuing = false
-  }
 }
 
 /** Was Balken, Ringe und Terminal-Blöcke jetzt zeigen; gemeinsam für das Zeichnen und den Änderungsschlüssel. */
@@ -605,8 +612,9 @@ function snapshot(now: number) {
     diskBlock: dv ? `${dv.label} ${dv.main}${dv.sub}` : undefined,
     cost: cv && costHere ? { view: cv, filled: costFilled(cv, costHere.chatUsd) } : undefined,
     costBlock: cv ? costBlock(cv) : undefined,
-    // Säulen schon vor der ersten Messung (gedimmt, „–“), damit die Breite im Band nicht springt
-    sys: sh.system && isWindows ? sysView(sysCur, sysPrev, now, lang) : undefined,
+    // Liste schon vor der ersten Messung (gedimmt, „–“), damit die Breite im Band nicht springt. Gezeigt wird `sysShown`, nicht
+    // die letzte Messung (Nachtrag 0.14.1, Regel 1)
+    sys: sh.system && isWindows ? sysViewOf(sysShown ?? sysView(undefined, undefined, now, lang).rows, lang) : undefined,
   }
 }
 
@@ -631,7 +639,7 @@ function keyOf(v: ReturnType<typeof snapshot>): string {
     r ? [r.main, r.sub ?? '', r.subColor ?? '', r.color, r.mainColor, ringFilled(r.fill), r.kept] : null,
     v.block?.text ?? '',
     v.disk ? [v.disk.main, v.disk.sub, v.disk.arcs.map((a) => [a.color, Math.round(a.to * 360)])] : null,
-    // Kosten auf den Cent bzw. die Kurzform, Säulen auf ganze Prozent (SPEC Ausbau 0.12.0, Tests „keyOf“)
+    // Kosten auf den Cent bzw. die Kurzform; Systemwerte wie angezeigt (`sysShown`), eine Messung allein ändert den Schlüssel nicht
     v.cost ? [v.cost.view.main, v.cost.view.sub, v.cost.filled, v.cost.view.grey] : null,
     v.sys && sysVisible !== false ? v.sys.rows.map((r) => [r.tag, r.pct, r.trend]) : null,
   ])
@@ -775,19 +783,6 @@ async function startDisk($: EngineInterface): Promise<void> {
   if (shownParts().storage && scanAllowed(s, now) && (!disk.scan || dayOf(disk.scan.at) !== dayOf(now))) await scanDisk($)
 }
 
-/** `/bars`-Werte aus dem Store; abgelehnt: es bleibt beim bisherigen Stand. */
-async function readDisplay($: EngineInterface): Promise<void> {
-  // Ließ sich ein /bars-Wert nicht speichern, gilt er in diesem Chat bis zum nächsten erfolgreichen Schreiben (Review 0.6.0, S2)
-  if (displayPinned) return
-  try {
-    const v = await $.store.get('display')
-    overrides = cleanOverrides(v)
-    styleOverride = cleanStyle(v)
-  } catch {
-    // bisheriger Stand
-  }
-}
-
 /** Speicher-Ring starten, wenn er gezeigt werden soll und noch nicht läuft (Sitzungsstart, erstes Zeichnen, Takt). */
 function maybeStartDisk($: EngineInterface): void {
   if (diskStarted || !driveOf(storagePath) || !shownParts().storage) return
@@ -825,6 +820,20 @@ async function sidekickAsks($: EngineInterface): Promise<boolean> {
     const st = (await $.state.get({ plugin: 'sidekick', key: 'status' })).value
     if (st?.level !== 'cache' && st?.level !== 'guide') return false
     return (await $.command.list()).some((c) => c.name === 'sidekick' && c.source === 'plugin')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Ausbau 0.15.0: Steht sidekicks `/handoff` in der Befehlsliste? Nur dann nennen `/cache` und die Abbrechen-Meldung ihn.
+ * Der Plugin-Name ist `sidekick` oder `sidekick@<marketplace>`; ohne Liste oder bei einem Fehler: nein.
+ */
+async function sidekickHandoffListed($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.command.list()).some(
+      (c) => c.name === 'handoff' && c.source === 'plugin' && (c.plugin === 'sidekick' || !!c.plugin?.startsWith('sidekick@')),
+    )
   } catch {
     return false
   }
@@ -879,12 +888,13 @@ function startSys($: EngineInterface): void {
           if (!sample) continue
           got = true
           sysFails = 0
-          sysPrev = sysCur
           sysCur = sample
-          refresh($, now)
+          if (!sysRedrawsFrom) sysRedrawsFrom = now
+          // Neu gezeichnet wird nur, wenn die Messung übernommen wird (Nachtrag 0.14.1, Regel 2)
+          if (takeSys(now, false) && refresh($, now)) sysRedraws += 1
           // Neuzeichnen angefordert, aber 15 s keins gekommen (Chat verdeckt, Band eingeklappt): beenden; das nächste Zeichnen
           // startet neu. Nur mit offener Anforderung: Bei gleichbleibenden Werten zeichnet ohnehin nichts neu (Review 0.13.0 S1)
-          if (awaitingRender && now - lastRenderAt > SYS_IDLE) stopSys()
+          if (awaitingRender && now - awaitingSince > SYS_IDLE) stopSys()
         }
         if (sysStream !== stream) break
       }
@@ -932,14 +942,33 @@ function publishBand($: EngineInterface, v: ReturnType<typeof snapshot>, key = k
     })
 }
 
-/** Neu zeichnen nur bei sichtbarer Änderung (Minute, Prozent, Kontext, Zustand). */
-function refresh($: EngineInterface, now: number) {
+/** Neu zeichnen nur bei sichtbarer Änderung (Minute, Prozent, Kontext, Zustand). `true`, wenn neu gezeichnet werden soll. */
+function refresh($: EngineInterface, now: number): boolean {
   const v = snapshot(now)
   const key = keyOf(v)
   publishBand($, v, key)
-  if (key === drawnKey) return
+  if (key === drawnKey) return false
+  if (!awaitingRender) awaitingSince = now
   awaitingRender = true
   $.ui.invalidate('ui.render')
+  return true
+}
+
+/**
+ * Systemwerte in die Anzeige übernehmen (Nachtrag 0.14.1). Ohne `force` nur nach den Regeln in `sysAdopt` (Farbstufe, Zeile
+ * dazu/weg, ≥ 2 Punkte nach ≥ 5 s); mit `force` (ein Zeichnen kommt ohnehin) immer die neueste Messung. Dieselbe Messung wird
+ * nie zweimal übernommen, sonst verlöre der Pfeil seinen Vergleichswert. Der Pfeil vergleicht mit dem zuvor angezeigten Wert.
+ */
+function takeSys(now: number, force: boolean): boolean {
+  if (!isWindows || !shownParts().system) return false
+  const live = sysView(sysCur, shownPrev(sysShown), now, lang).rows
+  const from = live[0]!.pct === null ? -1 : sysCur!.at
+  if (from === sysShownFrom) return false
+  if (!force && !sysAdopt(sysShown, live, now - sysShownAt)) return false
+  sysShown = live
+  sysShownAt = now
+  sysShownFrom = from
+  return true
 }
 
 export function register(on: On, options: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
@@ -956,9 +985,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   }
   storagePath = typeof options.storagePath === 'string' ? options.storagePath.trim() : ''
   isWindows = isWindows || !!driveOf(storagePath)
-  baseDisplay = displayFromOptions(options)
-  baseStyle = styleFromOptions(options)
-  rawOptions = options
+  cfg = {}
+  applyCfg(readSettings(SETTINGS, options))
 
   on('session.start', async ($, e, next) => {
     // Windows: Laufwerksbuchstabe im Arbeitsordner (SessionStartInput.cwd, absolut) oder in storagePath; ohne neues Recht
@@ -966,28 +994,29 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // Nur wo das Band gezeichnet wird (types@2.1.288:9576); `-p`/SDK liefern null, VS Code und mobil zeichnen kein Band
     if (e.surface === 'terminal' || e.surface === 'desktop') {
       lastSurface = e.surface
-      await readDisplay($)
       await loadWindows($)
       publishBand($, snapshot(await $.clock.now()))
       if (wins.length > 0) $.ui.invalidate('ui.render')
       // Speicher-Ring: außerhalb des Hooks, der Sitzungsstart wartet nicht auf PowerShell; ausgeblendet kein PowerShell
       maybeStartDisk($)
     }
-    try {
-      settings = cleanSettings(await $.store.get('settings'))
-    } catch {
-      // Standard
-    }
+    // Danach (nicht gleichzeitig, beide schreiben settings.json) die Aus-Standards einmal speichern (hooks/offdefaults.ts)
+    void migrate($).catch(() => {}).then(() => storeOffDefaults($, SELF, SETTINGS))
+    // Ausbau 0.15.0: die Übergaben von /handoff (bis 0.14.x) sind weg, /handoff gehört sidekick; der Rest im Speicher wird einmal gelöscht
+    $.store.delete('handoffs').catch(() => {})
     await bindSession($)
     $.clock
       .now()
-      .then((now) => cleanup($, now))
+      .then((now) => {
+        // Zählung „Neuzeichnen wegen Systemwerten“ ab Sitzungsstart, damit `/bars` die Zeile von Anfang an zeigt
+        if (!sysRedrawsFrom) sysRedrawsFrom = now
+        return cleanup($, now)
+      })
       .catch(() => {})
     // Befehle zuletzt, jeder für sich (CLAUDE.md, Registrieren in session.start)
     const t = T[lang]
     for (const c of [
       { name: 'cache', description: t.cmdCache, argumentHint: CACHE_HINT },
-      { name: 'handoff', description: t.cmdHandoff, argumentHint: HANDOFF_HINT },
       { name: 'keepwarm', description: t.cmdKeepwarm, argumentHint: t.hintKeepwarm },
       { name: 'disk', description: t.cmdStorage, argumentHint: '[refresh]' },
       { name: 'bars', description: t.cmdBars, argumentHint: BARS_HINT },
@@ -1013,7 +1042,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       // ohne Uhr keine Auswertung
     }
     working = true
-    currentTurn = e.turnId
     const r = yield* next(e)
     try {
       const u = r.usage
@@ -1041,11 +1069,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const r = await next(e)
     if (e.agentId) return r
     working = false
-    try {
-      if (H.armed && e.turnId !== H.notTurn) captureHandoff($, e.reason === 'answer' ? e.answer : '', await $.clock.now())
-    } catch {
-      H.armed = false
-    }
     return r
   })
 
@@ -1060,13 +1083,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('prompt.submit', async ($, e, next) => {
     const t = T[lang]
     let question = ''
-    // Einstellungen frisch lesen: `/cache warn off` in einer anderen Session soll sofort auch hier gelten (0.2.1).
-    // Fail-open: geht das Lesen schief, bleibt der Stand dieser Session.
-    try {
-      settings = cleanSettings(await $.store.get('settings'))
-    } catch {
-      // Stand dieser Session
-    }
     try {
       const fromUser = e.origin.kind === 'composer' || e.origin.kind === 'bridge'
       if (settings.guard && fromUser && !e.turnId && !e.text.trim().startsWith('/')) {
@@ -1101,7 +1117,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
     if (answer === t.abort) {
       try {
-        $.ui.toast(t.abortToast, { timeoutMs: 12000 })
+        $.ui.toast((await sidekickHandoffListed($)) ? t.abortToastHandoff : t.abortToast, { timeoutMs: 12000 })
       } catch {
         // nur der Hinweis fehlt
       }
@@ -1130,21 +1146,17 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const [key, value] = e.args.trim().toLowerCase().split(/\s+/)
     let note = ''
     if (key) {
-      // `$.store` teilen sich alle Sessions: vor dem Schreiben neu lesen, sonst überschreibt eine die andere (Review S2)
-      try {
-        settings = cleanSettings(await $.store.get('settings'))
-      } catch {
-        // bleibt beim Stand dieser Session
-      }
       const s = applySetting(settings, key, value ?? '')
       if (!s) return { text: t.unknownArg(e.args.trim(), CACHE_ARGS) }
-      settings = s
-      try {
-        await $.store.set('settings', settings)
-        note = `${t.saved}\n`
-      } catch {
-        note = `${t.notSaved}\n`
-      }
+      // Nur das Feld, das der Befehl nennt: ein anderer Chat kann die übrigen inzwischen geändert haben (Review 0.16.0 S1)
+      const before = cachePatch(settings)
+      const patch: Values = {}
+      for (const [k, v] of Object.entries(cachePatch(s))) if (v !== before[k]) patch[k] = v
+      if (typeof patch.bigTokens === 'number' && patch.bigTokens < SETTINGS.bigTokens!.min!) return { text: t.unknownArg(e.args.trim(), CACHE_ARGS) }
+      const r = await writeSettings($, SELF, SETTINGS, patch, lang)
+      // Auch nach Weg 1: die Karte unten zeigt sonst den alten Stand dieser Instanz (Review 0.16.0 S2)
+      if (r.ok) applyCfg(patch)
+      note = `${writeNote(r, lang)}\n`
       $.ui.invalidate('ui.render')
     }
     const now = await $.clock.now()
@@ -1155,50 +1167,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     } catch {
       // ohne Limits
     }
-    const list = await loadHandoffs($)
+    const sidekickHandoff = await sidekickHandoffListed($)
     const guardBySidekick = settings.guard && (await sidekickAsks($))
-    const text = cacheReport({ now, mem, settings, keep, cold, last, limits, sessionUsd, handoffAt: list[0]?.at ?? null, lang, guardBySidekick })
+    const text = cacheReport({ now, mem, settings, keep, cold, last, limits, sessionUsd, sidekickHandoff, lang, guardBySidekick })
     return { text: note + text }
-  })
-
-  on('command.run', { command: 'handoff' }, async ($, e) => {
-    const t = T[lang]
-    // Vor allem anderen: bis 0.6.x startete jedes Argument eine Übergabe, also auch `help` (HELP-SPEC §2)
-    if (isHelp(e.args)) return { text: t.seeHelp }
-    const arg = e.args.trim().toLowerCase()
-    if (HANDOFF_SHOW_WORDS.includes(arg)) {
-      const list = await loadHandoffs($)
-      return { text: list[0] ? t.handoffLast(hhmm(list[0].at), list[0].text) : t.handoffNoneSaved }
-    }
-    if (HANDOFF_CONTINUE_WORDS.includes(arg)) {
-      later($, 300, () => {
-        clearAndContinue($).catch(() => {})
-      })
-      return { text: t.handoffContinuing }
-    }
-    if (H.pending || H.armed) return { text: t.handoffRunning }
-    H.pending = true
-    // Außerhalb des Hooks: den Skill suchen und starten (die Engine stellt ihn hinter einen laufenden Turn). Die Sprache geht als
-    // Argument mit, der Skill schreibt die Übergabe darin (skills/uebergabe/SKILL.md, `$ARGUMENTS`).
-    later($, 300, () => {
-      $.command
-        .list()
-        .then((cmds) => {
-          const cmd = cmds.find((c) => c.name === 'limit-bars:uebergabe') ?? cmds.find((c) => SKILL.test(c.name))
-          if (!cmd) throw new Error(t.skillMissing)
-          H.armed = true
-          H.notTurn = working ? currentTurn : ''
-          return $.command.run({ command: cmd.name, args: lang })
-        })
-        .catch((err) => {
-          H.armed = false
-          $.ui.toast(t.handoffStartFailed(msg(err)), { timeoutMs: 10000 })
-        })
-        .finally(() => {
-          H.pending = false
-        })
-    })
-    return { text: t.handoffWriting }
   })
 
   on('command.run', { command: 'keepwarm' }, async ($, e) => {
@@ -1237,29 +1209,21 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     }
   })
 
-  // /bars: Teile der Anzeige ein- und ausblenden (SPEC.md, Ausbau v0.6.0). Gespeichert in `$.store` unter `display`, damit es
-  // in allen offenen Chats gilt (der Takt liest neu); vor dem Schreiben neu lesen, wie bei den /cache-Einstellungen.
+  // /bars: Teile der Anzeige ein- und ausblenden (SPEC.md, Ausbau v0.6.0); seit 0.16.0 schreibt es die Felder in userConfig.
   on('command.run', { command: 'bars' }, async ($, e) => {
     // Sprache aller fynn-mods (docs/LANGUAGE-SPEC.md §6 Punkt 2), vor allem, was Store, Uhr oder Zustand liest; fängt Fehler selbst ab
     if (isLanguage(e.args)) return { text: await languageCommand($, { mod: 'limit-bars', cmd: 'bars', lang }, e.args) }
     const t = T[lang]
     const c = parseBars(e.args)
     if (c.kind === 'bad') return { text: t.unknownArg(e.args.trim(), BARS_HINT) }
-    await readDisplay($)
     if (c.kind === 'help') {
       await readCostState($)
-      // Stand beim Aufruf (HELP-SPEC §3 Punkt 3): Einstellungen frisch aus dem Store, wie /cache
-      try {
-        settings = cleanSettings(await $.store.get('settings'))
-      } catch {
-        // Stand dieser Session
-      }
       await bindSession($)
       const data = barsHelpData({
         lang,
         options: rawOptions,
         shown: shownParts(),
-        overrides,
+        overrides: {},
         storagePath,
         hasDrive: !!driveOf(storagePath),
         settings,
@@ -1267,7 +1231,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         memTtlSource: mem.ttlSource,
         keep,
         style: styleNow(),
-        styleByCommand: styleOverride !== undefined,
+        styleByCommand: false,
         noFive: noFiveHour(),
         hasCost: !!costHere,
         guardBySidekick: settings.guard && (await sidekickAsks($)),
@@ -1276,39 +1240,33 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       return { text: helpMarkdown(data, rememberHelp(await $.clock.now(), data)) }
     }
     let note = ''
+    // Schreibt die Felder in userConfig (SETTINGS-SPEC §4). Weg 1 lädt die Mod neu, Weg 2 zieht die Werte hier nach.
+    const change = async (patch: Values): Promise<boolean> => {
+      const r = await writeSettings($, SELF, SETTINGS, patch, lang)
+      // Auch nach Weg 1: die Tabelle unten zeigt sonst den alten Stand dieser Instanz (Review 0.16.0 S2)
+      if (r.ok) applyCfg(patch)
+      note = writeNote(r, lang)
+      return r.ok
+    }
     if (c.kind === 'reset') {
-      overrides = {}
-      styleOverride = undefined
-      try {
-        await $.store.delete('display')
-        displayPinned = false
-      } catch (err) {
-        displayPinned = true
-        note = t.barsSaveFailed(msg(err))
-      }
+      // Alle Anzeige-Felder auf den Standard aus plugin.json
+      const patch: Values = { style: 'bar', onlyFiveHour: false }
+      for (const p of PARTS) patch[PART_FIELD[p]] = SETTINGS[PART_FIELD[p]]!.default
+      if (!(await change(patch))) return { text: note }
+      if (!shownParts().system) stopSys()
     } else if (c.kind === 'set') {
       // Speicher-Ring ohne Laufwerk: nichts speichern, sondern sagen, wo der Pfad hingehört
       if (c.part === 'storage' && c.on && !driveOf(storagePath)) return { text: storagePath ? t.storageWindowsOnly : t.storageOff }
       // Säulen nur unter Windows: nichts speichern, sondern es sagen (SPEC Ausbau 0.12.0, 2.)
       if (c.part === 'system' && c.on && !isWindows) return { text: t.sysWindowsOnly }
+      const patch: Values = { [PART_FIELD[c.part]]: c.on }
+      // Woche an: das veraltete onlyFiveHour darf sie nicht weiter ausblenden
+      // (immer: nach gescheitertem Umzug steht es lokal schon auf false, gespeichert aber noch auf true; Review K5)
+      if (c.part === 'weekly' && c.on) patch.onlyFiveHour = false
+      if (!(await change(patch))) return { text: note }
       if (c.part === 'system' && !c.on) stopSys()
-      overrides = { ...overrides, [c.part]: c.on }
-      try {
-        await $.store.set('display', displayValue())
-        displayPinned = false
-      } catch (err) {
-        displayPinned = true
-        note = t.barsSaveFailed(msg(err))
-      }
     } else if (c.kind === 'style') {
-      styleOverride = c.style
-      try {
-        await $.store.set('display', displayValue())
-        displayPinned = false
-      } catch (err) {
-        displayPinned = true
-        note = t.barsSaveFailed(msg(err))
-      }
+      if (!(await change({ style: c.style }))) return { text: note }
     }
     await readCostState($)
     try {
@@ -1324,14 +1282,14 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       else if (sh[p] && p === 'cost') state = costHere ? t.barsOn : t.costWaiting
       else if (sh[p] && p === 'system') state = isWindows ? t.barsOn : t.sysNotWindows
       else if (sh[p]) state = p !== 'storage' || driveOf(storagePath) ? t.barsOn : storagePath ? t.barsNotWindows : t.barsNoPath
-      return `| ${t.barsPart[p]} | ${state} | ${overrides[p] !== undefined ? t.barsByCommand : t.barsBySetting} |`
+      return `| ${t.barsPart[p]} | ${state} |`
     })
-    rows.push(`| ${t.barsStyle} | ${t.styleName[styleNow()]} | ${styleOverride ? t.barsByCommand : t.barsBySetting} |`)
+    rows.push(`| ${t.barsStyle} | ${t.styleName[styleNow()]} |`)
     const lines: string[] = []
     if (c.kind === 'set') lines.push(t.barsSet(t.barsPart[c.part], c.on ? t.barsOn : t.barsOff), '')
     if (c.kind === 'reset') lines.push(t.barsReset, '')
     if (c.kind === 'style') lines.push(t.styleSet(t.styleName[c.style]), ...(c.style === 'ring' && lastSurface === 'terminal' ? [t.styleDesktopOnly] : []), '')
-    lines.push(t.barsTitle, '', t.barsHead, '|---|---|---|', ...rows, '', t.barsUsage)
+    lines.push(t.barsTitle, '', t.barsHead, '|---|---|', ...rows, '', t.barsUsage)
     // Cache-Ring aus heißt nur: Anzeige weg (Fynn); Rückfrage und Hinweise bleiben
     if (c.kind === 'set' && c.part === 'cache' && !c.on) lines.push(t.barsCacheNote)
     // Kosten und CPU/RAM: Stand, letzte Messung, Fehler (SPEC Ausbau 0.12.0)
@@ -1340,10 +1298,18 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     if (sh.system && isWindows) {
       const now = await $.clock.now()
       if (now < sysPausedUntil) extra.push(t.sysPaused(hhmm(sysPausedUntil)))
-      const v = sysView(sysCur, sysPrev, now, lang)
-      if (sysCur && v.rows[0]!.pct !== null) extra.push(t.sysLine(hhmm(sysCur.at), v.rows.map((r) => `${r.tag} ${r.pct}%`).join(' · ')))
+      // Die angezeigten Werte, nicht die letzte Messung (Nachtrag 0.14.1, Regel 5)
+      const rowsNow = sysShown ?? []
+      if (sysCur && rowsNow.length && rowsNow[0]!.pct !== null) extra.push(t.sysLine(hhmm(sysCur.at), rowsNow.map((r) => `${r.tag} ${r.pct}%`).join(' · ')))
       else extra.push(t.sysNone)
       if (sysErr && sysErrAt > (sysCur?.at ?? 0)) extra.push(t.sysFailed(hhmm(sysErrAt), sysErr))
+      // Zum Abgleich vorher/nachher: Neuzeichnen wegen Systemwerten seit dem letzten Aufruf (wie `/clawd status`)
+      if (sysRedrawsFrom) {
+        const ms = now - sysRedrawsFrom
+        if (ms > 0) extra.push(t.sysRedraws(String(Math.round((sysRedraws * 60_000) / ms)), String(sysRedraws), String(Math.round(ms / 1000))))
+        sysRedraws = 0
+        sysRedrawsFrom = now
+      }
     }
     if (extra.length) lines.push('', ...extra)
     if (note) lines.push('', note)
@@ -1463,9 +1429,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       if (e.surface !== 'terminal' && e.surface !== 'desktop') return await pass(e)
       lastSurface = e.surface
       // Nennt `session.start` die Oberfläche nicht (z. B. eine App, die als SDK startet), holt das erste Zeichnen den Anfangsstand
-      // Ersatzweg, wenn session.start die Oberfläche nicht nannte: auch die /bars-Werte holen (Review 0.6.0, S1)
       if (!usageAsked) {
-        await readDisplay($)
         await loadWindows($)
       }
       maybeStartDisk($)
@@ -1473,7 +1437,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       await readCostState($)
       const now = await $.clock.now()
       awaitingRender = false
-      lastRenderAt = now
       // Eine abgelehnte Periode beendet das Intervall still: bleiben zwei Ticks aus, wird der Takt neu gestartet. Gemessen ab dem
       // letzten Tick, nicht ab dem Start: Jede Periode dauert etwas länger als TICK, über Stunden summierte sich das sonst auf.
       if (timer && now - lastTick >= 2 * TICK) {
@@ -1498,6 +1461,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       }
       // Eine Umfrage hält das Band; ein Hook weicht ihr (types@2.1.288:9580)
       if (e.props.hasSurvey) return await pass(e)
+      // Zeichnet das Band ohnehin (Limits, Cache, Kosten, ein anderer Mod, `/bars`): die neuesten Systemwerte gleich mit, die 5 s
+      // beginnen neu (Nachtrag 0.14.1, Regel 3)
+      takeSys(now, true)
       const view = snapshot(now)
       drawnKey = keyOf(view)
       // Alles ausgeblendet: nichts Eigenes und kein freigehaltener Platz (bodyColumns unverändert); der Takt läuft weiter,

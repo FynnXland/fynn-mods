@@ -1,27 +1,17 @@
 {
   "name": "tune-strip",
-  "version": "0.9.0",
-  "description": "Windows only. Music bar for Spotify above the prompt: album cover, title, artist, position and clickable controls (restart/previous, play/pause, next). Reads the Windows media controls, no login, no network. Finds the beat of the song locally for clawd-buddy (listens to Spotify only, nothing recorded or sent).",
+  "version": "0.11.5",
+  "description": "Windows only. Shows the song playing in Spotify above the prompt, with cover and playback controls. No login, and nothing leaves your computer.",
   "author": {
     "name": "Fynn Hansen"
   },
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
-    "language": {
-      "type": "string",
-      "title": "Language / Sprache",
-      "description": "Language of the mod's texts. en: English, de: Deutsch.",
-      "default": "en",
-      "options": [
-        "en",
-        "de"
-      ]
-    },
     "size": {
       "type": "string",
       "title": "Size",
-      "description": "auto: in the desktop the bar above all other band mods, or the compact size in the row when it fits. full: its own bar above the other band mods with cover, title, position bar and all buttons. compact: in the row, cover, title and previous/play/next. mini: in the row, cover and play/pause. off: hidden. /tune size overrides this in all open chats.",
+      "description": "auto: its own bar in the desktop app, compact in the row when it fits. full, compact, mini: fixed. off: hidden. Also /tune size and /tune on|off.",
       "default": "auto",
       "options": [
         "auto",
@@ -31,19 +21,43 @@
         "off"
       ]
     },
+    "extraButtons": {
+      "type": "boolean",
+      "title": "More buttons",
+      "description": "Adds −15 s, +15 s, shuffle and repeat to the desktop bar. The commands /tune back, forward, shuffle and repeat work either way.",
+      "default": false
+    },
+    "beat": {
+      "type": "boolean",
+      "title": "Beat for Clawd",
+      "description": "Finds the beat of the song on this PC so Clawd can move to it. Listens to Spotify only and records nothing. Also /tune beat on|off.",
+      "default": true
+    },
+    "beatOffset": {
+      "type": "number",
+      "title": "Beat delay (ms)",
+      "description": "Shifts the beat, e.g. for Bluetooth headphones. Positive: later. Also /tune beat offset.",
+      "default": 0,
+      "min": -400,
+      "max": 400
+    },
     "pollSeconds": {
       "type": "number",
-      "title": "Poll every (seconds)",
-      "description": "How often the Windows media controls are read while the band is on screen.",
+      "title": "Refresh every (s)",
+      "description": "How often the bar reads the Windows media controls while it is on screen.",
       "default": 4,
       "min": 3,
       "max": 10
     },
-    "extraButtons": {
-      "type": "boolean",
-      "title": "Extra buttons",
-      "description": "In the desktop bar, also show −15 s, +15 s, shuffle and repeat next to previous, play/pause and next. The commands /tune back, forward, shuffle and repeat work either way.",
-      "default": false
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the texts. en: English, de: Deutsch. Also /tune language.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
+      ]
     }
   }
 }

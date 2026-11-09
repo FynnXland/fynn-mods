@@ -3,6 +3,7 @@
 import type { Engine, On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import { MIN, dayKey } from '../hooks/cache.ts'
+import { cliStubs, settingsNow } from './cli.ts'
 import {
   DEFAULT_LOOP,
   DEFAULT_SETTINGS,
@@ -26,8 +27,11 @@ import { sidekickHelp } from '../hooks/helpdata.ts'
 const NOW = new Date(2026, 10, 6, 10, 0, 0).getTime()
 const DAY = 24 * 60 * MIN
 const DE = { options: { language: 'de' } }
-function deTest(name: string, body: ($: Engine, on: On) => unknown) {
-  test(name, DE, async ($, on) => {
+/** Deutscher Test; `cfg`: weitere userConfig-Felder (seit 0.23.0 die einzige Quelle der Einstellungen). */
+function deTest(name: string, a: Record<string, string | number | boolean> | (($: Engine, on: On) => unknown), b?: ($: Engine, on: On) => unknown) {
+  const cfg = typeof a === 'function' ? {} : a
+  const body = typeof a === 'function' ? a : b!
+  test(name, { options: { ...DE.options, ...cfg } }, async ($, on) => {
     setLang('de')
     return body($, on)
   })
@@ -153,10 +157,11 @@ deTest('Hilfe: /sidekick loop als Befehl und Funktion mit Zustand', () => {
 type StepU = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number; model: string }
 const stepUsage = (read: number, written: number): StepU => ({ input_tokens: 2, output_tokens: 10, cache_read_input_tokens: read, cache_creation_input_tokens: written, model: 'claude-opus-5-5' })
 
-function world(on: On, o: { settings?: Record<string, unknown>; compactAfter?: number; handoffFails?: boolean } = {}) {
+// Schalter kommen seit 0.23.0 als userConfig (Test-Optionen); Befehle schreiben über den CLI-Stub (tests/cli.ts)
+function world(on: On, o: { compactAfter?: number; handoffFails?: boolean } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = new Map<string, unknown>()
-  saved.set('settings', { ...DEFAULT_SETTINGS, ...o.settings })
+  const cli = cliStubs(on)
   const asks: { question: string; options: string[] }[] = []
   const sent: { text: string; context?: readonly string[] }[] = []
   const toasts: string[] = []
@@ -245,7 +250,8 @@ function world(on: On, o: { settings?: Record<string, unknown>; compactAfter?: n
     setCtx: (n: number | undefined) => (ctx = n),
     setCompactSkip: (b: boolean) => (compactSkip = b),
     ledger: (sid = 'sess-1') => cleanLedger(saved.get(`bilanz:${sid}`)),
-    settings: () => cleanSettings(saved.get('settings')),
+    cli,
+    settings: () => settingsNow(cli, saved),
   }
 }
 
@@ -434,8 +440,8 @@ deTest('Schleife: frei getippter Text sendet unverändert, ohne Ruhe zu zählen'
   expect(w.settings().loop.declined).toBe(0)
 })
 
-deTest('Schleife: aus, Stufe Cache oder Off → keine Frage', async ($, on) => {
-  const w = world(on, { settings: { loop: { on: false, declined: 0, restUntil: 0 } } })
+deTest('Schleife: aus, Stufe Cache oder Off → keine Frage', { retryLoop: false }, async ($, on) => {
+  const w = world(on)
   await threeCorrections($)
   expect(w.asks.length).toBe(0)
   await $.command.run({ command: 'sidekick', args: 'loop on' } as never)
@@ -537,6 +543,48 @@ deTest('Zähler: neuer Chat bucht mit dem aktuellen, kleinen Kontext und Grund v
   await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
   await $.prompt.submit(userPrompt('Und jetzt die nächste Liste bitte'))
   expect(w.asks.length).toBe(1)
+})
+
+/** Ausbau 0.20.0: jede von sidekick geschriebene `sidekick.buddy`-Änderung. */
+function buddyLog(on: On): unknown[] {
+  const vals: unknown[] = []
+  on('state.set', ($: unknown, e: any) => {
+    if (e.plugin === 'sidekick' && e.key === 'buddy') vals.push(e.value)
+    return { value: { isSet: true, version: vals.length } }
+  })
+  return vals
+}
+const stopsOf = (vals: unknown[]) => vals.filter((v) => (v as { kind?: string } | null)?.kind === 'stop')
+
+deTest('0.20.0: Korrektur-Schleife und Frage „verdichtet“ melden stop ohne Grund', async ($, on) => {
+  const w = world(on)
+  const vals = buddyLog(on)
+  await threeCorrections($)
+  expect(w.asks.length).toBe(1)
+  expect(stopsOf(vals)).toEqual([{ kind: 'stop', at: NOW }])
+  // Zusammenfassungs-Frage nach der 2. Compaction
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+  w.setAnswer('Trotzdem senden')
+  await $.prompt.submit(userPrompt('Weiter mit der Liste unten bitte'))
+  expect(w.asks.length).toBe(2)
+  expect(w.asks[1]!.question).toContain('2× zusammengefasst')
+  expect(stopsOf(vals)).toEqual([{ kind: 'stop', at: NOW }, { kind: 'stop', at: NOW }])
+})
+
+deTest('0.20.0: Kalt-Cache-Frage mit Satz zur Schleife meldet cold (Kälte vor Schleife)', async ($, on) => {
+  const w = world(on)
+  const vals = buddyLog(on)
+  w.setCtx(undefined)
+  await $.prompt.submit(userPrompt('Baue den Balken unten rechts ein'))
+  await w.step($, stepUsage(0, 300000))
+  await $.prompt.submit(userPrompt(K1))
+  await $.prompt.submit(userPrompt(K2))
+  await w.clock.advance(70 * MIN)
+  w.setAnswer('Trotzdem senden')
+  await $.prompt.submit(userPrompt(K3))
+  expect(w.asks[0]!.question).toContain('Außerdem ist das der dritte Korrekturversuch in Folge')
+  expect(stopsOf(vals).map((v) => (v as { why?: string }).why)).toEqual(['cold'])
 })
 
 deTest('Zähler: geschrumpfter Kontext ohne Hook (/rewind) zählt nicht', async ($, on) => {
