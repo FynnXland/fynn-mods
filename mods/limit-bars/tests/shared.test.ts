@@ -1,9 +1,9 @@
 // limit-bars 0.8.0: Takt 2 s und gemeinsamer Stand aller Chats auf dem Rechner (`$.store` unter `limits`, SPEC.md, Ausbau 0.8.0).
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { cleanShared, mergeWins } from '../hooks/view.ts'
-import { cliAnswer } from './cli.ts'
-import type { Cli } from './cli.ts'
+import { cleanShared, mergeWins } from '../hooks/view.js'
+import { cliAnswer } from './cli.js'
+import type { Cli } from './cli.js'
 
 const NOW = new Date(2026, 9, 19, 10, 0, 0).getTime()
 const MIN = 60000
@@ -27,7 +27,7 @@ const stored = (at: number, five: number, week: number) => ({
   ],
 })
 
-const props = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } as const
+const props = { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } as const
 const band = { plugin: 'limit-bars', component: 'AbovePrompt', requestId: 'above-prompt', props, surface: 'desktop' } as const
 
 // Ein Chat: eigene Messung (`usage()`) und der Store, den alle Chats teilen (hier eine Map)

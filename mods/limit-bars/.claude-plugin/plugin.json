@@ -1,6 +1,6 @@
 {
   "name": "limit-bars",
-  "version": "0.16.5",
+  "version": "0.17.0",
   "description": "Shows your 5-hour and weekly usage limits above the prompt, along with how long the prompt cache stays warm. Asks before a send that would cost more because the cache has gone cold.",
   "author": {
     "name": "Fynn Hansen"

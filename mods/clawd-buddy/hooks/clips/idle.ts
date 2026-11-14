@@ -1,7 +1,7 @@
 // clawd-buddy: Clips der Gruppe "idle" (Grundpose).
-import { clip } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropSprite } from '../stage.ts'
+import { clip } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropSprite } from '../stage.js'
 
 /** Requisiten, die nur diese Gruppe braucht (Name → Sprite). Namen müssen über alle Gruppen eindeutig sein. */
 export const PROPS: Readonly<Record<string, PropSprite>> = {}

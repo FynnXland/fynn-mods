@@ -2,10 +2,10 @@
 // Stil der Referenz (Fynn): Hände sind Blöcke, nichts taucht auf oder verschwindet. Die Schlafmütze holt er hinter der Linie hervor, zieht sie
 // gerade hoch und schiebt sie sich auf den Kopf; beim Aufschrecken fliegt sie im Bogen nach links auf den Boden, er packt sie in die Tasche. Die Sonne steigt hinter
 // der Linie auf, er schaut hinüber und streckt sich, danach geht sie wieder hinter der Linie unter. Die Tasse holt er aus der Tasche.
-import { clip } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, fetchOut, walk } from '../macros.ts'
+import { clip } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { armBlock, fetchIn, fetchOut, walk } from '../macros.js'
 
 /** Sprite um 180° drehen (Zeichenraster); für die Mütze, die sich im Flug überschlägt. */
 const flip = (rows: readonly string[]): string[] => rows.map((r) => r.split('').reverse().join('')).reverse()
@@ -15,7 +15,7 @@ const CAP0 = ['..BBBB.....', '.BBBBBB....', 'WWBBBBBBB..', 'WWBBBLBBBB.', '.BBBB
 /** Sonne aus Scheibe (Radius 4) und Strahlen: im Wechsel lange gerade Strahlen bzw. lange schräge Strahlen (13×13, Mitte 6|6). */
 const sunRows = (longCross: boolean): string[] => {
   const g = Array.from({ length: 13 }, () => Array.from({ length: 13 }, () => '.'))
-  const put = (dx: number, dy: number): void => { g[6 + dy][6 + dx] = 'Y' }
+  const put = (dx: number, dy: number): void => { g[6 + dy]![6 + dx] = 'Y' }
   for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) if (dx * dx + dy * dy <= 18) put(dx, dy)
   const lc = longCross ? 2 : 1
   const ld = longCross ? 1 : 2
@@ -30,7 +30,7 @@ const MUG_ROWS = ['..WRRRW', 'WWWWWWG', 'W.WWWWG', 'W.WWWWG', 'WWWWWWG', '..WGGG
 /** Gekippte Tasse: Spalten ab 4 (die Trinkseite) eine Zeile tiefer, Höhe +1. */
 const tiltRows = (rows: readonly string[]): string[] => {
   const g = Array.from({ length: rows.length + 1 }, () => Array.from({ length: 7 }, () => '.'))
-  rows.forEach((r, y) => r.split('').forEach((c, x) => { if (c !== '.') g[x >= 4 ? y + 1 : y][x] = c }))
+  rows.forEach((r, y) => r.split('').forEach((c, x) => { if (c !== '.') g[x >= 4 ? y + 1 : y]![x] = c }))
   return g.map((r) => r.join(''))
 }
 
@@ -303,7 +303,7 @@ C('morning_brush', 'Zähne putzen', 'morning', {
     // zurück: Hand wechselt wieder an die Seite, Bürste zurück zur Ablage
     { ...brHand(2, 6), eyes: 'half', mouth: null, props: [br(3, 6)], t: 1 },
     ...[2, -1, -4].map((x): Frame => ({ ...brHand(x, 6), look: [-2, 1], props: [br(x, 6)], t: 1 })),
-    ...[-7, -7, -7].map((x, i): Frame => ({ ...brHand(x, [7, 8, 9][i]), props: [br(x, [7, 8, 9][i])], t: 1 })),
+    ...[-7, -7, -7].map((x, i): Frame => ({ ...brHand(x, [7, 8, 9][i]!), props: [br(x, [7, 8, 9][i]!)], t: 1 })),
     { armL: 'down', props: [br(-7, 9)], t: 2 }],
   outro: fetchOut(BRUSH),
 })

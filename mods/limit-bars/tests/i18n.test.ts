@@ -1,10 +1,11 @@
-import type { Engine, On } from 'claude-code'
+import type { On, SessionRateLimit } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { spanText, tokensText } from '../hooks/cache.ts'
-import { T, dec, langOf, usd } from '../hooks/i18n.ts'
-import { clockText, countdownText } from '../hooks/view.ts'
-import { cliAnswer } from './cli.ts'
-import type { Cli } from './cli.ts'
+import { spanText, tokensText } from '../hooks/cache.js'
+import { T, dec, langOf, usd } from '../hooks/i18n.js'
+import { clockText, countdownText } from '../hooks/view.js'
+import { cliAnswer } from './cli.js'
+import type { Cli } from './cli.js'
 
 // Sprachumschaltung (release/I18N.md): Standard en, `language: de` für Deutsch. Die übrigen Tests laufen mit `de`.
 const NOW = new Date(2026, 9, 2, 10, 0, 0).getTime()
@@ -17,7 +18,7 @@ const limits = (five: number, week: number) => [
   { kind: 'seven_day', percentUsed: week, resetsAt: iso(WEEK_RESET) },
 ]
 const props = (bodyColumns: number) =>
-  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
+  ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
 const band = (surface: 'terminal' | 'desktop', bodyColumns = 120) =>
   ({ plugin: 'limit-bars', component: 'AbovePrompt', requestId: 'above-prompt', props: props(bodyColumns), surface }) as const
 const usage = (read: number, written: number) => ({ input_tokens: 2, output_tokens: 10, cache_read_input_tokens: read, cache_creation_input_tokens: written, model: 'claude-opus-5-5' })
@@ -93,7 +94,7 @@ function world(on: On) {
   const registered: { name: string; description: string; argumentHint?: string }[] = []
   const sent: string[] = []
   let answer: string | null = null
-  let rateLimits: unknown[] = []
+  let rateLimits: SessionRateLimit[] = []
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: undefined, window: 1000000 }, rateLimits } }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
@@ -113,16 +114,16 @@ function world(on: On) {
   })
   on('command.register', ($, e) => {
     registered.push(e as never)
-    return { value: undefined }
+    return { value: { command: e.name } }
   })
-  on('command.list', () => ({ value: [{ name: 'limit-bars:cache', description: 'Cache', source: 'plugin' }] }))
+  on('command.list', () => ({ value: [{ name: 'limit-bars:cache', description: 'Cache', source: 'plugin' as const }] }))
   on('command.run', ($, e) => {
     runs.push({ command: e.command, args: e.args })
     return { text: '' }
   })
   on('tool.call', ($, e) => {
     if (e.tool !== 'AskUserQuestion') return { result: '' }
-    const q = (e as unknown as { questions: { question: string; options: { label: string }[] }[] }).questions[0]
+    const q = (e as unknown as { questions: { question: string; options: { label: string }[] }[] }).questions[0]!
     asks.push({ question: q.question, options: q.options.map((o) => o.label) })
     if (answer === null) return { deny: 'closed' }
     return { result: { answers: { [q.question]: answer } } }
@@ -159,7 +160,7 @@ function world(on: On) {
     sent,
     step,
     setAnswer: (a: string | null) => (answer = a),
-    setLimits: (l: unknown[]) => (rateLimits = l),
+    setLimits: (l: SessionRateLimit[]) => (rateLimits = l),
   }
 }
 
@@ -304,10 +305,10 @@ test('en: Rückfrage vor kaltem Senden auf Englisch; Cancel verwirft mit englisc
   w.setAnswer('Cancel')
   const r = await $.prompt.submit(userPrompt('go on'))
   expect(r.drop).toContain('cancelled')
-  expect(w.asks[0].question).toBe(
+  expect(w.asks[0]!.question).toBe(
     'The cache has been cold for 15 min. Sending rewrites 405k tokens (≈ $3.24 API value; warm it would be ≈ $0.08). Compacting also reads everything once and saves little now. How to continue?',
   )
-  expect(w.asks[0].options).toEqual(['Send anyway', 'Compact first', 'Cancel'])
+  expect(w.asks[0]!.options).toEqual(['Send anyway', 'Compact first', 'Cancel'])
   expect(w.toasts.some((t) => t.startsWith('Not sent.'))).toBe(true)
   w.setAnswer('Send anyway')
   expect(await $.prompt.submit(userPrompt('again'))).toMatchObject({ text: 'again' })

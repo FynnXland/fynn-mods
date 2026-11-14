@@ -11,8 +11,8 @@
 // Fynn (Runde 4): Rein und raus nur nach UNTEN. Der linke, rechte und obere Bühnenrand sind kein Ein- oder Ausgang; ein Gegenstand,
 // Effekt oder die Figur, die dort abgeschnitten wird, ist ein Fehler ("am Rand abgeschnitten"). Gegenstände aus der Tasche erscheinen
 // verkleinert (`name@NN`) an der Hand und wachsen dann; beim Wegpacken schrumpfen sie dort wieder (erlaubt, wenn klein und an der Hand).
-import { H, W, propSprite } from './stage.ts'
-import type { Composed, Pose, PropTable } from './stage.ts'
+import { H, W, propSprite } from './stage.js'
+import type { Composed, Pose, PropTable } from './stage.js'
 
 export type Shot = Composed & { pose: Pose }
 export type Issue = { kind: string; frame: number; name: string; x: number; y: number }
@@ -164,10 +164,10 @@ export function lintFrames(frames: readonly Shot[], props: PropTable): Issue[] {
         else if (!allowed(c, fig)) issues.push({ kind: 'taucht auf', frame: idx, name: c.name, x: Math.round(c.cx), y: Math.round(c.cy) })
       }
       for (const i of unmatched) {
-        const p = prev[i]
+        const p = prev[i]!
         if (!allowed(p, prevFig)) issues.push({ kind: 'verschwindet', frame: idx, name: p.name, x: Math.round(p.cx), y: Math.round(p.cy) })
       }
-      const a = frames[idx - 1].pose
+      const a = frames[idx - 1]!.pose
       const b = f.pose
       for (const k of ['fx', 'fy', 'by', 'squash'] as const) {
         if (Math.abs(a[k] - b[k]) > 2) issues.push({ kind: `Ruckler ${k}`, frame: idx, name: '', x: a[k], y: b[k] })
@@ -178,7 +178,7 @@ export function lintFrames(frames: readonly Shot[], props: PropTable): Issue[] {
   })
   // Aufräumen: am Ende darf kein Nicht-Effekt-Gegenstand mehr im Bild liegen
   if (frames.length) {
-    for (const c of components(frames[frames.length - 1], props)) {
+    for (const c of components(frames[frames.length - 1]!, props)) {
       if (!c.effect) issues.push({ kind: 'liegt am Ende noch herum', frame: frames.length - 1, name: c.name, x: Math.round(c.cx), y: Math.round(c.cy) })
     }
   }

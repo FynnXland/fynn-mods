@@ -3,12 +3,12 @@ import { expect, mock, test } from 'claude-code/testing'
 import {
   FROST_BREAK_P, FROST_ESTIMATE_MS, FROST_P, FROST_THAW_MS, NO_FACTS, NO_STRAIN, SK_MAX_MS, deriveMood, frostActive, frostDecide, frostMood, frostRoll,
   sidekickStatus, sidekickValue,
-} from '../hooks/mood.ts'
-import type { Facts, Frost } from '../hooks/mood.ts'
-import { createDesk } from '../hooks/desk.ts'
-import { ALL_CLIPS, ALL_PROPS } from '../hooks/library.ts'
-import { FY, H, POSES } from '../hooks/stage.ts'
-import { CLIP_EN, T } from '../hooks/i18n.ts'
+} from '../hooks/mood.js'
+import type { Facts, Frost } from '../hooks/mood.js'
+import { createDesk } from '../hooks/desk.js'
+import { ALL_CLIPS, ALL_PROPS } from '../hooks/library.js'
+import { FY, H, POSES } from '../hooks/stage.js'
+import { CLIP_EN, T } from '../hooks/i18n.js'
 
 // Fest in UTC (15:00 deutscher Zeit): frostRoll hängt an den Millisekunden, und die CI läuft in UTC.
 const T0 = Date.UTC(2026, 10, 6, 14, 0, 0)
@@ -115,13 +115,13 @@ test('Clips: Gruppe frost und die neuen sidekick-Gruppen vollständig, Pose ice 
   expect(cat('sk_stop_cold').length).toBeGreaterThanOrEqual(2)
   expect(cat('sk_upkeep').length).toBeGreaterThanOrEqual(2)
   for (const c of ['sk_stop_wrong', 'sk_stop_model', 'sk_stop_rewrite', 'sk_stop_topic', 'sk_hint']) expect(cat(c).length, c).toBeGreaterThanOrEqual(1)
-  expect(POSES.ice.props.map((p) => p[0])).toEqual(['frost_ice0', 'frost_fx0'])
+  expect(POSES.ice!.props.map((p) => p[0])).toEqual(['frost_ice0', 'frost_fx0'])
   for (const c of ALL_CLIPS.filter((x) => x.name.startsWith('frost') || x.cat.startsWith('sk_'))) expect(CLIP_EN[c.name], c.name).toBeTruthy()
   // frozen nur tags, frozen_sleep nur nachts; der Block (Ursprung y −2, 13 Zeilen inkl. der verdeckten) endet auf der Linie
   expect(ALL_CLIPS.find((c) => c.name === 'frozen')?.when).toBe('day')
   expect(ALL_CLIPS.find((c) => c.name === 'frozen_sleep')?.when).toBe('night')
-  const ice = POSES.ice.props[0]
-  const rows = ALL_PROPS[ice[0]].rows.length
+  const ice = POSES.ice!.props[0]!
+  const rows = ALL_PROPS[ice[0]]!.rows.length
   expect(FY + ice[2] + rows - 1, 'unterste Zeile des Blocks liegt eine Zeile unter der Linie (verdeckt)').toBe(H)
   expect(FY + ice[2], 'Oberkante auf der Bühne (kein Rand oben)').toBeGreaterThan(0)
 })
@@ -186,7 +186,7 @@ test('Engine: Begrüßung nach langer Pause entfällt im Eis; ohne Eis kommt sie
     const f: Facts = { ...NO_FACTS, backAt: T + 500, ...(withIce ? { frost: { at: T, src: 'new', cracks: 0 } } : {}) }
     d.advance(T, f, NO_STRAIN)
     d.advance(T + 1000, f, NO_STRAIN)
-    return d.engine.S.welcome || d.engine.S.queue.some((x) => x.name === 'rub_eyes') || d.engine.S.play?.clip.name === 'rub_eyes'
+    return d.engine.S.welcome || d.engine.S.queue.some((x) => (x as { name?: string }).name === 'rub_eyes') || d.engine.S.play?.clip.name === 'rub_eyes'
   }
   expect(welcomed(false)).toBe(true)
   expect(welcomed(true)).toBe(false)
@@ -222,8 +222,10 @@ const BAND = {
   component: 'AbovePrompt',
   requestId: 'above-prompt',
   viewport: { columns: 120, rows: 30, isFullscreen: true },
-  props: { hasSurvey: false, isWorking: false, maxRows: 7, bodyColumns: 100, scroll: { offset: 0, bodyRows: 7 }, view: {} },
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 7, bodyColumns: 100, scroll: { offset: 0, bodyRows: 7 }, view: {} },
 } as const
+
+const RUN = { origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as const
 
 function base(on: any, state: () => Record<string, unknown> = () => ({})) {
   const store = new Map<string, unknown>()
@@ -247,9 +249,9 @@ function base(on: any, state: () => Record<string, unknown> = () => ({})) {
   on('prompt.edit', ($: unknown, e: any) => ({ text: e.text, cursor: e.cursor }))
 }
 const clientFacts = async (ui: any): Promise<Facts> => (await ui.find({ type: 'Client', key: 'buddy' }))?.props.props.facts
-const status = async ($: any): Promise<string> => (await $.command.run({ command: 'clawd', args: 'status' })).text
+const status = async ($: any): Promise<string> => (await $.command.run({ ...RUN, command: 'clawd', args: 'status' })).text
 const edit = ($: any, text: string) => $.prompt.edit({ text, inputText: text.slice(-1), cursor: text.length, start: text.length - 1, end: text.length - 1 } as any)
-const pause = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const pause = (ms: number) => new Promise((r) => (globalThis as any).setTimeout(r, ms))
 
 // Feste Würfe (frostRoll hängt an der Uhrzeit): um T0 bleibt ein neuer Chat warm (0,88), um T0 + 1 s friert er ein (0,29), um T0 + 2 s
 // ebenso (0,15), um T0 + 4 s nicht (0,56). Die Schätzung würfelt mit Beginn + 60 min: nach einem Turn-Ende um T0 + 1 s trifft sie (0,18),
@@ -329,7 +331,7 @@ test('Im Mod: /clawd freeze friert sofort ein (ohne Würfel, zählt nicht für d
   base(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  const res = await $.command.run({ command: 'clawd', args: 'freeze' })
+  const res = await $.command.run({ ...RUN, command: 'clawd', args: 'freeze' })
   expect(res.text).toMatch(/frozen/)
   await ui.redraw()
   let f = await clientFacts(ui)
@@ -564,7 +566,7 @@ test('Desktop: sidekick kalt, Risse beim Tippen, Senden über sidekick check und
   await clock.advance(5000)
   await ui.redraw()
   const s5 = await deskSvg(ui)
-  expect((await $.command.run({ command: 'clawd', args: 'freeze' })).text).toMatch(/frozen/)
+  expect((await $.command.run({ ...RUN, command: 'clawd', args: 'freeze' })).text).toMatch(/frozen/)
   await ui.redraw()
   expect(await deskSvg(ui)).not.toBe(s5)
   await ui.unmount()
@@ -579,19 +581,19 @@ test('Im Mod: /clawd freeze ohne Uhr antwortet mit eigener Meldung (Review K2)',
   base(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
   broken = true
-  expect((await $.command.run({ command: 'clawd', args: 'freeze' })).text).toMatch(/could not freeze/)
+  expect((await $.command.run({ ...RUN, command: 'clawd', args: 'freeze' })).text).toMatch(/could not freeze/)
 })
 
 test('Im Mod: Hilfe und Liste kennen freeze und die Gruppe frost; deutsch mit Eis-Zeile', { options: { language: 'de' } }, async ($, on) => {
   mock.clock(on, { now: MISS })
   base(on)
   await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-  const list = (await $.command.run({ command: 'clawd', args: 'list' })).text
+  const list = (await $.command.run({ ...RUN, command: 'clawd', args: 'list' })).text
   expect(list).toMatch(/^frost_in: /m)
   expect(list).toMatch(/^frozen: frozen, frozen_sleep$/m)
   expect(list).toMatch(/^sk_stop_wrong: sk_map_lost$/m)
-  expect((await $.command.run({ command: 'clawd', args: 'demo frost_break' })).text).toMatch(/spielt: frost_break/)
-  expect((await $.command.run({ command: 'clawd', args: 'help' })).text).toMatch(/\/clawd freeze/)
+  expect((await $.command.run({ ...RUN, command: 'clawd', args: 'demo frost_break' })).text).toMatch(/spielt: frost_break/)
+  expect((await $.command.run({ ...RUN, command: 'clawd', args: 'help' })).text).toMatch(/\/clawd freeze/)
   expect(await status($)).toMatch(/Eis: neuer Chat, gewürfelt: ja, bleibt warm; in diesem Chat gefroren: nein\./)
-  expect((await $.command.run({ command: 'clawd', args: 'freeze' })).text).toMatch(/eingefroren/)
+  expect((await $.command.run({ ...RUN, command: 'clawd', args: 'freeze' })).text).toMatch(/eingefroren/)
 })

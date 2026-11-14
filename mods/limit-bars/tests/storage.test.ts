@@ -20,9 +20,9 @@ import {
   sizeShort,
   storageReport,
   storageTerminal,
-} from '../hooks/storage.ts'
-import { T } from '../hooks/i18n.ts'
-import { EMPTY, GREY } from '../hooks/view.ts'
+} from '../hooks/storage.js'
+import { T } from '../hooks/i18n.js'
+import { EMPTY, GREY } from '../hooks/view.js'
 
 const NOW = new Date(2026, 9, 6, 10, 0, 0).getTime()
 const G = 1024 ** 3
@@ -48,7 +48,7 @@ const EN = { options: { language: 'en', storagePath: 'E:\\' } } as const
 const OFF = { options: { language: 'de' } } as const
 
 const props = (bodyColumns: number) =>
-  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
+  ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
 const band = (surface: 'terminal' | 'desktop', bodyColumns = 120) =>
   ({ plugin: 'limit-bars', component: 'AbovePrompt', requestId: 'above-prompt', props: props(bodyColumns), surface }) as const
 const output = (text: string, surface: string, isErrored = false) =>
@@ -84,7 +84,7 @@ function world(on: On, o: { saved?: Map<string, unknown>; scan?: Ps; probe?: Ps;
     saved.delete(e.key)
     return { value: undefined }
   })
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('process.run', ($, e) => {
     const kind = e.argv[4] === PROBE_SCRIPT ? 'probe' : e.argv[4] === SCAN_SCRIPT ? 'scan' : '?'
     attempts.push(e.argv[0]!)

@@ -1,14 +1,14 @@
 // limit-bars: Inhalt von `/bars help` (docs/HELP-SPEC.md §5 „limit-bars 0.7.0“), reine Funktion ohne `$`. Gezeichnet wird er
 // von help.ts (Kopie von templates/help/help.ts). Stand beim Aufruf: Was register.ts übergibt, wird nicht live umgeschrieben.
-import type { KeepWarm, Settings } from './cache.ts'
-import { DEFAULT_SETTINGS, tokensText } from './cache.ts'
-import { PART_ARG } from './display.ts'
-import type { Display, Overrides, Part, Style } from './display.ts'
-import type { HelpData, HelpFeature, HelpSetting } from './help.ts'
-import { T, hhmm } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import { languageHelp } from './language.ts'
-import { SETTINGS } from './fields.ts'
+import type { KeepWarm, Settings } from './cache.js'
+import { DEFAULT_SETTINGS, tokensText } from './cache.js'
+import { PART_ARG } from './display.js'
+import type { Display, Overrides, Part, Style } from './display.js'
+import type { HelpData, HelpFeature, HelpSetting } from './help.js'
+import { T, hhmm } from './i18n.js'
+import type { Lang } from './i18n.js'
+import { languageHelp } from './language.js'
+import { SETTINGS } from './fields.js'
 
 /**
  * Akzent der Hilfe: Theme-Key `warning` (Gelb), folgt dem Theme hell und dunkel (HELP-SPEC §4, geändert 2026-10-09;

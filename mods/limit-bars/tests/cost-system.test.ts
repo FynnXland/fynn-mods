@@ -1,12 +1,13 @@
 // limit-bars: Kostenring (0.12.0, aus cost-ledger.here) und Systemwerte als Liste (0.13.0, löst die Säulen ab). SPEC → Tests.
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { cleanHere, costFilled, costText, costView, shortUsd } from '../hooks/cost.ts'
-import { PS_ABS } from '../hooks/storage.ts'
-import { NVIDIA_SMI, SYS_DELTA, SYS_REDRAW, SYS_SCRIPT, cellText, parseSample, shownPrev, sysAdopt, sysTermWidth, sysView, takeLines, termColumns, trendOf } from '../hooks/system.ts'
-import type { SysRow } from '../hooks/system.ts'
-import { cliAnswer } from './cli.ts'
-import type { Cli } from './cli.ts'
+import { cleanHere, costFilled, costText, costView, shortUsd } from '../hooks/cost.js'
+import { desktopCols } from '../hooks/register.js'
+import { PS_ABS } from '../hooks/storage.js'
+import { NVIDIA_SMI, SYS_DELTA, SYS_REDRAW, SYS_SCRIPT, cellText, parseSample, shownPrev, sysAdopt, sysTermWidth, sysView, takeLines, termColumns, trendOf } from '../hooks/system.js'
+import type { SysRow } from '../hooks/system.js'
+import { cliAnswer } from './cli.js'
+import type { Cli } from './cli.js'
 
 const NOW = new Date(2026, 10, 4, 10, 0, 0).getTime()
 const MIN = 60000
@@ -18,7 +19,7 @@ const LINE = (cpu: number, ram: number, gpu?: number, vram?: number) =>
   `cpu\t${cpu * 10}\tram\t${ram * 10}${gpu === undefined ? '' : `\tgpu\t${gpu * 10}\tvram\t${vram! * 10}`}\r\n`
 
 const props = (bodyColumns: number) =>
-  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
+  ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
 const band = (surface: 'terminal' | 'desktop', bodyColumns = 120) =>
   ({ plugin: 'limit-bars', component: 'AbovePrompt', requestId: 'above-prompt', props: props(bodyColumns), surface }) as never
 
@@ -57,7 +58,7 @@ function world(on: On, o: W = {}) {
     saved.delete(e.key)
     return { value: undefined }
   })
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('state.get', ($, e) => {
     const x = e as unknown as { plugin: string; key: string }
     if (x.plugin === 'cost-ledger' && x.key === 'here') {
@@ -68,8 +69,8 @@ function world(on: On, o: W = {}) {
     return { value: { value: undefined, version: 0 } } as never
   })
   on('state.set', ($, e) => {
-    const x = e as unknown as { plugin: string; value: { width: number } | null }
-    if (x.plugin === 'limit-bars' && x.value) st.widths.push(x.value.width)
+    const x = e as unknown as { plugin: string; value: { cols: number } | null }
+    if (x.plugin === 'limit-bars' && x.value) st.widths.push(x.value.cols)
     return { value: { isSet: true, version: 1 } } as never
   })
   // Messprozess: liefert, was der Test schickt
@@ -254,7 +255,7 @@ test('0.12.0/0.13.0 Kostenring Desktop: Reihenfolge Limits · Cache · Kosten, M
   expect((src.match(/stroke="#D77757"/g) ?? []).length).toBe(1)
   expect(w.st.stateReads > 0).toBe(true)
   await clock2(w)
-  expect(w.st.widths.at(-1)).toBe(pic.props.width)
+  expect(w.st.widths.at(-1)).toBe(desktopCols(pic.props.width))
   await ui.unmount()
 })
 
@@ -296,7 +297,7 @@ test('0.12.0 Kostenring: ein Schreiben von cost-ledger zeichnet neu, ohne eigene
   on('store.get', () => ({ value: undefined }))
   on('store.set', () => ({ value: undefined }))
   on('store.keys', () => ({ value: [] }))
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.render', () => ({ type: 'engine', ref: 0 }) as never)
   const ui = await $.ui.mount(band('desktop'))
   expect((await svgOf(ui))!.props.source.includes('Kosten')).toBe(false)
@@ -442,7 +443,8 @@ test('0.13.0 Systemwerte: endet bei /bars show cpu off und wenn nicht mehr gezei
   const ticks = (async () => {
     for (let i = 0; i < 3; i++) await w.clock.advance(TICK)
   })()
-  await new Promise((r) => setTimeout(r, 300)) // echte Zeit: die Ticks laufen bis zum wartenden Stub
+  // setTimeout kennt die Typprüfung der Mods nicht (keine Node-Typen); im Test-Kit gibt es ihn
+  await new Promise((r) => (globalThis as unknown as { setTimeout: (f: () => void, ms: number) => void }).setTimeout(() => r(undefined), 300)) // echte Zeit: die Ticks laufen bis zum wartenden Stub
   await w.say(LINE(51, 50))
   await ticks
   await settle(w.clock)
@@ -525,9 +527,9 @@ for (const [cols, want] of [
     if (await has(/^CPU $/)) found.push('CPU')
     if (await has(/^RAM $/)) found.push('RAM')
     expect(found).toEqual([...want])
-    if (want.includes('CPU')) {
+    if ((want as readonly string[]).includes('CPU')) {
       expect((await ui.find({ type: 'Text', text: '  34%' }))?.props.color).toBe('#6CC070')
-      expect(((await ui.find({ key: 'limit-bars' })) as any).props.width <= 44).toBe(true)
+      expect(((await ui.find({ key: 'slot:10:limit-bars' })) as any).props.width <= 44).toBe(true)
     }
     await ui.unmount()
   })
@@ -559,7 +561,7 @@ test('0.12.0 Terminal bei 120 Spalten mit beiden Limits: kein Platz für Zusätz
   // Die Liste passt nicht: dann auch kein Messprozess (Review 0.13.0 S2)
   for (let i = 0; i < 3; i++) await clock2(w)
   expect(w.h.spawns).toBe(0)
-  expect(((await ui.find({ key: 'limit-bars' })) as any).props.width <= 44).toBe(true)
+  expect(((await ui.find({ key: 'slot:10:limit-bars' })) as any).props.width <= 44).toBe(true)
   await ui.unmount()
 })
 
@@ -567,15 +569,23 @@ test('0.13.0 Breitenmeldung: Systemwerte und Kosten an und aus ändern limit-bar
   const w = world(on, { here: HERE })
   await w.start($)
   const ui = await $.ui.mount(band('desktop'))
+  // Bildbreite in px; gemeldet wird sie seit 0.17.0 in Zellen (desktopCols)
+  const px = async () => {
+    await ui.redraw()
+    return (await svgOf(ui))!.props.width
+  }
   await clock2(w)
-  const withCost = w.st.widths.at(-1)!
+  const withCost = await px()
+  expect(w.st.widths.at(-1)).toBe(desktopCols(withCost))
   await bars($, 'cpu on')
   await clock2(w)
-  const withSys = w.st.widths.at(-1)!
+  const withSys = await px()
   expect(withSys > withCost && withSys - withCost < 90).toBe(true) // schmale Liste statt 124 px Säulen
+  expect(w.st.widths.at(-1)).toBe(desktopCols(withSys))
   await bars($, 'cost off')
   await clock2(w)
-  expect(w.st.widths.at(-1)).toBe(withSys - 8 - 52)
+  expect(await px()).toBe(withSys - 8 - 52)
+  expect(w.st.widths.at(-1)).toBe(desktopCols(withSys - 8 - 52))
   const n = w.st.widths.length
   w.st.sid = 'sess-2'
   await clock2(w)

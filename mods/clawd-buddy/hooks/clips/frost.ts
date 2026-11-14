@@ -14,9 +14,9 @@
 // Zeichnung: Der Block (frost_ice…) liegt HINTER der Figur (`under`), sein Inneres ist ein dunkles Eisblau (PAL I); Glanz und Risse
 // (frost_fx…) liegen als Effekt VOR ihr, nie über einem Auge. Alle Eis-Bilder haben eine verdeckte Zeile unter der Linie: der Block steckt im
 // Boden, Frost wächst von dort hoch und die Pfütze versickert dorthin (ANIMATION-GUIDE §0: rein und raus nur nach unten).
-import { clip } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
+import { clip } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
 
 // ---- Geometrie -------------------------------------------------------------------------------------------------------------------
 // Alle Eis-Bilder: 23 breit, 13 hoch, Ursprung (−3, −2) relativ zum Heimatplatz. Spalte cx = x + 3, Zeile cy = y + 2.
@@ -35,19 +35,19 @@ const rowsOf = (g: string[][]): string[] => g.map((r) => r.join(''))
 
 /** Blockreihe: Rand hellblau, Inneres Eisblau. */
 function fillRow(g: string[][], cy: number): void {
-  for (let cx = BL; cx <= BR; cx++) g[cy][cx] = cx === BL || cx === BR ? 'L' : 'I'
+  for (let cx = BL; cx <= BR; cx++) g[cy]![cx] = cx === BL || cx === BR ? 'L' : 'I'
 }
 
 /** Voller Block. `glint` 0 = nur der feste Glanz oben links, 1 … 6 = ein Glanzlicht wandert über die obere und die rechte Kante. */
 function full(glint: number): PropSprite {
   const g = blank()
-  for (let cx = BL + 1; cx < BR; cx++) g[0][cx] = 'L'
+  for (let cx = BL + 1; cx < BR; cx++) g[0]![cx] = 'L'
   for (let cy = 1; cy < SH; cy++) fillRow(g, cy)
   // fester Glanz: obere linke Kante
-  g[0][4] = g[0][5] = 'W'
-  g[1][BL] = g[2][BL] = 'W'
-  const top = (a: number, b: number) => { for (let cx = a; cx <= b; cx++) g[0][cx] = 'W' }
-  const side = (a: number, b: number) => { for (let cy = a; cy <= b; cy++) g[cy][BR] = 'W' }
+  g[0]![4] = g[0]![5] = 'W'
+  g[1]![BL] = g[2]![BL] = 'W'
+  const top = (a: number, b: number) => { for (let cx = a; cx <= b; cx++) g[0]![cx] = 'W' }
+  const side = (a: number, b: number) => { for (let cy = a; cy <= b; cy++) g[cy]![BR] = 'W' }
   if (glint === 1) top(7, 9)
   if (glint === 2) top(11, 13)
   if (glint === 3) top(15, 17)
@@ -65,7 +65,7 @@ function growing(h: number): PropSprite {
   const g = blank()
   const top = SH - h
   for (let cy = top + 1; cy < SH; cy++) fillRow(g, cy)
-  for (let cx = BL; cx <= BR; cx++) g[top][cx] = (cx + h) % 4 === 0 && cx !== BL && cx !== BR ? 'W' : 'L'
+  for (let cx = BL; cx <= BR; cx++) g[top]![cx] = (cx + h) % 4 === 0 && cx !== BL && cx !== BR ? 'W' : 'L'
   return { rows: rowsOf(g), under: true }
 }
 
@@ -80,7 +80,7 @@ function frostLine(h: number): PropSprite {
   for (let cx = BL + 2; cx <= BR - 2; cx++) {
     const x = cx + OX
     if (y >= 1 && y <= 4 && ((x >= 3 && x <= 5) || (x >= 11 && x <= 13))) continue
-    if ((cx + h) % 2 === 0) g[cy][cx] = (cx + h) % 4 === 0 ? 'W' : 'L'
+    if ((cx + h) % 2 === 0) g[cy]![cx] = (cx + h) % 4 === 0 ? 'W' : 'L'
   }
   return { rows: rowsOf(g), effect: true }
 }
@@ -88,10 +88,10 @@ function frostLine(h: number): PropSprite {
 /** Schmelzender Block: oben `m` Zeilen weg; die neue Oberkante ist rund und nass (Glanz), an den Seiten hängen Tropfen. */
 function melting(m: number): PropSprite {
   const g = blank()
-  for (let cx = BL + 1; cx < BR; cx++) g[m][cx] = 'L'
+  for (let cx = BL + 1; cx < BR; cx++) g[m]![cx] = 'L'
   for (let cy = m + 1; cy < SH; cy++) fillRow(g, cy)
-  g[m][5] = g[m][6] = 'W'
-  if (m + 1 < SH - 1) g[m + 1][BR] = 'W'
+  g[m]![5] = g[m]![6] = 'W'
+  if (m + 1 < SH - 1) g[m + 1]![BR] = 'W'
   return { rows: rowsOf(g), under: true }
 }
 
@@ -99,9 +99,9 @@ function melting(m: number): PropSprite {
 const PUDDLE: readonly (readonly [number, number])[] = [[1, 21], [3, 19], [6, 16], [9, 13]]
 function puddle(n: number): PropSprite {
   const g = blank()
-  const [a, b] = PUDDLE[n]
-  for (let cx = a; cx <= b; cx++) g[SH - 2][cx] = cx === a || cx === b ? 'B' : 'L'
-  for (let cx = a; cx <= b; cx++) g[SH - 1][cx] = 'B'
+  const [a, b] = PUDDLE[n]!
+  for (let cx = a; cx <= b; cx++) g[SH - 2]![cx] = cx === a || cx === b ? 'B' : 'L'
+  for (let cx = a; cx <= b; cx++) g[SH - 1]![cx] = 'B'
   return { rows: rowsOf(g), under: true }
 }
 
@@ -120,9 +120,9 @@ const CRACK: readonly (readonly Pt[])[] = [
 ]
 function overlay(level: number): PropSprite {
   const g = blank()
-  const put = ([x, y]: Pt, c: string) => { g[y - OY][x - OX] = c }
+  const put = ([x, y]: Pt, c: string) => { g[y - OY]![x - OX] = c }
   for (const p of SHINE) put(p, 'W')
-  for (let k = 0; k < level; k++) for (const p of CRACK[k]) put(p, 'W')
+  for (let k = 0; k < level; k++) for (const p of CRACK[k]!) put(p, 'W')
   return { rows: rowsOf(g), effect: true }
 }
 
@@ -288,7 +288,7 @@ for (const lv of [1, 2, 3]) {
   C('frost_crack' + lv, `Eis bekommt Risse (Stufe ${lv})`, 'frost_crack', { from: 'ice', loop: true, interruptible: true,
     intro: [
       { ...ICED, props: [ice(0), fx(lv - 1)], t: 1 },
-      { eyes: 'wide', props: [ice(0), fx(lv), SNAP[lv - 1]], t: 2 },
+      { eyes: 'wide', props: [ice(0), fx(lv), SNAP[lv - 1]!], t: 2 },
       { look: LOOK_AT[lv - 1], props: [ice(0), fx(lv)], t: 5 },
       { eyes: 'open', t: 3 },
     ],

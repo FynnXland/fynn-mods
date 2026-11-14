@@ -9,10 +9,10 @@
 // Regeln wie überall: Hände sind Blöcke, nichts taucht auf (die Kopfhörer kommen aus der Tasche wie der Partyhut, Noten entstehen
 // an der Figur und vergehen nahe bei ihr), der erste Clip ist der ruhigste (weniger Bewegung nimmt ihn).
 // Die Einstiegspose steht im Intro: Ein Hauptteil aus Schlag-Bildern beginnt auf dem Schlag, das Intro hält bis dahin (höchstens ein Schlag).
-import { clip } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { fetchIn, fetchOut } from '../macros.ts'
+import { clip } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { fetchIn, fetchOut } from '../macros.js'
 
 /** Ein Schlag in Takten (75 ms) ohne Takt aus tune-strip: Abschlag 3, Aufschlag 4 ≈ 0,53 s ≈ 115 pro Minute. */
 const DOWN = 3

@@ -1,7 +1,7 @@
 // clawd-buddy: Basis-Requisiten (reine Daten). Weitere Requisiten liefern die Clip-Gruppen unter hooks/clips/.
 // Palettenzeichen siehe stage.ts → PAL. '.' ist durchsichtig. `effect`: kleiner Effekt, der aus der Figur entsteht
 // (Funkeln, Note, Herz, Schweiß …); alles andere muss im Bild herein- und hinausgeführt werden (siehe macros.ts).
-import type { PropSprite } from './stage.ts'
+import type { PropSprite } from './stage.js'
 
 const s = (rows: readonly string[]): PropSprite => ({ rows })
 const fx = (rows: readonly string[]): PropSprite => ({ rows, effect: true })

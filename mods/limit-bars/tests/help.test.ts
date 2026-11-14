@@ -1,15 +1,15 @@
 // limit-bars 0.7.0: /bars help als gezeichnete Tabelle (docs/HELP-SPEC.md §6), Verweis der Nebenbefehle, Vollständigkeit.
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { DISK_WORDS, HELP_WORDS, KEEP_OFF_WORDS, ON_OFF_WORDS, PART_WORDS, RESET_WORDS, SHOW_WORDS, STATUS_WORDS, STYLE_VALUE_WORDS, STYLE_WORDS, parseBars } from '../hooks/display.ts'
-import { CACHE_WORDS, DEFAULT_SETTINGS } from '../hooks/cache.ts'
-import { stateText } from '../hooks/help.ts'
-import { HELP_ACCENT, barsHelpData } from '../hooks/helpdata.ts'
-import type { HelpInput } from '../hooks/helpdata.ts'
-import { T } from '../hooks/i18n.ts'
-import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
-import { cliAnswer } from './cli.ts'
-import type { Cli } from './cli.ts'
+import { DISK_WORDS, HELP_WORDS, KEEP_OFF_WORDS, ON_OFF_WORDS, PART_WORDS, RESET_WORDS, SHOW_WORDS, STATUS_WORDS, STYLE_VALUE_WORDS, STYLE_WORDS, parseBars } from '../hooks/display.js'
+import { CACHE_WORDS, DEFAULT_SETTINGS } from '../hooks/cache.js'
+import { stateText } from '../hooks/help.js'
+import { HELP_ACCENT, barsHelpData } from '../hooks/helpdata.js'
+import type { HelpInput } from '../hooks/helpdata.js'
+import { T } from '../hooks/i18n.js'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.js'
+import { cliAnswer } from './cli.js'
+import type { Cli } from './cli.js'
 
 const NOW = new Date(2026, 9, 9, 10, 0, 0).getTime()
 const MIN = 60000
@@ -36,7 +36,7 @@ function world(on: On, o: { saved?: Map<string, unknown>; storeGetFails?: boolea
     return { value: undefined }
   })
   on('ui.toast', () => ({ value: undefined }))
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('command.list', () => {
     listed += 1
     return { value: [{ name: 'limit-bars:cache', description: 'Cache', source: 'plugin' }] }
@@ -165,7 +165,7 @@ test('0.7.0 Hilfe UI: VS Code, mobil, Fehlerzeile, unbekannte Kennung und gewöh
   expect(await status.find({ text: /^ENGINE:### limit-bars · Anzeige/ })).toBeDefined()
   await status.unmount()
   // 0.7.2: gültige Kennung, aber die Zeile stammt nicht von `/bars help` (z. B. `/bars #kennung`) → Engine (Review worklist, K2)
-  const mountArgs = (args: string, surface: string) =>
+  const mountArgs = (args: string, surface: 'terminal' | 'desktop') =>
     $.ui.mount({
       plugin: 'limit-bars', component: 'CommandOutput', requestId: `h-args-${args}-${surface}`, surface, viewport: { columns: 100, rows: 40 },
       props: { command: 'bars', args, text, isErrored: false },

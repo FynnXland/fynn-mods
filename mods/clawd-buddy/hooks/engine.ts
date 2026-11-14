@@ -8,10 +8,10 @@
 // lässt den Durchgang zu Ende spielen oder steigt an einer Ruhestelle aus (siehe cutHere), dann läuft das Outro, dann (falls nötig) Übergangsclips zur Ausgangspose
 // des nächsten Clips. Nur Maus und Aufwachen unterbrechen sofort, immer über einen Reaktionsclip; Gegenstände am Boden bleiben
 // dabei stehen ("Carry") und werden später ordentlich weggeräumt, nie ausgeblendet.
-import { FX, FY, H, LOOKABLE_EYES, POSES, STRUCT, TICK, W, compose } from './stage.ts'
-import type { Composed, Pose, PropRef, PropTable } from './stage.ts'
-import { isSafe, mergeFrames, planPath, resolveClip, smooth } from './clipdef.ts'
-import type { ClipDef, Resolved } from './clipdef.ts'
+import { FX, FY, H, LOOKABLE_EYES, POSES, STRUCT, TICK, W, compose } from './stage.js'
+import type { Composed, Pose, PropRef, PropTable } from './stage.js'
+import { isSafe, mergeFrames, planPath, resolveClip, smooth } from './clipdef.js'
+import type { ClipDef, Resolved } from './clipdef.js'
 
 export type Rng = () => number
 
@@ -224,10 +224,10 @@ export function createEngine(opts: EngineOpts) {
       if (i === 0 && ownsMate()) S.mates[0] = 0
       else if (i < want) {
         // nacheinander aufsteigen: der nächste erst, wenn der vorige fast steht
-        if (i === 0 || S.mates[i - 1] <= 2) S.mates[i] = Math.max(0, S.mates[i] - 1)
-      } else S.mates[i] = Math.min(MATE_HIDE, S.mates[i] + 1)
+        if (i === 0 || S.mates[i - 1]! <= 2) S.mates[i] = Math.max(0, S.mates[i]! - 1)
+      } else S.mates[i] = Math.min(MATE_HIDE, S.mates[i]! + 1)
     }
-    while (S.mates.length > want && S.mates[S.mates.length - 1] >= MATE_HIDE) S.mates.pop()
+    while (S.mates.length > want && S.mates[S.mates.length - 1]! >= MATE_HIDE) S.mates.pop()
   }
   function mateProps(): PropRef[] {
     const out: PropRef[] = []
@@ -236,14 +236,14 @@ export function createEngine(opts: EngineOpts) {
       if (off >= MATE_HIDE || (i === 0 && ownsMate())) return
       // Hintere Reihe: dunklere Silhouetten, 1 px höher, zuerst gezeichnet (liegen hinter der vorderen Reihe)
       if (i >= FRONT_MATES) {
-        back.push([props.agent_sback ? 'agent_sback' : 'agent_s', MATE_X[i], BACK_Y + off, 'G'])
+        back.push([props.agent_sback ? 'agent_sback' : 'agent_s', MATE_X[i]!, BACK_Y + off, 'G'])
         return
       }
       const blink = off === 0 && (S.ticks + i * 17) % 53 < 2
       // Steht er allein (Clawd macht etwas anderes), werkelt er meist still vor sich hin (Fynn: mit sich selbst beschäftigt)
       const busy = off === 0 && !blink && !!props.agent_s8 && !!props.agent_s9 && (S.ticks + i * 11) % 60 < 40
       const name = blink ? 'agent_sb' : busy ? ((S.ticks >> 2) % 2 ? 'agent_s8' : 'agent_s9') : 'agent_s'
-      out.push([name, MATE_X[i], MATE_Y + off, 'G'])
+      out.push([name, MATE_X[i]!, MATE_Y + off, 'G'])
     })
     return [...back, ...out]
   }
@@ -293,7 +293,7 @@ export function createEngine(opts: EngineOpts) {
     if (S.mates.length && !c.companion && !c.minMates && freeSide(c) < 0) cool = 0
     if (c.minMates && S.mates.filter((o) => o === 0).length < c.minMates) cool = 0
     // Tageszeit (Zeitvertreib verändert sich über den Tag) und besondere Tage (dann bevorzugt)
-    if (c.daypart) cool *= c.daypart[daypartIndex()]
+    if (c.daypart) cool *= c.daypart[daypartIndex()]!
     if (c.special) cool *= 5
     // Musik-Clips (0.11.0): Gewicht nach der Gruppe des Songs; bei offener Gruppe die Spalte „ohne Takt“
     if (c.music) {
@@ -315,9 +315,9 @@ export function createEngine(opts: EngineOpts) {
     const weighted = pool.filter((c) => weightOf(c) > 0)
     const list = items.length ? items : weighted.length ? weighted : pool.filter((c) => !c.temper).length ? pool.filter((c) => !c.temper) : pool
     const total = list.reduce((a, c) => a + weightOf(c), 0)
-    if (total <= 0) return list[Math.floor(rng() * list.length)].name
+    if (total <= 0) return list[Math.floor(rng() * list.length)]!.name
     let r = rng() * total
-    let chosen = list[list.length - 1]
+    let chosen = list[list.length - 1]!
     for (const c of list) {
       r -= weightOf(c)
       if (r < 0) {
@@ -377,7 +377,7 @@ export function createEngine(opts: EngineOpts) {
     const pool = poolOf(m)
     if (!pool.length) return 'idle_breathe'
     // Weniger Bewegung: eine Schleife, die gerade passt (sonst winkte er bei Subagenten mit `wave_helper` pausenlos, Review 0.8.1)
-    if (S.reduced && !ONE_SHOT.has(m)) return (pool.find((c) => c.loop && weightOf(c) > 0) ?? pool[0]).name
+    if (S.reduced && !ONE_SHOT.has(m)) return (pool.find((c) => c.loop && weightOf(c) > 0) ?? pool[0]!).name
     return pick(pool, m)
   }
 
@@ -388,10 +388,10 @@ export function createEngine(opts: EngineOpts) {
       return S.mates.length ? { ...d, props: [...mateProps(), ...d.props] } : d
     }
     const pl = S.play
-    let p: Pose = { ...POSES[S.landing] }
+    let p: Pose = { ...POSES[S.landing]! }
     if (pl) {
       const list = pl[pl.phase === 'end' ? 'body' : pl.phase]
-      if (list.length) p = { ...list[Math.min(pl.fi, list.length - 1)].p }
+      if (list.length) p = { ...list[Math.min(pl.fi, list.length - 1)]!.p }
       const clip = pl.clip
       if (S.carry) p.mirror = S.carry.mirror
       // Ebenen über jedem Clip: Atmen, Blick zum Cursor, Blinzeln
@@ -452,7 +452,7 @@ export function createEngine(opts: EngineOpts) {
   }
 
   function startClip(item: string | ClipDef, skipIntro = false) {
-    const c = typeof item === 'string' ? byName[item] : item
+    const c = typeof item === 'string' ? byName[item]! : item
     // Schlüssel wie in pick: die Gruppe, Maus-Reaktionen unter 'click'
     if (!isDyn(c)) S.lastPick[c.cat === 'mouse' ? 'click' : c.cat] = c.name
     let intro: Resolved[] = []
@@ -469,7 +469,7 @@ export function createEngine(opts: EngineOpts) {
         r = { intro: mm(r.intro), body: mm(r.body), outro: mm(r.outro) }
       }
       if (!skipIntro) intro = smooth(r.intro, S.lastPose)
-      const before = intro.length ? intro[intro.length - 1].p : S.lastPose
+      const before = intro.length ? intro[intro.length - 1]!.p : S.lastPose
       body = smooth(r.body, before)
       outro = r.outro
     }
@@ -542,7 +542,7 @@ export function createEngine(opts: EngineOpts) {
     let item = S.queue.shift()!
     let skipIntro = false
     if (S.carry) {
-      const target = typeof item === 'string' ? byName[item] : item
+      const target = typeof item === 'string' ? byName[item]! : item
       if (isDyn(target) || target.cat === 'mouse') {
         // Zwischenclips und Reaktionen laufen über dem Carry
       } else if (carryCovers(target)) {
@@ -564,7 +564,7 @@ export function createEngine(opts: EngineOpts) {
   /** Outro des unterbrochenen Clips als eigener Clip, ab der aktuellen Pose. */
   function carryOutro(c: ClipDef): Dyn | null {
     if (!c.outro.length) return null
-    const start = S.lastPose ?? POSES[c.from]
+    const start = S.lastPose ?? POSES[c.from]!
     return dyn(c.name + '_outro', c.label + ' (wegräumen)', c.from, c.from, mergeFrames(start, c.outro))
   }
 
@@ -577,12 +577,12 @@ export function createEngine(opts: EngineOpts) {
     if (!path.includes('freeze')) return path
     const pool = clips.filter((c) => c.cat === 'frost_in')
     if (!pool.length) return path
-    const entry = S.reduced ? pool[0].name : pick(pool, 'frost_in')
+    const entry = S.reduced ? pool[0]!.name : pick(pool, 'frost_in')
     return path.map((n) => (n === 'freeze' ? entry : n))
   }
 
   function planTo(name: string): string[] {
-    return [...pathTo(S.landing, byName[name].from), name]
+    return [...pathTo(S.landing, byName[name]!.from), name]
   }
 
   function endClip() {
@@ -594,7 +594,7 @@ export function createEngine(opts: EngineOpts) {
     pl.phase = 'end'
     // Sicherheitsnetz: Arme und Mund sauber zurück (Gegenstände müssen die Clips selbst wegräumen, siehe Prüfung)
     const list = pl.outro.length ? pl.outro : pl.body
-    const lastP = list.length ? list[list.length - 1].p : null
+    const lastP = list.length ? list[list.length - 1]!.p : null
     const tidy = lastP && !isDyn(c) ? tidyFrames(lastP, S.landing) : []
     if (tidy.length) S.queue.unshift(dyn('tidy', 'Arme zurück', S.landing, S.landing, tidy))
     nextFromQueue()
@@ -602,7 +602,7 @@ export function createEngine(opts: EngineOpts) {
 
   /** Arme zurück in die Haltung der Landepose (im Eis bleiben sie verschränkt, 0.13.0), Mund zu. */
   function tidyFrames(p: Pose, landing: string): Resolved[] {
-    const base = POSES[landing] ?? POSES.stand
+    const base = POSES[landing] ?? POSES.stand!
     if (p.armL === base.armL && p.armR === base.armR && !p.mouth) return []
     return [{ p: { ...p, armL: base.armL, armR: base.armR, mouth: null }, t: 1 }]
   }
@@ -612,7 +612,7 @@ export function createEngine(opts: EngineOpts) {
     const pl = S.play!
     pl.interrupted = true
     S.landing = pl.clip.from
-    if (target) S.queue = [...pathTo(pl.clip.from, byName[target].from), target]
+    if (target) S.queue = [...pathTo(pl.clip.from, byName[target]!.from), target]
     if (pl.outro.length && pl.phase !== 'outro') {
       pl.phase = 'outro'
       pl.fi = 0
@@ -626,7 +626,7 @@ export function createEngine(opts: EngineOpts) {
     const p = currentPose()
     const pl = S.play
     const fromPose = S.landing
-    const base = POSES[fromPose]
+    const base = POSES[fromPose]!
     // Der Begleiter eines Subagenten (agent_s…) gehört der Begleiter-Ebene, nicht dem Carry
     const ground = p.props.filter((x) => x[3] === 'g' && props[x[0]]?.effect !== true && !x[0].startsWith('agent_s'))
     if (pl && !isDyn(pl.clip) && pl.clip.outro.length && ground.length) S.carry = { clip: pl.clip, props: ground, mirror: !!p.mirror }
@@ -639,7 +639,7 @@ export function createEngine(opts: EngineOpts) {
       const end = { ...p, ...Object.fromEntries(STRUCT.map((k) => [k, base[k]])), legs: base.legs, look: [0, 0], eyes: p.eyes === 'none' ? base.eyes : p.eyes } as Pose
       settle.push({ p: mid, t: 1 }, { p: end, t: 1 })
     }
-    const settled = settle.length ? settle[settle.length - 1].p : p
+    const settled = settle.length ? settle[settle.length - 1]!.p : p
     // Was in der Hand war (relative Nicht-Effekt-Requisiten), verschwindet nicht abrupt: der Clip soll es selbst weglegen;
     // hier bleiben nur Effekte (sie lösen sich im Reaktionsclip auf) und der Carry.
     // Gegenstände der Pose selbst (der Eisblock der Pose `ice`, 0.13.0) bleiben stehen; ihre Effekte (Glanz, Risse) ersetzt die Pose
@@ -648,9 +648,9 @@ export function createEngine(opts: EngineOpts) {
     const ownFam = new Set(own.map((x) => fam(x[0])))
     const keepFx = [...own, ...settled.props.filter((x) => props[x[0]]?.effect === true && !ownFam.has(fam(x[0])))]
     const frames = [...settle, ...tidyFrames({ ...settled, props: keepFx }, fromPose)]
-    S.play = { clip: pl ? pl.clip : byName.idle_breathe, mood: S.mood, intro: [], body: [], outro: [], phase: 'end', fi: 0, tick: 0, interrupted: true }
+    S.play = { clip: pl ? pl.clip : byName.idle_breathe!, mood: S.mood, intro: [], body: [], outro: [], phase: 'end', fi: 0, tick: 0, interrupted: true }
     S.landing = fromPose
-    const rest = target ? [...pathTo(fromPose, byName[target].from), target] : S.queue
+    const rest = target ? [...pathTo(fromPose, byName[target]!.from), target] : S.queue
     S.queue = frames.length ? [dyn('ausklang', 'Ausklang (Pose zurück)', fromPose, fromPose, frames), ...rest] : rest
     nextFromQueue()
   }
@@ -703,7 +703,7 @@ export function createEngine(opts: EngineOpts) {
   /** Ticks bis zum Ende des laufenden Durchgangs (Hauptteil ab dem aktuellen Bild). */
   function bodyLeft(pl: Play): number {
     let n = 0
-    for (let i = pl.fi; i < pl.body.length; i++) n += pl.body[i].t
+    for (let i = pl.fi; i < pl.body.length; i++) n += pl.body[i]!.t
     return n
   }
 
@@ -714,7 +714,7 @@ export function createEngine(opts: EngineOpts) {
    */
   function cutHere(pl: Play): boolean {
     if (held()) return false
-    const p = pl.body[pl.fi].p
+    const p = pl.body[pl.fi]!.p
     if (!isSafe(pl.clip, p) && !(S.pendingUrgent && intoOutro(pl, p))) return false
     // Grundpose (atmen, umschauen) hat keine Handlung, die man abbrechen könnte: sofort an jeder sicheren Stelle weiter
     if (pl.clip.cat === 'idle') return true
@@ -722,7 +722,7 @@ export function createEngine(opts: EngineOpts) {
     if (S.mood === 'watching' && pl.clip.cat === 'fun') return false
     if (bodyLeft(pl) <= (S.pendingUrgent ? FINISH_URGENT : FINISH)) return false
     if (S.pendingUrgent) return true
-    const base = POSES[pl.clip.from]
+    const base = POSES[pl.clip.from]!
     return p.armL === base.armL && p.armR === base.armR
   }
 
@@ -734,7 +734,7 @@ export function createEngine(opts: EngineOpts) {
    * bleibt stehen, bis dessen Schlag kommt (höchstens ein Schlag länger).
    */
   function frameDur(pl: Play, list: readonly Resolved[], fi: number, start: number): number {
-    const fr = list[fi]
+    const fr = list[fi]!
     const g = S.beat
     if (!g || S.gallery) return fr.t
     if (fr.b) {
@@ -813,7 +813,7 @@ export function createEngine(opts: EngineOpts) {
   // ---- Zeiger (Bühnenpixel, Bruchteile erlaubt)
   function dragPose(): Pose {
     const d = S.drag!
-    const base = { ...POSES.stand }
+    const base = { ...POSES.stand! }
     if (d.mode === 'arm') {
       const to: readonly [number, number] = [d.x - FX, d.y - FY]
       const dist = Math.hypot(d.x - d.x0, d.y - d.y0)
@@ -872,7 +872,7 @@ export function createEngine(opts: EngineOpts) {
   }
 
   function chainNow(list: string[]) {
-    leaveNow(list[0])
+    leaveNow(list[0]!)
     S.queue.push(...list.slice(1))
   }
 
@@ -917,9 +917,9 @@ export function createEngine(opts: EngineOpts) {
     let i = 0
     while (x !== 0) {
       x += dir
-      frames.push({ p: { ...POSES.stand, fx: x, legs: i++ % 2 ? 'stepA' : 'stepB', look: [dir, 0] }, t: Math.abs(fx) > 12 ? 1 : 2 })
+      frames.push({ p: { ...POSES.stand!, fx: x, legs: i++ % 2 ? 'stepA' : 'stepB', look: [dir, 0] }, t: Math.abs(fx) > 12 ? 1 : 2 })
     }
-    frames.push({ p: { ...POSES.stand }, t: 2 })
+    frames.push({ p: { ...POSES.stand! }, t: 2 })
     return dyn('zurueckgehen', 'geht zurück an seinen Platz', 'stand', 'stand', frames)
   }
 
@@ -998,7 +998,7 @@ export function createEngine(opts: EngineOpts) {
     const ix = Math.floor(x)
     const iy = Math.floor(y)
     if (ix < 0 || iy < 0 || ix >= W || iy >= H) return null
-    return last.hit[iy * W + ix]
+    return last.hit[iy * W + ix]!
   }
 
   /** Zeigerereignis in Bühnenpixeln. Liefert true, wenn die Figur es verwendet hat (Treffer auf Körper oder Arm). */
@@ -1044,13 +1044,13 @@ export function createEngine(opts: EngineOpts) {
     }
     if (d.mode === 'press') {
       // Losgelassen, bevor er hochgehoben war: kurz zurückfedern, sonst nichts
-      S.play = { clip: byName.idle_breathe, mood: S.mood, intro: [], body: [], outro: [], phase: 'end', fi: 0, tick: 0, interrupted: true }
+      S.play = { clip: byName.idle_breathe!, mood: S.mood, intro: [], body: [], outro: [], phase: 'end', fi: 0, tick: 0, interrupted: true }
       S.landing = 'stand'
-      S.queue = [dyn('zurueckfedern', 'federt zurück', 'stand', 'stand', [{ p: { ...POSES.stand, by: 1 }, t: 1 }, { p: { ...POSES.stand }, t: 2 }])]
+      S.queue = [dyn('zurueckfedern', 'federt zurück', 'stand', 'stand', [{ p: { ...POSES.stand!, by: 1 }, t: 1 }, { p: { ...POSES.stand! }, t: 2 }])]
       nextFromQueue()
       return true
     }
-    const none = { clip: byName.idle_breathe, mood: S.mood, intro: [], body: [], outro: [], phase: 'end' as Phase, fi: 0, tick: 0, interrupted: true }
+    const none = { clip: byName.idle_breathe!, mood: S.mood, intro: [], body: [], outro: [], phase: 'end' as Phase, fi: 0, tick: 0, interrupted: true }
     if (d.mode === 'arm') {
       S.annoy = Math.min(8, S.annoy + 1)
       S.play = { ...none }
@@ -1070,7 +1070,7 @@ export function createEngine(opts: EngineOpts) {
         ]),
       ]
       if (d.moved > 80) {
-        const dz = resolveClip(byName.dizzy).body.map((fr) => ({ p: { ...fr.p, fx: fr.p.fx + fx }, t: fr.t }))
+        const dz = resolveClip(byName.dizzy!).body.map((fr) => ({ p: { ...fr.p, fx: fr.p.fx + fx }, t: fr.t }))
         S.queue.push(dyn('dizzy_fx', 'schwindelig', 'stand', 'stand', dz))
       }
       if (fx !== 0) S.queue.push(walkBackClip(fx))

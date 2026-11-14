@@ -1,8 +1,8 @@
 // clawd-buddy: Clips der Gruppe "done" (Turn fertig, Fehler, Erfolgsserie).
-import { clip, rep } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, fetchOut } from '../macros.ts'
+import { clip, rep } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { armBlock, fetchIn, fetchOut } from '../macros.js'
 
 /** Requisiten, die nur diese Gruppe braucht (Name → Sprite). Namen müssen über alle Gruppen eindeutig sein. */
 export const PROPS: Readonly<Record<string, PropSprite>> = {
@@ -29,7 +29,7 @@ C('celebrate_jump', 'Freudensprung', 'done', { shapedEyes: true, frames: [
   { armL: 'down', armR: 'down', props: [], t: 3 }, { eyes: 'open', t: 2 }] });
 C('sparkle_cheer', 'Jubeln mit Funkeln', 'done', { frames: [
   { armL: 'up1', armR: 'up1', eyes: 'happy', t: 2 },
-  ...rep(3, [{ armL: 'up2', armR: 'up2', props: [['sparkle', -3, 0], ['dotY', 18, -2]], t: 2 }, { armL: 'raise', armR: 'raise', props: [['dotY', -2, -2], ['sparkle', 17, 0]], t: 2 }]),
+  ...rep<Frame>(3, [{ armL: 'up2', armR: 'up2', props: [['sparkle', -3, 0], ['dotY', 18, -2]], t: 2 }, { armL: 'raise', armR: 'raise', props: [['dotY', -2, -2], ['sparkle', 17, 0]], t: 2 }]),
   { armL: 'up1', armR: 'up1', props: [], t: 2 }, { armL: 'down', armR: 'down', t: 2 }, { eyes: 'open', t: 2 }] });
 C('shrug', 'Schulterzucken', 'oops', { frames: [
   { eyes: 'sad', t: 3 }, { armL: 'up1', armR: 'up1', by: 1, t: 2 }, { armL: 'up2', armR: 'up2', by: 0, mouth: 'flat', t: 6 },
@@ -109,7 +109,7 @@ C('streak_medal', 'Medaille (Erfolgsserie)', 'streak', { interruptible: false,
     // abnehmen
     { armL: 'raise', armR: 'down', mouth: null, props: [med1(6, 1)], t: 1 }, { props: [med1(6, -2)], t: 1 },
     ...[2, -1, -4].map((x): Frame => ({ ...medHand(x, -2), look: [-2, 0], props: [med0(x, -2)], t: 1 })),
-    ...[-7, ...[-7, -7, -7, -7]].slice(0, 5).map((x, i): Frame => ({ ...medHand(x, [-2, 0, 3, 6, 8][i]), look: [-2, 1], props: [med0(x, [-2, 0, 3, 6, 8][i])], t: 1 }))],
+    ...[-7, ...[-7, -7, -7, -7]].slice(0, 5).map((x, i): Frame => ({ ...medHand(x, [-2, 0, 3, 6, 8][i]!), look: [-2, 1], props: [med0(x, [-2, 0, 3, 6, 8][i]!)], t: 1 }))],
   outro: fetchOut(MEDAL) });
 
 export const CLIPS: readonly ClipDef[] = out

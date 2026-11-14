@@ -4,26 +4,27 @@
 // Aufgabe: aus Events *Fakten* sammeln (wann begann der Turn, welches Tool läuft seit wann, ob eine Frage offen ist, wann zuletzt
 // getippt wurde, wie der letzte Turn endete) und sie als `props` an das Client-Modul `./buddy.ts` reichen. Die Stimmung leitet der Client
 // daraus auf seiner eigenen Uhr ab (mood.ts); `$.ui.invalidate` läuft darum nur bei echten Ereignissen, nie im Bildtakt (Desktop: desk.ts).
-// Zeichnet ins Band über dem Prompt (docs/raw/en/interface.md:207-213) und lässt fremden Inhalt stehen (`await next(e)` als Kind).
+// Zeichnet ins Band über dem Prompt nur die eigene Zeile (Band 2, ab 2.1.323: AbovePrompt einmal je Plugin, en/interface.md:200-204);
+// die Anordnung aller Zeilen macht `arrange` aus band.ts im AbovePromptList-Hook (docs/BAND.md).
 import type { EngineInterface, On, Timer } from 'claude-code'
-import { joinBand, nameOf, slot, SLOTS, splitBand } from './band.ts'
-import { ALL_CLIPS } from './library.ts'
-import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, beatValue, musicValue, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.ts'
-import { FROST_BREAK_P, FROST_BURST_MS, FROST_ESTIMATE_MS, FROST_GRACE_MS, frostDecide, frostRoll, sidekickStatus } from './mood.ts'
-import type { FrostSource, Strain } from './mood.ts'
-import { createDesk, DESK_TICK, stillSource } from './desk.ts'
-import { T, clipLabel, langOf, num as fmt } from './i18n.ts'
-import { ACCENT, SUBCOMMANDS, clawdHelp, isHelp } from './clawdhelp.ts'
-import { helpMarkdown, helpTree } from './help.ts'
-import type { HelpData } from './help.ts'
-import type { Lang } from './i18n.ts'
-import { isLanguage, languageCommand } from './language.ts'
-import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
-import { storeOffDefaults } from './offdefaults.ts'
-import { SETTINGS } from './fields.ts'
-import { H, W } from './stage.ts'
-import type { Desk } from './desk.ts'
-import type { Facts, ToolKind } from './mood.ts'
+import { arrange, rowGapCells, slot, SLOTS } from './band.js'
+import { ALL_CLIPS } from './library.js'
+import { AWAY_MS, NO_FACTS, NO_STRAIN, SETBACK, STREAK_STEP, TYPING_MS, addHit, ctxLevel, deriveTemper, beatValue, musicValue, shellKind, sidekickValue, strainTurnEnd, strainTurnStart, toolKind } from './mood.js'
+import { FROST_BREAK_P, FROST_BURST_MS, FROST_ESTIMATE_MS, FROST_GRACE_MS, frostDecide, frostRoll, sidekickStatus } from './mood.js'
+import type { FrostSource, Strain } from './mood.js'
+import { createDesk, DESK_TICK, stillSource } from './desk.js'
+import { T, clipLabel, langOf, num as fmt } from './i18n.js'
+import { ACCENT, SUBCOMMANDS, clawdHelp, isHelp } from './clawdhelp.js'
+import { helpMarkdown, helpTree } from './help.js'
+import type { HelpData } from './help.js'
+import type { Lang } from './i18n.js'
+import { isLanguage, languageCommand } from './language.js'
+import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.js'
+import { storeOffDefaults } from './offdefaults.js'
+import { SETTINGS } from './fields.js'
+import { H, W } from './stage.js'
+import type { Desk } from './desk.js'
+import type { Facts, ToolKind } from './mood.js'
 
 // `enabledMigrated`: der Wert von `enabled`, der zuletzt nach userConfig umgezogen ist (0.14.2)
 type Stored = { enabled?: boolean; enabledMigrated?: boolean; annoy?: number; seenAt?: number }
@@ -39,18 +40,26 @@ let enabled = true
 let iceWhenCold = true
 // Wert der Einstellung `enabled` für die Hilfe: demo/nap/freeze zeigen Clawd nur für die Sitzung (Review 0.14.0 K3)
 let enabledSetting = true
-// Breite des Platzes im Desktop für tune-strip: `$.state` `clawd-buddy.band` (types/index.d.ts, docs/BAND.md „Platzbreite“). `undefined` =
-// noch nicht geschrieben; nie im Zeichnen, dort darf `$.state` nicht geschrieben werden.
+// Breite des eigenen Platzes für tune-strip: `$.state` `clawd-buddy.band` = `{ cols }` in Zellen (0.15.0, Band 2; types/index.d.ts,
+// docs/BAND.md „Absprachen“): im Desktop die Bühne, im Terminal die Breite, die Clawd beim letzten Zeichnen hatte (`termCols`).
+// `undefined` = noch nicht geschrieben; nie im Zeichnen, dort darf `$.state` nicht geschrieben werden (docs/BAND.md Regel 8). Die
+// Terminal-Breite geht deshalb beim nächsten Ereignis hinaus (session.measure, turn.start, turn.complete, prompt.edit).
 let isDesktop = false
-let publishedWidth: number | null | undefined = undefined
+let termCols: number | null = null
+/** Breite eines gemeldeten Platzes in Zellen (`limit-bars.band`); nie gemeldet oder unbrauchbar zählt als nichts. */
+const colsIn = (v: unknown): number | null => {
+  const c = (v as { cols?: unknown } | null | undefined)?.cols
+  return typeof c === 'number' && Number.isFinite(c) && c > 0 ? Math.ceil(c) : null
+}
+let publishedCols: number | null | undefined = undefined
 let publishChain: Promise<unknown> = Promise.resolve()
 let sessionStarted = false // erst nach session.start kennt der Mod die Oberfläche (isDesktop)
 function publishBand($: EngineInterface) {
-  const width = enabled && isDesktop ? DESK_WIDTH : null
-  if (width === publishedWidth) return
-  publishedWidth = width
+  const cols = !enabled ? null : isDesktop ? DESK_COLS : termCols
+  if (cols === publishedCols) return
+  publishedCols = cols
   // Schreibvorgänge nacheinander; Beiwerk: ein Fehler ändert nichts an Clawd
-  publishChain = publishChain.then(() => $.state.set({ plugin: 'clawd-buddy', key: 'band' }, width === null ? null : { width })).catch(() => {})
+  publishChain = publishChain.then(() => $.state.set({ plugin: 'clawd-buddy', key: 'band' }, cols === null ? null : { cols })).catch(() => {})
 }
 let annoy = 0
 let napN = 0
@@ -157,10 +166,10 @@ function frostSent(now: number): boolean {
 // der Buddy an ist: `/clawd off` bricht ihn ab, und zeichnet die App auf die Bitte hin 2 s lang nicht, bricht er sich selbst ab; das
 // nächste Zeichnen startet ihn neu. Gezählt wird in Wächter-Runden, nicht in Echtzeit (im Test-Kit läuft nur die Uhr der Mods-API).
 const DESK_SCALE = 4 // CSS-Pixel je Figurpixel: Figur 68 × 40 px, Bühne 400 × 56 px
-const DESK_WIDTH = W * DESK_SCALE // Breite des Platzes im Desktop, wie sie an tune-strip gemeldet wird
-const BACK_SLOT = 0 // 0.12.1: Platz der Bühne hinter der Zeile, vor allen anderen Plätzen (docs/BAND.md)
-// Durchsichtiger Halter für die Höhe der Bühne (Platz 30), 1 × 56 px
-const ROOM_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 ${H * DESK_SCALE}" width="1" height="${H * DESK_SCALE}"></svg>`
+// Breite der Bühne in Zellen, wie sie an tune-strip gemeldet wird (Band 2): Der Desktop rechnet Layout-Zahlen in Zellen, nur Svg in px;
+// ≈ 7,8 px je Zelle geschätzt (Probe 7b: 99 Zellen bei ≈ 770 px), aufgerundet, lieber eine Zelle zu viel (BAND-SPEC-2 §3 „Breite“).
+const PX_PER_CELL = 7.8
+const DESK_COLS = Math.ceil((W * DESK_SCALE) / PX_PER_CELL)
 const DESK_CHECK = 250 // ms je Wächter-Runde
 const DESK_LEAD = 1000 // so lange vor dem Ende der Animation um die nächste bitten
 const DESK_IDLE_CHECKS = 8 // ~2 s ohne Antwort auf die Bitte: Wächter beenden
@@ -207,11 +216,11 @@ let deskShape = ''
 // mit performance.now() (synchron, kein `$`-Aufruf): Zeichnungen, Länge und Bildwechsel der Animationen, Rechen- und Zeichendauer.
 // Dazu (0.6.5): wie oft wegen eines geänderten Aufbaus des Bands bzw. nach Wiederanzeigen oder Einschalten neu gezeichnet wurde.
 type DeskMeter = {
-  since: number; draws: number; foreign: number; planSecs: number; changes: number; chars: number; calcSum: number; calcMax: number; drawSum: number; drawMax: number; othersSum: number
+  since: number; draws: number; foreign: number; planSecs: number; changes: number; chars: number; calcSum: number; calcMax: number; drawSum: number; drawMax: number
   freshShape: number; freshShown: number; skipped: number
 }
 const newMeter = (): DeskMeter => ({
-  since: performance.now(), draws: 0, foreign: 0, planSecs: 0, changes: 0, chars: 0, calcSum: 0, calcMax: 0, drawSum: 0, drawMax: 0, othersSum: 0,
+  since: performance.now(), draws: 0, foreign: 0, planSecs: 0, changes: 0, chars: 0, calcSum: 0, calcMax: 0, drawSum: 0, drawMax: 0,
   freshShape: 0, freshShown: 0, skipped: 0,
 })
 let meter = newMeter()
@@ -223,7 +232,7 @@ function meterText(lang: Lang, m: DeskMeter, at: number): string {
   return T[lang].desk({
     secs: s.toFixed(0), draws: m.draws, foreign: m.foreign, perMin: fmt(lang, s > 0 ? (m.draws * 60) / s : 0), planSecs: avg(m.planSecs), changes: avg(m.changes),
     kb: fmt(lang, m.draws ? m.chars / m.draws / 1000 : 0), calcAvg: avg(m.calcSum), calcMax: fmt(lang, m.calcMax), drawAvg: avgAll(m.drawSum),
-    drawMax: fmt(lang, m.drawMax), others: avgAll(m.othersSum),
+    drawMax: fmt(lang, m.drawMax),
   }) + T[lang].deskFresh({ shape: m.freshShape, shown: m.freshShown, skipped: m.skipped })
 }
 
@@ -351,7 +360,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   // geschrieben wird in derselben Kette wie sonst, also in Aufrufreihenfolge (Review 0.9.1 K4)
   on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async ($, e, next) => {
     if (sessionStarted) {
-      publishedWidth = undefined
+      publishedCols = undefined
       publishBand($)
     }
     // /clear ist ein neuer Chat (0.13.0): kalter Moment, „einmal pro Chat“ beginnt neu.
@@ -392,7 +401,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   on('session.start', async ($, e, next) => {
     isDesktop = e.surface === 'desktop'
-    publishedWidth = undefined
+    publishedCols = undefined
     sessionStarted = true
     try {
       const s = ((await $.store.get('buddy')) ?? {}) as Stored
@@ -427,6 +436,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   // ---- Nutzungslimits (nur Prozent und Reset-Zeit, types:10566): ausgeschöpftes Limit → eigene Animationen
   on('session.measure', async ($, e, next) => {
+    publishBand($)
     try {
       const pick = (kind: string) => e.rateLimits.find((r) => r.kind === kind)
       const five = pick('five_hour')
@@ -464,6 +474,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   // ---- Fakten aus den Events
   on('turn.start', async ($, e, next) => {
+    publishBand($)
     facts = { ...facts, turnActive: true, endedKind: '', lastTool: undefined }
     let now: number | undefined
     try {
@@ -480,6 +491,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   })
 
   on('turn.complete', async ($, e, next) => {
+    publishBand($)
     // Ein Subagent-Lauf trägt `agentId`: dann ist dieser Subagent fertig (zählt nicht mehr), die Hauptstimmung bleibt
     if (e.agentId) {
       if (agentSeen.delete(e.agentId)) {
@@ -644,6 +656,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('prompt.edit', async ($, e, next) => {
     // Zuerst weiterreichen: das Tippen darf nie verzögert werden. Keine `$`-Aufrufe pro Taste außer dem gedrosselten invalidate.
     const result = await next(e)
+    // Terminal-Breite für tune-strip (0.15.0): ruft `$.state.set` nur, wenn sie sich seit der letzten Meldung geändert hat
+    publishBand($)
     const gap = performance.now() - typingPerf
     typingPerf = performance.now()
     // Eis (0.13.0): je Tipp-Schub eine Riss-Stufe (höchstens 3). Die Zeit kommt aus der letzten Zeichnung, kein `$`-Aufruf je Taste.
@@ -836,17 +850,16 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   })
 
   // ---- Zeichnen
+  // Band 2 (ab 2.1.323): AbovePrompt wird einmal je Plugin gefragt, `next(e)` enthält keine fremden Zeilen mehr und heißt „keine Zeile“
+  // (types@2.1.325:11360-11375). Clawd zeichnet nur seine eigene Zeile: im Terminal (und bei `side: left`) Platz 30 im Fluss, im Desktop
+  // rechts die Bühne `slot:0:clawd-buddy`, absolut an der eigenen Wurzel; die Anordnung stapelt sie als unterste Zeile (docs/BAND.md).
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Was andere Mods ins Band zeichnen, bleibt erhalten (interface.md:210)
     const drawStart = performance.now()
-    const theirs = await next(e)
-    const othersMs = performance.now() - drawStart
     try {
-      if (!enabled) return theirs
-      if (e.surface !== 'terminal' && e.surface !== 'desktop') return theirs
-      // Ebenen anderer Mods (Quick-Replies, sidekick) bleiben über dem Grund, nie neben Clawd, egal wer in der Kette außen liegt
-      // (band.ts, docs/BAND.md). Clawd kommt nur neben den Grund (z. B. die Limit-Balken).
-      const { layers, slots, base } = splitBand(theirs)
+      if (!enabled) return await next(e)
+      if (e.surface !== 'terminal' && e.surface !== 'desktop') return await next(e)
+      // Eine Umfrage hält das Band; eine Mod weicht ihr (types@2.1.325:11385-11387, docs/BAND.md Regel 5)
+      if (e.props.hasSurvey) return await next(e)
       const now = await $.clock.now()
       clockAt = { clock: now, perf: performance.now() }
       // Schnittstelle zu sidekick: dessen `$.state`-Wert lesen. Das Lesen beim Zeichnen abonniert ihn, ein Schreiben von sidekick
@@ -907,9 +920,27 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       const f: Facts = JSON.parse(JSON.stringify(facts)) as Facts
       if (typingPerf > 0) f.typingAt = now - (performance.now() - typingPerf)
       const { Box, Client } = $.ui.resolve(e)
+      // Terminal (0.15.0, Fynn 2026-11-14): Jede Zeile sieht die volle Breite, und Flexbox schrumpft über die Hüllen der Anordnung
+      // nicht (BAND-SPEC-2 §3 „Breite“). Mit der vollen Bühne (100 Spalten) neben limit-bars wäre die Grundzeile zu breit, und das
+      // Terminal ließe Clawd ganz weg (gemessen). Clawd nimmt deshalb nur, was limit-bars übrig lässt (`limit-bars.band` in Zellen).
+      let columns = e.props.bodyColumns
+      if (e.surface === 'terminal') {
+        try {
+          const bars = colsIn((await $.state.get({ plugin: 'limit-bars', key: 'band' })).value)
+          if (bars !== null) columns = Math.max(0, e.props.bodyColumns - bars - (flip ? rowGapCells(2, 0) : rowGapCells(1, 1)))
+        } catch (err) {
+          $.ui.log(`clawd-buddy: limit-bars band not read: ${String(err)}`, { to: 'debug' })
+        }
+        // Zu wenig Platz (wie buddy.ts: unter 20 Spalten oder 4 Zeilen zeichnet der Client nichts): keine Zeile, keinen Platz
+        // freihalten und tune-strip nichts melden (Review 0.15.0 K1)
+        if (Math.min(W, columns) < 20 || Math.min(H / 2, e.props.maxRows) < 4) {
+          termCols = null
+          return await next(e)
+        }
+        termCols = Math.min(W, columns)
+      }
       const buddyProps = {
-        // Zeichnet ein anderer Mod links daneben, bekommt er 44 Spalten (Clawd behält mindestens 40)
-        columns: base ? Math.min(e.props.bodyColumns, Math.max(40, e.props.bodyColumns - 44)) : e.props.bodyColumns,
+        columns,
         maxRows: e.props.maxRows,
         now,
         nightStart,
@@ -988,13 +1019,12 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         }
         const { Svg } = $.ui.resolve(e)
         // 0.12.1: Clawd liegt HINTER der Zeile (Fynn, 2026-11-04: limit-bars 0.13.0 ist breiter geworden und schob ihn weg; „nicht den
-        // Raum kleiner machen, sondern dahinter legen“). Seine Bühne steht als Platz 0 vorn in der Zeile, aus dem Fluss genommen
-        // (`position: absolute`, types:946-958: kein Platz unter den Geschwistern) und am Rand der Zeile festgemacht. Was später kommt
-        // (limit-bars, tune-strip), wird darüber gemalt. Platz 30 bleibt als 1 px schmaler Halter für die Höhe, sonst schneidet das Band
-        // die 56 px hohe Bühne ab, wenn die anderen flacher sind. Die gemeldete Breite (400 px) bleibt, damit tune-strip weiter weicht.
-        // Nur rechts und ohne Umfrage (Review 0.12.1 S2, S3): links läge die Bühne fast ganz unter limit-bars, und eine Umfrage der
-        // App steht im Rest der Zeile rechtsbündig, also genau unter der Bühne. Dann wie bis 0.12.0 als Platz 30 im Fluss.
-        const behind = !flip && !e.props.hasSurvey
+        // Raum kleiner machen, sondern dahinter legen“). Band 2 (0.15.0): Die Bühne ist eine eigene Zeile `slot:0:clawd-buddy`, an der
+        // eigenen Wurzel absolut `bottom: 0, right: 0` (nur die eigene Wurzel darf `position` tragen, Probe §2 c′). `arrange` stapelt sie
+        // als unterste Zeile nach `band-row`; so liegt sie rechts am Fensterrand und ragt ohne eigene Höhe nach oben über die Grundzeile
+        // (BAND-SPEC-2 §3, Probe 7 Bild d5). Der 1-px-Halter auf Platz 30 entfällt. tune-strip weicht über `clawd-buddy.band` (`{ cols }`).
+        // Links (`side: left`) wie bis 0.12.0 als Platz 30 im Fluss (Review 0.12.1 S2: links läge die Bühne fast ganz unter limit-bars).
+        const behind = !flip
         const stage = (source: string, frame?: true) => Box({
           key: 'buddy',
           flexDirection: 'column',
@@ -1005,13 +1035,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
           // (`frame`) gibt es nur noch im Flacker-Test zum Vergleich.
           children: [Svg({ source, alt: tx.alt, width: W * DESK_SCALE, height: H * DESK_SCALE, ...(frame ? { isInteractive: frame } : {}) })],
         })
-        const deskBand = (source: string, frame?: true) => joinBand(layers, base, behind
-          ? [
-              ...slots,
-              Box({ key: `slot:${BACK_SLOT}:clawd-buddy`, position: 'absolute', bottom: 0, right: 0, flexDirection: 'column', justifyContent: 'flex-end', children: [stage(source, frame)] }),
-              slot(SLOTS.clawdBuddy, 'clawd-buddy', Box({ key: 'buddy-room', flexShrink: 0, children: [Svg({ source: ROOM_SVG, alt: '', width: 1, height: H * DESK_SCALE })] }), 'right'),
-            ]
-          : [...slots, slot(SLOTS.clawdBuddy, 'clawd-buddy', stage(source, frame), flip ? 'left' : 'right')])
+        const deskBand = (source: string, frame?: true) => behind
+          ? slot(SLOTS.clawdStage, 'clawd-buddy', stage(source, frame), 'left', { position: 'absolute', bottom: 0, right: 0, justifyContent: 'flex-end' })
+          : slot(SLOTS.clawdBuddy, 'clawd-buddy', stage(source, frame), 'left', { justifyContent: 'flex-end' })
         if (deskDiag !== -1) {
           if (deskDiag === -2) deskDiag = now
           const t = now - deskDiag
@@ -1026,7 +1052,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         }
         const calcStart = performance.now()
         const fNow = deskFacts(now)
-        const shape = `${layers.map((l) => nameOf(l)).join(',')}|${e.props.bodyColumns}|${e.props.maxRows}`
+        // Band 2: Fremde Ebenen sind nicht mehr sichtbar; der Aufbau zählt nur noch Breite und Höhe des Bands
+        const shape = `${e.props.bodyColumns}|${e.props.maxRows}`
         const fresh = deskFresh || deskSvg === '' || shape !== deskShape
         // Zeichnung nur für andere Mods (ohne eigenen Anlass): wird gezählt, aber nicht mehr mit dem alten Svg beantwortet (0.8.1, siehe oben)
         if (!fresh && !deskForce && deskAsked === 0 && desk.divergence(now, fNow, strain) > DESK_LEAD && desk.remaining(now) > DESK_LEAD) {
@@ -1056,15 +1083,20 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         const drawMs = performance.now() - drawStart
         meter.drawSum += drawMs
         meter.drawMax = Math.max(meter.drawMax, drawMs)
-        meter.othersSum += othersMs
         return deskBand(deskSvg)
       }
-      // Eine Zeile: Clawd ist ein Platz (30) neben den anderen Plätzen; was sonst im Band steht, füllt die Mitte
-      return joinBand(layers, base, [...slots, slot(SLOTS.clawdBuddy, 'clawd-buddy',
-        Box({ flexDirection: 'column', justifyContent: 'flex-end', children: [Client({ key: 'buddy', module: './buddy.ts', props: buddyProps })] }), flip ? 'left' : 'right')])
+      // Terminal: Clawd ist Platz 30 im Fluss (rechts, bei `side: left` links). Eine absolute Bühne würde dort oben abgeschnitten,
+      // weil `band-row` eine Zeile hoch ist (BAND-SPEC-2 §3 Nachtrag A–D).
+      return slot(SLOTS.clawdBuddy, 'clawd-buddy',
+        Box({ flexDirection: 'column', justifyContent: 'flex-end', children: [Client({ key: 'buddy', module: './buddy.ts', props: buddyProps })] }),
+        flip ? 'left' : 'right', { justifyContent: 'flex-end', width: Math.min(W, columns) })
     } catch (err) {
       $.ui.log(`clawd-buddy ui.render: ${String(err)}`, { to: 'debug' })
-      return theirs
+      return next(e)
     }
   })
+
+  // Anordnung des ganzen Bands, in jeder Band-Mod derselbe Hook (templates/band/README.md). Idempotent: Liegt eine zweite Band-Mod in
+  // der Kette, ordnet die äußere, und die innere reicht unverändert weiter (docs/BAND.md).
+  on('ui.render', { component: 'AbovePromptList' }, async (_$, e, next) => arrange(e, next))
 }

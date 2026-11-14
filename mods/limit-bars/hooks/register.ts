@@ -7,8 +7,10 @@
 // Hinweis kurz vor Ablauf, /cache, /keepwarm (Standard aus).
 // Texte en/de nach `userConfig.language` (i18n.ts); Argumente englisch, die deutschen gelten weiter als Alias.
 // Fail-open: Ein Fehler heißt nur „keine Anzeige“ bzw. „Nachricht geht unverändert durch“; was andere Mods zeichnen, bleibt erhalten.
+// Band 2 (0.17.0, docs/BAND-SPEC-2.md): eigene Zeile `slot:10:limit-bars` mit fester Breite in Zellen; `arrange` aus band.ts
+// setzt in `AbovePromptList` alle Zeilen zur einen Grundzeile zusammen (docs/BAND.md).
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
-import { joinBand, slot, SLOTS, splitBand } from './band.ts'
+import { SLOTS, arrange, slot } from './band.js'
 import {
   DEFAULT_SETTINGS,
   MIN,
@@ -29,9 +31,9 @@ import {
   terminalBlock,
   tokensText,
   ttlOf,
-} from './cache.ts'
-import type { CacheMem, KeepWarm, ReportLimit, Settings, StepUsage } from './cache.ts'
-import { BARS_HINT, CACHE_ARGS, CACHE_HINT, T, hhmm, langOf, usd } from './i18n.ts'
+} from './cache.js'
+import type { CacheMem, KeepWarm, ReportLimit, Settings, StepUsage } from './cache.js'
+import { BARS_HINT, CACHE_ARGS, CACHE_HINT, T, hhmm, langOf, usd } from './i18n.js'
 import {
   DISK_WORDS,
   HELP_WORDS,
@@ -43,18 +45,18 @@ import {
   isHelp,
   parseBars,
   styleFromOptions,
-} from './display.ts'
-import type { Display, Style } from './display.ts'
-import { helpMarkdown, helpTree } from './help.ts'
-import type { HelpData } from './help.ts'
-import { HELP_ACCENT, barsHelpData } from './helpdata.ts'
-import type { Lang } from './i18n.ts'
-import { isLanguage, languageCommand } from './language.ts'
-import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
-import { storeOffDefaults } from './offdefaults.ts'
-import type { Values } from './settings.ts'
-import { PART_FIELD, SETTINGS } from './fields.ts'
-import { ringFilled } from './ring.ts'
+} from './display.js'
+import type { Display, Style } from './display.js'
+import { helpMarkdown, helpTree } from './help.js'
+import type { HelpData } from './help.js'
+import { HELP_ACCENT, barsHelpData } from './helpdata.js'
+import type { Lang } from './i18n.js'
+import { isLanguage, languageCommand } from './language.js'
+import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.js'
+import { storeOffDefaults } from './offdefaults.js'
+import type { Values } from './settings.js'
+import { PART_FIELD, SETTINGS } from './fields.js'
+import { ringFilled } from './ring.js'
 import {
   PROBE_SCRIPT,
   PS_ABS,
@@ -67,13 +69,13 @@ import {
   storageReport,
   storageSvg,
   storageTerminal,
-} from './storage.ts'
-import type { Drive, Scan, StorageReport } from './storage.ts'
-import { desktopSvg } from './svg.ts'
-import { cleanHere, costBlock, costFilled, costText, costView } from './cost.ts'
-import type { Here } from './cost.ts'
-import { CELL_W, SYS_SCRIPT, cellText, levelColor, parseSample, shownPrev, sysAdopt, sysTermWidth, sysView, sysViewOf, takeLines, termColumns } from './system.ts'
-import type { Sample, SysRow } from './system.ts'
+} from './storage.js'
+import type { Drive, Scan, StorageReport } from './storage.js'
+import { desktopSvg } from './svg.js'
+import { cleanHere, costBlock, costFilled, costText, costView } from './cost.js'
+import type { Here } from './cost.js'
+import { CELL_W, SYS_SCRIPT, cellText, levelColor, parseSample, shownPrev, sysAdopt, sysTermWidth, sysView, sysViewOf, takeLines, termColumns } from './system.js'
+import type { Sample, SysRow } from './system.js'
 import {
   GREY,
   NO_FIVE_AFTER,
@@ -89,8 +91,8 @@ import {
   sharedMiss,
   shownWindows,
   withPace,
-} from './view.ts'
-import type { Opts, ResetStyle, Shared, Shown, Win } from './view.ts'
+} from './view.js'
+import type { Opts, ResetStyle, Shared, Shown, Win } from './view.js'
 
 // Optionen aus userConfig, in register() gesetzt
 let lang: Lang = 'en'
@@ -129,8 +131,11 @@ let drawnKey = '' // was zuletzt gezeichnet wurde (Texte, Farben, Füllstufen)
 let awaitingRender = false // ein Neuzeichnen ist angefordert, aber noch nicht gekommen
 let awaitingSince = 0 // seit wann (erste offene Anforderung)
 let lastTick = 0 // Uhrzeit des letzten Ticks (bzw. des Starts)
-// Lehnt eine Claude-Code-Version das Umschreiben von bodyColumns ab, stapelt limit-bars danach über dem Rest (SPEC.md, Phase 0)
-let noRewrite = false
+// Bandbreite (`bodyColumns`, Zellen) beim letzten Zeichnen im Terminal: daraus rechnet `publishBand` die Breite des Platzes
+// außerhalb des Zeichnens nach (die Terminal-Anordnung hängt von der Breite ab). 0 = noch nie gezeichnet.
+let lastColumns = 0
+// Ein `AbovePrompt`-Zeichnen läuft gerade: `publishBand` schreibt dann nicht (ui.render darf $.state nicht schreiben)
+let drawing = false
 
 // Cache dieser Session. `mem` liegt in `$.store` unter `cache:<sessionId>`, damit der Ring nach Neustart oder Reload weiß, wie warm er ist.
 let sessionId = ''
@@ -180,7 +185,8 @@ let sysShownAt = 0 // Zeitpunkt der letzten Übernahme (für SYS_REDRAW)
 let sysShownFrom: number | null = null // `at` der übernommenen Messung, -1 = Zeilen ohne frische Messung („–“), null = noch nichts
 let sysRedraws = 0 // Neuzeichnen wegen Systemwerten seit `sysRedrawsFrom` (Zeile in `/bars`)
 let sysRedrawsFrom = 0
-let sysStream: { return: (v?: never) => Promise<unknown> } | null = null
+// Der laufende Messprozess (`$.process.spawn` liefert einen HookStream, types@2.1.325:5550)
+let sysStream: ReturnType<EngineInterface['process']['spawn']> | null = null
 let sysStartedAt = 0 // Start des laufenden Prozesses, für den Wächter
 // Im Terminal passt die Liste neben langen Limits nicht in die 44 Spalten: dann kein Prozess und kein Neuzeichnen für sie
 // (Review 0.13.0 S2). Gesetzt beim Zeichnen; `undefined` = noch nicht gezeichnet
@@ -454,7 +460,7 @@ async function bindSession($: EngineInterface): Promise<void> {
     cold = { count: 0, usd: 0 }
     stopKeep($, T[lang].whyNewChat)
     // /clear, /resume, /branch leeren $.state (interface.md:760): die Breite beim nächsten Takt neu melden (Review 0.12.0 S2)
-    publishedWidth = undefined
+    publishedCols = undefined
     publishedKey = ''
   }
   try {
@@ -844,7 +850,8 @@ function stopSys(): void {
   const s = sysStream
   sysStream = null
   try {
-    s?.return().catch(() => {}) // ein Reject wäre sonst unbehandelt (Review 0.13.0 K1)
+    // `return` will den Rückgabewert des Generators; der Kern beendet das Kind ohne ihn (types@2.1.325:5550)
+    s?.return(undefined as never).catch(() => {}) // ein Reject wäre sonst unbehandelt (Review 0.13.0 K1)
   } catch {
     // schon zu Ende
   }
@@ -892,7 +899,7 @@ function startSys($: EngineInterface): void {
           if (!sysRedrawsFrom) sysRedrawsFrom = now
           // Neu gezeichnet wird nur, wenn die Messung übernommen wird (Nachtrag 0.14.1, Regel 2)
           if (takeSys(now, false) && refresh($, now)) sysRedraws += 1
-          // Neuzeichnen angefordert, aber 15 s keins gekommen (Chat verdeckt, Band eingeklappt): beenden; das nächste Zeichnen
+          // Neuzeichnen angefordert, aber 15 s keins gekommen (z. B. Chat verdeckt; ein eingeklapptes Band zeichnet weiter, interface.md:775): beenden; das nächste Zeichnen
           // startet neu. Nur mit offener Anforderung: Bei gleichbleibenden Werten zeichnet ohnehin nichts neu (Review 0.13.0 S1)
           if (awaitingRender && now - awaitingSince > SYS_IDLE) stopSys()
         }
@@ -919,24 +926,82 @@ function startSys($: EngineInterface): void {
   })()
 }
 
-// Breite des Platzes im Desktop (Pixel) für spotify: `$.state` `limit-bars.band` (types/index.d.ts, docs/BAND.md „Platzbreite“).
-// `undefined` = noch nie geschrieben (der nächste Aufruf schreibt sicher, auch `null`). Nie im Zeichnen: ui.render darf nicht schreiben.
-let publishedWidth: number | null | undefined = undefined
-let publishedKey = '' // Änderungsschlüssel der Anzeige beim letzten Prüfen: die Breite ändert sich nur mit ihr (und das Bild zu bauen kostet)
+/**
+ * Pixel je Zelle im Desktop: Layout-Zahlen zählen dort in Zellen, nur `Svg` in px (docs/BAND-SPEC-2.md §3 „Breite“, Probe 7b:
+ * 99 Zellen bei ≈ 770 px, 125 bei ≈ 975 px). Geschätzt; aufgerundet, damit das Bild nie über den eigenen Platz ragt.
+ */
+export const PX_PER_CELL = 7.8
+/** Breite des Platzes im Desktop in Zellen für ein Bild von `px` Pixeln. */
+export const desktopCols = (px: number): number => Math.ceil(px / PX_PER_CELL)
+
+type TermPart = { text: string; color: string | undefined; dim: boolean }
+type TermPlan = { lay: NonNullable<ReturnType<typeof layoutTerminal>>; parts: TermPart[]; withSys: boolean; sysCols: ReturnType<typeof termColumns> }
+
+/**
+ * Anordnung im Terminal für `bodyColumns` Zellen. Hinter den Balken: Cache-Block, Speicher-Block, Kosten-Block, dahinter die
+ * CPU/RAM-Gruppen. Wird es eng, fallen zuerst CPU/RAM weg, dann der Speicher, dann die Kosten, dann der Cache; die Limits werden
+ * erst danach kürzer (SPEC 0.12.0, 3.). `null`: nichts passt.
+ */
+function termPlan(view: ReturnType<typeof snapshot>, bodyColumns: number): TermPlan | null {
+  const cacheP: TermPart[] = view.block ? [{ text: view.block.text, color: view.block.color, dim: false }] : []
+  const diskP: TermPart[] = view.diskBlock ? [{ text: view.diskBlock, color: undefined, dim: true }] : []
+  const costP: TermPart[] = view.costBlock ? [{ text: view.costBlock, color: undefined, dim: true }] : []
+  const sysCols = view.sys ? termColumns(view.sys).filter((c) => c.length) : []
+  const sysW = view.sys ? sysTermWidth(view.sys) : 0
+  const combos: { parts: TermPart[]; sys: boolean }[] = []
+  for (const c of [
+    { parts: [...cacheP, ...diskP, ...costP], sys: sysCols.length > 0 },
+    { parts: [...cacheP, ...diskP, ...costP], sys: false },
+    { parts: [...cacheP, ...costP], sys: false },
+    { parts: cacheP, sys: false },
+  ])
+    if ((c.parts.length || c.sys) && !combos.some((x) => x.sys === c.sys && x.parts.length === c.parts.length)) combos.push(c)
+  for (const c of combos) {
+    const text = c.parts.map((x) => x.text).join('  ')
+    const extraW = text.length + (c.sys ? (text ? 2 : 0) + sysW : 0)
+    // Alles zusammen höchstens 44 Zellen und 40 für die anderen Plätze frei (view.ts layoutTerminal). Seit Band 2 sieht jede
+    // Zeile die volle Breite (docs/BAND-SPEC-2.md, Nachtrag A–D „Breite“)
+    const l = layoutTerminal(view.shown, bodyColumns, text || ' ', { extraW })
+    if (l?.extra) return { lay: l, parts: c.parts, withSys: c.sys, sysCols }
+  }
+  const lay = layoutTerminal(view.shown, bodyColumns)
+  return lay ? { lay, parts: [], withSys: false, sysCols } : null
+}
+
+/** Ob überhaupt etwas eingeschaltet ist; sonst zeichnet limit-bars keine Zeile. */
+const anyShown = (v: ReturnType<typeof snapshot>): boolean => v.bars.length > 0 || !!v.ring || !!v.disk || !!v.cost || !!v.sys
+
+/** Breite der eigenen Zeile in Zellen für die zuletzt gezeichnete Oberfläche, `null` ohne Zeile. */
+function bandCols(v: ReturnType<typeof snapshot>): number | null {
+  if (!anyShown(v)) return null
+  if (lastSurface === 'desktop') return desktopCols(desktopSvg(v.bars, v.ring, v.disk, v.style, v.cost, v.sys).width)
+  if (lastSurface === 'terminal' && lastColumns > 0) return termPlan(v, lastColumns)?.lay.width ?? null
+  return null
+}
+
+// Breite der eigenen Zeile in Zellen für tune-strip: `$.state` `limit-bars.band` = `{ cols }` (types/index.d.ts, docs/BAND.md
+// „Absprachen über $.state“). `undefined` = noch nie geschrieben (der nächste Aufruf schreibt sicher, auch `null`).
+// Nie im Zeichnen (docs/BAND.md Regel 8): Sitzungsstart, Takt und Befehle rufen das hier auf.
+let publishedCols: number | null | undefined = undefined
+let publishedKey = '' // Oberfläche, Breite und Änderungsschlüssel beim letzten Prüfen: die Breite ändert sich nur mit ihnen
 let publishChain: Promise<unknown> = Promise.resolve()
 function publishBand($: EngineInterface, v: ReturnType<typeof snapshot>, key = keyOf(v)) {
-  if (key === publishedKey) return
-  publishedKey = key
-  const width = v.bars.length > 0 || v.ring || v.disk || v.cost || v.sys ? desktopSvg(v.bars, v.ring, v.disk, v.style, v.cost, v.sys).width : null
-  if (width === publishedWidth) return
-  publishedWidth = width
+  // Aus dem Zeichnen heraus (z. B. erstes Zeichnen ohne Oberfläche in session.start → loadWindows → refresh) nicht schreiben;
+  // der Stand bleibt offen, der nächste Takt meldet (Review 0.17.0 S3)
+  if (drawing) return
+  const pubKey = `${lastSurface ?? ''}|${lastColumns}|${key}`
+  if (pubKey === publishedKey) return
+  publishedKey = pubKey
+  const cols = bandCols(v)
+  if (cols === publishedCols) return
+  publishedCols = cols
   // Schreibvorgänge nacheinander; Beiwerk: ein Fehler ändert nichts an den Balken. Abgelehnt (etwa aus einem Zeichnen heraus,
   // types@2.1.295:3405) wird der Stand vergessen, damit die nächste Änderung oder der nächste Tick es erneut versucht (Review K6)
   publishChain = publishChain
-    .then(() => $.state.set({ plugin: 'limit-bars', key: 'band' }, width === null ? null : { width }))
+    .then(() => $.state.set({ plugin: 'limit-bars', key: 'band' }, cols === null ? null : { cols }))
     .catch(() => {
-      if (publishedWidth === width) {
-        publishedWidth = undefined
+      if (publishedCols === cols) {
+        publishedCols = undefined
         publishedKey = ''
       }
     })
@@ -974,7 +1039,9 @@ function takeSys(now: number, force: boolean): boolean {
 export function register(on: On, options: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
   const hl = typeof options.highlightAt === 'number' && Number.isFinite(options.highlightAt) ? options.highlightAt : 90
   lang = langOf(options.language)
-  publishedWidth = undefined
+  publishedCols = undefined
+  lastColumns = 0
+  drawing = false
   publishedKey = ''
   publishChain = Promise.resolve()
   opts = {
@@ -1152,7 +1219,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       const before = cachePatch(settings)
       const patch: Values = {}
       for (const [k, v] of Object.entries(cachePatch(s))) if (v !== before[k]) patch[k] = v
-      if (typeof patch.bigTokens === 'number' && patch.bigTokens < SETTINGS.bigTokens!.min!) return { text: t.unknownArg(e.args.trim(), CACHE_ARGS) }
+      const big = SETTINGS.bigTokens
+      const minBig = big?.type === 'number' ? (big.min ?? 0) : 0
+      if (typeof patch.bigTokens === 'number' && patch.bigTokens < minBig) return { text: t.unknownArg(e.args.trim(), CACHE_ARGS) }
       const r = await writeSettings($, SELF, SETTINGS, patch, lang)
       // Auch nach Weg 1: die Karte unten zeigt sonst den alten Stand dieser Instanz (Review 0.16.0 S2)
       if (r.ok) applyCfg(patch)
@@ -1414,7 +1483,6 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     let called = false
     let nextFailed = false
-    let theirs: RenderNode | null | undefined = null
     // Jeder Aufruf von `next` läuft hierüber: so ist klar, ob ein Fehler aus der Kette stammt oder aus diesem Hook
     const pass = async (arg: typeof e) => {
       called = true
@@ -1425,6 +1493,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         throw err
       }
     }
+    // Während des Zeichnens kein $.state.set (docs/BAND.md Regel 8, types@2.1.325:3657); `publishBand` wartet auf den Takt
+    drawing = true
     try {
       if (e.surface !== 'terminal' && e.surface !== 'desktop') return await pass(e)
       lastSurface = e.surface
@@ -1446,7 +1516,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       if (!timer) {
         lastTick = now
         timer = $.clock.every(TICK, () => {
-          // Neuzeichnen angefordert, aber keins gekommen (Band eingeklappt, Sitzung verdeckt): Takt beenden; das nächste Zeichnen
+          // Neuzeichnen angefordert, aber keins gekommen (z. B. Sitzung verdeckt; ein eingeklapptes Band zeichnet weiter, interface.md:775): Takt beenden; das nächste Zeichnen
           // startet ihn neu. Ohne Änderung wird nichts angefordert, dann läuft er still weiter (usage() ist kostenlos).
           if (awaitingRender) {
             timer?.cancel()
@@ -1466,95 +1536,33 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       takeSys(now, true)
       const view = snapshot(now)
       drawnKey = keyOf(view)
-      // Alles ausgeblendet: nichts Eigenes und kein freigehaltener Platz (bodyColumns unverändert); der Takt läuft weiter,
-      // damit ein `/bars` aus einem anderen Chat und die Hinweise vor Ablauf hier ankommen
-      if (view.bars.length === 0 && !view.ring && !view.disk && !view.cost && !view.sys) return await pass(e)
+      // Alles ausgeblendet: keine Zeile (`next(e)` heißt seit 2.1.323 „diese Mod zeichnet nichts“, docs/BAND.md Regel 1); der
+      // Takt läuft weiter, damit ein `/bars` aus einem anderen Chat und die Hinweise vor Ablauf hier ankommen
+      if (!anyShown(view)) return await pass(e)
       const { Box, Text } = $.ui.resolve(e)
-      let mine: RenderNode
-      let stack = false
       if (e.surface === 'desktop') {
-        // Desktop: was eingeschaltet ist (Cache-Ring vor der ersten Anfrage grau mit „–“), Balken mit Werten, sobald es Limits gibt; kein Umschreiben von
-        // bodyColumns, weil Clawds Svg eine feste Größe hat
-        theirs = await pass(e)
+        // Desktop: was eingeschaltet ist (Cache-Ring vor der ersten Anfrage grau mit „–“), Balken mit Werten, sobald es Limits gibt
         const { Svg } = $.ui.resolve(e)
         // Ohne Limits stehen Platzhalter da (5h –, 7d –), damit die Balken wie der Ring sofort sichtbar sind
         const pic = desktopSvg(view.bars, view.ring, view.disk, view.style, view.cost, view.sys)
         if (view.sys) sysVisible = true
-        // Unten bündig mit Clawds Füßen, auch wenn die Desktop-App alignItems der äußeren Zeile nicht umsetzt (Spalte + flex-end)
-        // 0.13.1: `position: relative`, damit die Balken über Clawd gemalt werden, der seit clawd-buddy 0.12.1 hinter der Zeile liegt
-        // (Platz 0, absolut; Fynn, 2026-11-04: „dahinter legen“). Ohne Versatz verschiebt es nichts (types:958).
-        mine = Box({ key: 'limit-bars', position: 'relative', flexShrink: 0, flexDirection: 'column', justifyContent: 'flex-end', children: [Svg({ source: pic.source, alt: pic.alt, width: pic.width, height: pic.height })] })
-      } else {
-        // Hinter den Balken: Cache-Block, Speicher-Block, Kosten-Block, dahinter die CPU/RAM-Gruppen. Wird es eng, fallen zuerst
-        // CPU/RAM weg, dann der Speicher, dann die Kosten, dann der Cache; die Limits werden erst danach kürzer (SPEC 0.12.0, 3.)
-        type Part = { text: string; color: string | undefined; dim: boolean }
-        const cacheP: Part[] = view.block ? [{ text: view.block.text, color: view.block.color, dim: false }] : []
-        const diskP: Part[] = view.diskBlock ? [{ text: view.diskBlock, color: undefined, dim: true }] : []
-        const costP: Part[] = view.costBlock ? [{ text: view.costBlock, color: undefined, dim: true }] : []
-        const sysCols = view.sys ? termColumns(view.sys).filter((c) => c.length) : []
-        const sysW = view.sys ? sysTermWidth(view.sys) : 0
-        const combos: { parts: Part[]; sys: boolean }[] = []
-        for (const c of [
-          { parts: [...cacheP, ...diskP, ...costP], sys: sysCols.length > 0 },
-          { parts: [...cacheP, ...diskP, ...costP], sys: false },
-          { parts: [...cacheP, ...costP], sys: false },
-          { parts: cacheP, sys: false },
-        ])
-          if ((c.parts.length || c.sys) && !combos.some((x) => x.sys === c.sys && x.parts.length === c.parts.length)) combos.push(c)
-        let lay: ReturnType<typeof layoutTerminal> = null
-        let parts: Part[] = []
-        let withSys = false
-        for (const c of combos) {
-          const text = c.parts.map((x) => x.text).join('  ')
-          const extraW = text.length + (c.sys ? (text ? 2 : 0) + sysW : 0)
-          // Alles zusammen höchstens 44 Spalten wie bisher: clawd-buddy außen gibt dem Grund fest 44 (Fynn 2026-11-04, Review S1)
-          const l = layoutTerminal(view.shown, e.props.bodyColumns, text || ' ', { extraW })
-          if (l?.extra) {
-            lay = l
-            parts = c.parts
-            withSys = c.sys
-            break
-          }
-        }
-        lay ??= layoutTerminal(view.shown, e.props.bodyColumns)
-        if (view.sys) sysVisible = withSys
-        if (!lay) return await pass(e)
-        if (noRewrite) {
-          theirs = await pass(e)
-          stack = true
-        } else {
-          // Platz abgeben: Mods weiter innen (z. B. clawd-buddy) sehen die Breite ohne die Balken. Props-Rewrites sind erlaubt
-          // (types@2.1.288:9103-9104), das Feld heißt aber "Read-only" (types@2.1.288:9598-9604). Phase 0 hat belegt, dass die
-          // Engine es annimmt; lehnt eine spätere Version ab, scheitert dieses Zeichnen, und ab dann wird gestapelt.
-          try {
-            theirs = await pass({ ...e, props: { ...e.props, bodyColumns: e.props.bodyColumns - lay.width } })
-          } catch (err) {
-            noRewrite = true
-            throw err
-          }
-        }
-        const children: RenderNode[] = lay.blocks.map((b) => {
-          const s = b.shown
-          // Tempo-Zeile ohne 5h-Fenster: `5h ∞` gedimmt, das Tempo in seiner Farbe, darunter kein Balken (Ausbau 0.10.0)
-          if (s.pace) {
-            const grey = s.color === GREY
-            return Box({
-              flexDirection: 'column',
-              width: b.width,
-              flexShrink: 0,
-              children: [
-                Box({
-                  flexDirection: 'row',
-                  children: [
-                    Text({ color: ORANGE, children: [s.tag] }),
-                    Text({ dimColor: true, children: [` ${b.pct}`] }),
-                    ...(b.rest ? [grey ? Text({ dimColor: true, wrap: 'truncate-end', children: [b.rest] }) : Text({ color: s.color, wrap: 'truncate-end', children: [b.rest] })] : []),
-                  ],
-                }),
-                Text({ children: [' '] }),
-              ],
-            })
-          }
+        // Unten bündig (Spalte + flex-end), damit die Balken auf einer Linie mit Clawds Füßen stehen. Feste Breite in Zellen an der
+        // eigenen Wurzel, nie schrumpfen (docs/BAND-SPEC-2.md §3 „Breite“: Flexbox schrumpft über die Hüllen nicht).
+        // Seit Band 2 ist Clawds Bühne eine eigene, unterste Zeile und malt über die Grundzeile (docs/BAND.md „Clawd im Desktop“).
+        const inner = Box({ key: 'limit-bars', flexShrink: 0, flexDirection: 'column', justifyContent: 'flex-end', children: [Svg({ source: pic.source, alt: pic.alt, width: pic.width, height: pic.height })] })
+        return slot(SLOTS.limitBars, SELF, inner, 'left', { width: desktopCols(pic.width), flexShrink: 0, justifyContent: 'flex-end' })
+      }
+      // Terminal: Bandbreite für `publishBand` merken (geschrieben wird erst im Takt, nie hier)
+      lastColumns = e.props.bodyColumns
+      const plan = termPlan(view, e.props.bodyColumns)
+      if (view.sys) sysVisible = plan?.withSys ?? false
+      if (!plan) return await pass(e)
+      const { lay, parts, withSys, sysCols } = plan
+      const children: RenderNode[] = lay.blocks.map((b) => {
+        const s = b.shown
+        // Tempo-Zeile ohne 5h-Fenster: `5h ∞` gedimmt, das Tempo in seiner Farbe, darunter kein Balken (Ausbau 0.10.0)
+        if (s.pace) {
+          const grey = s.color === GREY
           return Box({
             flexDirection: 'column',
             width: b.width,
@@ -1563,76 +1571,85 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
               Box({
                 flexDirection: 'row',
                 children: [
-                  Text({ color: ORANGE, bold: s.strong, children: [s.tag] }),
-                  Text({ children: [' '] }),
-                  s.fresh ? Text({ dimColor: true, children: [b.pct] }) : Text({ color: s.color, bold: s.strong, children: [b.pct] }),
-                  ...(b.rest ? [Text({ dimColor: true, wrap: 'truncate-end', children: [b.rest] })] : []),
+                  Text({ color: ORANGE, children: [s.tag] }),
+                  Text({ dimColor: true, children: [` ${b.pct}`] }),
+                  ...(b.rest ? [grey ? Text({ dimColor: true, wrap: 'truncate-end', children: [b.rest] }) : Text({ color: s.color, wrap: 'truncate-end', children: [b.rest] })] : []),
                 ],
               }),
-              Box({
-                flexDirection: 'row',
-                // Am Wochenbalken ohne 5h-Fenster ein Strich beim gleichmäßigen Verbrauch (`┆`), sonst nur gefüllt und leer
-                children: barRuns(s.ratio, b.width, s.color, s.mark, s.markColor).map((r) => Text({ color: r.color, children: [r.mark ? '┆' : '▄'.repeat(r.n)] })),
-              }),
+              Text({ children: [' '] }),
             ],
           })
-        })
-        // Cache-, Speicher- und Kosten-Block hinter den Balken, auf der Zeile der Beschriftungen
-        if (lay.extra && parts.length > 0) {
-          const line = parts.flatMap((p, i) => [
-            ...(i > 0 ? [Text({ children: ['  '] })] : []),
-            p.dim ? Text({ dimColor: true, children: [p.text] }) : Text({ color: p.color, children: [p.text] }),
-          ])
-          children.push(Box({ key: 'cache', flexDirection: 'column', flexShrink: 0, children: [Box({ flexDirection: 'row', children: line }), Text({ children: [' '] })] }))
         }
-        // Systemwerte: Spalten zu je zwei Zeilen (CPU über GPU, RAM über VRAM), Zahlen in jeder Zeile an derselben Stelle
-        if (lay.extra && withSys)
-          sysCols.forEach((col, i) =>
-            children.push(
-              Box({
-                key: `sys-${i}`,
-                flexDirection: 'column',
-                width: CELL_W,
-                flexShrink: 0,
-                children: [0, 1].map((k) => {
-                  const r = col[k]
-                  if (!r) return Text({ children: [' '] })
-                  const c = cellText(r)
-                  return Box({
-                    flexDirection: 'row',
-                    children: [
-                      Text({ color: ORANGE, children: [c.tag] }),
-                      r.pct === null ? Text({ dimColor: true, children: [c.value] }) : Text({ color: levelColor(r.pct), children: [c.value] }),
-                      Text({ dimColor: true, children: [c.arrow] }),
-                    ],
-                  })
-                }),
-              }),
-            ),
-          )
-        mine = Box({
-          key: 'limit-bars',
-          width: lay.width,
-          // Nie schrumpfen: läuft das Band über, gibt die dehnbare Seite nach, nicht die Beschriftung
+        return Box({
+          flexDirection: 'column',
+          width: b.width,
           flexShrink: 0,
-          flexDirection: 'row',
-          columnGap: 2,
-          children,
+          children: [
+            Box({
+              flexDirection: 'row',
+              children: [
+                Text({ color: ORANGE, bold: s.strong, children: [s.tag] }),
+                Text({ children: [' '] }),
+                s.fresh ? Text({ dimColor: true, children: [b.pct] }) : Text({ color: s.color, bold: s.strong, children: [b.pct] }),
+                ...(b.rest ? [Text({ dimColor: true, wrap: 'truncate-end', children: [b.rest] })] : []),
+              ],
+            }),
+            Box({
+              flexDirection: 'row',
+              // Am Wochenbalken ohne 5h-Fenster ein Strich beim gleichmäßigen Verbrauch (`┆`), sonst nur gefüllt und leer
+              children: barRuns(s.ratio, b.width, s.color, s.mark, s.markColor).map((r) => Text({ color: r.color, children: [r.mark ? '┆' : '▄'.repeat(r.n)] })),
+            }),
+          ],
         })
+      })
+      // Cache-, Speicher- und Kosten-Block hinter den Balken, auf der Zeile der Beschriftungen
+      if (lay.extra && parts.length > 0) {
+        const line = parts.flatMap((p, i) => [
+          ...(i > 0 ? [Text({ children: ['  '] })] : []),
+          p.dim ? Text({ dimColor: true, children: [p.text] }) : Text({ color: p.color, children: [p.text] }),
+        ])
+        children.push(Box({ key: 'cache', flexDirection: 'column', flexShrink: 0, children: [Box({ flexDirection: 'row', children: line }), Text({ children: [' '] })] }))
       }
-      // Ebenen anderer Mods (Quick-Replies, sidekick) bleiben über dem Grund, nie neben den Balken, egal wer in der Kette außen
-      // liegt (band.ts, docs/BAND.md). Die Balken kommen nur neben den Grund.
-      // Die Balken sind Platz 10 der Grund-Zeile: die Zeile sortiert die Plätze, egal wer in der Kette außen liegt (band.ts).
-      // Der Kern-Knoten `{type:'engine'}` (types@2.1.288:9033-9041) bleibt als Rest in der Mitte erhalten.
-      const { layers, slots, base } = splitBand(theirs)
-      // Nur der Ausweichweg: lehnt die Engine das Umschreiben von bodyColumns ab, gilt der Rest gestapelt unter den Balken
-      if (stack && base) return joinBand(layers, Box({ flexDirection: 'column', children: [mine, base] }), slots)
-      return joinBand(layers, base, [...slots, slot(SLOTS.limitBars, 'limit-bars', mine)])
+      // Systemwerte: Spalten zu je zwei Zeilen (CPU über GPU, RAM über VRAM), Zahlen in jeder Zeile an derselben Stelle
+      if (lay.extra && withSys)
+        sysCols.forEach((col, i) =>
+          children.push(
+            Box({
+              key: `sys-${i}`,
+              flexDirection: 'column',
+              width: CELL_W,
+              flexShrink: 0,
+              children: [0, 1].map((k) => {
+                const r = col[k]
+                if (!r) return Text({ children: [' '] })
+                const c = cellText(r)
+                return Box({
+                  flexDirection: 'row',
+                  children: [
+                    Text({ color: ORANGE, children: [c.tag] }),
+                    r.pct === null ? Text({ dimColor: true, children: [c.value] }) : Text({ color: levelColor(r.pct), children: [c.value] }),
+                    Text({ dimColor: true, children: [c.arrow] }),
+                  ],
+                })
+              }),
+            }),
+          ),
+        )
+      // Die Balken sind Platz 10 der Grundzeile (docs/BAND.md „Vergebene Plätze“). Feste Breite in Zellen an der eigenen Wurzel,
+      // nie schrumpfen: läuft das Band über, gibt tune-strip nach, nicht die Beschriftung (docs/BAND-SPEC-2.md §3 „Breite“)
+      const inner = Box({ key: 'limit-bars', flexDirection: 'row', columnGap: 2, children })
+      return slot(SLOTS.limitBars, SELF, inner, 'left', { width: lay.width, flexShrink: 0 })
     } catch (err) {
       // Fehler aus der Kette: weiterwerfen, die Engine behandelt den Hook dann als gescheitert (docs/raw/en/events.md:313-316)
-      if (nextFailed) throw err
-      // Eigener Fehler (fail-open): ohne Anzeige; der Inhalt der anderen bleibt, `next` läuft höchstens einmal
-      return called ? theirs : next(e)
+      if (nextFailed || called) throw err
+      // Eigener Fehler (fail-open): keine Zeile; `next` läuft höchstens einmal
+      return next(e)
+    } finally {
+      drawing = false
     }
   })
+
+  // Anordnung des ganzen Bands, in jeder Band-Mod derselbe Hook (docs/BAND.md Regel 2, templates/band/README.md). Idempotent:
+  // Liegen mehrere Band-Mods in der Kette, ordnet die äußere, die inneren reichen unverändert weiter. band.ts ruft nichts an `$` auf.
+  on('ui.render', { component: 'AbovePromptList' }, async (_$, e, next) => arrange(e, next))
 }

@@ -1,10 +1,10 @@
 // limit-bars: Systemwerte als Liste (SPEC Ausbau 0.13.0, löst die Säulen aus 0.12.0 ab), reine Funktionen ohne `$`.
 // Ein dauerhafter PowerShell-Prozess (`$.process.spawn`) schreibt jede Sekunde eine Zeile: CPU, RAM, GPU-Last (Windows-Zähler,
 // jede Grafikkarte) und, mit NVIDIA-Karte, den belegten Grafikspeicher. Angezeigt werden höchstens 4 Zeilen untereinander mit Prozent und Trendpfeil.
-import { FONT, RING_H, esc } from './ring.ts'
-import { T } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import { GREEN, GREY, ORANGE, RED, YELLOW } from './view.ts'
+import { FONT, RING_H, esc } from './ring.js'
+import { T } from './i18n.js'
+import type { Lang } from './i18n.js'
+import { GREEN, GREY, ORANGE, RED, YELLOW } from './view.js'
 
 /** nvidia-smi über den festen Pfad (installiert der NVIDIA-Treiber); nur noch für den Grafikspeicher (VRAM). */
 export const NVIDIA_SMI = 'C:\\Windows\\System32\\nvidia-smi.exe'

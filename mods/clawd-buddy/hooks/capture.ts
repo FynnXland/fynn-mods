@@ -1,8 +1,8 @@
 // clawd-buddy: Clips mit der echten Engine abspielen und jedes Bild aufnehmen (reine Funktionen, nur für Tests und Werkzeuge).
-import { createEngine } from './engine.ts'
-import type { ClipDef } from './clipdef.ts'
-import type { PropTable } from './stage.ts'
-import type { Shot } from './lint.ts'
+import { createEngine } from './engine.js'
+import type { ClipDef } from './clipdef.js'
+import type { PropTable } from './stage.js'
+import type { Shot } from './lint.js'
 
 /** Kleiner deterministischer Zufallsgenerator (Seed → Folge in [0,1)). */
 /** mulberry32 mit lesbarem Zustand (`a`), damit sich eine Folge sichern und wiederholen lässt (desk.ts rechnet voraus). */

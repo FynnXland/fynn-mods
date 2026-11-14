@@ -1,15 +1,16 @@
 // limit-bars 0.10.0: Wochen-Tempo ohne 5h-Limit und Stil Balken oder Ringe (SPEC.md, Ausbau 0.10.0).
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { cleanStyle, parseBars, styleFromOptions } from '../hooks/display.ts'
-import { barsHelpData } from '../hooks/helpdata.ts'
-import { DEFAULT_SETTINGS } from '../hooks/cache.ts'
-import { MARK, darker } from '../hooks/ring.ts'
-import { desktopSvg } from '../hooks/svg.ts'
-import { cleanShared, lacksFive, layoutTerminal, nextMiss, paceOf, paceShown, sharedMiss, shownWindows, withPace } from '../hooks/view.ts'
-import type { Win } from '../hooks/view.ts'
-import { cliAnswer } from './cli.ts'
-import type { Cli } from './cli.ts'
+import { cleanStyle, parseBars, styleFromOptions } from '../hooks/display.js'
+import { barsHelpData } from '../hooks/helpdata.js'
+import { DEFAULT_SETTINGS } from '../hooks/cache.js'
+import { desktopCols } from '../hooks/register.js'
+import { MARK, darker } from '../hooks/ring.js'
+import { desktopSvg } from '../hooks/svg.js'
+import { cleanShared, lacksFive, layoutTerminal, nextMiss, paceOf, paceShown, sharedMiss, shownWindows, withPace } from '../hooks/view.js'
+import type { Win } from '../hooks/view.js'
+import { cliAnswer } from './cli.js'
+import type { Cli } from './cli.js'
 
 const H = 3600000
 const MIN = 60000
@@ -32,7 +33,7 @@ const both = (five: number, p: number): Limit[] => [{ kind: 'five_hour', percent
 const win = (p: number, resetsAt: number | null = WEEK_RESET): Win => ({ kind: 'seven_day', percentUsed: p, resetsAt: resetsAt ?? undefined })
 
 const props = (bodyColumns: number) =>
-  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
+  ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
 const band = (surface: 'terminal' | 'desktop', bodyColumns = 120) =>
   ({ plugin: 'limit-bars', component: 'AbovePrompt', requestId: `above-${surface}-${bodyColumns}`, props: props(bodyColumns), surface }) as never
 
@@ -56,7 +57,7 @@ function world(on: On, o: { own?: Limit[]; saved?: Map<string, unknown>; now?: n
     saved.delete(e.key)
     return { value: undefined }
   })
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('state.set', ($, e) => {
     st.widths.push(e.value)
     return { value: undefined } as never
@@ -338,9 +339,9 @@ test('0.10.0 Ring ohne 5h: Tempo als Text links, Wochen-Ring mit Kerbe; Breite w
   expect(s.source).toContain(`stroke="${RED}" stroke-width="2"/>`)
   expect(s.source).toContain('font-size="11" fill="#6CC070">34%</text>')
   expect(s.width).not.toBe(barW)
-  // Neue Breite für spotify gemeldet (nicht beim Zeichnen, sondern beim Befehl)
+  // Neue Breite (Zellen) für tune-strip gemeldet (nicht beim Zeichnen, sondern beim Befehl)
   expect(w.st.widths.length).toBe(n0 + 1)
-  expect(w.st.widths.at(-1)).toEqual({ width: s.width })
+  expect(w.st.widths.at(-1)).toEqual({ cols: desktopCols(s.width) })
   expect(w.cli.writes).toEqual([{ style: 'ring' }])
   await ui.unmount()
 })

@@ -4,10 +4,10 @@
 // zieht den Gegenstand hoch und stellt ihn seitlich neben sich auf die Linie. Arme sind immer 2 Pixel dicke Blöcke, die in ganzen Schritten
 // auf und ab gehen und ein Stück ausfahren; nichts taucht auf: Gegenstände kommen hinter der Linie hervor, Steine rollen über die linke
 // Bühnenkante hinaus, Effekte (Puff, Schweiß) entstehen an der Figur.
-import { clip, rep } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, fetchOut } from '../macros.ts'
+import { clip, rep } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { armBlock, fetchIn, fetchOut } from '../macros.js'
 
 // ---- Requisiten ------------------------------------------------------------------------------------------------------------------
 
@@ -16,9 +16,9 @@ import { armBlock, fetchIn, fetchOut } from '../macros.ts'
 function clockRows(sec: number): string[] {
   const g: string[][] = ['.YY.....YY.', '..BBBBBBB..', '.BWWWWWWWB.', 'BWWWWWWWWWB', 'BWWWWWWWWWB', 'BWWWWWWWWWB', 'BWWWWWWWWWB', 'BWWWWWWWWWB', '.BWWWWWWWB.', '..BBBBBBB..']
     .map((r) => r.split(''))
-  const put = (x: number, y: number, c: string) => { g[y][x] = c }
-  for (const [x, y] of [[5, 2], [5, 8], [1, 5], [9, 5]]) put(x, y, 'K') // Striche bei 12, 6, 9, 3
-  const [dx, dy] = [[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]][sec % 8] // der eine Zeiger, im Uhrzeigersinn
+  const put = (x: number, y: number, c: string) => { g[y]![x] = c }
+  for (const [x, y] of [[5, 2], [5, 8], [1, 5], [9, 5]] as const) put(x, y, 'K') // Striche bei 12, 6, 9, 3
+  const [dx, dy] = ([[0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1]] as const)[sec % 8]! // der eine Zeiger, im Uhrzeigersinn
   for (let k = 1; k <= 3; k++) put(5 + dx * k, 5 + dy * k, 'M')
   put(5, 5, 'K')
   return g.map((r) => r.join(''))
@@ -30,19 +30,19 @@ function glassRows(top: number, pile: number): string[] {
   const sand: Record<number, number[]> = {
     9: [1, 2, 3, 4, 5], 8: [1, 2, 4, 5], 6: [2, 4], 4: [], 1: [], 0: [],
   }
-  for (const x of sand[Math.min(9, top)] ?? []) g[1][x] = 'Y'
-  if (top >= 4) for (const x of [2, 3, 4]) g[2][x] = 'Y'
-  if (top >= 1 && top <= 3) g[2][3] = top >= 2 ? 'Y' : '.'
-  if (top >= 1) g[3][3] = 'Y'
+  for (const x of sand[Math.min(9, top)] ?? []) g[1]![x] = 'Y'
+  if (top >= 4) for (const x of [2, 3, 4]) g[2]![x] = 'Y'
+  if (top >= 1 && top <= 3) g[2]![3] = top >= 2 ? 'Y' : '.'
+  if (top >= 1) g[3]![3] = 'Y'
   const streaming = top > 0 && pile > 0 && pile < 9
-  if (streaming) g[4][3] = 'Y' // Hals
+  if (streaming) g[4]![3] = 'Y' // Hals
   const pileTop = pile >= 9 ? 5 : pile >= 6 ? 6 : 7
-  if (streaming) for (let y = 5; y < pileTop; y++) g[y][3] = 'Y' // Strahl bis zum Haufen
+  if (streaming) for (let y = 5; y < pileTop; y++) g[y]![3] = 'Y' // Strahl bis zum Haufen
   const row7 = pile >= 5 ? [1, 2, 3, 4, 5] : pile >= 3 ? [2, 3, 4] : pile >= 1 ? [3] : []
-  for (const x of row7) g[7][x] = 'Y'
-  if (pile >= 6) g[6][3] = 'Y'
-  if (pile >= 8) { g[6][2] = 'Y'; g[6][4] = 'Y' }
-  if (pile >= 9) g[5][3] = 'Y'
+  for (const x of row7) g[7]![x] = 'Y'
+  if (pile >= 6) g[6]![3] = 'Y'
+  if (pile >= 8) { g[6]![2] = 'Y'; g[6]![4] = 'Y' }
+  if (pile >= 9) g[5]![3] = 'Y'
   return g.map((r) => r.join(''))
 }
 
@@ -50,20 +50,20 @@ function glassRows(top: number, pile: number): string[] {
 /** Angelrute 9×10: Rute schräg von unten rechts (Griff) nach oben links, Schnur hängt senkrecht ab, Bobber (rot/weiß) schwimmt auf dem Boden (= Wasser); `b` = Zeile des Bobbers. */
 const rodRows = (b: number): string[] => {
   const g = Array.from({ length: 10 }, () => Array.from({ length: 9 }, () => '.'))
-  for (let i = 0; i <= 7; i++) g[i][i + 1] = 'R'
-  g[6][8] = 'R'; g[7][7] = 'R' // dickerer Griff
-  for (let y = 1; y < b; y++) g[y][1] = 'W'
-  g[b][1] = 'M'
-  if (b + 1 <= 9) g[b + 1][1] = 'W'
+  for (let i = 0; i <= 7; i++) g[i]![i + 1] = 'R'
+  g[6]![8] = 'R'; g[7]![7] = 'R' // dickerer Griff
+  for (let y = 1; y < b; y++) g[y]![1] = 'W'
+  g[b]![1] = 'M'
+  if (b + 1 <= 9) g[b + 1]![1] = 'W'
   return g.map((r) => r.join(''))
 }
 /** Staffelei 9×9: Leinwand (brauner Rahmen) auf Dreibein; `n` Stufen des Bildes: 1 Himmel, 2 Wiese, 3 Sonne, 4 Haus. */
 const easelRows = (n: number): string[] => {
   const g = Array.from({ length: 9 }, () => Array.from({ length: 9 }, () => '.'))
-  for (let y = 0; y <= 5; y++) for (let x = 0; x <= 8; x++) g[y][x] = y === 0 || y === 5 || x === 0 || x === 8 ? 'R' : 'W'
-  for (let x = 0; x <= 8; x++) g[6][x] = 'R'
-  for (const x of [1, 4, 7]) { g[7][x] = 'R'; g[8][x] = 'R' }
-  const paint = (x0: number, x1: number, y0: number, y1: number, c: string): void => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) g[y][x] = c }
+  for (let y = 0; y <= 5; y++) for (let x = 0; x <= 8; x++) g[y]![x] = y === 0 || y === 5 || x === 0 || x === 8 ? 'R' : 'W'
+  for (let x = 0; x <= 8; x++) g[6]![x] = 'R'
+  for (const x of [1, 4, 7]) { g[7]![x] = 'R'; g[8]![x] = 'R' }
+  const paint = (x0: number, x1: number, y0: number, y1: number, c: string): void => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) g[y]![x] = c }
   if (n >= 1) paint(1, 7, 1, 2, 'L')
   if (n >= 2) paint(1, 7, 3, 4, 'E')
   if (n >= 3) paint(6, 7, 1, 1, 'Y')
@@ -76,14 +76,14 @@ const CASE_ROWS = ['...GGGGG...', '...G...G...', 'RRRRRRRRRRR', 'RRYYRRRYYRR', '
 const calRows = (n: number): string[] => {
   const g = ['MMMMMMM', 'WWWWWWW', 'WGWGWGW', 'WWWWWWW', 'WGWGWGW', 'WWWWWWW', 'WGWGWGW'].map((r) => r.split(''))
   const dots: [number, number][] = [[1, 2], [3, 2], [5, 2], [1, 4], [3, 4], [5, 4], [1, 6], [3, 6], [5, 6]]
-  dots.slice(0, n).forEach(([x, y]) => { g[y][x] = 'M' })
+  dots.slice(0, n).forEach(([x, y]) => { g[y]![x] = 'M' })
   return g.map((r) => r.join(''))
 }
 
 /** Notizblock 6×5: roter Kopf, weißes Blatt; Stufe 0 leer, 1 bis 4 = Zeilen füllen sich mit grauer Schrift. */
 const padRows = (n: number): string[] => {
   const g = ['MMMMMM', 'WWWWWW', 'WWWWWW', 'WWWWWW', 'WWWWWW'].map((r) => r.split(''))
-  const ink = (y: number, from: number, to: number): void => { for (let x = from; x < to; x++) g[y][x] = 'G' }
+  const ink = (y: number, from: number, to: number): void => { for (let x = from; x < to; x++) g[y]![x] = 'G' }
   if (n >= 1) ink(1, 1, n >= 2 ? 5 : 3)
   if (n >= 3) ink(3, 1, n >= 4 ? 4 : 3)
   return g.map((r) => r.join(''))
@@ -94,8 +94,8 @@ const brickRows = (c: string): string[] => ['.cc.cc.', 'cWWcccc', 'ccccccc', 'cc
  *  Requisite (wait_btail), damit er beim Spiegeln mitgedreht wird, die Schrift in der Blase aber nicht (noFlip). */
 const bubbleRows = (dots: number, q = false): string[] => {
   const g = ['.WWWWWWW.', 'WWWWWWWWW', 'WWWWWWWWW', 'WWWWWWWWW', 'WWWWWWWWW', 'WWWWWWWWW', '.WWWWWWW.'].map((r) => r.split(''))
-  for (const x of [2, 4, 6].slice(0, dots)) g[3][x] = 'K'
-  if (q) ['KKK', '..K', '.KK', '...', '.K.'].forEach((r, y) => r.split('').forEach((c, x) => { if (c === 'K') g[1 + y][3 + x] = 'K' }))
+  for (const x of [2, 4, 6].slice(0, dots)) g[3]![x] = 'K'
+  if (q) ['KKK', '..K', '.KK', '...', '.K.'].forEach((r, y) => r.split('').forEach((c, x) => { if (c === 'K') g[1 + y]![3 + x] = 'K' }))
   return g.map((r) => r.join(''))
 }
 
@@ -107,12 +107,12 @@ const bubbleRows = (dots: number, q = false): string[] => {
  */
 const knitRows = (len: number, ph: number, b: boolean): string[] => {
   const g = Array.from({ length: 10 }, () => Array.from({ length: 11 }, () => '.'))
-  const put = (x: number, y: number, c: string): void => { g[y][x] = c }
-  const n1 = b ? [[1, 0], [1, 1], [2, 2], [3, 3]] : [[0, 0], [1, 1], [2, 2], [3, 3]]
-  const n2 = b ? [[3, 0], [3, 1], [2, 2], [1, 3]] : [[4, 0], [3, 1], [2, 2], [1, 3]]
+  const put = (x: number, y: number, c: string): void => { g[y]![x] = c }
+  const n1: [number, number][] = b ? [[1, 0], [1, 1], [2, 2], [3, 3]] : [[0, 0], [1, 1], [2, 2], [3, 3]]
+  const n2: [number, number][] = b ? [[3, 0], [3, 1], [2, 2], [1, 3]] : [[4, 0], [3, 1], [2, 2], [1, 3]]
   for (const [x, y] of [...n1, ...n2]) put(x, y, 'G')
-  put(n1[0][0], 0, 'Y')
-  put(n2[0][0], 0, 'Y')
+  put(n1[0]![0], 0, 'Y')
+  put(n2[0]![0], 0, 'Y')
   for (let r = 0; r < len; r++) for (let x = 1; x <= 3; x++) put(x, 4 + r, ((((r - ph) % 4) + 4) % 4) < 2 ? 'B' : 'W')
   put(4, 4, 'B') // Faden …
   put(5, 5, 'B')
@@ -227,11 +227,11 @@ export const PROPS: Readonly<Record<string, PropSprite>> = {
   wait_spade0: { rows: ['.R.', '.R.', '.R.', 'BBB', 'BBB', '.B.'] },
   wait_spade1: { rows: ['.R.', '.R.', 'YRY', 'BBB', 'BBB', '.B.'] },
   wait_grain: { rows: ['Y.Y', '.Y.'], effect: true },
-  wait_castle0: { rows: CASTLE_ROWS[0] },
-  wait_castle1: { rows: CASTLE_ROWS[1] },
-  wait_castle2: { rows: CASTLE_ROWS[2] },
-  wait_castle3: { rows: CASTLE_ROWS[3] },
-  wait_castle4: { rows: CASTLE_ROWS[4] },
+  wait_castle0: { rows: CASTLE_ROWS[0]! },
+  wait_castle1: { rows: CASTLE_ROWS[1]! },
+  wait_castle2: { rows: CASTLE_ROWS[2]! },
+  wait_castle3: { rows: CASTLE_ROWS[3]! },
+  wait_castle4: { rows: CASTLE_ROWS[4]! },
   wait_wave0: { rows: waveRows(0) },
   wait_wave1: { rows: waveRows(1) },
 }
@@ -309,10 +309,10 @@ const BW = 7 // Steinbreite
 const TX = -7 // Turm: direkt neben der Figur, die Hand (Länge 3) deckt die rechte Kante
 const BLOCKS = ['wait_blkB', 'wait_blkY', 'wait_blkE']
 const yRest = (k: number): number => 5 - 4 * k // Oberkante des k-ten Steins im Turm (die oberen Steine decken die Noppen des unteren)
-const blockAt = (k: number, x: number, y: number): PropRef => [BLOCKS[k], x, y, 'g']
+const blockAt = (k: number, x: number, y: number): PropRef => [BLOCKS[k]!, x, y, 'g']
 const placed = (n: number): PropRef[] => Array.from({ length: n }, (_, k) => blockAt(k, TX, yRest(k)))
 /** Stein k auf dem Turm; die Hand greift 2 Zeilen unter der Oberkante, nie über den Körperrand hinaus (der oberste Stein liegt höher). */
-const brick = (k: number) => ({ name: BLOCKS[k], size: [BW, 5] as const, at: [TX, yRest(k)] as const, side: 'L' as const, grip: Math.max(2, -yRest(k)) })
+const brick = (k: number) => ({ name: BLOCKS[k]!, size: [BW, 5] as const, at: [TX, yRest(k)] as const, side: 'L' as const, grip: Math.max(2, -yRest(k)) })
 
 /** Stein k aus der Tasche holen und oben auf das Türmchen setzen. */
 const build = (k: number): Frame[] => [...fetchIn({ ...brick(k), keep: placed(k) }), { look: [-2, 0], t: 3 }]
@@ -448,7 +448,7 @@ const TAIL: PropRef = ['wait_btail', 16, 2]
 const bub = (n: number): readonly PropRef[] => {
   if (n < 0) return []
   const size = [[3, 0], [5, -2]] // Höhe → oberste Zeile der kleinen und mittleren Blase
-  return [n < 2 ? ['wait_bubble' + n, BX, size[n][1]] : ['wait_bubble' + n, BX, -4], TAIL]
+  return [n < 2 ? ['wait_bubble' + n, BX, size[n]![1]!] : ['wait_bubble' + n, BX, -4], TAIL]
 }
 C('bubble_question', 'Fragt mit einer Sprechblase', 'waitUser', { loop: true, interruptible: true, frames: [
   { look: [0, 0], eyes: 'open', mouth: null, props: [], t: 6 },
@@ -810,7 +810,7 @@ C('limit_sandcastle', 'Baut eine Sandburg', 'limit_week', { loop: true, interrup
     { eyes: 'wide', mouth: 'o', look: [-2, 1], props: [wave(9, 0), ...castleAt(4), spadeAt(DUMP, 1)], t: 2 },
     // die Schaufel hebt er dabei hoch über die Burg (Blockhand 3 hoch, damit sie am Körper bleibt)
     { ...spH(-1), props: [wave(9, 1), ...castleAt(4), spadeAt(DUMP, -1)], t: 1 },
-    ...carry(DUMP, 0, -3, false, 4).map((f, i): Frame => ({ ...f, armL: { out: 3, y: -3, h: 3 }, props: [wave([8, 7, 6, 5, 1, 1][i], i), ...(f.props ?? [])] })),
+    ...carry(DUMP, 0, -3, false, 4).map((f, i): Frame => ({ ...f, armL: { out: 3, y: -3, h: 3 }, props: [wave([8, 7, 6, 5, 1, 1][i]!, i), ...(f.props ?? [])] })),
     { by: 0, legs: 'stand', ...spH(1), props: [wave(1, 1), ...castleAt(4), spadeAt(0, 1)], t: 1 },
     { legs: 'stand', by: 1, look: [-2, 0], ...spH(3, 1), props: [wave(1, 0), ...castleAt(4), spadeAt(0, 3)], t: 1 },
     // die Welle schlägt zusammen: die Burg sackt in sich zusammen und versinkt im Sand, dann läuft das Wasser ab
@@ -853,7 +853,7 @@ const confetti = (k: number, tau0: number): PropRef | null => {
   if (y > 9 || y < -3) return null
   if (x + 1 >= 2 && x <= 14 && y >= 0) return null // hinter dem Körper
   if (x + 1 >= -6 && x <= -2 && y >= 4) return null // hinter der Kanone (nie auf ihr gezeichnet)
-  return [CONF[k % 5], x, y, 'g']
+  return [CONF[k % 5]!, x, y, 'g']
 }
 /** Alle Stücke dieses Ticks; Stücke, die sich mit einem schon gesetzten berühren oder überlappen würden, bleiben weg (Effekte überlappen sich nie). */
 const burst = (t: number, T0: number): PropRef[] => {

@@ -15,10 +15,10 @@
 // Stil der Hände (Fynn, überall gleich): Clawds Arme sind Blöcke (2 Pixel dick, kurze Stummel, höchstens 6 lang), die in ganzen Pixelschritten auf und ab
 // gehen und ein Stück ausfahren.
 //
-import { clip } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { fetchOut } from '../macros.ts'
+import { clip } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { fetchOut } from '../macros.js'
 
 // ---- Der Helfer (6×5): A = helle Claude-Farbe (Körper), F = dunklere (Stummelarme), K = Augen. Zeile 4 = Füße. Er schaut Clawd an (Clawd steht rechts von ihm).
 // 0 (`agent_s`) steht, `agent_sb`/6 blinzelt, 1 winkt (rechter Arm hoch), 2 winkt (Arm halb), 3 beide Arme hoch (jubelt), 4 redet, 5 duckt sich froh
@@ -181,7 +181,7 @@ C('hop_with_helper', 'Hüpft mit dem Helfer', 'work_agent', {
     [3, FL, HS(0)],
     ...hopBeats(2, clap),
     ...clawdHop(2, (fy) => [1, { ...HAP, armL: fy ? A(3, -1) : A(3, 1), armR: fy ? A(3, -1) : A(3, 1), fy }, HS(fy ? 1 : 2)] as Beat),
-    ...rep(2, [0, 1, 2, 3].map((k) => [1, { ...HAP, fy: [0, -1, -1, 0][k], armL: k === 1 || k === 2 ? A(3, -1) : A(3, 1), armR: k === 1 || k === 2 ? A(3, -1) : A(3, 1) }, HS([0, 3, 3, 0][k], 0, [0, -1, -2, -1][k])] as Beat)),
+    ...rep(2, [0, 1, 2, 3].map((k) => [1, { ...HAP, fy: [0, -1, -1, 0][k], armL: k === 1 || k === 2 ? A(3, -1) : A(3, 1), armR: k === 1 || k === 2 ? A(3, -1) : A(3, 1) }, HS([0, 3, 3, 0][k]!, 0, [0, -1, -2, -1][k])] as Beat)),
     [2, HAP, HS(3)], [2, HAP, HS(0)], [1, FL, HS(6)], [3, FL, HS(0)],
   ]),
 })

@@ -3,7 +3,7 @@
 // Hauptbefehl der Mod (das `$` des Tests hat kein `$.config`), `$.config.list` und `$.config.set` per Stub.
 import { expect, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { FYNN_MODS, LANGUAGES, installedMods, isLanguage, languageHelp } from '../hooks/language.ts'
+import { FYNN_MODS, LANGUAGES, installedMods, isLanguage, languageHelp } from '../hooks/language.js'
 
 // ---- je Mod anpassen ----
 const SELF = 'clawd-buddy'

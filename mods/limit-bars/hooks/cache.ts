@@ -2,10 +2,10 @@
 // Neuschreiben, und was zeigen Ring, Terminal-Block und `/cache`. Nachgebaut nach Nate Herks Cache Keeper
 // (docs/vorlagen/nateherk-cache-keeper, MIT, Copyright (c) 2026 Nate Herk): Zustände und TTL-Messung nach register.mjs:232-244 und
 // :537-568, Preistabelle und Schreibfaktoren nach hooks/pricing.mjs.
-import { CACHE_ARGS, T, dec, hhmm, usd } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import type { RingView } from './ring.ts'
-import { EMPTY, GREEN, GREY, ORANGE, RED, YELLOW } from './view.ts'
+import { CACHE_ARGS, T, dec, hhmm, usd } from './i18n.js'
+import type { Lang } from './i18n.js'
+import type { RingView } from './ring.js'
+import { EMPTY, GREEN, GREY, ORANGE, RED, YELLOW } from './view.js'
 
 export const MIN = 60000
 

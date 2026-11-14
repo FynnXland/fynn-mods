@@ -1,10 +1,10 @@
 // limit-bars: Kostenring (SPEC Ausbau 0.12.0, 1.), reine Funktionen ohne `$`. Quelle ist `$.state` `cost-ledger.here`
 // (Vertrag in types/index.d.ts): was dieser Chat und das ganze Projekt an API-Wert gekostet haben. Gefüllt ist der Anteil
 // des Chats am Projekt; in der Mitte der Chat-Betrag, darunter `/887$` für das Projekt, darüber `Cost`/`Kosten`.
-import { FONT, RING_H, RING_SEGMENTS, RING_SIZE, esc } from './ring.ts'
-import { T, dec } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import { EMPTY, GREY, ORANGE } from './view.ts'
+import { FONT, RING_H, RING_SEGMENTS, RING_SIZE, esc } from './ring.js'
+import { T, dec } from './i18n.js'
+import type { Lang } from './i18n.js'
+import { EMPTY, GREY, ORANGE } from './view.js'
 
 /** Der Wert von cost-ledger, geprüft. */
 export type Here = { chatUsd: number; projectUsd: number | null; project: string | null; since: string; devices: number }

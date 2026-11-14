@@ -1,7 +1,7 @@
 // limit-bars: reine Anzeige-Logik ohne `$`. Aus den Fenstern der letzten Messung und der Uhrzeit wird,
 // was je Fenster zu sehen ist (Texte lang und kurz, Farbe, Füllung), und im Terminal die Aufteilung der Breite.
-import { T, hhmm } from './i18n.ts'
-import type { Lang } from './i18n.ts'
+import { T, hhmm } from './i18n.js'
+import type { Lang } from './i18n.js'
 
 export type Kind = 'five_hour' | 'seven_day'
 export type Win = { kind: Kind; percentUsed: number; resetsAt?: number }
@@ -392,7 +392,7 @@ export function layoutTerminal(shown: readonly Shown[], bodyColumns: number, ext
   }
   // Langform zuerst, wird es eng die Kurzform
   const tries: Block[][] = [shown.map((s) => block(s, false)), shown.map((s) => block(s, true))]
-  if (shown.length > 1) tries.push([block(shown[0], false)], [block(shown[0], true)])
+  if (shown.length > 1) tries.push([block(shown[0]!, false)], [block(shown[0]!, true)])
   for (const blocks of tries) {
     const used = blocks.reduce((a, b) => a + b.width, 0) + GAP * (blocks.length - 1)
     if (used + 1 <= avail) return { blocks, width: used + 1 }

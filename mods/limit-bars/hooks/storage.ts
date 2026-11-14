@@ -1,10 +1,10 @@
 // limit-bars: Speicher-Ring, reine Funktionen ohne `$` (SPEC.md, Ausbau v0.4.0). Ausgabe der PowerShell-Skripte lesen,
 // Endungen auf Gruppen verteilen, Größen formatieren und den Ring als Svg-Fragment zeichnen. Die Skripte selbst stehen
 // hier, damit Tests prüfen können, dass der Pfad nie im Skripttext steht (nur über LB_PATH).
-import { FONT, RING_H, RING_SEGMENTS, RING_SIZE, esc } from './ring.ts'
-import { EMPTY, GREY, ORANGE } from './view.ts'
-import { T, dec, int } from './i18n.ts'
-import type { Lang } from './i18n.ts'
+import { FONT, RING_H, RING_SEGMENTS, RING_SIZE, esc } from './ring.js'
+import { EMPTY, GREY, ORANGE } from './view.js'
+import { T, dec, int } from './i18n.js'
+import type { Lang } from './i18n.js'
 
 export const GROUPS = ['programs', 'media', 'models', 'code', 'archives', 'other'] as const
 export type Group = (typeof GROUPS)[number]

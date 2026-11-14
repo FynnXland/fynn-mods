@@ -2,7 +2,7 @@
 // auf einem glatten Kreis (Mittellinie r = 18, 4 px stark, je Segment etwa 3 px Bogen und 1 px Fuge) in einem Feld von 40 × 40 px.
 // Gefüllt ist der verbleibende Anteil; der Ring leert sich im Uhrzeigersinn ab 12 Uhr (SPEC.md, Ausbau v0.2.0, Anzeige).
 // Fynn (2026-10-05) zum ersten Prototyp aus Pixel-Kacheln: „zu verpixelt, nicht annähernd rund“ – darum Bögen statt Raster.
-import { EMPTY, GREY, ORANGE } from './view.ts'
+import { EMPTY, GREY, ORANGE } from './view.js'
 
 /** Was der Ring zeigt: Füllung 0..1, Farbe der gefüllten Segmente, Text in der Mitte, Markierung fürs Warmhalten, `alt`. */
 export type RingView = {

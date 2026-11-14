@@ -10,9 +10,9 @@
 //
 // Koordinaten: Requisiten mit Flag 'g' liegen relativ zum Heimatplatz (stage.ts → FX, FY), Armziele (`{to:[x,y]}`) relativ zur
 // Figur. "Hinter der Linie" heißt y_g ≥ HIDDEN_GY: alles dort ist abgeschnitten.
-import { FY, H } from './stage.ts'
-import type { PropRef } from './stage.ts'
-import type { Frame } from './clipdef.ts'
+import { FY, H } from './stage.js'
+import type { PropRef } from './stage.js'
+import type { Frame } from './clipdef.js'
 
 /** Erste y_g-Zeile, die schon hinter der Linie liegt (nichts davon ist sichtbar). */
 export const HIDDEN_GY = H - FY
@@ -175,7 +175,7 @@ export function riseIn(o: RiseOpts): Frame[] {
   let i = 0
   while (y > o.at[1]) {
     y = Math.max(o.at[1], y - step)
-    const nm = o.names ? o.names[i++ % o.names.length] : o.name
+    const nm = o.names ? o.names[i++ % o.names.length]! : o.name
     frames.push({ ...o.during, props: [...keep, [nm, o.at[0], y, 'g']], t: 1 })
   }
   return frames
@@ -190,7 +190,7 @@ export function sinkOut(o: RiseOpts): Frame[] {
   let i = 0
   while (y < HIDDEN_GY) {
     y = Math.min(HIDDEN_GY, y + step)
-    const nm = o.names ? o.names[i++ % o.names.length] : o.name
+    const nm = o.names ? o.names[i++ % o.names.length]! : o.name
     frames.push({ ...o.during, props: [...keep, [nm, o.at[0], y, 'g']], t: 1 })
   }
   frames.push({ ...o.during, props: keep, t: 1 })
@@ -223,7 +223,7 @@ export function slideX(o: SlideOpts): Frame[] {
   let i = 0
   while (dir > 0 ? x < o.to : x > o.to) {
     x += dir * step
-    frames.push({ ...o.during, props: [...keep, [o.names[Math.floor(i / every) % o.names.length], x, o.y, 'g']], t: 1 })
+    frames.push({ ...o.during, props: [...keep, [o.names[Math.floor(i / every) % o.names.length]!, x, o.y, 'g']], t: 1 })
     i++
   }
   return frames

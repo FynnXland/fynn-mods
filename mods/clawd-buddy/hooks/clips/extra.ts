@@ -7,18 +7,18 @@
 // Schleifen (compact): Nur die Schleifengrenze ist ein "sicherer Frame" (fx 0, by 0, alles im Ausgangszustand). Während der Handlung
 // steht er einen Pixel zur Seite versetzt (fx ≠ 0) oder macht einen Schritt, damit die Engine nicht mitten im Pressen aussteigt und das
 // Outro auf einen Zustand träfe, der nicht mehr passt.
-import { clip } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, fetchOut, riseIn, sinkOut } from '../macros.ts'
-import type { FetchOpts } from '../macros.ts'
+import { clip } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { armBlock, fetchIn, fetchOut, riseIn, sinkOut } from '../macros.js'
+import type { FetchOpts } from '../macros.js'
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Zeichenhilfen
 type Grid = string[][]
 const grid = (w: number, h: number): Grid => Array.from({ length: h }, () => Array<string>(w).fill('.'))
 const put = (g: Grid, x: number, y: number, c: string): void => {
-  if (y >= 0 && y < g.length && x >= 0 && x < g[0].length) g[y][x] = c
+  if (y >= 0 && y < g.length && x >= 0 && x < g[0]!.length) g[y]![x] = c
 }
 const rect = (g: Grid, x: number, y: number, w: number, h: number, c: string): void => {
   for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) put(g, x + i, y + j, c)
@@ -137,7 +137,7 @@ function toolbox(n: number): PropSprite {
 }
 /** Bild um 90° im Uhrzeigersinn drehen. */
 const rot = (rows: readonly string[]): string[] =>
-  Array.from({ length: rows[0].length }, (_, x) => Array.from({ length: rows.length }, (_, y) => rows[rows.length - 1 - y][x]).join(''))
+  Array.from({ length: rows[0]!.length }, (_, x) => Array.from({ length: rows.length }, (_, y) => rows[rows.length - 1 - y]![x]).join(''))
 /**
  * Ringmaulschlüssel (5x8, eine Familie): oben das offene Maul, unten der Ring (graues Loch), dazwischen der Griff.
  * 0 bis 3: eine volle Drehung gegen den Uhrzeigersinn in 90°-Schritten (0 Maul oben, 1 Maul links, 2 Maul unten, 3 Maul rechts).
@@ -149,9 +149,9 @@ const WRENCH: readonly (readonly string[])[] = [W_UP, rot(rot(rot(W_UP))), rot(r
 export const PROPS: Readonly<Record<string, PropSprite>> = {
   ...Object.fromEntries(STACK.map((r, i) => [`cmp_st${i}`, spr(r)])),
   ...Object.fromEntries([0, 1, 2, 3, 4, 5, 6, 7].map((n) => [`cmp_box${n}`, box(n)])),
-  cmp_pp0: spr(PAPER[0]),
-  cmp_pp1: spr(PAPER[1]),
-  cmp_pp2: fxSpr(PAPER[2]),
+  cmp_pp0: spr(PAPER[0]!),
+  cmp_pp1: spr(PAPER[1]!),
+  cmp_pp2: fxSpr(PAPER[2]!),
   cmp_tq1: turnQ(1),
   cmp_tq2: turnQ(2),
   cmp_tq3: turnQ(3),
@@ -175,14 +175,14 @@ const blkL = (o: number, y: number): Frame => armBlock('L', o, y)
 const SX = 18
 const ST_H = [8, 6, 5, 4]
 const ST_W = [8, 8, 7, 6]
-const st = (k: number): PropRef => ref(`cmp_st${k}`, SX, 10 - ST_H[k])
+const st = (k: number): PropRef => ref(`cmp_st${k}`, SX, 10 - ST_H[k]!)
 const TQ = (w: number, x = 2): PropRef => [`cmp_tq${w}`, x, 0]
 /** Beide Hände oben auf dem Stapel k (nahe Hand = Blockarm, ferne Hand = dunkler Block weiter rechts), `lift` Pixel darüber. */
 function hands(k: number, by: number, lift: number, extra: Frame = {}, t = 1): Frame {
-  const y = 10 - ST_H[k] - 2 - lift
+  const y = 10 - ST_H[k]! - 2 - lift
   return {
     fx: 1, face: 1, armL: 'hide', by, ...blkR(4, y - by), look: [1, 1],
-    props: [st(k), TQ(3), ref('cmp_fh', SX + ST_W[k] - 4, y)], t, ...extra,
+    props: [st(k), TQ(3), ref('cmp_fh', SX + ST_W[k]! - 4, y)], t, ...extra,
   }
 }
 /** Ein Stoß: Hände heben, aufsetzen, mit dem ganzen Körper drücken (Augen zu), der Stapel wird zu k+1, kurz nachlassen. */
@@ -251,7 +251,7 @@ function sheet(n: number): Frame[] {
 /** Beide Hände auf dem Haufen (zur linken Seite gewandt): nahe Hand = Blockarm links, ferne Hand = dunkler Block weiter links. */
 const HEAP_TOP: Record<number, number> = { 3: 1, 4: 3, 5: 4 }
 function squash(n: number, by: number, lift: number, extra: Frame = {}, t = 1): Frame {
-  const y = HEAP_TOP[n] - 2 - lift
+  const y = HEAP_TOP[n]! - 2 - lift
   return {
     fx: -1, legs: 'stand', face: -1, armR: 'hide', by, ...blkL(4, y - by), look: [-1, 1],
     props: [bx(n), TQ(3, 12), ref('cmp_fh', BXX + 3, y)], t, ...extra,
@@ -292,7 +292,7 @@ C('compact_box', 'Knüllt Papier in einen Karton', 'compact', {
 // verstehend, klappt es zu und packt es wieder ein.
 const BK: FetchOpts = { name: 'skl_bk0', size: [8, 5], at: [SX, 5], side: 'R', rummage: 3 }
 const BK_Y = [5, 2, -2, 4]
-const bk = (n: number): PropRef => ref(`skl_bk${n}`, SX, BK_Y[n])
+const bk = (n: number): PropRef => ref(`skl_bk${n}`, SX, BK_Y[n]!)
 C('skill_book', 'Schlägt ein Buch auf', 'skill', {
   intro: fetchIn(BK),
   frames: [
@@ -327,8 +327,8 @@ const tb = (n: number): PropRef => ref(`skl_tb${n}`, SX, 3)
 const wr = (n: number | string, x: number, y: number): PropRef => ref(typeof n === 'number' ? `skl_wr${n}` : n, x, y)
 /** Schlüssel n so legen, dass sein Mittelpunkt bei (17.5, -0.5) an der erhobenen Hand bleibt (über dem Kasten, unter dem Bühnenrand). */
 const wrAt = (n: number): PropRef => {
-  const r = WRENCH[n]
-  return wr(n, Math.round(17.5 - r[0].length / 2), Math.round(-0.5 - r.length / 2))
+  const r = WRENCH[n]!
+  return wr(n, Math.round(17.5 - r[0]!.length / 2), Math.round(-0.5 - r.length / 2))
 }
 /** Herausziehen (rückwärts: zurückstecken): Hand und Schlüssel in Stufen. */
 const PULL: readonly Frame[] = [

@@ -1,10 +1,10 @@
 // clawd-buddy: Inhalt von `/clawd help` (docs/HELP-SPEC.md §5 „clawd-buddy 0.7.0“). Rein, kein `$`: Wortlisten des Parsers und der
 // Schnappschuss `HelpData`; die Zeichnung macht help.ts (Kopie von templates/help/help.ts).
-import { helpLabels } from './help.ts'
-import type { HelpData } from './help.ts'
-import { T } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import { languageHelp } from './language.ts'
+import { helpLabels } from './help.js'
+import type { HelpData } from './help.js'
+import { T } from './i18n.js'
+import type { Lang } from './i18n.js'
+import { languageHelp } from './language.js'
 
 /** Akzent der Hilfe: Theme-Key claude (Orange), passt sich hell und dunkel an (HELP-SPEC §4, geändert 2026-10-09; vorher #D77757). */
 export const ACCENT = 'claude'

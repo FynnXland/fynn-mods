@@ -5,7 +5,7 @@ for Spotify (Windows) and a cost ledger.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.319_tested-D97757)](https://code.claude.com/docs/en/plugins/mods/overview)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.325_tested-D97757)](https://code.claude.com/docs/en/plugins/mods/overview)
 [![Mods](https://img.shields.io/badge/mods-6-555)](#the-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#the-mods)
 
@@ -50,7 +50,7 @@ settings, and values saved by earlier versions move over once.
 
 ## Requirements
 
-- Claude Code **v2.1.309 or later** (older versions refuse to load these mods); tested with **v2.1.319**. Check with
+- Claude Code **v2.1.323 or later** (older versions refuse to load these mods); tested with **v2.1.325**. Check with
   `claude --version`.
 - Runs in the terminal and in the Code tab of the Claude desktop app. In `claude -p`, the Agent SDK, VS Code and on
   mobile most mods draw nothing; see each mod's README.
@@ -371,7 +371,7 @@ that looks at your drive: it reads sizes, never file contents. Found a security 
 
 | Problem | Fix |
 |---|---|
-| A mod draws nothing | Check `claude --version` (these mods need v2.1.309 or later) and that `/plugin` lists the mod as `mod active`. A newly installed mod loads in the next session or after `/reload-plugins`. In `claude -p`, the Agent SDK, VS Code and on mobile most mods draw nothing. |
+| A mod draws nothing | Check `claude --version` (these mods need v2.1.323 or later) and that `/plugin` lists the mod as `mod active`. A newly installed mod loads in the next session or after `/reload-plugins`. In `claude -p`, the Agent SDK, VS Code and on mobile most mods draw nothing. |
 | A mod broke after a Claude Code update | Update the mods (`claude plugin marketplace update fynn-mods`, then `claude plugin update <mod>@fynn-mods`). If that doesn't help, please open an issue. |
 | Two questions in a row before a cold send | Update limit-bars to 0.14.0 or later; it then leaves the question to sidekick. With an older limit-bars, turn off its question with `/cache warn off`. |
 | Everything is in English | `/clawd language de` (or any other mod's command) switches all fynn-mods; for one mod, set `language` to `de` with `/plugin configure <mod>@fynn-mods`. In the desktop app it applies from the next chat, or at once after `/reload-plugins`. |

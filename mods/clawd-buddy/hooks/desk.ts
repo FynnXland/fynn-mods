@@ -18,13 +18,13 @@
 //
 // Das Bild ist in senkrechte Kacheln geteilt, jede mit eigener Zeitliste: Begleiter, die nebeneinander blinzeln und werkeln, ergäben
 // als Ganzes sonst so viele verschiedene Bilder, dass die Animation nur wenige Sekunden fassen könnte.
-import { createEngine } from './engine.ts'
-import type { Engine } from './engine.ts'
-import { seededRng } from './capture.ts'
-import { ALL_CLIPS, ALL_PROPS } from './library.ts'
-import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, frostActive, specialDay } from './mood.ts'
-import type { Facts, Strain } from './mood.ts'
-import { H, PAL, POSES, TICK, W, compose } from './stage.ts'
+import { createEngine } from './engine.js'
+import type { Engine } from './engine.js'
+import { seededRng } from './capture.js'
+import { ALL_CLIPS, ALL_PROPS } from './library.js'
+import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, frostActive, specialDay } from './mood.js'
+import type { Facts, Strain } from './mood.js'
+import { H, PAL, POSES, TICK, W, compose } from './stage.js'
 
 export type DeskOpts = { seed: number; nightStart: number; nightEnd: number; idleSeconds: number; reduced: boolean; flip: boolean; birthday?: string }
 
@@ -137,7 +137,7 @@ export function createDesk(o: DeskOpts): Desk {
     engine.render()
   }
 
-  const segAt = (n: number): Seg => segs.find((x) => x.until >= n) ?? segs[segs.length - 1]
+  const segAt = (n: number): Seg => segs.find((x) => x.until >= n) ?? segs[segs.length - 1]!
   /** Ein Takt nach dem Zeitplan, danach die Eingriffe, die mit ihm fällig werden. */
   function step(at: number) {
     const g = segAt(D.n + 1)
@@ -190,18 +190,18 @@ export function createDesk(o: DeskOpts): Desk {
       else for (const x of acts) if (x.at === D.n) apply(x.act)
       const f = frame()
       // Platz reicht nicht mehr für die neuen Kachelbilder: die Animation endet vor diesem Takt (der erste passt immer)
-      const fresh = f.reduce((n, body, t) => n + (ids[t].has(body) ? 0 : body.length), 0)
+      const fresh = f.reduce((n, body, t) => n + (ids[t]!.has(body) ? 0 : body.length), 0)
       if (i > 0 && chars + fresh > PLAN_CHARS) break
       chars += fresh
       f.forEach((body, t) => {
-        let id = ids[t].get(body)
+        let id = ids[t]!.get(body)
         if (id === undefined) {
-          id = bodies[t].length
-          ids[t].set(body, id)
-          bodies[t].push(body)
+          id = bodies[t]!.length
+          ids[t]!.set(body, id)
+          bodies[t]!.push(body)
         }
-        const s = shown[t]
-        if (!s.length || s[s.length - 1].id !== id) s.push({ id, from: i })
+        const s = shown[t]!
+        if (!s.length || s[s.length - 1]!.id !== id) s.push({ id, from: i })
       })
       ticks = i
     }
@@ -302,7 +302,7 @@ function tilesOf(buf: readonly (string | null)[], flip: boolean): string[] {
       while (a < b) {
         const t = Math.floor(a / TILE)
         const end = Math.min(b, (t + 1) * TILE)
-        runs[t].set(c, `${runs[t].get(c) ?? ''}M${a} ${y}h${end - a}v1h-${end - a}z`)
+        runs[t]!.set(c, `${runs[t]!.get(c) ?? ''}M${a} ${y}h${end - a}v1h-${end - a}z`)
         a = end
       }
       x = e
@@ -325,7 +325,7 @@ const GRAY = '#8a8a8a'
  * Darstellung.
  */
 export function stillSource(scale: number, flip: boolean, digit: number, nonce: number): string {
-  const body = tilesOf(compose({ ...POSES.stand }, ALL_PROPS).buf, flip).join('')
+  const body = tilesOf(compose({ ...POSES.stand! }, ALL_PROPS).buf, flip).join('')
   let d = ''
   ;(DIGITS[digit] ?? []).forEach((bits, y) => {
     for (let x = 0; x < 3; x++) if (bits & (4 >> x)) d += `M${1 + x} ${1 + y}h1v1h-1z`
@@ -346,19 +346,19 @@ function build(bodies: readonly string[][], shown: readonly Shown[][], ticks: nu
   shown.forEach((seq, t) => {
     for (const s of seq) if (s.from > 0) changeAt.add(s.from)
     for (const id of new Set(seq.map((s) => s.id))) {
-      if (!bodies[t][id]) continue
+      if (!bodies[t]![id]) continue
       frames++
       // Sichtbar ab jedem Abschnitt dieses Bilds, verborgen ab dem nächsten anderen; das letzte bleibt am Ende stehen.
       // Der erste Abschnitt beginnt bei Takt 0, also beginnt auch jede Liste dort.
       const keys: [number, 'visible' | 'hidden'][] = []
       for (const s of seq) {
         const vis = s.id === id ? 'visible' : 'hidden'
-        if (!keys.length || keys[keys.length - 1][1] !== vis) keys.push([s.from, vis])
+        if (!keys.length || keys[keys.length - 1]![1] !== vis) keys.push([s.from, vis])
       }
       const anim = keys.length > 1
         ? `<animate attributeName="visibility" calcMode="discrete"${begin} dur="${dur}" fill="freeze" values="${keys.map((k) => k[1]).join(';')}" keyTimes="${keys.map((k) => kt(k[0])).join(';')}"/>`
         : ''
-      groups += `<g visibility="${keys[0][1]}">${anim}${bodies[t][id]}</g>`
+      groups += `<g visibility="${keys[0]![1]}">${anim}${bodies[t]![id]}</g>`
     }
   })
   return { source: `${head(scale)}${groups}</svg>`, ticks, frames, changes: changeAt.size }

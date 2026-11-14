@@ -4,10 +4,10 @@
 // abgeschnitten. Gegenstände kommen aus der Tasche (fetchIn/fetchOut oder eigene Kram-Frames), die Hände sind Blöcke, die Augen bleiben immer frei
 // (Requisiten vor dem Körper liegen im Streifen zwischen den Augen, x 5 bis 11, oder unterhalb/oberhalb der Augenzeilen; der Blick geht höchstens 1 Pixel zur Seite).
 // Unverändert (Fynn mag sie): stretch, dance, hop, smell_flower.
-import { clip, rep } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { fetchIn, fetchOut, riseIn, sinkOut, HIDDEN_GY } from '../macros.ts'
+import { clip, rep } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { fetchIn, fetchOut, riseIn, sinkOut, HIDDEN_GY } from '../macros.js'
 
 const s = (rows: readonly string[]): PropSprite => ({ rows })
 const fxp = (rows: readonly string[]): PropSprite => ({ rows, effect: true })
@@ -23,8 +23,8 @@ const BUB_ROWS: Readonly<Record<number, readonly string[]>> = {
 /** Zerplatzen, Stufe 0 (9×9): der Blasenring (Durchmesser 7) mit kleinen weißen Spitzen nach außen. */
 const POP_RING: readonly string[] = (() => {
   const g = Array.from({ length: 9 }, () => Array(9).fill('.'))
-  BUB_ROWS[7].forEach((row, y) => [...row].forEach((c, x) => { if (c !== '.') g[y + 1][x + 1] = c }))
-  for (const [x, y] of [[4, 0], [4, 8], [0, 4], [8, 4], [1, 1], [7, 1], [1, 7], [7, 7]]) g[y][x] = 'W'
+  BUB_ROWS[7]!.forEach((row, y) => [...row].forEach((c, x) => { if (c !== '.') g[y + 1]![x + 1] = c }))
+  for (const [x, y] of [[4, 0], [4, 8], [0, 4], [8, 4], [1, 1], [7, 1], [1, 7], [7, 7]] as const) g[y]![x] = 'W'
   return g.map((r) => r.join(''))
 })()
 
@@ -90,7 +90,7 @@ const mod = (a: number, n: number): number => ((a % n) + n) % n
 /** Weg durch Stützpunkte mit höchstens `v` Pixeln je Tick (größte Achsendifferenz). Der erste Punkt ist der Start und wird nicht ausgegeben. */
 function route(pts: readonly (readonly [number, number])[], v = 2): [number, number][] {
   const res: [number, number][] = []
-  let [x, y] = pts[0]
+  let [x, y] = pts[0]!
   for (const [tx, ty] of pts.slice(1)) {
     const n = Math.max(1, Math.ceil(Math.max(Math.abs(tx - x), Math.abs(ty - y)) / v))
     const sx = x
@@ -154,7 +154,7 @@ function flyFrames(): Frame[] {
   f.push({ look: [-1, 1], props: [], t: 2 })
   // 1. Von unten hinter der Linie hoch (der Anfang ist unten abgeschnitten), dann in großen Bögen über und um den Kopf
   const pts: [number, number][] = [[-4, 9], [-6, 3], [-3, -3], [2, -4], [7, -3], [12, -4], [17, -2], [19, 3], [17, 6], [14, 0], [10, -3], [4, -2], [-1, 0], [-2, 4], [1, -1], [5, -3], [7, -2]]
-  f.push({ look: gaze(pts[0][0], pts[0][1]), eyes: 'wide', props: [fly(pts[0][0], pts[0][1])], t: 1 })
+  f.push({ look: gaze(pts[0]![0], pts[0]![1]), eyes: 'wide', props: [fly(pts[0]![0], pts[0]![1])], t: 1 })
   for (const [x, y] of route(pts, 3)) f.push({ look: gaze(x, y), eyes: 'open', props: [fly(x, y)], t: 1 })
   // 2. Sie schwebt herab und setzt sich vor sein Gesicht zwischen die Augen
   for (const [x, y] of route([[7, -2], [7, 3]], 2)) f.push({ look: [0, 0], props: [fly(x, y)], t: 1 })
@@ -240,7 +240,7 @@ function pebbleFrames(): Frame[] {
 const PEBBLE = splitAtMove(pebbleFrames())
 C('pebble_kick', 'Stein kicken', 'fun', { interruptible: true, intro: PEBBLE[0], frames: PEBBLE[1] });
 
-const danceStep = (n) => [
+const danceStep = (n: number): Frame[] => [
   { armL: 'up2', armR: 'down', legs: 'stepA', fx: -1, eyes: 'happy', t: 3, props: n ? [['note', -4, 0]] : [] },
   { armL: 'down', armR: 'up2', legs: 'stepB', fx: 1, t: 3, props: n ? [['note', 18, -1]] : [] }];
 C('dance', 'Tänzchen', 'fun', { interruptible: true, frames: [
@@ -290,7 +290,7 @@ function juggleParts(): { intro: Frame[]; body: Frame[]; outro: Frame[] } {
   }
   const base = (): Frame => ({ by: 0, eyes: 'open', look: [0, 0], mouth: null, ...hands() })
   const fetchBall = (idx: number): void => {
-    const nm = JB[idx]
+    const nm = JB[idx]!
     const other: Frame = { armR: balls.length ? 'hold' : 'down' }
     const lk: readonly [number, number] = idx ? [0, 1] : [-2, 1] // mit Bällen im Kreis nur nach unten schauen (ein Blick nach links träfe die Bahn)
     for (let i = 0; i < 2; i++) tick({ ...base(), look: lk, eyes: 'winkR', ...handL(1, 5), ...other })
@@ -312,7 +312,7 @@ function juggleParts(): { intro: Frame[]; body: Frame[]; outro: Frame[] } {
   const putAway = (): void => {
     for (let g = 0; g < JN && !balls.some((b) => mod(b.k, JN) === JCATCH); g++) tick(base())
     const i = balls.findIndex((b) => mod(b.k, JN) === JCATCH)
-    const b = balls[i]
+    const b = balls[i]!
     tick({ ...base(), armL: 'hold' }) // Ball liegt in der Hand (Platz JCATCH)
     balls.splice(i, 1)
     tick({ ...base(), ...handL(2, 4) }, [G(b.n, -1, 4)])
@@ -679,7 +679,7 @@ const starProp = (i: number, T: number, from: number, to: number): PropRef[] => 
   const at = from + 2 * i
   const end = to + 2 * i
   if (T < at || T >= end) return []
-  const [x, y] = STARS[i]
+  const [x, y] = STARS[i]!
   const ph = (T - at + 3 * i) % 8
   return ph < 4 || ph >= 6 ? [G('fun_st1', x, y)] : [G('fun_st2', x - 1, y - 1)]
 }
@@ -713,7 +713,7 @@ const CONF_NAMES = ['dotY', 'dotW', 'fun_cp', 'fun_cb', 'fun_ce', 'fun_cm']
 const CONF_A = [9, -9, 12, -12, 15, -16]
 const confetti = (k: number): PropRef[] =>
   CONF_NAMES.flatMap((nm, i): PropRef[] => {
-    const x = Math.round(8 + CONF_A[i] * (1 - Math.pow(0.7, k)))
+    const x = Math.round(8 + CONF_A[i]! * (1 - Math.pow(0.7, k)))
     const y = Math.round(-1 + (-1.3 - 0.12 * i) * k + 0.45 * k * k)
     return y > 6 || (y >= 3 && x <= 1) ? [] : [[nm, x, y]] // links fallen sie nie auf die Torte: dort vergehen sie über ihr, nahe an seinem Arm
   })
@@ -788,9 +788,9 @@ const FW_G = [0, 0, 0, 1, 2, 3]
 const burst = (cx: number, cy: number, k: number, off: number): PropRef[] =>
   k < 1 || k > 6 ? [] : FW_DIRS.flatMap(([dx, dy], i): PropRef[] => {
     if (k === 6 && i % 2) return []
-    const r = FW_R[k - 1]
+    const r = FW_R[k - 1]!
     const d = dx && dy ? Math.round(r * 0.75) : r
-    return [[FW_COLORS[(i + off) % 8], cx + dx * d, Math.max(-4, cy + dy * d + FW_G[k - 1])]]
+    return [[FW_COLORS[(i + off) % 8]!, cx + dx * d, Math.max(-4, cy + dy * d + FW_G[k - 1]!)]]
   })
 const rocket = (x: number, k: number): PropRef[] => (k < 0 || k > 5 ? [] : [['fun_rk' + (1 + (k % 2)), x, 10 - 2 * k]])
 function fireworkFrames(): Frame[] {
@@ -833,11 +833,11 @@ const SPARK_PAT: readonly (readonly (readonly [number, number, string])[])[] = [
   [[-1, -2, 'dotY'], [2, -1, 'dotW'], [-2, 0, 'dotW'], [1, -2, 'dotY']],
   [[2, -2, 'dotY'], [-2, -1, 'dotW'], [1, 0, 'dotY'], [-1, -2, 'dotW']],
 ]
-const sparks = (tx: number, ty: number, k: number, n = 4): PropRef[] => SPARK_PAT[k % 4].slice(0, n).map(([dx, dy, nm]) => G(nm, tx + dx, ty + dy))
+const sparks = (tx: number, ty: number, k: number, n = 4): PropRef[] => SPARK_PAT[k % 4]!.slice(0, n).map(([dx, dy, nm]) => G(nm, tx + dx, ty + dy))
 const WAVE: readonly (readonly [number, number])[] = [[-1, -2], [-2, -1], [-2, 0], [-1, 0], [0, -1], [0, -2]]
 C('ny_sparkler', 'Wunderkerze', 'fun', { special: 'newyear', interruptible: false, intro: [...hatIn(), ...sparkIn()], frames: [
   ...Array.from({ length: 20 }, (_, k): Frame => {
-    const [tx, ty] = WAVE[k % WAVE.length]
+    const [tx, ty] = WAVE[k % WAVE.length]!
     return { ...handL(2 - tx, ty + 5), armR: k % 4 < 2 ? 'up1' : 'down', eyes: 'open', look: [-1, 0], mouth: 'smile', props: [HAT, SPK_P(tx, ty), ...sparks(tx, ty, k)], t: 2 }
   }),
   // die Funken werden weniger und erlöschen, dann wandert der Draht zurück in die Tasche

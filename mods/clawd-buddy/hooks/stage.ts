@@ -209,7 +209,7 @@ export function propSprite(props: PropTable, name: string): PropSprite | undefin
       const rows: string[] = []
       for (let j = 0; j < nh; j++) {
         let row = ''
-        for (let i = 0; i < nw; i++) row += from[Math.floor(((j + 0.5) * h) / nh)][Math.floor(((i + 0.5) * w) / nw)] ?? '.'
+        for (let i = 0; i < nw; i++) row += from[Math.floor(((j + 0.5) * h) / nh)]![Math.floor(((i + 0.5) * w) / nw)] ?? '.'
         rows.push(row)
       }
       return rows
@@ -269,7 +269,7 @@ export function compose(p: Pose, props: PropTable): Composed {
   if (!p.back) {
     // Seitlicher Blick höchstens 1 Pixel: Die Pupille bleibt eine Spalte vom Körperrand weg (Fynn: vor dunklem Hintergrund
     // wirkt ein Auge am Rand wie abgeschnitten).
-    const lk = LOOKABLE_EYES.has(p.eyes) ? [Math.max(-1, Math.min(1, p.look[0])), p.look[1]] : [0, 0]
+    const lk: [number, number] = LOOKABLE_EYES.has(p.eyes) ? [Math.max(-1, Math.min(1, p.look[0])), p.look[1]] : [0, 0]
     const one = EYES_ONE[p.eyes]
     const fc = Math.round(p.face ?? 0)
     const drawEye = (name: string, right: boolean) => {
@@ -289,7 +289,7 @@ export function compose(p: Pose, props: PropTable): Composed {
     // Kein Mund (Fynn: ohne wirkt er stimmiger als mit einem, der zwischendurch auftaucht). `mouth` bleibt in den Clips stehen,
     // wird aber nicht gezeichnet; die Formen in MOUTH bleiben für eine spätere Wiederaufnahme. Einzige Ausnahme: der gespitzte Mund beim
     // Pfeifen, ein schmales Rechteck in der Mitte (Fynn, 2026-10-06: „nur einen, der auch rechteckig ist“).
-    if (p.mouth === 'whistle') for (const [x, y] of MOUTH.whistle) set(ox + x + fc, oy + top + y, 'K', null)
+    if (p.mouth === 'whistle') for (const [x, y] of MOUTH.whistle!) set(ox + x + fc, oy + top + y, 'K', null)
     if (p.blush) {
       set(ox + 3 + fc, oy + top + 4, 'P', null)
       set(ox + 13 + fc, oy + top + 4, 'P', null)
@@ -308,14 +308,14 @@ export function compose(p: Pose, props: PropTable): Composed {
     const rows = p.mirror && flag !== 'G' && s.mirrorRows && !s.noFlip ? s.mirrorRows : s.rows
     const w = Math.max(...rows.map((r) => r.length))
     rows.forEach((row, ry) => {
-      for (let rx = 0; rx < row.length; rx++) if (row[rx] !== '.') put(keep ? bx + w - 1 - rx : bx + rx, by + ry, row[rx], 'prop:' + name)
+      for (let rx = 0; rx < row.length; rx++) if (row[rx] !== '.') put(keep ? bx + w - 1 - rx : bx + rx, by + ry, row[rx]!, 'prop:' + name)
     })
   }
   for (const pr of p.props) drawProp(pr, 'mid')
   // Hände vor dem Körper gehen nie über die Augen (Fynn), außer beim Augenreiben (rub*), wo genau das gemeint ist: Berührt ein Vorderarm
   // ein Auge (auch nur daneben oder darunter), rutscht er als Ganzes bis zu 3 Pixel nach unten; nur wenn das nicht reicht, bleibt dort eine Lücke.
   const touchesEye = (x: number, y: number): boolean =>
-    [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => eyePx.has((y + dy) * W + mx(x + dx)))
+    ([[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]] as const).some(([dx, dy]) => eyePx.has((y + dy) * W + mx(x + dx)))
   const frontArm = (spec: ArmSpec, right: boolean) => {
     const tag = right ? 'armR' : 'armL'
     let pts: (readonly [number, number])[]

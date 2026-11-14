@@ -1,16 +1,17 @@
-import type { Engine, On } from 'claude-code'
+import type { CommandSource, On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { MIN, cacheState, emptyMem, inputCost, observeStep, textBar, parseTokens, pingMissed, priceFor, readCost, rewriteCost, ringFor, terminalBlock } from '../hooks/cache.ts'
-import { RING_H, RING_SEGMENTS, ringFilled } from '../hooks/ring.ts'
-import { desktopSvg } from '../hooks/svg.ts'
-import { cleanKeep } from '../hooks/register.ts'
-import { layoutTerminal, shownWindows } from '../hooks/view.ts'
-import { cliAnswer } from './cli.ts'
-import type { Cli } from './cli.ts'
+import { MIN, cacheState, emptyMem, inputCost, observeStep, textBar, parseTokens, pingMissed, priceFor, readCost, rewriteCost, ringFor, terminalBlock } from '../hooks/cache.js'
+import { RING_H, RING_SEGMENTS, ringFilled } from '../hooks/ring.js'
+import { desktopSvg } from '../hooks/svg.js'
+import { cleanKeep } from '../hooks/register.js'
+import { layoutTerminal, shownWindows } from '../hooks/view.js'
+import { cliAnswer } from './cli.js'
+import type { Cli } from './cli.js'
 
 const NOW = new Date(2026, 9, 5, 10, 0, 0).getTime()
 const props = (bodyColumns: number) =>
-  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
+  ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
 const band = (surface: 'terminal' | 'desktop', bodyColumns = 120) =>
   ({ plugin: 'limit-bars', component: 'AbovePrompt', requestId: 'above-prompt', props: props(bodyColumns), surface }) as const
 const usage = (read: number, written: number, model = 'claude-opus-5-5') => ({ input_tokens: 2, output_tokens: 10, cache_read_input_tokens: read, cache_creation_input_tokens: written, model })
@@ -113,7 +114,7 @@ test('Terminal-Block und Kürzung: der Block fällt als erste Stufe weg', async 
   const lay = layoutTerminal(two, 120, '◔ 42m')
   expect(lay?.extra).toBeUndefined()
   expect(lay?.blocks.length).toBe(2)
-  expect(lay?.blocks[0].rest).toBe(' · in 2 h 14 min')
+  expect(lay?.blocks[0]?.rest).toBe(' · in 2 h 14 min')
 })
 
 test('Ping schreibt statt zu lesen → verfehlt', async () => {
@@ -162,8 +163,8 @@ function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: s
   })
   const registered: string[] = []
   on('command.register', (_$, e) => {
-    registered.push((e as unknown as { name: string }).name)
-    return { value: undefined }
+    registered.push(e.name)
+    return { value: { command: e.name } }
   })
   const side = { ...(o.side ?? {}), stateReads: 0 }
   on('command.list', () =>
@@ -171,10 +172,10 @@ function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: s
       ? ({ deny: 'nein' } as never)
       : {
           value: [
-            { name: 'limit-bars:cache', description: 'Cache', source: 'plugin', plugin: 'limit-bars@fynn-mods' },
-            ...(side.handoff === 'other' ? [{ name: 'handoff', description: 'fremd', source: 'plugin', plugin: 'anderer-mod@fynn-mods' }] : []),
-            ...(side.handoff === true ? [{ name: 'handoff', description: 'Übergabe', source: 'plugin', plugin: 'sidekick@fynn-mods' }] : []),
-            ...(side.listed ? [{ name: 'sidekick', description: 'sidekick', source: side.source ?? 'plugin', plugin: 'sidekick' }] : []),
+            { name: 'limit-bars:cache', description: 'Cache', source: 'plugin' as const, plugin: 'limit-bars@fynn-mods' },
+            ...(side.handoff === 'other' ? [{ name: 'handoff', description: 'fremd', source: 'plugin' as const, plugin: 'anderer-mod@fynn-mods' }] : []),
+            ...(side.handoff === true ? [{ name: 'handoff', description: 'Übergabe', source: 'plugin' as const, plugin: 'sidekick@fynn-mods' }] : []),
+            ...(side.listed ? [{ name: 'sidekick', description: 'sidekick', source: (side.source ?? 'plugin') as CommandSource, plugin: 'sidekick' }] : []),
           ],
         },
   )
@@ -193,7 +194,7 @@ function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: s
   })
   on('tool.call', ($, e) => {
     if (e.tool !== 'AskUserQuestion') return { result: '' }
-    const q = (e as { questions: { question: string }[] }).questions[0].question
+    const q = (e as { questions: { question: string }[] }).questions[0]!.question
     asks.push(q)
     if (answer === null) return { deny: 'Dialog geschlossen' }
     return { result: { answers: { [q]: answer } } }
@@ -211,12 +212,12 @@ function world(on: On, o: { saved?: Map<string, unknown>; id?: string; inner?: s
   on('model.fork', () => {
     forks += 1
     if (forkValue === 'deny') return { deny: 'kein Kontingent' }
-    if (forkValue) return { value: forkValue }
-    return { value: forkUsage ? { isAnswered: true, text: 'ok', usage: forkUsage } : { isAnswered: false, reason: 'nothing-to-fork' } }
+    if (forkValue) return { value: forkValue } as never
+    return { value: forkUsage ? { isAnswered: true, text: 'ok', usage: forkUsage } : { isAnswered: false, reason: 'nothing-to-fork' } } as never
   })
   on('turn.complete', () => ({ text: '' }))
   on('ui.render', ($, e) => {
-    seen.cols = e.props.bodyColumns
+    seen.cols = 'bodyColumns' in e.props ? e.props.bodyColumns : -1
     return o.inner ? { type: 'Text', props: {}, children: [o.inner] } : { type: 'engine', ref: 0 }
   })
   let next: U = usage(0, 0)
@@ -630,25 +631,28 @@ test('/keepwarm aus und Höchstdauer 4 h', DE, async ($, on) => {
   expect(w.forks).toBe(0)
 })
 
-test('Reihenfolge außen und innen neben clawd-buddy auf beiden Oberflächen, mit Ring', DE, async ($, on) => {
-  const w = world(on)
+test('Band 2, Desktop: eigene Zeile slot:10:limit-bars mit Ring im eigenen Bild, nichts Fremdes darin', DE, async ($, on) => {
+  const w = world(on, { inner: 'clawd' })
   await w.step($, usage(300000, 5000))
-  // innen (Kern-Knoten) auf dem Desktop: Zeile, Ring im eigenen Bild, Kern-Knoten daneben
   const d = await $.ui.mount(band('desktop'))
-  const tree = await d.drawn()
-  expect(tree).toMatchObject({ type: 'Box', props: { flexDirection: 'row', alignItems: 'flex-end' } })
+  // Der Mount zeichnet im Kit die ganze Liste: die Zeile des Test-Plugins (Stub) und die eigene
+  const tree = await d.find({ key: 'slot:10:limit-bars' })
+  expect(tree?.props).toMatchObject({ flexDirection: 'column', flexShrink: 0 })
   expect(await ringAlt(d)).toContain('Cache warm')
+  expect(JSON.stringify(await d.drawn())).toContain('"part":{"plugin":"limit-bars"}')
   await d.unmount()
 })
 
-test('Reihenfolge außen im Terminal: Balkenbox mit Cache-Block links, innen sieht bodyColumns − B', DE, async ($, on) => {
+test('Band 2, Terminal: Balkenbox mit Cache-Block in der eigenen Zeile, bodyColumns nicht umgeschrieben', DE, async ($, on) => {
   const w = world(on, { inner: 'clawd' })
   await w.step($, usage(300000, 5000))
   const t = await $.ui.mount(band('terminal', 120))
-  const kids = (await t.drawn()).children as { props: { key?: string }; children: { props: { width?: number } }[] }[]
-  expect(kids[0].props.key).toBe('slot:10:limit-bars')
+  const tree = await t.find({ key: 'slot:10:limit-bars' })
+  expect((tree?.props.width as number) <= 44).toBe(true)
   expect(await t.find({ type: 'Text', text: '◔ 60m' })).toBeDefined()
-  expect(w.seen.cols).toBe(120 - (kids[0].children[0]!.props.width as number))
+  // Seit 2.1.323 sieht jede Zeile die volle Breite; limit-bars gibt keine Breite mehr ab (docs/BAND.md)
+  expect(w.seen.cols).toBe(120)
+  // Clawd ist eine eigene Zeile (hier die des Test-Plugins)
   expect(await t.find({ type: 'Text', text: 'clawd' })).toBeDefined()
 })
 

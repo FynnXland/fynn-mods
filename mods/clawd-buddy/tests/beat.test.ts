@@ -1,15 +1,15 @@
 // clawd-buddy 0.11.0: Im Takt des Songs (SPEC Nachtrag 0.11.0 → Tests). Engine und Raster ohne `$`; der Mod-Teil liest tune-strip.beat.
 import { expect, mock, test } from 'claude-code/testing'
-import { ALL_CLIPS, ALL_PROPS } from '../hooks/library.ts'
-import { mulberry32 } from '../hooks/capture.ts'
-import { createEngine } from '../hooks/engine.ts'
-import type { BeatGrid, Engine, MusicGroup } from '../hooks/engine.ts'
-import { createDesk } from '../hooks/desk.ts'
-import { NO_FACTS, NO_STRAIN, beatGrid, beatValue } from '../hooks/mood.ts'
-import type { BeatValue } from '../hooks/mood.ts'
-import { TICK } from '../hooks/stage.ts'
-import { lintFrames } from '../hooks/lint.ts'
-import { captureClip } from '../hooks/capture.ts'
+import { ALL_CLIPS, ALL_PROPS } from '../hooks/library.js'
+import { mulberry32 } from '../hooks/capture.js'
+import { createEngine } from '../hooks/engine.js'
+import type { BeatGrid, Engine, MusicGroup } from '../hooks/engine.js'
+import { createDesk } from '../hooks/desk.js'
+import { NO_FACTS, NO_STRAIN, beatGrid, beatValue } from '../hooks/mood.js'
+import type { BeatValue } from '../hooks/mood.js'
+import { TICK } from '../hooks/stage.js'
+import { lintFrames } from '../hooks/lint.js'
+import { captureClip } from '../hooks/capture.js'
 
 const LIB = { clips: ALL_CLIPS, props: ALL_PROPS }
 const engine = (seed: number, hour = 15, temper = 0) => {
@@ -294,8 +294,10 @@ const BAND = {
   component: 'AbovePrompt',
   requestId: 'above-prompt',
   viewport: { columns: 120, rows: 30, isFullscreen: true },
-  props: { hasSurvey: false, isWorking: false, maxRows: 7, bodyColumns: 100, scroll: { offset: 0, bodyRows: 7 }, view: {} },
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 7, bodyColumns: 100, scroll: { offset: 0, bodyRows: 7 }, view: {} },
 } as const
+
+const RUN = { origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } } as const
 
 test('Mod: tune-strip.beat beim Zeichnen gelesen (abonniert); Unsinn heißt ohne Takt; /clawd status nennt Tempo, Gruppe, Sicherheit', { options: { language: 'de' } }, async ($, on) => {
   mock.clock(on)
@@ -309,9 +311,9 @@ test('Mod: tune-strip.beat beim Zeichnen gelesen (abonniert); Unsinn heißt ohne
     return { value: { value: e.key === 'playing' ? { playing: true } : e.key === 'beat' ? beat : undefined, version: 1 } }
   })
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  const props = async () => (await ui.find({ type: 'Client', key: 'buddy' }))?.props.props
+  const props = async (): Promise<any> => (await ui.find({ type: 'Client', key: 'buddy' }))?.props.props
   expect((await props()).facts.beat).toEqual(beat)
-  const st = (await $.command.run({ command: 'clawd', args: 'status' })).text
+  const st = (await $.command.run({ ...RUN, command: 'clawd', args: 'status' })).text
   expect(st).toContain('Takt 128,0 bpm, hart, sicher')
   beat = { bpm: 300, at: 1, sure: true, group: 'hard' }
   await ui.redraw()

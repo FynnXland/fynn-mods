@@ -1,8 +1,8 @@
 // clawd-buddy 0.7.0: /clawd help als gezeichnete Tabelle (docs/HELP-SPEC.md §6). help.ts ist eine Kopie von templates/help/help.ts.
 import { expect, mock, test } from 'claude-code/testing'
-import { ACCENT, DEFAULTS, HELP_WORDS, SUBCOMMANDS, clawdHelp, isHelp } from '../hooks/clawdhelp.ts'
-import { stateText } from '../hooks/help.ts'
-import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
+import { ACCENT, DEFAULTS, HELP_WORDS, SUBCOMMANDS, clawdHelp, isHelp } from '../hooks/clawdhelp.js'
+import { stateText } from '../hooks/help.js'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.js'
 // Ordner der Mod, wie `$.plugin.root` ihn im Test meldet: Weg 2 schreibt nur für die installierte Kopie (hooks/settings.ts)
 const MOD_ROOT = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
 

@@ -1,11 +1,11 @@
 // limit-bars: Anzeige anpassbar (SPEC.md, Ausbau v0.6.0): userConfig show*, /bars, Vorrang, alles aus ohne Platz.
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { cleanOverrides, displayFromOptions, effectiveDisplay, parseBars } from '../hooks/display.ts'
-import { PROBE_SCRIPT, SCAN_SCRIPT } from '../hooks/storage.ts'
-import { T } from '../hooks/i18n.ts'
-import { cliAnswer } from './cli.ts'
-import type { Cli } from './cli.ts'
+import { cleanOverrides, displayFromOptions, effectiveDisplay, parseBars } from '../hooks/display.js'
+import { PROBE_SCRIPT, SCAN_SCRIPT } from '../hooks/storage.js'
+import { T } from '../hooks/i18n.js'
+import { cliAnswer } from './cli.js'
+import type { Cli } from './cli.js'
 
 const NOW = new Date(2026, 9, 6, 10, 0, 0).getTime()
 const MIN = 60000
@@ -14,7 +14,7 @@ const probeOut = `total\t${800 * G}\r\nfree\t${700 * G}\r\n`
 const scanOut = ['files\t10', `scanned\t${100 * G}`, `ext\t.dll\t${100 * G}`].join('\r\n')
 
 const props = (bodyColumns: number) =>
-  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
+  ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
 const band = (surface: 'terminal' | 'desktop' | 'vscode', bodyColumns = 120) =>
   ({ plugin: 'limit-bars', component: 'AbovePrompt', requestId: 'above-prompt', props: props(bodyColumns), surface }) as never
 
@@ -50,7 +50,7 @@ function world(on: On, o: { saved?: Map<string, unknown>; noLimits?: boolean; in
     saved.delete(e.key)
     return { value: undefined }
   })
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   const cli: Cli = { writes: [], fail: '' }
   on('process.run', ($, e) => {
     const c = cliAnswer(e as never, cli)

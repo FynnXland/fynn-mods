@@ -9,18 +9,18 @@
 // er klappt auf, steht im Profil rechts neben ihm, kurzes Strecken, er dreht sich zu 3/4 zum Laptop (Schattenstreifen Q an der Körperseite,
 // Augen rücken zum Laptop) und tippt mit zwei Händen abwechselnd (nahe Hand orange als Blockarm, ferne Hand dunkler als Requisite).
 // Am Ende klappt er zu, dreht sich zurück, nimmt ihn hoch, er wird kleiner und verschwindet in der Tasche.
-import { clip } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, fetchOut, riseIn, sinkOut } from '../macros.ts'
-import type { FetchOpts } from '../macros.ts'
+import { clip } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { armBlock, fetchIn, fetchOut, riseIn, sinkOut } from '../macros.js'
+import type { FetchOpts } from '../macros.js'
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Kleine Zeichenhilfen für Sprites (Pixelraster als Zeichenmatrix)
 type Grid = string[][]
 const grid = (w: number, h: number): Grid => Array.from({ length: h }, () => Array<string>(w).fill('.'))
 const put = (g: Grid, x: number, y: number, c: string): void => {
-  if (y >= 0 && y < g.length && x >= 0 && x < g[0].length) g[y][x] = c
+  if (y >= 0 && y < g.length && x >= 0 && x < g[0]!.length) g[y]![x] = c
 }
 const rect = (g: Grid, x: number, y: number, w: number, h: number, c: string): void => {
   for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) put(g, x + i, y + j, c)
@@ -42,7 +42,7 @@ const gp = ref
 const WORDS = [[2, 3, 1, 2], [3, 1, 3, 2], [1, 2, 3, 3]]
 function textLine(g: Grid, x: number, y: number, max: number, v: number, c: string): void {
   let cx = x
-  for (const seg of WORDS[v % WORDS.length]) {
+  for (const seg of WORDS[v % WORDS.length]!) {
     if (cx + seg > x + max) break
     rect(g, cx, y, seg, 1, c)
     cx += seg + 1
@@ -127,7 +127,7 @@ function terminal(n: number): PropSprite {
     const k = n - 6
     const o = k % 2
     const step = Math.floor(k / 2)
-    for (let i = 0; i < 3; i++) rect(g, 2, 2 + o + 2 * i, TLINES[(step + i) % 3], 1, 'E')
+    for (let i = 0; i < 3; i++) rect(g, 2, 2 + o + 2 * i, TLINES[(step + i) % 3]!, 1, 'E')
     put(g, 2, 8, 'Y')
     if (k < 3) rect(g, 4, 8, 2, 1, 'W')
   }
@@ -153,10 +153,10 @@ function logWin(n: number): PropSprite {
   for (let i = 0; i < 2; i++) {
     const row = 1 + s + 2 * i
     rect(g, 2, row, 2, 1, 'Y')
-    rect(g, 5, row, LOGL[(f + i) % LOGL.length], 1, i ? 'W' : 'G')
+    rect(g, 5, row, LOGL[(f + i) % LOGL.length]!, 1, i ? 'W' : 'G')
   }
   rect(g, 2, 5, 14, 1, 'D')
-  rect(g, 2, 5, [0, 3, 6, 9, 12, 14][f], 1, 'E')
+  rect(g, 2, 5, [0, 3, 6, 9, 12, 14][f]!, 1, 'E')
   return spr(rowsOf(g))
 }
 
@@ -313,7 +313,7 @@ const SPAN = [[2, 4], [1, 5], [0, 6], [0, 6], [0, 6], [1, 5], [2, 4]]
 function globe(k: number): PropSprite {
   const g = grid(7, 9)
   for (let r = 0; r < 7; r++) {
-    for (let c = SPAN[r][0]; c <= SPAN[r][1]; c++) put(g, c, r, MAP[r][(c + 2 * k) % 14] === 'E' ? 'E' : 'B')
+    for (let c = SPAN[r]![0]!; c <= SPAN[r]![1]!; c++) put(g, c, r, MAP[r]![(c + 2 * k) % 14] === 'E' ? 'E' : 'B')
   }
   put(g, 1, 2, 'L')
   put(g, 2, 1, 'L')
@@ -363,14 +363,14 @@ function router(ph: number): PropSprite {
 function thinkC(n: number): PropSprite {
   const g = grid(18, 10)
   if (n >= 2) {
-    const [w, h] = [[5, 3], [9, 5], [11, 7], [13, 9]][Math.min(n, 5) - 2]
+    const [w, h] = ([[5, 3], [9, 5], [11, 7], [13, 9]] as const)[Math.min(n, 5) - 2]!
     const x0 = 13 - w
     const y0 = 9 - h
     const cut = w >= 11 && h >= 7 ? [3, 1] : [1]
     const inside = (x: number, y: number): boolean => {
       if (x < 0 || y < 0 || x >= w || y >= h) return false
       const d = Math.min(y, h - 1 - y)
-      return d >= cut.length || (x >= cut[d] && x < w - cut[d])
+      return d >= cut.length || (x >= cut[d]! && x < w - cut[d]!)
     }
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -401,7 +401,7 @@ const QMARK = ['.WWW.', 'W...W', '....W', '...W.', '..W..', '.....', '..W..']
 function think(n: number, mirrored = false): PropSprite {
   const g = grid(18, 10)
   if (n >= 2) {
-    const [w, h] = THS[Math.min(n, 5)]
+    const [w, h] = THS[Math.min(n, 5)]!
     const x0 = 13 - w
     const y0 = 9 - h
     // abgerundetes Rechteck: Ecken je nach Größe um 1 oder 2 Pixel abgeschnitten
@@ -409,7 +409,7 @@ function think(n: number, mirrored = false): PropSprite {
     const inside = (x: number, y: number): boolean => {
       if (x < 0 || y < 0 || x >= w || y >= h) return false
       const d = Math.min(y, h - 1 - y)
-      return d >= cut.length || (x >= cut[d] && x < w - cut[d])
+      return d >= cut.length || (x >= cut[d]! && x < w - cut[d]!)
     }
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -458,7 +458,7 @@ function miniWin(k: number): PropSprite {
   put(g, 5, 0, 'E')
   for (let i = 0; i < 2; i++) {
     const row = 1 + (k % 2) + 2 * i
-    rect(g, 2, row, MLINES[(Math.floor(k / 2) + i) % MLINES.length], 1, 'E')
+    rect(g, 2, row, MLINES[(Math.floor(k / 2) + i) % MLINES.length]!, 1, 'E')
     put(g, 1, row, 'Y')
   }
   return spr(rowsOf(g))
@@ -524,7 +524,7 @@ function clipb(n: number): PropSprite {
   rect(g, 0, 0, 12, 10, 'R')
   rect(g, 1, 1, 10, 9, 'W')
   rect(g, 4, 0, 4, 1, 'G')
-  CLIPRES[n].forEach((r, i) => {
+  CLIPRES[n]!.forEach((r, i) => {
     const y = 1 + 3 * i
     rect(g, 2, y, 3, 3, 'W')
     if (r === 0) {
@@ -535,7 +535,7 @@ function clipb(n: number): PropSprite {
     } else {
       for (const [x, yy] of [[0, 0], [2, 0], [1, 1], [0, 2], [2, 2]] as const) put(g, 2 + x, y + yy, 'M')
     }
-    rect(g, 6, y + 1, TEXTL[i], 1, 'G')
+    rect(g, 6, y + 1, TEXTL[i]!, 1, 'G')
   })
   return spr(rowsOf(g))
 }
@@ -559,7 +559,7 @@ const ARROW = fxSpr(['.L.', 'LLL', '.L.', '.L.'])
  */
 const tbName = (n: number): string => famName('work_tb', n)
 function tube(n: number): PropSprite {
-  const col = 'BEM'[n >> 2]
+  const col = 'BEM'[n >> 2]!
   const b = n & 3
   const g = grid(4, 7)
   rect(g, 0, 0, 4, 1, 'W')
@@ -683,7 +683,7 @@ const A = (t: number, extra: Frame = {}, by = 0, fxs: PropRef[] = []): Frame => 
 const B = (t: number, extra: Frame = {}, by = 0, fxs: PropRef[] = []): Frame => tk(4, 6, 5, t, extra, by, fxs)
 /** `n` Anschläge im Takt `t`; `gaze` = Blickhöhe je Anschlag (1 Tastatur, 0 geradeaus, -1 Schirm), reihum. */
 const taps = (n: number, t: number, extra: Frame = {}, by = 0, gaze: readonly number[] = [0]): Frame[] =>
-  Array.from({ length: n }, (_, i) => (i % 2 ? B : A)(t, { look: [0, gaze[i % gaze.length]], ...extra }, by))
+  Array.from({ length: n }, (_, i) => (i % 2 ? B : A)(t, { look: [0, gaze[i % gaze.length]!], ...extra }, by))
 
 /** Hervorholen, Aufklappen, Strecken, Wenden zu 3/4: alles bis zum ersten Tippbild. */
 const lapIntro = (eyes?: string): Frame[] => [
@@ -759,8 +759,8 @@ C('type_fast', 'Tippt schnell', 'work_write', {
 const zPath = (x: number): PropRef[] => [gp('work_zS', x, 0), gp('work_zB', x, -1), gp('work_zB', x, -2), gp('work_zB', x, -3), gp('work_zB', x, -4), gp('work_zS', x, -4), gp('work_td2', x + 1, -3), gp('work_td1', x + 1, -3)]
 const zzSteps = Array.from({ length: 15 }, (_, i) => {
   const fx: PropRef[] = []
-  if (i < 8) fx.push(zPath(16)[i])
-  if (i >= 7) fx.push(zPath(20)[i - 7])
+  if (i < 8) fx.push(zPath(16)[i]!)
+  if (i >= 7) fx.push(zPath(20)[i - 7]!)
   return tk(6, null, 4, 1, { eyes: 'closed', mouth: i % 8 < 4 ? 'o' : null }, 2, fx) // ferne Hand ruht (sonst überlappt sie die Zs)
 })
 const exAt = (y: number, extra: Frame = {}, t = 1): Frame => tk(6, null, 3, t, { look: [0, 0], ...extra }, 0, [gp('work_ex', 17, y)])
@@ -805,7 +805,7 @@ C('type_sleepy', 'Tippt verschlafen (nachts)', 'work_write', {
 // Schriftrolle (links): aus der Tasche geholt (aufgerollt), rollt sich seitlich auf, er liest die Zeilen, rollt sie wieder zusammen und verstaut sie.
 const SCROLL = { name: 'work_scroll1', size: [4, 9] as const, at: [-4, 1] as const, side: 'L' as const, grip: 4 }
 const SW = [4, 6, 8, 10, 12]
-const sc = (n: number, extra: Frame = {}): Frame => ({ ...handTo('L', -1, 5), props: [ref(`work_scroll${n}`, -(n <= 5 ? SW[n - 1] : 12), 1)], ...extra })
+const sc = (n: number, extra: Frame = {}): Frame => ({ ...handTo('L', -1, 5), props: [ref(`work_scroll${n}`, -(n <= 5 ? SW[n - 1]! : 12), 1)], ...extra })
 C('read_scroll', 'Liest eine Schriftrolle', 'work_read', {
   loop: true, interruptible: true,
   intro: [

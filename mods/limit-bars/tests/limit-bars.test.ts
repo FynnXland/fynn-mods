@@ -1,5 +1,7 @@
-import type { Engine, On } from 'claude-code'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
+import { desktopCols } from '../hooks/register.js'
 
 // Feste lokale Zeit: Freitag, 2. Oktober 2026, 10:00 (lokal, damit Uhrzeit-Texte nicht von der Zeitzone abhängen)
 const NOW = new Date(2026, 9, 2, 10, 0, 0).getTime()
@@ -17,9 +19,25 @@ const YELLOW = '#F2C94C'
 const RED = '#C9594B'
 
 const props = (bodyColumns: number) =>
-  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
+  ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
 const band = (surface: 'terminal' | 'desktop', bodyColumns = 120) =>
   ({ plugin: 'limit-bars', component: 'AbovePrompt', requestId: 'above-prompt', props: props(bodyColumns), surface }) as const
+
+// Seit 2.1.323 zeichnet der Mount von AbovePrompt im Kit die ganze Liste: ein `ui.render`-Stub ohne `{ plugin }` ist die Zeile
+// des Test-Plugins, daneben steht die von limit-bars. Die eigene Zeile über ihren Schlüssel suchen (docs/BAND.md).
+type N = { type: string; props: Record<string, unknown>; children?: N[] }
+const OWN = 'slot:10:limit-bars'
+function findKey(t: unknown, key: string): N | undefined {
+  const n = t as N | null
+  if (!n || typeof n !== 'object') return undefined
+  if (n.props?.key === key) return n
+  for (const c of n.children ?? []) {
+    const hit = findKey(c, key)
+    if (hit) return hit
+  }
+  return undefined
+}
+const ownRow = async (ui: { drawn: () => Promise<unknown> }): Promise<N | undefined> => findKey(await ui.drawn(), OWN)
 
 type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 const limits = (five: number, week: number): Limit[] => [
@@ -28,7 +46,7 @@ const limits = (five: number, week: number): Limit[] => [
 ]
 
 // Grundausstattung: Uhr, Messung als Stub, ein Mod weiter innen, der Text zeichnet und die Breite meldet
-function world(on: On, opts: { inner?: boolean; layered?: boolean } = {}) {
+function world(on: On, opts: { inner?: boolean } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const seen = { bodyColumns: -1, renders: 0 }
   on('session.measure', ($, e) => ({ changed: e.changed }))
@@ -38,22 +56,10 @@ function world(on: On, opts: { inner?: boolean; layered?: boolean } = {}) {
     seen.renders += 1
     // inner: false spielt den Kern ohne weitere Mods: sein eigener Knoten, der im Band nichts zeichnet (types@2.1.288:9033-9041)
     if (opts.inner === false) return { type: 'engine', ref: 0 }
-    const text = { type: 'Text', props: {}, children: ['von anderen'] }
-    // layered: weiter innen liegt quick-replies und hat seine Pille als Ebene über den Grund gesetzt (band.ts, docs/BAND.md)
-    if (opts.layered) return LAYERED(text)
-    return text
+    return { type: 'Text', props: {}, children: ['von anderen'] }
   })
   return { clock, seen }
 }
-
-const LAYERED = (ground: unknown) => ({
-  type: 'Box',
-  props: { key: 'band', flexDirection: 'column', justifyContent: 'flex-end' },
-  children: [
-    { type: 'Box', props: { key: 'layer:20:quick-replies', flexDirection: 'column', flexShrink: 0 }, children: [{ type: 'Box', props: { key: 'quick-replies' }, children: ['Pille'] }] },
-    { type: 'Box', props: { key: 'band-base', flexDirection: 'row', alignItems: 'flex-end' }, children: [{ type: 'Box', props: { flexGrow: 1, flexDirection: 'column', justifyContent: 'flex-end' }, children: [ground] }] },
-  ],
-}) as never
 
 async function measure($: Engine, rateLimits: Limit[]) {
   await $.session.measure({ context: { tokens: 1000, window: 200000, percent: 1 }, rateLimits, changed: ['rateLimits'] })
@@ -103,8 +109,9 @@ test('Stufen 0 / 50 / 95 / 100 % im Terminal: Text, Farbe, fett, voll', DE, asyn
       expect(t.props.color).toBe(c.color)
       expect(t.props.bold === true).toBe(c.bold)
     }
-    const box = await ui.find({ key: 'limit-bars' })
-    expect((box?.props.width as number) <= 44).toBe(true)
+    // Band 2: die feste Breite steht an der Wurzel der eigenen Zeile
+    const root = await ui.find({ key: 'slot:10:limit-bars' })
+    expect((root?.props.width as number) <= 44).toBe(true)
     await ui.unmount()
   }
 })
@@ -117,14 +124,16 @@ test('Stufen auf dem Desktop: ein Svg mit alt, Höhe ≤ 56, Farben im Bild', DE
     const svg = await ui.find({ type: 'Svg' })
     expect(svg).toBeDefined()
     expect(String(svg?.props.alt)).toContain(`5-Stunden-Limit ${label}`)
-    // 0.13.1: die Balken liegen über Clawd, der seit clawd-buddy 0.12.1 hinter der Zeile liegt
-    expect((await ui.find({ key: 'limit-bars' }))?.props.position).toBe('relative')
+    // Band 2: eigene Zeile, Breite in Zellen aus der Bildbreite (px), nie schrumpfen (docs/BAND-SPEC-2.md §3 „Breite“)
+    const root = await ui.find({ key: 'slot:10:limit-bars' })
+    expect(root?.props.width).toBe(desktopCols(svg?.props.width as number))
+    expect(root?.props.flexShrink).toBe(0)
     expect(String(svg?.props.alt)).toContain('Wochenlimit 18 %, Reset Mo 09:00')
     expect((svg?.props.height as number) <= 56).toBe(true)
     expect(String(svg?.props.source)).toContain(`fill="${color}"`)
     expect(String(svg?.props.source)).toContain('>5h<')
-    // Fremder Inhalt bleibt, rechts neben den Balken
-    expect(await ui.find({ type: 'Text', text: 'von anderen' })).toBeDefined()
+    // Seit 2.1.323 nur die eigene Zeile: der fremde Text steht in der Zeile des Test-Plugins, nicht in der von limit-bars
+    expect(JSON.stringify(await ownRow(ui))).not.toContain('von anderen')
     await ui.unmount()
   }
 })
@@ -401,45 +410,61 @@ test('Takt: eine abgelehnte Periode beendet ihn still; zwei ausgebliebene Ticks 
   await ui.redraw()
   expect(periods).toBe(first + 1)
 })
-test('Reihenfolge außen: Balken links, Inhalt weiter innen rechts in einer Zeile; innen sieht bodyColumns − B', DE, async ($, on) => {
+test('Band 2, Terminal: eigene Zeile slot:10:limit-bars mit fester Breite, volle bodyColumns, next(e) nicht gerufen', DE, async ($, on) => {
   const { seen } = world(on)
+  // Antwortet nur auf next(e) von limit-bars selbst (test.md:146): zählt, ob limit-bars beim Zeichnen weiterreicht
+  let ownNext = 0
+  on('ui.render', { plugin: 'limit-bars' }, () => {
+    ownNext += 1
+    return { type: 'Text', props: {}, children: ['keine Zeile'] }
+  })
   await measure($, limits(71, 18))
-  const ui = await $.ui.mount(band('terminal', 120))
-  const tree = await ui.drawn()
-  expect(tree).toMatchObject({ type: 'Box', props: { flexDirection: 'row', alignItems: 'flex-end' } })
-  const kids = tree.children as { props: { key?: string; flexGrow?: number; flexShrink?: number }; children?: { props: { width?: number; flexShrink?: number } }[] }[]
-  // Seit 0.9.0 ein Platz der Grund-Zeile (band.ts, docs/BAND.md): Platz 10, darin die Balkenbox
-  expect(kids[0].props.key).toBe('slot:10:limit-bars')
-  // Läuft das Band über, schrumpft die Beschriftung nicht (im Sicht-Check sonst abgeschnitten)
-  expect(kids[0].props.flexShrink).toBe(0)
-  expect(kids[0].children![0]!.props.flexShrink).toBe(0)
-  expect(kids[1].props.flexGrow).toBe(1)
-  const b = kids[0].children![0]!.props.width as number
-  expect(b <= 44).toBe(true)
-  expect(seen.bodyColumns).toBe(120 - b)
-  expect(await ui.find({ type: 'Text', text: ' · in 2 h 14 min' })).toBeDefined()
+  for (const isCollapsed of [false, true]) {
+    const ui = await $.ui.mount({ ...band('terminal', 120), props: { ...props(120), isCollapsed } })
+    const tree = (await ownRow(ui))!
+    // Die Wurzel ist der Platz selbst (band.ts slot): Spalte, feste Breite, nie schrumpfen (docs/BAND-SPEC-2.md §3 „Breite“)
+    expect(tree).toMatchObject({ type: 'Box', props: { key: OWN, flexDirection: 'column', flexShrink: 0 } })
+    const b = tree.props.width as number
+    expect(b <= 44).toBe(true)
+    // Darin die Balkenbox als Zeile; ihre Blöcke schrumpfen nicht
+    const inner = tree.children![0]!
+    expect(inner.props).toMatchObject({ key: 'limit-bars', flexDirection: 'row' })
+    expect(inner.children!.every((c) => c.props.flexShrink === 0)).toBe(true)
+    expect(await ui.find({ type: 'Text', text: ' · in 2 h 14 min' })).toBeDefined()
+    // Eingeklappt (ctrl+x ctrl+a) läuft der Hook weiter und zeichnet dieselbe Zeile; zu sehen ist nichts (docs/BAND.md Regel 6)
+    await ui.unmount()
+  }
+  // Keine fremde Zeile in next(e): limit-bars reicht beim Zeichnen nicht weiter, und jede Zeile sieht die volle Breite
+  expect(ownNext).toBe(0)
+  expect(seen.bodyColumns).toBe(120)
 })
 
-test('Reihenfolge innen bzw. allein: Kern-Knoten NEBEN den Balken (nicht darunter), Breite ≤ min(44, bodyColumns − 40)', DE, async ($, on) => {
+test('Band 2: Breite ≤ min(44, bodyColumns − 40) im Terminal, im Desktop aus der Bildbreite; beide Oberflächen eine Zeile', DE, async ($, on) => {
   world(on, { inner: false })
   await measure($, limits(71, 18))
   for (const surface of ['terminal', 'desktop'] as const) {
     for (const bodyColumns of [120, 80]) {
       const ui = await $.ui.mount(band(surface, bodyColumns))
       const tree = await ui.drawn()
-      // Übereinander gab die Desktop-App dem Kern-Knoten Höhe, die Balken rutschten über Clawds Füße (Fynn, 2026-10-03)
-      expect(tree).toMatchObject({ type: 'Box', props: { flexDirection: 'row', alignItems: 'flex-end' } })
-      const kids = tree.children as { props: { key?: string; flexGrow?: number }; children?: unknown[] }[]
-      expect(kids[0].props.key).toBe('slot:10:limit-bars')
-      expect(kids[1].props.flexGrow).toBe(1)
-      expect(kids[1].children?.[0]).toMatchObject({ type: 'engine' })
-      if (surface === 'terminal') {
-        const box = await ui.find({ key: 'limit-bars' })
-        expect((box?.props.width as number) <= Math.min(44, bodyColumns - 40)).toBe(true)
+      expect(tree).toMatchObject({ type: 'Box', props: { key: 'slot:10:limit-bars', flexShrink: 0 } })
+      const width = (tree as { props: { width: number } }).props.width
+      if (surface === 'terminal') expect(width <= Math.min(44, bodyColumns - 40)).toBe(true)
+      else {
+        const svg = await ui.find({ type: 'Svg' })
+        expect(width).toBe(desktopCols(svg?.props.width as number))
+        // Unten bündig mit Clawds Füßen (Spalte + flex-end)
+        expect((tree as { props: { justifyContent?: string } }).props.justifyContent).toBe('flex-end')
       }
+      expect(await ui.find({ type: 'engine' })).toBeUndefined()
       await ui.unmount()
     }
   }
+})
+
+test('desktopCols: px → Zellen, aufgerundet (≈ 7,8 px je Zelle)', () => {
+  expect(desktopCols(78)).toBe(10)
+  expect(desktopCols(79)).toBe(11)
+  expect(desktopCols(1)).toBe(1)
 })
 
 test('schmal: 70 → Kurzformen, 60 → nur 5h, 50 → nichts (bodyColumns dann unverändert)', DE, async ($, on) => {
@@ -493,38 +518,119 @@ test('VS Code und -p: kein usage(), kein Takt, kein Fehler', DE, async ($, on) =
   expect(await ui.find({ key: 'limit-bars' })).toBeUndefined()
 })
 
-test('Reihenfolge: liegt quick-replies weiter innen, bleibt seine Pille über dem Band, die Balken kommen nur neben den Grund', DE, async ($, on) => {
-  world(on, { layered: true })
+test('Band 2, AbovePromptList: die eigene Zeile steht links in der Grundzeile, Pille darüber, Clawd rechts, fremde Zeile dazwischen', DE, async ($, on) => {
+  world(on)
   await measure($, limits(71, 18))
+  type N = { type: string; props: Record<string, unknown>; children?: N[] }
+  const text = (s: string): N => ({ type: 'Text', props: {}, children: [s as never] })
   for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount(band(surface, 120))
-    type N = { props: { key?: string }; children: N[] }
+    // Die eigene Zeile so, wie limit-bars sie zeichnet; die anderen als nachgebaute Zeilen (templates/band/tests)
+    const own = await $.ui.mount(band(surface, 120))
+    const mine = (await ownRow(own))!
+    await own.unmount()
+    const rows = [
+      { plugin: 'clawd-buddy', tree: { type: 'Box', props: { key: 'slot:30:clawd-buddy:right', flexDirection: 'column', alignItems: 'flex-end' }, children: [text('Clawd')] } },
+      { plugin: 'limit-bars', tree: mine },
+      { plugin: 'fremd', tree: { type: 'Box', props: {}, children: [text('fremd')] } },
+      { plugin: 'quick-replies', tree: { type: 'Box', props: { key: 'layer:20:quick-replies', flexDirection: 'column' }, children: [text('Pille')] } },
+    ] as never
+    const ui = await $.ui.mount({ plugin: 'limit-bars', component: 'AbovePromptList', requestId: 'above-prompt-list', surface, props: { ...props(120), rows } })
     const tree = (await ui.drawn()) as N
     expect(tree.props.key).toBe('band')
-    expect(tree.children.map((c) => c.props.key)).toEqual(['layer:20:quick-replies', 'band-base'])
-    // Im Grund: Balken links, der fremde Text rechts, keine Pille
-    const row = tree.children[1].children[0].children[0]
-    expect(row.children[0].props.key).toBe('slot:10:limit-bars')
-    expect(JSON.stringify(row)).toContain('von anderen')
-    expect(JSON.stringify(row)).not.toContain('quick-replies')
+    // Ebene, Rest, Grundzeile (docs/BAND.md „Aufbau“)
+    const texts = (await ui.findAll({ type: 'Text' })).map((t) => t.text)
+    expect(texts[0]).toBe('Pille')
+    expect(texts[1]).toBe('fremd')
+    expect(texts.at(-1)).toBe('Clawd')
+    expect(await ui.find({ key: 'band-row' })).toBeDefined()
+    expect(await ui.find({ key: 'band-cell:0:slot:10:limit-bars' })).toBeDefined()
+    expect(await ui.find({ key: 'band-gap' })).toBeDefined()
+    expect(await ui.find({ key: 'band-cell:2:slot:30:clawd-buddy:right' })).toBeDefined()
     await ui.unmount()
   }
 })
 
-test('0.9.0: die Platzbreite wird als $.state limit-bars.band gemeldet (nie beim Zeichnen), null ohne Anzeige', DE, async ($, on) => {
+test('Band 2, AbovePromptList: limit-bars allein bleibt unverändert (next(e))', DE, async ($, on) => {
   world(on)
+  await measure($, limits(71, 18))
+  const own = await $.ui.mount(band('terminal', 120))
+  const mine = (await ownRow(own))!
+  await own.unmount()
+  const ui = await $.ui.mount({ plugin: 'limit-bars', component: 'AbovePromptList', requestId: 'above-prompt-list', surface: 'terminal', props: { ...props(120), rows: [{ plugin: 'limit-bars', tree: mine as never }] } })
+  expect(await ui.find({ key: 'band' })).toBeUndefined()
+  expect(await ui.find({ key: 'band-row' })).toBeUndefined()
+  expect(await ui.find({ key: 'slot:10:limit-bars' })).toBeDefined()
+})
+
+test('0.9.0/0.17.0: die Breite der Zeile wird als $.state limit-bars.band = { cols } gemeldet (nie beim Zeichnen)', DE, async ($, on) => {
+  const { clock } = world(on)
   const writes: unknown[] = []
+  let drawing = false
+  let duringDraw = 0
   on('state.set', ($, e) => {
+    if (drawing) duringDraw += 1
     writes.push(e.value)
     return { value: undefined } as never
   })
   on('session.start', () => ({ cwd: '/work' }))
+  // Desktop: Zellen aus der Bildbreite, schon beim Sitzungsstart und nach jeder Änderung
   await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
   await measure($, limits(71, 18))
+  drawing = true
+  let ui = await $.ui.mount(band('desktop', 120))
+  const desk = await ownRow(ui)
+  drawing = false
+  const cols = writes.filter((w): w is { cols: number } => !!w && typeof w === 'object')
+  expect(cols.length >= 1).toBe(true)
+  expect(cols.at(-1)!.cols).toBe(desk!.props.width)
+  expect(cols.every((w) => !('width' in w))).toBe(true)
+  await ui.unmount()
+  // Terminal: die Breite hängt von bodyColumns ab; gemeldet im nächsten Takt nach dem Zeichnen
+  writes.length = 0
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  drawing = true
+  ui = await $.ui.mount(band('terminal', 120))
+  const term = await ownRow(ui)
+  drawing = false
+  await clock.advance(TICK)
+  const tcols = writes.filter((w): w is { cols: number } => !!w && typeof w === 'object')
+  expect(tcols.at(-1)!.cols).toBe(term!.props.width)
+  // Schmaler: neue Breite im nächsten Takt
+  drawing = true
+  await ui.unmount()
+  ui = await $.ui.mount(band('terminal', 70))
+  const narrow = await ownRow(ui)
+  drawing = false
+  await clock.advance(TICK)
+  const ncols = writes.filter((w): w is { cols: number } => !!w && typeof w === 'object')
+  expect(ncols.at(-1)!.cols).toBe(narrow!.props.width)
+  expect(ncols.at(-1)!.cols < tcols.at(-1)!.cols).toBe(true)
+  expect(duringDraw).toBe(0)
+  await ui.unmount()
+})
+
+test('0.17.0 (Review S3): erstes Zeichnen ohne Oberfläche in session.start schreibt limit-bars.band nicht im Zeichnen, erst im Takt', DE, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: 0, window: 200000 }, rateLimits: limits(42, 7) } }))
+  let drawing = false
+  let duringDraw = 0
+  const writes: unknown[] = []
+  on('state.set', ($, e) => {
+    if (drawing) duringDraw += 1
+    writes.push(e.value)
+    return { value: undefined } as never
+  })
+  // Kein session.start: das erste Zeichnen holt den Anfangsstand (loadWindows → takeBaseline → refresh). Geprüft wird das Ergebnis:
+  // keine Meldung während des Mounts, die Breite im nächsten Takt. Ohne den Schutz in publishBand bliebe der Test grün, weil
+  // $.state.set über publishChain erst nach dem Zeichnen läuft; der Schutz ist eine Absicherung (Review 0.17.0 S3)
+  drawing = true
   const ui = await $.ui.mount(band('desktop', 120))
-  await ui.drawn()
-  const widths = writes.filter((w): w is { width: number } => !!w && typeof w === 'object')
-  expect(widths.length >= 1).toBe(true)
-  expect(widths.at(-1)!.width > 100).toBe(true)
+  const row = await ownRow(ui)
+  drawing = false
+  expect(row).toBeDefined()
+  expect(duringDraw).toBe(0)
+  await clock.advance(TICK)
+  const cols = writes.filter((w): w is { cols: number } => !!w && typeof w === 'object')
+  expect(cols.at(-1)?.cols).toBe(row!.props.width)
   await ui.unmount()
 })

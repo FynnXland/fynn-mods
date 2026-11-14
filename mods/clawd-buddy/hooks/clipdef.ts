@@ -6,8 +6,8 @@
 //   outro  – einmal beim Verlassen, z. B. Gegenstand wegräumen
 // Felder, die ein Frame nicht nennt, bleiben vom Vorgänger; `props` wird nur ersetzt, wenn der Frame es nennt.
 // `from` und `to` sind kanonische Posen (stage.ts → POSES), über die Clips verbunden werden.
-import { NUM, POSES, STRUCT } from './stage.ts'
-import type { Pose, PropRef } from './stage.ts'
+import { NUM, POSES, STRUCT } from './stage.js'
+import type { Pose, PropRef } from './stage.js'
 
 /**
  * `bt` (0.11.0): Länge des Bilds in Schlägen des laufenden Songs (0,5 = Ab- oder Aufschlag, 0,25 = Solo). Mit Takt (tune-strip.beat)
@@ -111,15 +111,15 @@ export function beatMarks(list: Resolved[]): Resolved[] {
  */
 export const SQUARE_EYES: Readonly<Record<string, string>> = { happy: 'closed', angry: 'half', sad: 'half', tight: 'closed', dizzy: 'wide' }
 const squareEyes = (l: Resolved[]): Resolved[] =>
-  l.map((f) => (SQUARE_EYES[f.p.eyes] ? { ...f, p: { ...f.p, eyes: SQUARE_EYES[f.p.eyes] } } : f))
+  l.map((f) => (SQUARE_EYES[f.p.eyes] ? { ...f, p: { ...f.p, eyes: SQUARE_EYES[f.p.eyes]! } } : f))
 
 /** Clip auflösen: Intro, Hauptteil und Outro laufen auf derselben Sticky-Kette. */
 export function resolveClip(c: ClipDef): ResolvedClip {
-  const start = POSES[c.from]
+  const start = POSES[c.from]!
   const intro = mergeFrames(start, c.intro)
-  const afterIntro = intro.length ? intro[intro.length - 1].p : start
+  const afterIntro = intro.length ? intro[intro.length - 1]!.p : start
   const body = mergeFrames(afterIntro, c.frames)
-  const afterBody = body.length ? body[body.length - 1].p : afterIntro
+  const afterBody = body.length ? body[body.length - 1]!.p : afterIntro
   const outro = mergeFrames(afterBody, c.outro)
   if (c.shapedEyes) return { intro, body, outro }
   return { intro: squareEyes(intro), body: squareEyes(body), outro: squareEyes(outro) }
@@ -128,7 +128,7 @@ export function resolveClip(c: ClipDef): ResolvedClip {
 /** Ein Frame ist "sicher", wenn die Figur dort strukturell in ihrer Ausgangspose steht und der Clip unterbrechbar ist. */
 export function isSafe(c: ClipDef, p: Pose): boolean {
   if (!c.interruptible) return false
-  const base = POSES[c.from]
+  const base = POSES[c.from]!
   return STRUCT.every((k) => p[k] === base[k]) && (p.legs === 'stand' || p.legs === base.legs)
 }
 

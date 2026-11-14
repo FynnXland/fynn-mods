@@ -4,7 +4,7 @@ Two slim bars on the left of the band above the prompt show live how much of the
 
 Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.319** · Plugin version **0.16.5**
+Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.17.0**
 
 ## Display
 
@@ -59,7 +59,7 @@ Off by default. `/bars show cpu on` (or `showSystem`) shows up to four lines to 
 - **Measured every second, redrawn at most every 5 s (since 0.14.1):** one reading every second, but the band redraws for the system values at most every 5 s, and only when a value is at least 2 points away from the one shown. A colour change (60 %, 85 %) of at least 2 points and a line appearing or disappearing show at once; a value that only wobbles across a colour boundary (59 ↔ 60) does not redraw. When the band redraws for another reason (limits, cache, cost, another mod, `/bars`), it takes the latest readings along. Every redraw makes the desktop app redraw the whole band and the hover bar under your messages, so redrawing every second (the GPU load jumps by several points per second) made it flicker. `/bars` shows "Redraws for system values: n/min", counted since the last `/bars`. There is no animation between readings: it would need the next reading and so lag a second behind.
 - **Terminal:** two columns of two lines, `CPU` above `GPU` and `RAM` above `VRAM`, numbers in the same column.
 - **Data source:** one Windows PowerShell process per chat (`$.process.spawn`) with one fixed, read-only script and no arguments or environment from outside. It writes a line every second: CPU as processor time between two raw readings (`Win32_PerfRawData_PerfOS_Processor`), RAM as used share of visible memory (`Win32_PerfRawData_PerfOS_Memory`), GPU load as Task Manager computes it (since 0.13.2): busy time from the raw counters `Win32_PerfRawData_GPUPerformanceCounters_GPUEngine`, summed over all processes per physical engine, the busiest engine wins. `nvidia-smi` (fixed path) only supplies GPU memory, because its own load figure measures something else (about 30 % when Task Manager showed 75 %). WMI class names are the same in every Windows language. It costs about 1–3 % of one CPU core (the PowerShell process about 13 ms per second; the Windows WMI service adds a little).
-- **Lifetime:** the process runs only while the band is drawn and the system values are on, and ends with `/bars show cpu off`, when a requested redraw does not come (hidden chat or collapsed band; with steady values it keeps running without redraws), or after 30 minutes (the next tick starts a new one).
+- **Lifetime:** the process runs only while the band is drawn and the system values are on, and ends with `/bars show cpu off`, when a requested redraw does not come (for example a hidden chat; with steady values it keeps running without redraws; a collapsed band still draws, so it keeps running there too), or after 30 minutes (the next tick starts a new one).
 - **Errors:** `/bars` shows the latest reading and the last failure. A process that ends without a reading counts as a failed start; the next try comes after a minute, and after three in a row measuring pauses for an hour.
 
 ## Customize
@@ -148,17 +148,18 @@ Desktop app: **Settings → Plugins → limit-bars → Settings**. Terminal: `/c
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, command.run{command=cache}, command.run{command=keepwarm}, command.run{command=bars}, command.run{command=disk}, ui.render{component=CommandOutput, props has {command=bars}}, ui.render{component=CommandOutput, props has {command=disk}}, session.measure, ui.render{component=AbovePrompt}
+hooks: session.start, turn.step, turn.complete, session.compact, prompt.submit, command.run{command=cache}, command.run{command=keepwarm}, command.run{command=bars}, command.run{command=disk}, ui.render{component=CommandOutput, props has {command=bars}}, ui.render{component=CommandOutput, props has {command=disk}}, session.measure, ui.render{component=AbovePrompt}, ui.render{component=AbovePromptList}
 calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.config.list, $.config.set, $.model.fork, $.process.run, $.process.spawn, $.prompt.submit, $.session.compact, $.session.id, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.invalidate, $.ui.resolve, $.ui.toast
 state reads: cost-ledger.here, sidekick.status
 state writes: limit-bars.band
 ```
 
-No file system access of its own (no `$.fs`), no network, no environment variables read, no tokens or credentials. Processes: Windows PowerShell for the storage ring, only when `storagePath` is set, and for the system values, only while they are on and the band is drawn; and the `claude` CLI (`claude plugin list` / `claude plugin configure`) for `/bars language` in the desktop app and `claude -p`. That scan does walk the whole drive you named and reads sizes and file extensions (never file contents). In the terminal band, limit-bars passes on the space it uses to the mods further in (smaller `bodyColumns`).
+No file system access of its own (no `$.fs`), no network, no environment variables read, no tokens or credentials. Processes: Windows PowerShell for the storage ring, only when `storagePath` is set, and for the system values, only while they are on and the band is drawn; and the `claude` CLI (`claude plugin list` / `claude plugin configure`) for `/bars language` in the desktop app and `claude -p`. That scan does walk the whole drive you named and reads sizes and file extensions (never file contents). The bars are their own row in the band (since 0.17.0); the row has a fixed width and leaves `bodyColumns` unchanged for the other mods.
 
 In plain language:
 
-- `$.state.set`: tells the tune-strip mod how wide the bars are (`limit-bars.band`, a width in pixels), so tune-strip can make room for them. Written at session start and when the display changes, never while drawing. Nothing else reads it.
+- `$.state.set`: tells the tune-strip mod how wide the bars are (`limit-bars.band`, a width in terminal cells on both surfaces since 0.17.0; before, pixels in the desktop app), so tune-strip can make room for them. Written at session start, on the tick and when the display or the band width changes, never while drawing. Nothing else reads it.
+- Hook `ui.render` for `AbovePromptList` (since 0.17.0): arranges the rows of the band mods (fynn-mods) into one band: the rows of sidekick, tune-strip (desktop, full bar) and quick-replies on top, rows of other mods below them, then one line with the bars on the left, tune-strip next to them and Clawd on the right. The same code runs in every band mod; whichever runs outermost arranges, the others pass the rows on unchanged. It changes no row and calls nothing on `$`.
 - `$.state.get` (`state reads: cost-ledger.here`, since 0.12.0): reads the chat and project cost that cost-ledger provides, for the cost ring. Amounts, the first day of recording, the number of devices and the project's folder name; nothing is written back.
 - `$.session.usage`: limits, context size and session cost at start and on every tick (without `breakdown`, free)
 - Hook `session.measure`: takes the percentage and reset time of `five_hour` and `seven_day` after every measurement
@@ -222,7 +223,7 @@ Since 0.14.0 the cache guard steps aside for [sidekick](../sidekick/README.md): 
 
 ## Working with clawd-buddy
 
-Both mods draw into the same band above the prompt. Claude Code does not define the order in which they run; either way, the bars end up left of Clawd, aligned to the bottom. In the terminal, Clawd gets the width that is left after the bars.
+Both mods draw their own row into the band above the prompt (since 0.17.0, Claude Code 2.1.323 or later). The `AbovePromptList` hook that both carry puts the rows side by side: the bars on the left, Clawd on the right, aligned to the bottom. Every row sees the full band width; the bars keep a fixed width of at most 44 cells in the terminal and leave at least 40 for the others.
 
 ## Known limitations
 
@@ -236,7 +237,8 @@ Both mods draw into the same band above the prompt. Claude Code does not define 
 - **Fixed colors in the desktop image:** the Svg is an image and does not follow the theme. The grey `#9A9A9A` and the level colors are chosen for the dark theme; legibility in the light theme has not been checked yet.
 - **Exactly 100 %?** It is not documented whether an exhausted 5-hour or weekly window reports exactly 100. `full` applies from ≥ 100; 99.6 % shows `99%`.
 - **Terminal narrower than 53 columns:** no bars.
-- **Giving up space in the terminal** relies on observed behavior: Claude Code's type definitions call `bodyColumns` read-only but allow rewriting props, and current Claude Code versions accept it. If a later version rejects it, a single render fails and limit-bars then stacks its 2 lines above the rest (the band gets 2 lines taller).
+- **Width in the desktop app** is given in cells (since 0.17.0): the image is measured in pixels and converted at about 7.8 px per cell, rounded up. The ratio is an estimate from measurements at two window widths; if it is off, the gap to the next row is a little wider or narrower.
+- **Older Claude Code** (before 2.1.323): not supported since 0.17.0. There the own row would replace what other mods draw in the band.
 - **Storage ring on a folder:** `storagePath` is a directory picker. If you pick a folder instead of the drive root, the ring still shows the whole drive; only that folder is scanned, and the rest of the used space counts as "other".
 - **Windows folder:** PowerShell is started by its full path `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`. If Windows is installed elsewhere, the storage ring stays empty and `/disk` shows the error.
 - **Storage ring and `$.process`:** Claude Code's type definitions mark `$.process` as "CLI only". It ran in the CLI; if a surface refuses it, the storage ring is simply missing and `/disk` reports the error. The system values depend on it the same way: if `$.process.spawn` is refused, the lines show `–`, `/bars` shows the error, and after three failed starts measuring pauses for an hour.
@@ -245,3 +247,7 @@ Both mods draw into the same band above the prompt. Claude Code does not define 
 - **System values measuring themselves:** the PowerShell process uses about 3 % of one CPU core; its start (once per 30 minutes, or when the band shows again) is a short spike in Task Manager. CPU is processor time, which matched Task Manager on Windows 11 within about 5 points (checked 2026-11-04); the higher "Processor Utility" counter is not used.
 - **Cost and system values in the terminal:** everything limit-bars draws in the terminal shares the same 44 columns (Clawd reserves the rest). Next to the long form of both limits there is no room left, so cost and the system values appear in the terminal only when the limit texts happen to be shorter (for example `0% · fresh` or `resetStyle: clock`) or a limit is hidden. The bars never switch to their short forms to make room for them. The desktop app always shows them. The percentages in the terminal are not padded: the extra column would push both limits into their short forms.
 - **Time zone:** the clock-time display uses the local time of the hooks runtime (`new Date`). Which time zone that is, is not documented; check that `Mon 09:00` matches your own clock.
+
+## Changes
+
+- **0.17.0** (Claude Code 2.1.323 or later): the bars are their own row in the band. Since Claude Code 2.1.323 each mod draws only its own row; a new `AbovePromptList` hook, the same in every band mod, puts the rows back into one band as before: bars left, tune-strip next to them, Clawd right, sidekick and quick-replies on top. The row has a fixed width in cells, and `limit-bars.band` reports that width in cells on both surfaces (was pixels in the desktop app). New right: the hook `ui.render{component=AbovePromptList}`.

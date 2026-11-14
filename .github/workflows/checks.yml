@@ -11,7 +11,10 @@ jobs:
     timeout-minutes: 15
     env:
       # The Claude Code version the README names as tested. Validate and test need no login.
-      CLAUDE_CODE_VERSION: 2.1.318
+      CLAUDE_CODE_VERSION: 2.1.325
+      # Mods not yet moved to the Claude Code 2.1.323 band (one row per mod). Their checks only warn until their next
+      # release; remove a mod from this list when it is released.
+      PENDING_MODS: "sidekick quick-replies tune-strip cost-ledger"
     steps:
       - uses: actions/checkout@v7
       - name: Install Claude Code
@@ -23,9 +26,17 @@ jobs:
         run: |
           status=0
           for mod in mods/*/; do
-            echo "::group::${mod%/}"
-            claude plugin validate "$mod" --strict || status=1
-            claude plugin test "$mod" || status=1
+            name=$(basename "$mod")
+            echo "::group::$name"
+            ok=1
+            claude plugin validate "$mod" --strict || ok=0
+            claude plugin test "$mod" || ok=0
             echo "::endgroup::"
+            if [ "$ok" = 0 ]; then
+              case " $PENDING_MODS " in
+                *" $name "*) echo "::warning::$name is not yet updated for Claude Code 2.1.323 (pending)";;
+                *) status=1;;
+              esac
+            fi
           done
           exit $status

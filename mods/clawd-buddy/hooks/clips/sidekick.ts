@@ -6,10 +6,10 @@
 // Stil wie die Referenz type_laptop: Blockhände, Gegenstände kommen aus der Tasche (Hocke, Hand wühlt, ein Auge zu, Gegenstand klein an der Hand,
 // er wächst) und gehen dorthin zurück; was gehalten wird, steht seitlich neben der Figur. Die Eingabe liegt UNTER der Linie: Blick nach unten.
 // Alle Gegenstände tragen 'g' (fest auf der Bühne), die Figur läuft hier nirgends hin.
-import { clip } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, fetchOut, riseIn, sinkOut } from '../macros.ts'
+import { clip } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { armBlock, fetchIn, fetchOut, riseIn, sinkOut } from '../macros.js'
 
 type Side = 'L' | 'R'
 const g = (name: string, x: number, y: number): PropRef => [name, x, y, 'g']

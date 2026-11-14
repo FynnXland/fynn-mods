@@ -5,7 +5,7 @@ Senden mitdenkt, Schnellantworten, eine Musikleiste für Spotify (Windows) und e
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.319_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.325_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
 [![Mods](https://img.shields.io/badge/mods-6-555)](#die-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#die-mods)
 
@@ -52,7 +52,7 @@ Slash-Befehle ändern dieselben Einstellungen, und von früheren Versionen gespe
 
 ## Voraussetzungen
 
-- Claude Code **v2.1.309 oder neuer** (ältere Versionen laden diese Mods nicht); getestet mit **v2.1.319**. Prüfen mit
+- Claude Code **v2.1.323 oder neuer** (ältere Versionen laden diese Mods nicht); getestet mit **v2.1.325**. Prüfen mit
   `claude --version`.
 - Läuft im Terminal und im Code-Tab der Claude-Desktop-App. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen
   die meisten Mods nichts; Details in der README des jeweiligen Mods.
@@ -394,7 +394,7 @@ Sicherheitsproblem gefunden? Siehe [SECURITY.md](SECURITY.md) (englisch).
 
 | Problem | Lösung |
 |---|---|
-| Ein Mod zeichnet nichts | `claude --version` prüfen (diese Mods brauchen v2.1.309 oder neuer) und ob `/plugin` den Mod als `mod active` zeigt. Ein neu installierter Mod lädt in der nächsten Session oder nach `/reload-plugins`. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen die meisten Mods nichts. |
+| Ein Mod zeichnet nichts | `claude --version` prüfen (diese Mods brauchen v2.1.323 oder neuer) und ob `/plugin` den Mod als `mod active` zeigt. Ein neu installierter Mod lädt in der nächsten Session oder nach `/reload-plugins`. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen die meisten Mods nichts. |
 | Nach einem Claude-Code-Update geht ein Mod nicht mehr | Die Mods aktualisieren (`claude plugin marketplace update fynn-mods`, dann `claude plugin update <mod>@fynn-mods`). Hilft das nicht, bitte ein Issue anlegen. |
 | Zwei Rückfragen hintereinander vor dem Senden mit kaltem Cache | limit-bars auf 0.14.0 oder neuer aktualisieren; dann überlässt es sidekick die Frage. Bei älterem limit-bars die Rückfrage mit `/cache warn off` abschalten. |
 | Alles ist englisch | `/clawd language de` (oder der Befehl eines anderen Mods) stellt alle fynn-mods um; für einen einzelnen Mod die Option `language` mit `/plugin configure <mod>@fynn-mods` auf `de` stellen. In der Desktop-App wirkt das ab dem nächsten Chat oder sofort nach `/reload-plugins`. |

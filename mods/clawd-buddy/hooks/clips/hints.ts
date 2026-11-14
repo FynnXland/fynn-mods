@@ -5,10 +5,10 @@
 // done_long: Ein langer Turn (ab 5 min, mood.ts → LONG_TURN_MS) ist fertig: ein deutlicheres „Puh, geschafft“, damit man beim
 //            Zurückkommen sieht, dass die große Aufgabe durch ist.
 // Alle laufen einmal ganz durch (nicht unterbrechbar) und räumen ihre Gegenstände selbst wieder weg.
-import { clip, rep } from '../clipdef.ts'
-import type { ClipDef, Frame } from '../clipdef.ts'
-import type { PropRef, PropSprite } from '../stage.ts'
-import { armBlock, fetchIn, fetchOut, riseIn, sinkOut } from '../macros.ts'
+import { clip, rep } from '../clipdef.js'
+import type { ClipDef, Frame } from '../clipdef.js'
+import type { PropRef, PropSprite } from '../stage.js'
+import { armBlock, fetchIn, fetchOut, riseIn, sinkOut } from '../macros.js'
 
 /**
  * Zielflagge 6×9 (eine Familie): schwarz-weiß kariertes Tuch links, brauner Stab rechts (an ihm hält die Hand).
@@ -21,8 +21,8 @@ const FLAG: readonly (readonly string[])[] = [
 
 /** Requisiten, die nur diese Gruppe braucht. Der Karton und das Papier gehören dem Komprimieren (clips/extra.ts: cmp_box…, cmp_st…). */
 export const PROPS: Readonly<Record<string, PropSprite>> = {
-  hint_flag0: { rows: FLAG[0] },
-  hint_flag1: { rows: FLAG[1] },
+  hint_flag0: { rows: FLAG[0]! },
+  hint_flag1: { rows: FLAG[1]! },
 }
 
 const out: ClipDef[] = []

@@ -3,16 +3,16 @@
 // Stil `ring` (Ausbau 0.10.0): je Fenster ein Ring wie der Cache-Ring, 5h links, Woche rechts.
 // Rechts daneben im selben Bild der Cache-Ring (ring.ts) und der Speicher-Ring (storage.ts), damit sie sicher zwischen
 // Limits und Clawd sitzen.
-import { FONT, MARK, RING_H, darker, RING_SIZE, esc, limitRingSvg, ringSvg } from './ring.ts'
-import type { RingView } from './ring.ts'
-import { DISK_W, diskRingSvg } from './storage.ts'
-import type { DiskView } from './storage.ts'
-import { COST_W, costRingSvg } from './cost.ts'
-import type { CostView } from './cost.ts'
-import { SYS_W, sysSvg } from './system.ts'
-import type { SysView } from './system.ts'
-import { EMPTY, GREY, ORANGE } from './view.ts'
-import type { Shown } from './view.ts'
+import { FONT, MARK, RING_H, darker, RING_SIZE, esc, limitRingSvg, ringSvg } from './ring.js'
+import type { RingView } from './ring.js'
+import { DISK_W, diskRingSvg } from './storage.js'
+import type { DiskView } from './storage.js'
+import { COST_W, costRingSvg } from './cost.js'
+import type { CostView } from './cost.js'
+import { SYS_W, sysSvg } from './system.js'
+import type { SysView } from './system.js'
+import { EMPTY, GREY, ORANGE } from './view.js'
+import type { Shown } from './view.js'
 
 export type Style = 'bar' | 'ring'
 

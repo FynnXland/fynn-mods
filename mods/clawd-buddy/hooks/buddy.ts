@@ -4,13 +4,13 @@
 // Stimmung ab, treibt die Engine mit `surface.every(TICK)` (75 ms) und zeichnet das Bild in Halbblock-Auflösung (`▀` mit color = obere,
 // backgroundColor = untere Pixelzeile, 2 Pixel pro Zelle). Keine Arbeit pro Frame außer Engine-Tick und Zeichnen; kein `setState` im Render.
 import type { ClientPointerEvent, ClientSurface } from 'claude-code'
-import { createEngine } from './engine.ts'
-import type { Engine } from './engine.ts'
-import { ALL_CLIPS, ALL_PROPS } from './library.ts'
-import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, frostActive, specialDay } from './mood.ts'
-import type { Facts, Strain } from './mood.ts'
-import { mulberry32 } from './capture.ts'
-import { H, PAL, TICK, W } from './stage.ts'
+import { createEngine } from './engine.js'
+import type { Engine } from './engine.js'
+import { ALL_CLIPS, ALL_PROPS } from './library.js'
+import { WELCOME_WINDOW_MS, activeAgents, beatGrid, beatGroup, deriveMood, deriveTemper, frostActive, specialDay } from './mood.js'
+import type { Facts, Strain } from './mood.js'
+import { mulberry32 } from './capture.js'
+import { H, PAL, TICK, W } from './stage.js'
 
 export type BuddyProps = {
   /** Spalten und Zeilen, die das Band hergibt (bodyColumns, maxRows). */

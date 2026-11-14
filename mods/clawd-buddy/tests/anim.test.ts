@@ -1,16 +1,16 @@
 // clawd-buddy: Tests für Datenmodell, Engine, Übergänge, Maus, Nacht und die Prüfung "nichts taucht aus dem Nichts auf".
 // Reine Funktionen ohne Test-Kit-Stubs (kein `$` nötig); laufen mit `claude plugin test`.
 import { expect, test } from 'claude-code/testing'
-import { ALL_CLIPS, ALL_PROPS } from '../hooks/library.ts'
-import { planPath } from '../hooks/clipdef.ts'
-import { ARMS, CROSS_L, EYES, EYES_ONE, FRONT, FX, FY, H, LEGS, MOUTH, PAL, POSES, W, compose, propSprite } from '../hooks/stage.ts'
-import type { Pose } from '../hooks/stage.ts'
-import { resolveClip } from '../hooks/clipdef.ts'
-import { captureClip, mulberry32, newEngine } from '../hooks/capture.ts'
-import { createEngine } from '../hooks/engine.ts'
-import { lintFrames } from '../hooks/lint.ts'
-import { PLAN_TICKS, SOURCE_MAX, createDesk } from '../hooks/desk.ts'
-import { NO_FACTS, NO_STRAIN } from '../hooks/mood.ts'
+import { ALL_CLIPS, ALL_PROPS } from '../hooks/library.js'
+import { planPath } from '../hooks/clipdef.js'
+import { ARMS, CROSS_L, EYES, EYES_ONE, FRONT, FX, FY, H, LEGS, MOUTH, PAL, POSES, W, compose, propSprite } from '../hooks/stage.js'
+import type { Pose } from '../hooks/stage.js'
+import { resolveClip } from '../hooks/clipdef.js'
+import { captureClip, mulberry32, newEngine } from '../hooks/capture.js'
+import { createEngine } from '../hooks/engine.js'
+import { lintFrames } from '../hooks/lint.js'
+import { PLAN_TICKS, SOURCE_MAX, createDesk } from '../hooks/desk.js'
+import { NO_FACTS, NO_STRAIN } from '../hooks/mood.js'
 
 const LIB = { clips: ALL_CLIPS, props: ALL_PROPS }
 const byName = (n: string) => ALL_CLIPS.find((c) => c.name === n)!
@@ -79,12 +79,12 @@ test('Effekte überlappen sich nie (Pfeif-Noten, Funken, Herzen …) und nicht m
             // Zwei verschiedene Requisiten auf demselben Pixel (mindestens eine ein Effekt) = Überlappung
             if (other !== undefined && other !== `${k}`) {
               const o = f.p.props[Number(other)]
-              const os = propSprite(ALL_PROPS, o[0])!
+              const os = propSprite(ALL_PROPS, o![0])!
               // Sichtbar ist das später gezeichnete: liegt ein Effekt oben, überdeckt er etwas (Fynn: Pfeif-Noten übereinander). Ein Effekt
               // unter einem festen Gegenstand ist verdeckt (Knäuel fällt hinter den Kartonrand). Eine Hand (`hand`) liegt bewusst auf dem,
               // was sie hält.
               // Ein Block hinter der Figur (`under`, Eisklumpen 0.13.0) ist Hintergrund: Glanz und Risse liegen bewusst darauf.
-              if (sp.effect && !sp.hand && !os.hand && !os.under && !sp.under) bad.push(`${c.name} Frame ${idx}: ${pr[0]} überlappt ${o[0]} bei (${x},${y})`)
+              if (sp.effect && !sp.hand && !os.hand && !os.under && !sp.under) bad.push(`${c.name} Frame ${idx}: ${pr[0]} überlappt ${o![0]} bei (${x},${y})`)
             }
             cells.set(key, `${k}`)
           }
@@ -97,7 +97,7 @@ test('Effekte überlappen sich nie (Pfeif-Noten, Funken, Herzen …) und nicht m
 
 test('Daten: Sprites sind rechteckig und nutzen nur Palettenzeichen; Clip-Namen sind eindeutig', () => {
   for (const [name, sp] of Object.entries(ALL_PROPS)) {
-    const w = sp.rows[0].length
+    const w = sp.rows[0]!.length
     for (const row of sp.rows) {
       expect(row.length, `${name}: Zeilenbreite`).toBe(w)
       for (const ch of row) if (ch !== '.') expect(PAL[ch], `${name}: Farbe ${ch}`).toBeDefined()
@@ -145,14 +145,14 @@ test('Jeder Clip endet in seiner Zielpose ohne liegengebliebene Gegenstände und
     // Gegenstände der Ausgangs- und Zielpose selbst (Eisblock der Pose `ice`, 0.13.0) gehören nicht dem Clip
     // (verglichen nach Familie: frost_ice1 … 6 sind derselbe Block mit Glanzlicht)
     const fam = (n: string) => n.replace(/\d+$/, '')
-    const own = new Set([...POSES[c.from].props, ...POSES[c.to].props].map((x) => fam(x[0])))
+    const own = new Set([...POSES[c.from]!.props, ...POSES[c.to]!.props].map((x) => fam(x[0])))
     const usesProps = all.some((f) => f.p.props.some((x) => !propSprite(ALL_PROPS, x[0])!.effect && !own.has(fam(x[0]))))
     if (c.loop && usesProps) expect(c.outro.length, `${c.name}: Schleife mit Gegenstand braucht ein Outro`).toBeGreaterThan(0)
-    const last = all[all.length - 1].p
+    const last = all[all.length - 1]!.p
     if (!c.loop) {
       // Begleiter-Clips enden mit dem Helfer des Subagenten (die Engine lässt ihn danach absinken)
       // Gegenstände der Zielpose selbst bleiben gewollt stehen
-      const ownTo = new Set(POSES[c.to].props.map((x) => x[0]))
+      const ownTo = new Set(POSES[c.to]!.props.map((x) => x[0]))
       const left = last.props.filter((x) => !propSprite(ALL_PROPS, x[0])!.effect && !ownTo.has(x[0]) && !(c.companion && x[0].startsWith('agent_s')))
       expect(left.length, `${c.name}: am Ende bleibt ${left.map((x) => x[0]).join(',')} liegen`).toBe(0)
     }
@@ -175,7 +175,7 @@ const hashRun = (seed: number) => {
   let h = 7
   const moods = ['work_write', 'wait10', 'idle', 'work_agent', 'done', 'idle', 'watching']
   for (let t = 0; t < 1500; t++) {
-    if (t % 150 === 10) e.setMood(moods[(t / 150) | 0 ? ((t / 150) | 0) % moods.length : 0])
+    if (t % 150 === 10) e.setMood(moods[(t / 150) | 0 ? ((t / 150) | 0) % moods.length : 0]!)
     e.tick()
     const { buf } = e.render()
     for (let i = 0; i < buf.length; i += 7) h = (Math.imul(h, 31) + (buf[i] ? buf[i]!.charCodeAt(0) : 1)) | 0
@@ -200,7 +200,7 @@ test('Engine: Zufallsläufe mit Stimmungen, Klicks, Ziehen und Tageszeit werfen 
     e.start()
     for (let t = 0; t < 1800; t++) {
       const roll = rand()
-      if (roll < 0.012) e.setMood(moods[Math.floor(rand() * moods.length)])
+      if (roll < 0.012) e.setMood(moods[Math.floor(rand() * moods.length)]!)
       else if (roll < 0.016) {
         e.render()
         const x = 34 + Math.floor(rand() * 17)
@@ -314,7 +314,7 @@ test('Maus: Klick löst Reaktion aus, wiederholte Klicks steigern den Ärger, Ar
     if (n && !names.includes(n)) names.push(n)
   }
   expect(names).toContain('zurueckschnappen')
-  expect(POSES[e2.S.landing].fy).toBe(0)
+  expect(POSES[e2.S.landing]!.fy).toBe(0)
   // Hochheben erst nach längerem Festhalten, dann folgt er dem Zeiger direkt; losgelassen fällt er und geht zurück
   const e3 = newEngine(LIB, 8)
   e3.start()
@@ -510,9 +510,9 @@ test('Tageszeit: nachts nur ruhiger Zeitvertreib, dann Schlaf; besondere Tage nu
 })
 
 test('Spiegeln: Schrift und Zeichen (Fragezeichen-Schild) wechseln die Seite, bleiben aber lesbar', () => {
-  expect(ALL_PROPS.wait_sign.noFlip).toBe(true)
-  expect(ALL_PROPS.question.noFlip).toBe(true)
-  const s = ALL_PROPS.wait_sign
+  expect(ALL_PROPS.wait_sign!.noFlip).toBe(true)
+  expect(ALL_PROPS.question!.noFlip).toBe(true)
+  const s = ALL_PROPS.wait_sign!
   const w = Math.max(...s.rows.map((r) => r.length))
   const pose = { ...POSES.stand, props: [['wait_sign', 20, 0, 'g'] as const] } as Pose
   const plain = compose(pose, ALL_PROPS).buf
@@ -595,15 +595,15 @@ test('Reduzierte Bewegung: im Leerlauf kein Zeitvertreib, in Arbeit der erste (r
     e.tick()
     if (e.S.play?.clip.cat === 'work_write') names.add(e.S.play.clip.name)
   }
-  expect([...names]).toEqual([e.poolOf('work_write')[0].name])
+  expect([...names]).toEqual([e.poolOf('work_write')[0]!.name])
 })
 
 test('Bühne: eine Pose lässt sich zeichnen, alles unter der Linie wird abgeschnitten', () => {
-  const p: Pose = { ...POSES.stand, props: [['laptop', -8, 10, 'g']] }
+  const p: Pose = { ...POSES.stand!, props: [['laptop', -8, 10, 'g']] }
   const c = compose(p, ALL_PROPS)
   expect(c.buf.length).toBe(W * H)
   expect(c.hit.some((t) => t === 'prop:laptop')).toBe(false)
-  const q: Pose = { ...POSES.stand, props: [['laptop', -8, 8, 'g']] }
+  const q: Pose = { ...POSES.stand!, props: [['laptop', -8, 8, 'g']] }
   expect(compose(q, ALL_PROPS).hit.some((t) => t === 'prop:laptop')).toBe(true)
 })
 
@@ -651,14 +651,14 @@ test('Rückkehr: Begrüßung (Augen reiben, dann Morgen-Clip) zu jeder Uhrzeit, 
 })
 
 test('Gesicht: kein Mund außer dem rechteckigen beim Pfeifen; Blinzeln senkt nur das Lid (Auge springt nie zur Seite)', { timeoutMs: 30000 }, () => {
-  const plain = compose({ ...POSES.stand }, ALL_PROPS).buf
-  for (const m of Object.keys(MOUTH)) if (m !== 'whistle') expect(compose({ ...POSES.stand, mouth: m }, ALL_PROPS).buf).toEqual(plain)
+  const plain = compose({ ...POSES.stand! }, ALL_PROPS).buf
+  for (const m of Object.keys(MOUTH)) if (m !== 'whistle') expect(compose({ ...POSES.stand!, mouth: m }, ALL_PROPS).buf).toEqual(plain)
   // Pfeifen: genau die zwei Pixel 1 × 2 in der Mitte unter den Augen, schwarz
-  const wh = compose({ ...POSES.stand, mouth: 'whistle' }, ALL_PROPS).buf
+  const wh = compose({ ...POSES.stand!, mouth: 'whistle' }, ALL_PROPS).buf
   const diff = wh.map((c, i) => (c !== plain[i] ? i : -1)).filter((i) => i >= 0)
   expect(diff.length).toBe(2)
   expect(diff.every((i) => wh[i] === 'K')).toBe(true)
-  expect(diff[1] - diff[0]).toBe(W)
+  expect(diff[1]! - diff[0]!).toBe(W)
   const e = newEngine(LIB, 9)
   e.start()
   for (let i = 0; i < 600; i++) {
@@ -739,7 +739,7 @@ test('Nichts mittendrin abbrechen: ein Wechsel wartet aufs Ende des Durchgangs b
         // Ausstieg am nächsten Bild (die Engine prüft nach dem Weiterschalten) oder an der Schleifengrenze (letztes Bild)
         const last = fi === before.body.length - 1
         const f = before.body[Math.min(fi + 1, before.body.length - 1)]
-        const rest = f.p.armL === 'down' && f.p.armR === 'down' && f.p.fx === 0 && f.p.fy === 0
+        const rest = f!.p.armL === 'down' && f!.p.armR === 'down' && f!.p.fx === 0 && f!.p.fy === 0
         expect(rest || last, `${before.clip.name}: Ausstieg bei Bild ${fi + 1}`).toBe(true)
         left = i
       }
@@ -830,7 +830,7 @@ test('Helfer fertig, während Clawd selbst arbeitet: er bleibt stehen bis zur Ü
 
 test('Gespiegelt läuft er selbst: Gegenstände am Boden bleiben stehen, die Figur bewegt sich gespiegelt in die Gegenrichtung', () => {
   const at = (fx: number, mirror: boolean): { body: number; prop: number } => {
-    const c = compose({ ...POSES.stand, fx, mirror, props: [['fun_jy', -10, 6, 'g']] }, ALL_PROPS)
+    const c = compose({ ...POSES.stand!, fx, mirror, props: [['fun_jy', -10, 6, 'g']] }, ALL_PROPS)
     const first = (tag: (t: string) => boolean): number => c.hit.findIndex((t) => !!t && tag(t)) % W
     return { body: first((t) => t === 'body'), prop: first((t) => t.startsWith('prop:')) }
   }
@@ -852,17 +852,17 @@ test('Kein Gespamt: nach zwei kurzen Clips (< 4 s) läuft der dritte länger, au
     const starts: number[] = []
     let last = e.S.realStart
     for (let i = 0; i < 4000; i++) {
-      if (i % 12 === 0) e.setMood(moods[Math.floor(rand() * moods.length)])
+      if (i % 12 === 0) e.setMood(moods[Math.floor(rand() * moods.length)]!)
       e.tick()
       if (e.S.realStart !== last) {
         last = e.S.realStart
         starts.push(last)
       }
     }
-    const lens = starts.slice(1).map((s, k) => s - starts[k])
+    const lens = starts.slice(1).map((s, k) => s - starts[k]!)
     expect(lens.length, 'genug Wechsel').toBeGreaterThan(20)
     for (let k = 2; k < lens.length; k++) {
-      expect(lens[k - 2] < 53 && lens[k - 1] < 53 && lens[k] < 53, `Seed ${seed}: drei kurze nacheinander ab Clip ${k - 2}`).toBe(false)
+      expect(lens[k - 2]! < 53 && lens[k - 1]! < 53 && lens[k]! < 53, `Seed ${seed}: drei kurze nacheinander ab Clip ${k - 2}`).toBe(false)
     }
   }
 })
@@ -877,7 +877,7 @@ test('Kein Gespamt, aber eine Rückfrage wartet nicht: auch im gehaltenen dritte
     const rand = () => ((r = (r * 16807) % 2147483647) / 2147483647)
     // Wie oben, bis ein dritter Clip gehalten wird und noch mindestens ~6 s bleiben müsste
     for (let i = 0; i < 4000 && e.S.holdUntil - e.S.ticks < 80; i++) {
-      if (i % 12 === 0) e.setMood(moods[Math.floor(rand() * moods.length)])
+      if (i % 12 === 0) e.setMood(moods[Math.floor(rand() * moods.length)]!)
       e.tick()
     }
     if (e.S.holdUntil - e.S.ticks < 80) continue
@@ -913,16 +913,16 @@ test('Kein Gespamt mit Rückfragen: Wechsel Rückfrage ↔ Arbeit im Sekundentak
       const starts: number[] = []
       let last = e.S.realStart
       for (let i = 0; i < 4000; i++) {
-        if (i % period === 0) e.setMood((i / period) % 2 === 0 ? 'waitUser' : work[(i / period / 2 + seed) % work.length | 0])
+        if (i % period === 0) e.setMood((i / period) % 2 === 0 ? 'waitUser' : work[(i / period / 2 + seed) % work.length | 0]!)
         e.tick()
         if (e.S.realStart !== last) {
           last = e.S.realStart
           starts.push(last)
         }
       }
-      const lens = starts.slice(1).map((s, k) => s - starts[k])
+      const lens = starts.slice(1).map((s, k) => s - starts[k]!)
       for (let k = 4; k < lens.length; k++) {
-        expect([0, 1, 2, 3, 4].every((d) => lens[k - d] < 53), `Periode ${period}, Seed ${seed}: fünf kurze nacheinander ab Clip ${k - 4}`).toBe(false)
+        expect([0, 1, 2, 3, 4].every((d) => lens[k - d]! < 53), `Periode ${period}, Seed ${seed}: fünf kurze nacheinander ab Clip ${k - 4}`).toBe(false)
       }
     }
   }
@@ -975,8 +975,8 @@ test('Helfer-Clips: ein Nicken (Körper 1 tiefer) kehrt zurück und bleibt nicht
   // (helper_gift beugt sich beim Einstecken bewusst länger)
   const nods = ['chat_helper', 'helper_report', 'helper_busy', 'chat_second', 'nod_to_team', 'team_glance']
   for (const c of ALL_CLIPS.filter((x) => x.cat === 'work_agent' || x.cat === 'agent_done' || /helper|team/.test(x.name))) {
-    const r = resolveClip(c, ALL_PROPS)
-    if (r.body.length && r.body[r.body.length - 1].p.by === 1) bad.push(`${c.name}: endet 1 tiefer`)
+    const r = resolveClip(c)
+    if (r.body.length && r.body[r.body.length - 1]!.p.by === 1) bad.push(`${c.name}: endet 1 tiefer`)
     if (!nods.includes(c.name)) continue
     let run = 0
     r.body.forEach((f, i) => {
@@ -1160,7 +1160,7 @@ test('0.9.0/0.11.0: Musik-Clips: Lint ohne Befund (nichts taucht auf, alles ger�
     for (const seed of [1, 2]) expect(lintFrames(captureClip(LIB, name, { seed, hour: name === 'music_nod_night' ? 1 : 15 }), ALL_PROPS), `${name} Seed ${seed}`).toEqual([])
   }
   const music = ALL_CLIPS.filter((c) => c.cat === 'music')
-  expect(music[0].name).toBe('music_bob')
+  expect(music[0]!.name).toBe('music_bob')
   // 0.11.0: statt „gute Laune“ die Gruppe (SPEC Nachtrag 0.11.0); nicht bei schlechter Laune
   for (const n of ['music_airguitar', 'music_headbang']) expect(music.find((c) => c.name === n)?.music).toEqual({ calm: 0, groove: 0, hard: n === 'music_airguitar' ? 3 : 2.5, sad: 0, none: 0, notBad: true })
   expect(music.filter((c) => c.when === 'night').map((c) => c.name)).toEqual(['music_nod_night'])
