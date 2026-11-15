@@ -1,0 +1,34 @@
+{
+  "name": "poly-world",
+  "version": "0.1.0",
+  "description": "A floating low-poly island behind the chat in the Claude Desktop and mobile apps. Its sky follows the time of day, and a matching color set tints the app.",
+  "author": {
+    "name": "Fynn Hansen"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Show the island",
+      "description": "Off removes the scene and the colors. Also /world on|off.",
+      "default": true
+    },
+    "colors": {
+      "type": "boolean",
+      "title": "App colors",
+      "description": "Tint the Desktop app to match the island. Also /world colors on|off.",
+      "default": true
+    },
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the texts. en: English, de: Deutsch. Also /world language.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
+      ]
+    }
+  }
+}

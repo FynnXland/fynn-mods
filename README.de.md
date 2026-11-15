@@ -1,7 +1,7 @@
 # fynn-mods
 
-**Sechs Mods für Claude Code: ein animiertes Maskottchen, Balken für die Nutzungslimits, ein Sidekick, der vor dem
-Senden mitdenkt, Schnellantworten, eine Musikleiste für Spotify (Windows) und ein Kostenbuch.**
+**Sieben Mods für Claude Code: ein animiertes Maskottchen, Balken für die Nutzungslimits, ein Sidekick, der vor dem
+Senden mitdenkt, Schnellantworten, eine Musikleiste für Spotify (Windows), ein Kostenbuch und eine lebende Hintergrundwelt.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
@@ -342,6 +342,26 @@ Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost
   Keine Modellaufrufe oder Netzwerkzugriffe. Dateien nur für den optionalen Sync (`$.fs`, begrenzt auf den gewählten Ordner und die eigene Datei `cost-ledger-<id>.json`).
 - **Details:** [mods/cost-ledger](mods/cost-ledger/README.md) (englisch)
 
+### poly-world
+
+![poly-world in der Abenddämmerung, für sich gerendert ohne die App: eine schwebende Low-Poly-Insel mit Hütte, Bäumen und kleinem Wasserfall oben rechts in einem orange-violetten Abendhimmel, Rauch aus dem Schornstein, leuchtende Laternen und ein helles Fenster.](assets/poly-world.png)
+
+**Neu, nur Desktop- und Mobil-App.** Eine schwebende Low-Poly-Insel hinter dem Chat: Hütte, Bäume und ein kleiner
+Wasserfall im Himmel oben rechts, weg von deinen Nachrichten und dem Eingabefeld. Himmel und Licht folgen der echten
+Uhrzeit (Nacht, Morgen, Tag, Abend) als eine langsame 24-Stunden-Animation, und ein passender Farbsatz „Poly World“
+färbt die App in hell und dunkel. Die Insel reagiert leise: Rauch, solange Claude arbeitet, Laternen, solange tune-strip
+Musik spielt, ein helles Fenster spät abends (mit einer künftigen clawd-buddy-Version, wenn Clawd müde ist), nachts ein
+bläulicher Laptop-Schein. Terminal und VS Code zeichnen kein Theme, dort siehst du nichts.
+
+- **Befehle:** `/world` (Status), `/world on|off`, `/world colors on|off`, `/world time <HH:MM>|now` (andere Tageszeit
+  ansehen), `/world language de|en`, `/world help`
+- **Rechte kurz:** setzt das Theme der Session (`$.theme.set`: Szene und Farben) und löscht es nur bei `/world off`;
+  zeichnet die Szene selbst (SVG mit CSS-Animation, kein Script, nichts nachgeladen); liest, ob tune-strip Musik spielt,
+  und später Clawds Müdigkeit (`$.state`). Sonst nur die [Einstellungsbefehle](#rechte-und-vertrauen). Keine Dateien,
+  kein Netzwerk, keine Modellaufrufe.
+- **Ein Theme je Session:** Claude Code behält ein Theme, das zuletzt gesetzte; nutze immer nur eine Theme-Mod.
+- **Details:** [mods/poly-world](mods/poly-world/README.md) (englisch)
+
 ## Zusammenspiel
 
 - **Ein Band über dem Prompt.** clawd-buddy, limit-bars, quick-replies, tune-strip und sidekick zeichnen alle ins Band
@@ -354,7 +374,7 @@ Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost
   und die Gruppe (ruhig, Groove, hart, traurig), nie was läuft.
 - **cost-ledger beliefert limit-bars.** Sind beide installiert, zeichnet limit-bars einen Kostenring mit dem, was dieser
   Chat und dieses Projekt gekostet haben, dieselben Zahlen wie `/ledger here all`.
-- **Ein Sprachschalter für alle.** `/<befehl> language de|en` in einem der sechs Mods stellt alle installierten
+- **Ein Sprachschalter für alle.** `/<befehl> language de|en` in einem der sieben Mods stellt alle installierten
   fynn-mods auf einmal um.
 - **limit-bars lässt sidekick den Vortritt.** Beide können vor kaltem Senden fragen. Läuft sidekick auf `cache` oder
   `guide`, schweigt limit-bars von selbst (`/cache` zeigt „an (übernimmt gerade sidekick)“), damit nie zwei Dialoge
@@ -373,14 +393,14 @@ hängt und welche API-Aufrufe er macht; `claude plugin validate mods/<mod>` zeig
 erklärt in Klartext, wofür sie da sind. Keiner dieser Mods liest oder speichert Anmeldedaten oder Tokens, keiner hat einen
 eigenen Netzwerkzugang, und keiner schreibt irgendwohin außer in seinen eigenen Plugin-Speicher und seine
 Plugin-Einstellungen, mit zwei Ausnahmen: cost-ledger schreibt seine eigene Datei in den Ordner, den du wählst, aber
-nur, wenn du `/ledger sync` einschaltest; und der Sprachschalter ändert die Einstellung `language` der sechs
+nur, wenn du `/ledger sync` einschaltest; und der Sprachschalter ändert die Einstellung `language` der sieben
 fynn-mods, sonst nichts.
 
 **Einstellungsbefehle:** `/<befehl> language de|en` liest die Plugin-Einstellungen und ändert nur das Feld `language`
-der sechs fynn-mods (`$.config`). Die Befehle, die eine Einstellung spiegeln (`/clawd on|off`, `/replies on|off`,
+der sieben fynn-mods (`$.config`). Die Befehle, die eine Einstellung spiegeln (`/clawd on|off`, `/replies on|off`,
 `/tune size`, `/ledger plan`, `/sidekick cache` und so weiter), ändern nur die Felder ihres eigenen Mods. In der
 Desktop-App und in `claude -p`, wo Claude Code keine Plugin-Einstellungen auflistet, rufen sie stattdessen die
-`claude`-CLI auf, nur `claude plugin list --json` und `claude plugin configure <mod>@fynn-mods` (für die sechs
+`claude`-CLI auf, nur `claude plugin list --json` und `claude plugin configure <mod>@fynn-mods` (für die sieben
 fynn-mods, nur eigene Felder). Das ist der einzige Prozess, den clawd-buddy, cost-ledger, quick-replies und sidekick
 je starten.
 

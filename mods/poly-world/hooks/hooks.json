@@ -1,0 +1,4 @@
+{
+  "description": "poly-world – Hooks-Modul",
+  "modules": ["./register.ts"]
+}
