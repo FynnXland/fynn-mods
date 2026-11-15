@@ -3,7 +3,7 @@
 // seit 0.11.0 `tune-strip.beat` (Takt und Gruppe des Songs, kein Titel)
 // seit 0.15.0 `limit-bars.band` (Breite der Balken in Zellen, für die Terminal-Breite)
 // und schreibt seit 0.8.0 `clawd-buddy.band`: seit 0.15.0 (Band 2) die Breite seines Platzes in Zellen `{ cols }` (`null`, wenn
-// Clawd aus ist oder weder im Terminal noch im Desktop zeichnet), für tune-strip (docs/BAND.md „Absprachen über $.state“; tune-strip deklariert denselben
+// Clawd aus ist oder weder im Terminal noch im Desktop zeichnet), für tune-strip; seit 0.15.1 `clawd-buddy.mood` (Müdigkeit, für poly-world) (docs/BAND.md „Absprachen über $.state“; tune-strip deklariert denselben
 // Wert). Jeder Mod darf die Werte eines anderen lesen (types:3308-3313). Ohne Abhängigkeit in plugin.json kennt dieser Vertrag die der
 // anderen nicht; deshalb stehen ihre Werte hier noch einmal und müssen mit mods/sidekick/types/index.d.ts und
 // mods/tune-strip/types/index.d.ts übereinstimmen. `validate` meldet sie als „state of other plugins, not checked“.
@@ -32,6 +32,9 @@ declare module 'claude-code' {
     'clawd-buddy': {
       // 0.15.0: Breite des eigenen Platzes in Zellen (Desktop: die Bühne; Terminal: die gezeichnete Breite); bis 0.14.x `{ width }` in Pixeln
       band: { cols: number } | null
+      // 0.15.1: wie müde Clawd ist, `tired` 0–1 in Schritten von 0,05 (Arbeitszeit am Stück), `null`, wenn er aus ist. Liest
+      // poly-world (Fensterlicht ab 0,6); gleich wie mods/poly-world/types/index.d.ts
+      mood: { tired: number } | null
     }
   }
 }

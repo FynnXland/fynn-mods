@@ -1240,7 +1240,7 @@ test('0.15.0: Terminal: Clawd nimmt nur die Restbreite neben limit-bars (limit-b
     return { value: e.plugin === 'limit-bars' && e.key === 'band' ? { value: bars, version: 1 } : { value: undefined, version: 0 } }
   })
   on('state.set', ($: unknown, e: any) => {
-    writes.push(e.value)
+    if (e.key === 'band') writes.push(e.value)
     return { value: undefined } as never
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -1287,7 +1287,7 @@ test('0.15.0: Terminal zu schmal neben limit-bars (unter 20 Spalten): keine Zeil
   const writes: unknown[] = []
   on('state.get', ($: unknown, e: any) => ({ value: e.plugin === 'limit-bars' && e.key === 'band' ? { value: { cols: 44 }, version: 1 } : { value: undefined, version: 0 } }))
   on('state.set', ($: unknown, e: any) => {
-    writes.push(e.value)
+    if (e.key === 'band') writes.push(e.value)
     return { value: undefined } as never
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -1308,7 +1308,7 @@ test('0.15.0: -p (surface null) und VS Code: Start ohne Fehler, keine Breitenmel
   on('command.register', () => ({ value: { command: 'clawd' } }))
   const writes: unknown[] = []
   on('state.set', ($: unknown, e: any) => {
-    writes.push(e.value)
+    if (e.key === 'band') writes.push(e.value)
     return { value: undefined } as never
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -1335,7 +1335,7 @@ test('0.15.0: die Bühnenbreite geht als $.state clawd-buddy.band = { cols } (Ze
   on('ui.log', () => ({ value: undefined }))
   on('command.register', () => ({ value: { command: 'clawd' } }))
   on('state.set', ($: unknown, e: any) => {
-    writes.push(e.value)
+    if (e.key === 'band') writes.push(e.value)
     return { value: undefined } as never
   })
   on('process.run', ($: unknown, e: any) => ({ value: { exitCode: 0, stdout: e.argv.join(' ') === 'claude plugin list --json' ? JSON.stringify([{ id: 'clawd-buddy@fynn-mods', enabled: true, installPath: MOD_ROOT }]) : JSON.stringify({ saved: Object.keys(JSON.parse(e.init?.stdin ?? '{}')) }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
@@ -1438,7 +1438,7 @@ test('0.9.0: musicValue: nur { playing: true } heißt Musik', () => {
 })
 
 test('0.9.1: nach /clear, /resume und /branch meldet Clawd die Platzbreite sofort wieder (classic.SessionStart), nicht nach Start oder Komprimieren', async ($, on) => {
-  mock.clock(on)
+  const clock = mock.clock(on)
   const store = new Map<string, unknown>()
   const writes: unknown[] = []
   on('store.get', ($: unknown, e: any) => ({ value: store.get(e.key) }))
@@ -1449,7 +1449,7 @@ test('0.9.1: nach /clear, /resume und /branch meldet Clawd die Platzbreite sofor
   on('ui.log', () => ({ value: undefined }))
   on('command.register', () => ({ value: { command: 'clawd' } }))
   on('state.set', ($: unknown, e: any) => {
-    writes.push(e.value)
+    if (e.key === 'band') writes.push(e.value)
     return { value: undefined } as never
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -1460,9 +1460,11 @@ test('0.9.1: nach /clear, /resume und /branch meldet Clawd die Platzbreite sofor
     await $.classic.SessionStart({ source })
     expect(writes.at(-1), source).toEqual({ cols: 52 })
   }
+  await clock.advance(10) // 0.15.1: die Meldungen laufen in einer Kette mit der Müdigkeit (Uhr lesen)
   expect(writes.length).toBe(4)
   // Start und Komprimieren setzen $.state nicht zurück: kein Schreiben
   for (const source of ['startup', 'compact'] as const) await $.classic.SessionStart({ source })
+  await clock.advance(10)
   expect(writes.length).toBe(4)
 })
 
@@ -1477,8 +1479,8 @@ test('0.9.1: /clear mit abgelehntem state.set: der Hook geht durch, nichts wirft
   })
   on('ui.log', () => ({ value: undefined }))
   on('command.register', () => ({ value: { command: 'clawd' } }))
-  on('state.set', () => {
-    tries += 1
+  on('state.set', ($: unknown, e: any) => {
+    if (e.key === 'band') tries += 1
     return { deny: 'abgelehnt' } as never
   })
   on('session.start', () => ({ cwd: '/work' }))
@@ -1561,4 +1563,75 @@ test('0.14.0 iceWhenCold aus: kein Einfrieren bei einem neuen Chat, Status nennt
   const st = String((await $.command.run({ ...RUN, command: 'clawd', args: '' } as any)).text)
   expect(st).toMatch(/clawd-buddy: off/)
   expect(st).toMatch(/ice is off in the settings/)
+})
+
+// ---- 0.15.1: Müdigkeit für poly-world ($.state clawd-buddy.mood, mods/poly-world/SPEC.md)
+
+test('0.15.1: clawd-buddy.mood = { tired } in Schritten von 0,05: beim Start, nach langer Arbeit, höchstens alle 5 s, null wenn aus, nie beim Zeichnen', async ($, on) => {
+  const clock = mock.clock(on)
+  const { cli } = stubs(on)
+  on('command.register', () => ({ value: { command: 'clawd' } }))
+  on('ui.invalidate', () => ({ value: undefined }))
+  const moods: unknown[] = []
+  on('state.set', ($: unknown, e: any) => {
+    if (e.key === 'mood') moods.push(e.value)
+    return { value: undefined } as never
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('turn.start', ($: unknown, e: any) => ({ turnId: e.turnId }))
+  on('tool.check', () => ({ decision: 'allow' }))
+  on('tool.call', () => ({ result: 'ok' }))
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await clock.advance(10)
+  expect(moods).toEqual([{ tired: 0 }])
+  // Ein Turn läuft 90 min: (90 − 45) / 75 = 0,6
+  await $.turn.start({ text: 'los', turnId: 't1' })
+  await clock.advance(90 * 60_000)
+  await $.tool.call({ tool: 'Read', tool_use_id: 'r1', file_path: 'a' } as any)
+  await clock.advance(10)
+  expect(moods.at(-1)).toEqual({ tired: 0.6 })
+  // Innerhalb von 5 s keine weitere Prüfung, auch wenn der Wert schon um einen Schritt gestiegen wäre
+  const n = moods.length
+  await clock.advance(4 * 60_000) // 0,65 (die nächste Prüfung folgt erst beim nächsten Ereignis)
+  await $.tool.call({ tool: 'Read', tool_use_id: 'r2', file_path: 'b' } as any)
+  await clock.advance(10)
+  expect(moods.length).toBe(n + 1)
+  expect(moods.at(-1)).toEqual({ tired: 0.65 })
+  await clock.advance(1000)
+  await $.tool.call({ tool: 'Read', tool_use_id: 'r3', file_path: 'c' } as any)
+  await clock.advance(10)
+  expect(moods.length).toBe(n + 1)
+  // Zeichnen schreibt nichts
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.redraw()
+  expect(moods.length).toBe(n + 1)
+  await ui.unmount()
+  // Aus: null, sofort
+  await $.command.run({ ...RUN, command: 'clawd', args: 'off' })
+  await clock.advance(10)
+  expect(cli.at(-1)).toEqual({ enabled: 'false' })
+  expect(moods.at(-1)).toBeNull()
+})
+
+test('0.15.1: abgelehntes Schreiben von clawd-buddy.mood: nichts wirft, die nächste Prüfung versucht es wieder', async ($, on) => {
+  const clock = mock.clock(on)
+  stubs(on)
+  on('command.register', () => ({ value: { command: 'clawd' } }))
+  let refuse = true
+  let tries = 0
+  on('state.set', ($: unknown, e: any) => {
+    if (e.key !== 'mood') return { value: undefined } as never
+    tries += 1
+    return refuse ? ({ deny: 'abgelehnt' } as never) : ({ value: undefined } as never)
+  })
+  on('session.start', () => ({ cwd: '/work' }))
+  on('turn.start', ($: unknown, e: any) => ({ turnId: e.turnId }))
+  await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  await clock.advance(10)
+  expect(tries).toBe(1)
+  refuse = false
+  await clock.advance(6000)
+  await $.turn.start({ text: 'los', turnId: 't1' })
+  await clock.advance(10)
+  expect(tries).toBe(2)
 })

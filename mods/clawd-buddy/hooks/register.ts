@@ -58,8 +58,37 @@ function publishBand($: EngineInterface) {
   const cols = !enabled ? null : isDesktop ? DESK_COLS : termCols
   if (cols === publishedCols) return
   publishedCols = cols
-  // Schreibvorgänge nacheinander; Beiwerk: ein Fehler ändert nichts an Clawd
-  publishChain = publishChain.then(() => $.state.set({ plugin: 'clawd-buddy', key: 'band' }, cols === null ? null : { cols })).catch(() => {})
+  // Schreibvorgänge nacheinander; Beiwerk: ein Fehler ändert nichts an Clawd. Abgelehnt: die nächste Meldung versucht es wieder
+  // (Review 0.15.1 K1), sofern inzwischen nichts Neueres ansteht.
+  publishChain = publishChain
+    .then(() => $.state.set({ plugin: 'clawd-buddy', key: 'band' }, cols === null ? null : { cols }))
+    .catch(() => {
+      if (publishedCols === cols) publishedCols = undefined
+    })
+}
+// Müdigkeit für poly-world (0.15.1, mods/poly-world/SPEC.md „Müdigkeit → Licht in der Hütte“): `$.state` `clawd-buddy.mood` =
+// `{ tired }` (0–1, in Schritten von 0,05) bzw. `null`, wenn Clawd aus ist. Nie beim Zeichnen geschrieben (docs/BAND.md Regel 8), nur
+// bei Ereignissen, höchstens alle MOOD_MIN_MS und nur bei einer Änderung um einen Schritt. `undefined` = noch nicht geschrieben.
+const MOOD_MIN_MS = 5000
+let publishedTired: number | null | undefined = undefined
+let moodCheckedAt = -1e9 // Uhrzeit ($.clock) der letzten ungezwungenen Prüfung
+let moodTypedAt = -1e9 // performance.now() der letzten Prüfung beim Tippen (dort kein `$`-Aufruf je Taste)
+function publishMood($: EngineInterface, force = false) {
+  // In derselben Kette wie die Breitenmeldung: Uhr lesen, Wert bilden, nur bei Änderung schreiben; ein Fehler ändert nichts an Clawd.
+  // Gedrosselt nach der Uhr der Mods-API (im Test-Kit vorstellbar); an/aus, Start und /clear prüfen sofort.
+  publishChain = publishChain
+    .then(async () => {
+      const now = await $.clock.now()
+      if (!force) {
+        if (now - moodCheckedAt < MOOD_MIN_MS) return
+        moodCheckedAt = now
+      }
+      const tired = enabled ? Math.round(deriveTemper(strain, now).tired * 20) / 20 : null
+      if (tired === publishedTired) return
+      await $.state.set({ plugin: 'clawd-buddy', key: 'mood' }, tired === null ? null : { tired })
+      publishedTired = tired // erst nach Erfolg: ein abgelehntes Schreiben versucht die nächste Prüfung wieder
+    })
+    .catch(() => {})
 }
 let annoy = 0
 let napN = 0
@@ -319,6 +348,7 @@ async function migrate($: EngineInterface, lang: Lang) {
     enabledSetting = apply.enabled
     deskForce = true
     publishBand($)
+    publishMood($, true)
     $.ui.invalidate('ui.render')
   }
 }
@@ -362,6 +392,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     if (sessionStarted) {
       publishedCols = undefined
       publishBand($)
+      publishedTired = undefined
+      publishMood($, true)
     }
     // /clear ist ein neuer Chat (0.13.0): kalter Moment, „einmal pro Chat“ beginnt neu.
     if (e.source === 'clear') {
@@ -412,6 +444,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       $.ui.log(`clawd-buddy: store not read: ${String(err)}`, { to: 'debug' })
     }
     publishBand($)
+    publishMood($, true)
     // Danach (nicht gleichzeitig, beide schreiben settings.json) die Aus-Standards einmal speichern (hooks/offdefaults.ts)
     void migrate($, lang).catch(() => {}).then(() => storeOffDefaults($, 'clawd-buddy', SETTINGS))
     // Neuer Chat (0.13.0): ein kalter Moment. Hat resume/fork schon entschieden (0.13.1, kam vor session.start), bleibt es dabei.
@@ -437,6 +470,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   // ---- Nutzungslimits (nur Prozent und Reset-Zeit, types:10566): ausgeschöpftes Limit → eigene Animationen
   on('session.measure', async ($, e, next) => {
     publishBand($)
+    publishMood($)
     try {
       const pick = (kind: string) => e.rateLimits.find((r) => r.kind === kind)
       const five = pick('five_hour')
@@ -475,6 +509,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   // ---- Fakten aus den Events
   on('turn.start', async ($, e, next) => {
     publishBand($)
+    publishMood($)
     facts = { ...facts, turnActive: true, endedKind: '', lastTool: undefined }
     let now: number | undefined
     try {
@@ -492,6 +527,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
 
   on('turn.complete', async ($, e, next) => {
     publishBand($)
+    publishMood($)
     // Ein Subagent-Lauf trägt `agentId`: dann ist dieser Subagent fertig (zählt nicht mehr), die Hauptstimmung bleibt
     if (e.agentId) {
       if (agentSeen.delete(e.agentId)) {
@@ -536,6 +572,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   })
 
   on('tool.call', async ($, e, next) => {
+    publishMood($) // Müdigkeit wächst mit der Arbeitszeit am Stück (0.15.1); gedrosselt, wartet nicht
     const id = e.tool_use_id
     // Subagenten-Tools (agentId) ändern die Hauptstimmung nicht; eine offene Rückfrage eines Subagenten räumen wir aber mit auf
     if (e.agentId) {
@@ -656,8 +693,13 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('prompt.edit', async ($, e, next) => {
     // Zuerst weiterreichen: das Tippen darf nie verzögert werden. Keine `$`-Aufrufe pro Taste außer dem gedrosselten invalidate.
     const result = await next(e)
-    // Terminal-Breite für tune-strip (0.15.0): ruft `$.state.set` nur, wenn sie sich seit der letzten Meldung geändert hat
+    // Terminal-Breite für tune-strip (0.15.0): ruft `$.state.set` nur, wenn sie sich seit der letzten Meldung geändert hat.
+    // Müdigkeit (0.15.1): höchstens alle 5 s eine Prüfung (ohne `$`-Aufruf je Taste); nach einer Pause fällt sie hier auf 0.
     publishBand($)
+    if (performance.now() - moodTypedAt >= MOOD_MIN_MS) {
+      moodTypedAt = performance.now()
+      publishMood($)
+    }
     const gap = performance.now() - typingPerf
     typingPerf = performance.now()
     // Eis (0.13.0): je Tipp-Schub eine Riss-Stufe (höchstens 3). Die Zeit kommt aus der letzten Zeichnung, kein `$`-Aufruf je Taste.
@@ -730,6 +772,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       if (enabled) return
       enabled = true
       publishBand($)
+      publishMood($, true)
     }
     if (sub === 'on' || sub === 'off') {
       const want = sub === 'on'
@@ -740,6 +783,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       enabled = want
       enabledSetting = want
       publishBand($)
+      publishMood($, true)
       if (!enabled) {
         deskTimer?.cancel()
         deskTimer = null
