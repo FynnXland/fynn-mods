@@ -1,6 +1,6 @@
 {
   "name": "fynn-mods",
-  "description": "Fynn's daily-driver Claude Code mods: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies, a music bar for Spotify (Windows) and a cost ledger.",
+  "description": "Fynn's daily-driver Claude Code mods: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies, a music bar for Spotify (Windows), a cost ledger and color sets for the desktop app.",
   "owner": {
     "name": "Fynn Hansen"
   },
@@ -36,12 +36,13 @@
       "description": "Records what every chat costs, across projects and, if you like, across devices, so you can see where your usage goes. It only observes and makes no model calls."
     },
     {
-      "name": "poly-world",
-      "source": "./mods/poly-world",
-      "description": "A floating low-poly island behind the chat in the Claude Desktop and mobile apps. Its sky follows the time of day, and a matching color set tints the app."
+      "name": "tint",
+      "source": "./mods/tint",
+      "description": "A calm color set for the Claude Desktop app: Herbstglut, Rosé Pine, Nord, or colors from your own design system, in light and dark. Colors only, no background."
     }
   ],
   "renames": {
-    "spotify": "tune-strip"
+    "spotify": "tune-strip",
+    "poly-world": null
   }
 }

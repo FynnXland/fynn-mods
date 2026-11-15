@@ -1,6 +1,6 @@
 {
   "name": "sidekick",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "description": "Checks your message before it is sent and offers a better way where there is one: a new chat with a handoff, a skill, a clearer version or a cheaper model. It never changes your words or sends anything without asking.",
   "author": {
     "name": "Fynn Hansen"

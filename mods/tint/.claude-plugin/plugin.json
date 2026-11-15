@@ -1,0 +1,39 @@
+{
+  "name": "tint",
+  "version": "0.2.1",
+  "description": "A calm color set for the Claude Desktop app: Herbstglut, Rosé Pine, Nord, or colors from your own design system, in light and dark. Colors only, no background.",
+  "author": {
+    "name": "Fynn Hansen"
+  },
+  "license": "MIT",
+  "userConfig": {
+    "enabled": {
+      "type": "boolean",
+      "title": "Apply colors",
+      "description": "Off leaves the app's own colors. Also /tint on|off.",
+      "default": true
+    },
+    "palette": {
+      "type": "string",
+      "title": "Color set",
+      "description": "herbstglut: warm paper and lantern light, rose-pine: Rosé Pine Dawn and Moon, nord: Nord Snow Storm and Polar Night, custom: your own set chosen last (/tint <name>). Applies from the next chat; /tint <name> applies now.",
+      "default": "herbstglut",
+      "options": [
+        "herbstglut",
+        "rose-pine",
+        "nord",
+        "custom"
+      ]
+    },
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the texts. en: English, de: Deutsch. Also /tint language.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
+      ]
+    }
+  }
+}

@@ -4,6 +4,6 @@ import type { FieldDefs } from './settings.js'
 
 export const SETTINGS: FieldDefs = {
   enabled: { type: 'boolean', default: true },
-  colors: { type: 'boolean', default: true },
+  palette: { type: 'string', default: 'herbstglut', options: ['herbstglut', 'rose-pine', 'nord', 'custom'] },
   language: { type: 'string', default: 'en', options: ['en', 'de'] },
 }

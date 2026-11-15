@@ -1,12 +1,12 @@
 # fynn-mods
 
 **Sieben Mods für Claude Code: ein animiertes Maskottchen, Balken für die Nutzungslimits, ein Sidekick, der vor dem
-Senden mitdenkt, Schnellantworten, eine Musikleiste für Spotify (Windows), ein Kostenbuch und eine lebende Hintergrundwelt.**
+Senden mitdenkt, Schnellantworten, eine Musikleiste für Spotify (Windows), ein Kostenbuch und Farbsätze für die Desktop-App.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.325_tested-D97757)](https://code.claude.com/docs/de/plugins/mods/overview)
-[![Mods](https://img.shields.io/badge/mods-6-555)](#die-mods)
+[![Mods](https://img.shields.io/badge/mods-7-555)](#die-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#die-mods)
 
 [Installation](#installation) · [Die Mods](#die-mods) · [Fehlerbehebung](#fehlerbehebung) · [Website](https://fynn.land/fynn-mods/) · [English](README.md) · **Deutsch**
@@ -25,12 +25,18 @@ Mods sind aufeinander abgestimmt, aber jeder ist ein eigenes Plugin und einzeln 
 
 Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mods`.
 
+> **Neu in fynn-mods 2.0:** Alle Band-Mods sind für das neue Band von Claude Code 2.1.323 umgebaut, in dem jeder Mod
+> seine eigene Zeile zeichnet und die Zeilen wieder ein Band ergeben. Dazu kommt ein siebter Mod, [tint](#tint):
+> ruhige Farbsätze für die Desktop-App oder die Farben deines eigenen Design-Systems. Aktualisieren mit
+> `claude plugin marketplace update fynn-mods`, dann `claude plugin update <mod>@fynn-mods` für jeden Mod, den du nutzt.
+
 > **Englisch oder Deutsch.** Alle Mods sprechen standardmäßig Englisch: Knöpfe, Meldungen, Dialoge und die Antworten
 > der Modellaufrufe, die manche Mods machen. Jeder Mod hat die Option `language` (`en` oder `de`). `/clawd language de`
-> (oder dasselbe mit `/bars`, `/sidekick`, `/replies`, `/tune`, `/ledger`) stellt alle installierten fynn-mods auf
+> (oder dasselbe mit `/bars`, `/sidekick`, `/replies`, `/tune`, `/ledger`, `/tint`) stellt alle installierten fynn-mods auf
 > einmal um; für einen einzelnen Mod `/plugin configure <mod>@fynn-mods`. Die Bilder unten zeigen die englische
 > Standardeinstellung. Sie sind aus dem Zeichencode der Mods nachgebaut, mit einem erfundenen Beispielprojekt: keine
-> echten Chats, Pfade oder Kosten.
+> echten Chats, Pfade oder Kosten. Einzige Ausnahme ist das Bild von tint: ein echter Screenshot eines Beispiel-Chats
+> auf Deutsch.
 > Die Mod-READMEs unter `mods/` sind englisch.
 
 | Mod | In einem Satz |
@@ -41,8 +47,9 @@ Dieses Repository ist ein Claude-Code-Plugin-Marketplace mit dem Namen `fynn-mod
 | [quick-replies](#quick-replies) | Der Vorschlag von Claude Code für die nächste Nachricht als Knopf |
 | [tune-strip](#tune-strip) | Musikleiste für Spotify über dem Prompt mit Cover, Position und Knöpfen (nur Windows) |
 | [cost-ledger](#cost-ledger) | Kostenbuch über alle Chats, nach Tag, Projekt, Chat und Modell |
+| [tint](#tint) | Ruhige Farbsätze für die Desktop-App (Herbstglut, Rosé Pine, Nord) oder die Farben deines eigenen Design-Systems |
 
-**Hilfe in jedem Mod:** `/<befehl> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/tune`, `/ledger`) zeichnet
+**Hilfe in jedem Mod:** `/<befehl> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/tune`, `/ledger`, `/tint`) zeichnet
 eine Tabelle mit allen Befehlen, was gerade an oder aus ist und wie man es umschaltet, und den Einstellungen des Mods
 mit ihren Werten. In `claude -p` und VS Code kommt dasselbe als kurzer Text.
 
@@ -56,7 +63,7 @@ Slash-Befehle ändern dieselben Einstellungen, und von früheren Versionen gespe
   `claude --version`.
 - Läuft im Terminal und im Code-Tab der Claude-Desktop-App. In `claude -p`, im Agent SDK, in VS Code und mobil zeichnen
   die meisten Mods nichts; Details in der README des jeweiligen Mods.
-- tune-strip braucht Windows und die Spotify-Desktop-App. Die anderen fünf sind an kein System gebunden (täglich unter
+- tune-strip braucht Windows und die Spotify-Desktop-App. Die anderen sechs sind an kein System gebunden (täglich unter
   Windows im Einsatz, in der CI unter Linux getestet); nur der optionale Speicher-Ring und die Systemwerte von
   limit-bars laufen nur unter Windows.
 - Die Mods-API kann sich zwischen Claude-Code-Versionen ändern. Funktioniert ein Mod nach einem Update nicht mehr,
@@ -343,25 +350,30 @@ Anleitung mit Pfaden je System und Fehlerhilfe: [Sync between devices](mods/cost
   Keine Modellaufrufe oder Netzwerkzugriffe. Dateien nur für den optionalen Sync (`$.fs`, begrenzt auf den gewählten Ordner und die eigene Datei `cost-ledger-<id>.json`).
 - **Details:** [mods/cost-ledger](mods/cost-ledger/README.md) (englisch)
 
-### poly-world
+### tint
 
-![poly-world in der Abenddämmerung, für sich gerendert ohne die App: eine schwebende Low-Poly-Insel mit Hütte, Bäumen und kleinem Wasserfall oben rechts in einem orange-violetten Abendhimmel, Rauch aus dem Schornstein, leuchtende Laternen und ein helles Fenster.](assets/poly-world.png)
+![Derselbe Chat in der Claude-Desktop-App mit zwei Farbsätzen von tint, diagonal geteilt: links Rosé Pine Moon mit violetten Flächen, rechts Herbstglut im dunklen Modus mit nachtblauen Flächen. Der Chat erklärt CSS Grid mit zwei Codeblöcken; darunter nimmt das Band mit tune-strip, limit-bars und Clawd die Farben des jeweiligen Satzes an.](assets/tint.png)
 
-**Neu, nur Desktop- und Mobil-App.** Eine schwebende Low-Poly-Insel hinter dem Chat: Hütte, Bäume und ein kleiner
-Wasserfall im Himmel oben rechts, weg von deinen Nachrichten und dem Eingabefeld. Himmel und Licht folgen der echten
-Uhrzeit (Nacht, Morgen, Tag, Abend) als eine langsame 24-Stunden-Animation, und ein passender Farbsatz „Poly World“
-färbt die App in hell und dunkel. Die Insel reagiert leise: Rauch, solange Claude arbeitet, Laternen, solange tune-strip
-Musik spielt, ein helles Fenster spät abends (mit einer künftigen clawd-buddy-Version, wenn Clawd müde ist), nachts ein
-bläulicher Laptop-Schein. Terminal und VS Code zeichnen kein Theme, dort siehst du nichts.
+<i>Echter Screenshot der Desktop-App, derselbe Chat einmal mit jedem Satz; Album-Cover verpixelt.</i>
 
-- **Befehle:** `/world` (Status), `/world on|off`, `/world colors on|off`, `/world time <HH:MM>|now` (andere Tageszeit
-  ansehen), `/world language de|en`, `/world help`
-- **Rechte kurz:** setzt das Theme der Session (`$.theme.set`: Szene und Farben) und löscht es nur bei `/world off`;
-  zeichnet die Szene selbst (SVG mit CSS-Animation, kein Script, nichts nachgeladen); liest, ob tune-strip Musik spielt,
-  und später Clawds Müdigkeit (`$.state`). Sonst nur die [Einstellungsbefehle](#rechte-und-vertrauen). Keine Dateien,
-  kein Netzwerk, keine Modellaufrufe.
+**Neu, nur Desktop-App.** Ein ruhiger Farbsatz für den Code-Tab, in hell und dunkel: nur Farben, kein Hintergrund,
+nichts bewegt sich. Zur Wahl stehen `herbstglut` (warmes Papier und Ahornorange, Standard), `rose-pine` (Dawn und Moon)
+und `nord`. Jeder Satz hält den Haupttext bei 7:1 oder besser und gedämpften Text bei 4.5:1 oder besser, auf jeder Fläche.
+
+**Dein eigenes Design-System:** Sag Claude, wo es liegt („Übernimm die Farben aus meinem Design-System in
+`design/tokens.json` in die App“). Eine Tailwind-Konfiguration, CSS-Variablen, ein Figma- oder Design-Token-Export, ein
+Brand Guide oder ein Design-System auf claude.ai gehen alle. Claude ordnet die Farben den Ankern von tint zu und gibt sie
+an tint, das den Kontrast wie bei den eigenen Sätzen prüft, den Satz unter seinem Namen speichert und setzt. Bis zu 20
+eigene Sätze; wählen mit `/tint <name>`. Terminal und VS Code zeichnen kein Theme, dort siehst du nichts.
+
+- **Befehle:** `/tint` (Status mit Farbproben), `/tint herbstglut|rose-pine|nord|<eigener Name>`, `/tint remove <name>`,
+  `/tint on|off`, `/tint language de|en`, `/tint help`
+- **Rechte kurz:** setzt die Farben der Session (`$.theme.set`, nie einen Hintergrund) und löscht sie nur bei
+  `/tint off`; ein Werkzeug (`save_colors`), dem Claude die Farben eines Design-Systems übergibt und das hinter
+  ToolSearch wartet, bis es gebraucht wird; eigene Sätze im eigenen Plugin-Speicher. Sonst nur die
+  [Einstellungsbefehle](#rechte-und-vertrauen). Keine Dateien, kein Netzwerk, keine eigenen Modellaufrufe.
 - **Ein Theme je Session:** Claude Code behält ein Theme, das zuletzt gesetzte; nutze immer nur eine Theme-Mod.
-- **Details:** [mods/poly-world](mods/poly-world/README.md) (englisch)
+- **Details:** [mods/tint](mods/tint/README.md) (englisch)
 
 ## Zusammenspiel
 
@@ -403,8 +415,8 @@ der sieben fynn-mods (`$.config`). Die Befehle, die eine Einstellung spiegeln (`
 `/tune size`, `/ledger plan`, `/sidekick cache` und so weiter), ändern nur die Felder ihres eigenen Mods. In der
 Desktop-App und in `claude -p`, wo Claude Code keine Plugin-Einstellungen auflistet, rufen sie stattdessen die
 `claude`-CLI auf, nur `claude plugin list --json` und `claude plugin configure <mod>@fynn-mods` (für die sieben
-fynn-mods, nur eigene Felder). Das ist der einzige Prozess, den clawd-buddy, cost-ledger, quick-replies und sidekick
-je starten.
+fynn-mods, nur eigene Felder). Das ist der einzige Prozess, den clawd-buddy, cost-ledger, quick-replies, sidekick
+und tint je starten.
 
 **Weitere Prozesse,** alle Windows PowerShell mit festen Skripten: tune-strip, um die Spotify-Sitzung der
 Windows-Mediensteuerung zu lesen und zu steuern und für den Takt nur den Ton von Spotify zu hören (nur das Tempo,

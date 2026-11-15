@@ -1,0 +1,17 @@
+/* Acme design system: test fixture for tint's import probe. Light only, no dark mode on purpose. */
+:root {
+  --acme-bg: #f1f5f9;
+  --acme-card: #f8fafc;
+  --acme-panel: #ffffff;
+  --acme-text: #0f172a;
+  --acme-text-secondary: #334155;
+  --acme-text-muted: #475569;
+  --acme-neutral-300: #cbd5e1;
+  --acme-neutral-400: #94a3b8;
+  --acme-neutral-800: #1e293b;
+  --acme-neutral-900: #0f172a;
+  --acme-brand: #4f46e5;
+  --acme-error: #dc2626;
+  --acme-success: #16a34a;
+  --acme-warning: #d97706;
+}

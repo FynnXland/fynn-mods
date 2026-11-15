@@ -6,8 +6,8 @@ import type { On } from 'claude-code'
 import { FYNN_MODS, LANGUAGES, installedMods, isLanguage, languageHelp } from '../hooks/language.js'
 
 // ---- je Mod anpassen ----
-const SELF = 'poly-world'
-const CMD = 'world'
+const SELF = 'tint'
+const CMD = 'tint'
 // -------------------------
 
 const OTHERS = FYNN_MODS.filter((m) => m !== SELF)
