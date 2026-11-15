@@ -4,21 +4,21 @@ After Claude answers, Claude Code often suggests your next message itself (the g
 
 Texts are English by default; set `language` to `de` for German.
 
-Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.8.1**
+Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.8.2**
 
 ## Display
 
 | Surface | Look |
 |---|---|
 | Desktop Code tab | Its own pill with a dimmed rounded border and one blank line above Clawd, the limit bars and the cache ring, which stay unchanged below |
-| Terminal | Compact, without border or spacing, above the rest of the band |
+| Terminal | Compact, without border or spacing, above the row with limit-bars and Clawd |
 
 - **Layout:** a single suggestion stands alone in its row. From two suggestions on, **2 × 2** (left `1`/`3`, right `2`/`4`) if the longest label fits into half the width, otherwise one per row. The `layout` setting can force either.
 - **Labels** are at most 40 characters, shortened with `…`. That only affects Claude Code's own suggestion, which is shown in full as grey text in the prompt and is sent in full.
 - **The pill only shows** when a turn has finished since your last message, at least one suggestion exists, the prompt is empty and the mod is on. It disappears while Claude is working, while you type, during a survey in the band, while a subagent transcript is open, and after `/clear` until the next answer. Without a pill the band keeps its height; quick-replies never moves Clawd or the bars.
 - **Stability:** if suggestions are already shown and you typed or clicked within the last 2 s, newly arriving suggestions wait until 2 s of quiet. If nothing is shown yet, a new suggestion appears at once.
 - While sidekick starts a new chat (its handoff box in the band), the pill is hidden. sidekick's other rows (its prompt buttons, tips) stay above the pill. While the band is collapsed (ctrl+x ctrl+a) there is no pill either, and a digit stays a digit.
-- **One band (since 0.8.0):** since Claude Code 2.1.323 each mod draws its own row. quick-replies draws the pill as its own row and carries a small `AbovePromptList` hook, the same in every band mod from fynn-mods, that puts the rows back into one band: sidekick on top, then the pill, then one row with limit-bars, tune-strip and Clawd.
+- **One band (since 0.8.0):** since Claude Code 2.1.323 each mod draws its own row. quick-replies draws the pill as its own row and carries a small `AbovePromptList` hook, the same in every band mod from fynn-mods, that puts the rows back into one band. From top to bottom: sidekick, tune-strip's bar as its own row, the pill, then one row with limit-bars on the left and Clawd on the right.
 
 **Runs in:** terminal and the desktop Code tab. In `claude -p`, the Agent SDK, VS Code and mobile it draws nothing and makes no model calls.
 
@@ -139,6 +139,10 @@ claude --plugin-dir <path-to-clone>/mods/quick-replies
 - **Band mods from fynn-mods on older versions:** the band only looks like one band again when the other band mods (clawd-buddy, limit-bars, sidekick, tune-strip) are on their Band 2 versions too; an older one draws its own stacked row. Rows of other mods that do not use the shared keys stay in the band, between the pill and the bottom row.
 - **Haiku 5.5 above 100k tokens:** Haiku 5.5 costs five times as much when a request has more than 100,000 prompt tokens. The fork reports only the sum over its requests, so the cost line always uses the lower price. Each fork request carries the whole chat, so in a Haiku 5.5 chat whose context is over 100,000 tokens the estimate is about five times too low.
 - **Hover flicker in the desktop app:** next to animated mods in the band (e.g. clawd-buddy's Clawd), the buttons can flicker under the mouse. Clicks still work.
+
+## Changes
+
+- **0.8.2**: README: order of the band rows. No other change.
 
 ## Credits
 
