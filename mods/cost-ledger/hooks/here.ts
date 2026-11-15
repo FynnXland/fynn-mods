@@ -2,10 +2,10 @@
 // Desktop: ein Svg mit Ring (Anteil des Chats am Projekt) und der großen Zahl (API-Wert des Projekts), darunter die
 // Fußzeile als Text in Theme-Farben. Terminal: dieselben Zahlen in wenigen Zeilen mit einem Balken statt des Rings.
 import type { RenderElement, RenderNode } from 'claude-code'
-import { T, dateTime, fullDate, rangeLabel, usd } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import { NO_FOLDER, dayBefore, dayKey } from './logic.ts'
-import type { Kind, Rec } from './logic.ts'
+import { T, dateTime, fullDate, rangeLabel, usd } from './i18n.js'
+import type { Lang } from './i18n.js'
+import { NO_FOLDER, dayBefore, dayKey } from './logic.js'
+import type { Kind, Rec } from './logic.js'
 
 /** Alles, was Zeichnung und Text brauchen. `project` = `null`: Skript-Lauf oder Ordner unbekannt (Verhalten 6). */
 export type Here = {

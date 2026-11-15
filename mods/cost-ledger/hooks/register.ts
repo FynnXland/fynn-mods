@@ -3,13 +3,13 @@
 // Fail-open: Jeder Erfassungs-Hook gibt das Ergebnis von `next` unverändert zurück, Fehler gehen nur ins Debug-Log; kein `.catch`.
 // Ein $.store-Schlüssel pro Session (`s:<sessionId>`), den nur diese Session schreibt: $.store ist nicht atomar (CHEATSHEET).
 import type { ConfigRow, EngineInterface, FsEntry, On } from 'claude-code'
-import { helpMarkdown, helpTree } from './help.ts'
-import type { HelpData } from './help.ts'
-import { T, dateTime, shortDate, usd } from './i18n.ts'
-import { isLanguage, languageCommand } from './language.ts'
-import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
-import type { Values } from './settings.ts'
-import { SETTINGS } from './fields.ts'
+import { helpMarkdown, helpTree } from './help.js'
+import type { HelpData } from './help.js'
+import { T, dateTime, shortDate, usd } from './i18n.js'
+import { isLanguage, languageCommand } from './language.js'
+import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.js'
+import type { Values } from './settings.js'
+import { SETTINGS } from './fields.js'
 import {
   HELP_WORDS,
   HERE_WORDS,
@@ -54,14 +54,14 @@ import {
   summaryText,
   titleFromPrompt,
   tokensOf,
-} from './logic.ts'
-import type { Carry, HelpInfo, Kind, Limit, Plan, Rec, Settings, SyncInfo, TurnInfo, Usage } from './logic.ts'
-import { FILE_LIMIT, buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, safeProj, usersIn, utf8Bytes, validDir } from './sync.ts'
-import type { Device, SyncFile } from './sync.ts'
-import { hereLine, hereOf, hereState, hereText, hereTree } from './here.ts'
-import type { Here, HereState } from './here.ts'
-import { ledgerTree } from './view.ts'
-import type { View } from './view.ts'
+} from './logic.js'
+import type { Carry, HelpInfo, Kind, Limit, Plan, Rec, Settings, SyncInfo, TurnInfo, Usage } from './logic.js'
+import { FILE_LIMIT, buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, safeProj, usersIn, utf8Bytes, validDir } from './sync.js'
+import type { Device, SyncFile } from './sync.js'
+import { hereLine, hereOf, hereState, hereText, hereTree } from './here.js'
+import type { Here, HereState } from './here.js'
+import { ledgerTree } from './view.js'
+import type { View } from './view.js'
 
 const SELF = 'cost-ledger'
 
@@ -1047,8 +1047,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   on('model.complete', async ($, e, next) => {
     const r = await next(e)
     try {
-      if ('value' in r) {
-        await serial(() => bookCall($, next.origin?.plugin, e.model, r.value.usage, false, true))
+      const v = 'value' in r ? r.value : undefined
+      if (v) {
+        await serial(() => bookCall($, next.origin?.plugin, e.model, v.usage, false, true))
         void publish($) // der Mod-Aufruf wartet nur aufs eigene Speichern, nicht auf $.state (SPEC Verhalten 5; Review 0.10.0 K2)
       }
     } catch (err) {
@@ -1061,8 +1062,10 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const r = await next(e)
     try {
       // Der Fork läuft auf dem Modell der Hauptschleife; „nothing-to-fork“ hat keine Usage und kostet nichts
-      if ('value' in r && 'usage' in r.value) {
-        await serial(() => bookCall($, next.origin?.plugin, lastModel, r.value.usage, false))
+      const v = 'value' in r ? r.value : undefined
+      if (v && 'usage' in v) {
+        const usage = v.usage
+        await serial(() => bookCall($, next.origin?.plugin, lastModel, usage, false))
         void publish($) // der Mod-Aufruf wartet nur aufs eigene Speichern, nicht auf $.state (SPEC Verhalten 5; Review 0.10.0 K2)
       }
     } catch (err) {

@@ -4,7 +4,7 @@ A cost ledger across all your chats. After every answer, cost-ledger records wha
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.319** · Plugin version **0.12.2** · Requires Claude Code v2.1.309 or later
+Tested with Claude Code **v2.1.325** · Plugin version **0.12.3** · Requires Claude Code v2.1.318 or later
 
 ## Usage
 

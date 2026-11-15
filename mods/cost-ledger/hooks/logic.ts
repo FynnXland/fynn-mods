@@ -1,8 +1,8 @@
 // cost-ledger: reine Logik ohne $ (Buchen, Aggregieren, Preise, Kurzfassung). Alles hier ist ohne Engine testbar.
-import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import type { HelpData } from './help.ts'
-import { languageHelp } from './language.ts'
+import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.js'
+import type { Lang } from './i18n.js'
+import type { HelpData } from './help.js'
+import { languageHelp } from './language.js'
 
 export const DAY = 24 * 60 * 60 * 1000
 

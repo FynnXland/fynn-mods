@@ -14,7 +14,7 @@ jobs:
       CLAUDE_CODE_VERSION: 2.1.325
       # Mods not yet moved to the Claude Code 2.1.323 band (one row per mod). Their checks only warn until their next
       # release; remove a mod from this list when it is released.
-      PENDING_MODS: "sidekick quick-replies tune-strip cost-ledger"
+      PENDING_MODS: "sidekick quick-replies tune-strip"
     steps:
       - uses: actions/checkout@v7
       - name: Install Claude Code

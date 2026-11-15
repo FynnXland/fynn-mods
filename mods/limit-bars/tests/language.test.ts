@@ -28,7 +28,7 @@ const row = (mod: string, field: string, value: unknown, o: { owner?: string; lo
 })
 const engineRow: Row = { key: 'language', label: 'Language', kind: 'text', value: 'Default (English)', provider: { plugin: 'engine', tier: 'core' }, isLocked: false }
 
-/** Alle sechs Mods mit `value`, dazu Fremdes: Sprache der Engine, fremdes Plugin mit `language`, andere Felder, fremder Besitzer. */
+/** Alle fynn-mods mit `value`, dazu Fremdes: Sprache der Engine, fremdes Plugin mit `language`, andere Felder, fremder Besitzer. */
 const all = (value: string): Row[] => [
   engineRow,
   ...FYNN_MODS.map((m) => row(m, 'language', value)),
@@ -108,7 +108,7 @@ test('language: Hilfezeile in en und de', () => {
   expect(languageHelp(CMD, 'de')).toEqual({ cmd: `/${CMD} language de|en`, does: 'Sprache aller fynn-mods umstellen' })
 })
 
-test('language en: setzt alle sechs, die eigene zuletzt; Fremdes und andere Felder bleiben in Ruhe; Antwort englisch', DE, async ($, on) => {
+test('language en: setzt alle, die eigene zuletzt; Fremdes und andere Felder bleiben in Ruhe; Antwort englisch', DE, async ($, on) => {
   const w = world(on, all('de'))
   const text = await run($, 'language en')
   expect(w.sets.map((s) => s.key)).toEqual([...OTHERS, SELF].map((m) => `${m}.language`))
@@ -166,7 +166,7 @@ test('language: abgelehnter oder werfender set → Zeile nennt die Mod, die ande
   w.deny[`${OTHERS[0]}.language`] = 'nicht jetzt'
   w.throws[`${OTHERS[1]}.language`] = 'Schreiben fehlgeschlagen'
   const text = await run($, 'language de')
-  expect(w.sets).toHaveLength(6)
+  expect(w.sets).toHaveLength(FYNN_MODS.length)
   // Im Test-Kit lässt ein `deny`-Stub den Aufruf werfen (docs/raw/en/test.md:187); in einer Session kommt `{ deny }` zurück
   expect(text).toMatch(new RegExp(`^- ${OTHERS[0]}: (abgelehnt|Fehler): .*nicht jetzt`, 'm'))
   expect(text).toMatch(new RegExp(`^- ${OTHERS[1]}: Fehler: `, 'm'))
@@ -205,10 +205,10 @@ const LISTED = [
   { id: `${OTHERS[0]}@fynn-mods`, enabled: true, hasUserConfig: true },
   { id: `${OTHERS[1]}@fynn-mods`, enabled: false, hasUserConfig: true }, // abgeschaltet
   { id: `${OTHERS[2]}@other-market`, enabled: true, hasUserConfig: true }, // anderer Marketplace
-  { id: 'foreign@fynn-mods', enabled: true, hasUserConfig: true }, // keine der sechs
+  { id: 'foreign@fynn-mods', enabled: true, hasUserConfig: true }, // keine aus FYNN_MODS
 ]
 
-test('language: Weg 2, installedMods nimmt nur aktivierte <mod>@fynn-mods der sechs', () => {
+test('language: Weg 2, installedMods nimmt nur aktivierte <mod>@fynn-mods aus FYNN_MODS', () => {
   expect(installedMods(LISTED)).toEqual(FYNN_MODS.filter((m) => m === SELF || m === OTHERS[0]))
   expect(installedMods(null)).toEqual([])
   expect(installedMods({ id: `${SELF}@fynn-mods` })).toEqual([])

@@ -1,6 +1,6 @@
 {
   "name": "cost-ledger",
-  "version": "0.12.2",
+  "version": "0.12.3",
   "description": "Records what every chat costs, across projects and, if you like, across devices, so you can see where your usage goes. It only observes and makes no model calls.",
   "author": {
     "name": "Fynn Hansen"

@@ -4,7 +4,7 @@ Two slim bars on the left of the band above the prompt show live how much of the
 
 Texts are English by default; set `language` to `de` for German.
 
-Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.17.0**
+Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.17.1**
 
 ## Display
 
@@ -250,4 +250,5 @@ Both mods draw their own row into the band above the prompt (since 0.17.0, Claud
 
 ## Changes
 
+- **0.17.1**: `/bars language` also switches poly-world (shared language list of the fynn-mods). No other change.
 - **0.17.0** (Claude Code 2.1.323 or later): the bars are their own row in the band. Since Claude Code 2.1.323 each mod draws only its own row; a new `AbovePromptList` hook, the same in every band mod, puts the rows back into one band as before: bars left, tune-strip next to them, Clawd right, sidekick and quick-replies on top. The row has a fixed width in cells, and `limit-bars.band` reports that width in cells on both surfaces (was pixels in the desktop app). New right: the hook `ui.render{component=AbovePromptList}`.

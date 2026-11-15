@@ -6,9 +6,9 @@
 // als eine Zelle. Spalten sind deshalb Boxen mit fester Breite; im Desktop sind Balken Boxen mit Hintergrundfarbe und
 // ganzzahliger Prozentbreite (Kommaprozente verwirft er), im Terminal dünne `▄`. Der leere Teil zeigt den Hintergrund.
 import type { RenderElement, RenderNode } from 'claude-code'
-import { T, dateTime, duration, fullDate, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import { bigUsd } from './here.ts'
+import { T, dateTime, duration, fullDate, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from './i18n.js'
+import type { Lang } from './i18n.js'
+import { bigUsd } from './here.js'
 import {
   MOD_PART,
   UNKNOWN_MODEL,
@@ -25,8 +25,8 @@ import {
   planLine,
   projectLabel,
   projectionText,
-} from './logic.ts'
-import type { Bucket, LimWindow, LimitsReport, Report, Settings, ViewName } from './logic.ts'
+} from './logic.js'
+import type { Bucket, LimWindow, LimitsReport, Report, Settings, ViewName } from './logic.js'
 
 /** `here`: die Zeile „Hier: …“ unten in der Übersicht (ab 0.8.0), fertig formatiert. */
 export type View = { report: Report; view: ViewName; range: number; here?: string }

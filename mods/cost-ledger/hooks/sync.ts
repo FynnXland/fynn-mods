@@ -6,8 +6,8 @@
 // „dieses Projekt“ über Geräte zählt (Fynn 2026-11-03, SPEC Nachtrag 0.8.0, Entscheidung 3).
 // Die Dateiversion bleibt 1: Ein 0.7.0-Leser schickt jeden Datensatz durch `cleanRec`, das unbekannte Felder verwirft; er
 // nimmt die Datei an und zeigt die Chats wie bisher unter dem Gerät.
-import { DEVICE_PROJECT, LIMIT_KINDS, cleanRec, folderOf } from './logic.ts'
-import type { ModDay, ModelDay, Rec } from './logic.ts'
+import { DEVICE_PROJECT, LIMIT_KINDS, cleanRec, folderOf } from './logic.js'
+import type { ModDay, ModelDay, Rec } from './logic.js'
 
 export type Device = { id: string; name: string }
 export type SyncFile = { v: 1; kind: 'cost-ledger-device'; device: Device; at: number; since: number | null; recs: Record<string, Rec> }

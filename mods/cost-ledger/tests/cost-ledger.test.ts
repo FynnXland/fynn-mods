@@ -41,16 +41,16 @@ import {
   LEGACY_PLANS,
   currentPlan,
   planLabel,
-} from '../hooks/logic.ts'
-import { buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, safeProj, shareRec, usersIn, validDir } from '../hooks/sync.ts'
-import type { SyncFile } from '../hooks/sync.ts'
-import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from '../hooks/i18n.ts'
-import { THEME_HEX, donutSvg, familyColors, modelColors, stackedBar } from '../hooks/view.ts'
-import { arcPath, bigUsd, hereBar, hereSvg, hereText, shareOf, shareText } from '../hooks/here.ts'
-import { helpMarkdown, helpTree, stateText } from '../hooks/help.ts'
-import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
-import type { Rec } from '../hooks/logic.ts'
-import { SETTINGS } from '../hooks/fields.ts'
+} from '../hooks/logic.js'
+import { buildFile, cleanDevice, cleanDeviceName, cleanSync, fileName, idFromName, inDir, mergeRecs, newDeviceId, parseFile, safeProj, shareRec, usersIn, validDir } from '../hooks/sync.js'
+import type { SyncFile } from '../hooks/sync.js'
+import { T, clock, dateTime, duration, factor, fullDate, langOf, pct, rangeLabel, resetTime, shortDate, span, tokens, usd, weekLabel } from '../hooks/i18n.js'
+import { THEME_HEX, donutSvg, familyColors, modelColors, stackedBar } from '../hooks/view.js'
+import { arcPath, bigUsd, hereBar, hereSvg, hereText, shareOf, shareText } from '../hooks/here.js'
+import { helpMarkdown, helpTree, stateText } from '../hooks/help.js'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.js'
+import type { Rec } from '../hooks/logic.js'
+import { SETTINGS } from '../hooks/fields.js'
 // Ordner der Mod, wie `$.plugin.root` ihn im Test meldet: Weg 2 schreibt nur für die installierte Kopie (hooks/settings.ts)
 const MOD_ROOT = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
 
@@ -59,7 +59,7 @@ const DAY = 24 * 60 * 60 * 1000
 const TODAY = dayKey(NOW)
 const ROOT = 'D:\\Dev\\ClaudeMods'
 // Unter Linux/macOS (CI) sind `D:\…`-Pfade relativ: Session und Sync-Ordner heißen dort POSIX
-const WIN = /^file:\/\/\/?[A-Za-z]:/.test(import.meta.url) // kein `process` im Test; unter Windows steht ein Laufwerk in der URL
+const WIN = /^file:\/\/\/?[A-Za-z]:/.test(String((import.meta as { url?: string }).url ?? '')) // kein `process` im Test; unter Windows steht ein Laufwerk in der URL
 const SESSION_ROOT = WIN ? ROOT : '/dev/ClaudeMods'
 
 type W = {
@@ -159,7 +159,7 @@ function world(on: On, o: W = {}) {
   })
   on('command.register', ($, e) => {
     st.registered.push(e as never)
-    return { value: undefined }
+    return { value: { command: e.name } }
   })
   on('tool.call', ($, e) => {
     if (e.tool !== 'AskUserQuestion') return { result: '' }
@@ -196,7 +196,7 @@ function world(on: On, o: W = {}) {
     async ledger($: any, args = '') {
       lastArgs = args // die Zeile trägt die Argumente des Aufrufs (CommandOutput props.args)
       // Der Hinweis nach einer Einstellung (0.11.0, „Saved …“) steht in einem eigenen Test; hier fällt er weg
-      return ((await $.command.run({ command: 'ledger', args })).text as string).replace(/\n\n(Saved|Gespeichert)[^\n]*$/, '')
+      return ((await $.command.run({ command: 'ledger', args } as never)).text as string).replace(/\n\n(Saved|Gespeichert)[^\n]*$/, '')
     },
     /** Was zuletzt über `claude plugin configure` geschrieben wurde (Weg 2) */
     lastCli: () => st.cli.at(-1),
@@ -405,7 +405,7 @@ test('model.complete von sidekick@inline: Mod sidekick, Betrag nach Preistabelle
   const w = world(on)
   on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_IN } as never }))
   await w.start($)
-  const out = await $.command.run({ command: 'probe', args: '' })
+  const out = await $.command.run({ command: 'probe', args: '' } as never)
   expect(out.text).toBe('complete:OK')
   const m = w.rec()!.mods.sidekick!.days[TODAY]!
   expect(m.calls).toBe(1)
@@ -417,7 +417,7 @@ test('model.complete abgelehnt ({deny}): nichts gebucht, Ablehnung kommt unverä
   const w = world(on)
   on('model.complete', () => ({ deny: 'kein Modell' }))
   await w.start($)
-  expect((await $.command.run({ command: 'probe', args: '' })).text).toMatch(/^denied:.*kein Modell/)
+  expect((await $.command.run({ command: 'probe', args: '' } as never)).text).toMatch(/^denied:.*kein Modell/)
   expect(w.rec()).toBeUndefined()
 })
 
@@ -429,8 +429,8 @@ test('model.fork nutzt das Modell der Hauptschleife; model.classify zählt nur',
   await w.turn($, 0, { usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-sonnet-5-5' } })
   // Ein Subagent-Turn ändert das Fork-Modell nicht
   await w.turn($, 0, { agentId: 'a1', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-haiku-4-5-20251001' } })
-  expect((await $.command.run({ command: 'probe', args: 'fork' })).text).toBe('fork:true')
-  expect((await $.command.run({ command: 'probe', args: 'classify' })).text).toBe('classify:a')
+  expect((await $.command.run({ command: 'probe', args: 'fork' } as never)).text).toBe('fork:true')
+  expect((await $.command.run({ command: 'probe', args: 'classify' } as never)).text).toBe('classify:a')
   const m = w.rec()!.mods.sidekick!.days[TODAY]!
   expect(m.calls).toBe(2)
   near(m.usd, 10) // Sonnet 5.5: 10 $ je Million Output; classify ohne Betrag
@@ -441,9 +441,9 @@ test('model.fork „nothing-to-fork“ zählt nicht; model.complete ohne Antwort
   on('model.fork', () => ({ value: { isAnswered: false, reason: 'nothing-to-fork' } as never }))
   on('model.complete', () => ({ value: { isAnswered: false, reason: 'empty-reply', usage: MILLION_IN } as never }))
   await w.start($)
-  expect((await $.command.run({ command: 'probe', args: 'fork' })).text).toBe('fork:false')
+  expect((await $.command.run({ command: 'probe', args: 'fork' } as never)).text).toBe('fork:false')
   expect(w.rec()).toBeUndefined()
-  expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:empty-reply')
+  expect((await $.command.run({ command: 'probe', args: '' } as never)).text).toBe('complete:empty-reply')
   near(w.rec()!.mods.sidekick!.days[TODAY]!.usd, 0.5) // „usage rides every arm“ (types ModelCompleteResult)
 })
 
@@ -487,7 +487,7 @@ test('0.4.3: Stufe nur bei Einzelaufrufen; Turn-Summe über 100k bleibt normal (
   await w.start($)
   await w.turn($, 1, { usage: U('claude-haiku-5-5', 20_000, 0, 100_000) }) // Summe mehrerer Antworten
   near(w.rec()!.models['haiku-5-5']!.days[TODAY]!.usd, usd)
-  await $.command.run({ command: 'probe', args: 'model:claude-haiku-5-5' }) // eine Anfrage mit 120k Prompt
+  await $.command.run({ command: 'probe', args: 'model:claude-haiku-5-5' } as never) // eine Anfrage mit 120k Prompt
   near(w.rec()!.modModels['haiku-5-5']!.days[TODAY]!.usd, 5 * usd)
   near(w.rec()!.mods.sidekick!.days[TODAY]!.usd, 5 * usd)
 })
@@ -503,7 +503,7 @@ test('/ledger models: Tokens je Modell aus Turns, Subagents und Mod-Aufrufen; so
   await w.turn($, 1, { usage: U('claude-opus-5-5', 1000, 50000, 2000000, 100000) })
   await w.turn($, 1.2, { usage: U('claude-opus-5-5', 500, 10000) })
   await w.turn($, 1.3, { agentId: 'a1', usage: U('claude-haiku-5-5', 200, 3000) })
-  await $.command.run({ command: 'probe', args: '' }) // sidekick: Alias haiku = Haiku 5.5, 1M Input
+  await $.command.run({ command: 'probe', args: '' } as never) // sidekick: Alias haiku = Haiku 5.5, 1M Input
   const m = w.rec()!.models
   expect(m['opus-5-5']!.days[TODAY]).toMatchObject({ in: 1500, out: 60000, cr: 2000000, cw: 100000, n: 2 })
   expect(m['haiku-5-5']!.days[TODAY]!.n).toBe(1) // Subagent
@@ -693,7 +693,7 @@ test('Fehlerpfad: Mod-Aufruf und Store-Fehler → Ergebnis kommt unverändert an
   on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_IN } as never }))
   await w.start($)
   w.st.setFails = true
-  expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:OK')
+  expect((await $.command.run({ command: 'probe', args: '' } as never)).text).toBe('complete:OK')
 })
 
 test('Fehlerpfad: usage() ohne cost → keine Buchung, /ledger nennt den Grund', DE, async ($, on) => {
@@ -1231,7 +1231,7 @@ test('0.5.0: model.complete von sidekick → lim.mod des aktuellen Fensters, ohn
   w.st.rl = RL(T5, 10, TW, 5)
   await w.turn($, 0.1)
   const calls = w.st.usageCalls
-  expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:OK')
+  expect((await $.command.run({ command: 'probe', args: '' } as never)).text).toBe('complete:OK')
   expect(w.st.usageCalls).toBe(calls) // Mod-Pfad ohne zusätzlichen usage()-Aufruf
   const five = w.rec()!.lim.five_hour![String(T5)]!
   near(five.mod, 0.5) // Alias haiku = Haiku 5.5, 1 Mio. Prompt-Tokens: fünffach (0,50 $)
@@ -1243,7 +1243,7 @@ test('0.5.0: Mod-Aufruf vor der ersten Messung → carry, mit dem ersten Fenster
   const w = world(on)
   on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_IN } as never }))
   await w.start($)
-  await $.command.run({ command: 'probe', args: '' })
+  await $.command.run({ command: 'probe', args: '' } as never)
   expect(w.rec()!.lim).toEqual({})
   w.st.rl = RL(T5, 2)
   await w.turn($, 0.1)
@@ -1775,7 +1775,7 @@ test('0.5.0 Review 2: Mod-Aufruf zwischen Resume und erstem Turn verschiebt die 
   const w = world(on, { saved: new Map<string, unknown>([['s:S1', old]]), cost: 3 })
   on('model.complete', () => ({ value: { isAnswered: true, text: 'OK', usage: MILLION_IN } as never }))
   await w.start($, 'S1', 'resume')
-  await $.command.run({ command: 'probe', args: '' }) // sidekick vor dem ersten Turn: kein Fenster bekannt → carry
+  await $.command.run({ command: 'probe', args: '' } as never) // sidekick vor dem ersten Turn: kein Fenster bekannt → carry
   w.st.rl = RL(T5, 10)
   await w.turn($, 3.1)
   near(w.rec()!.lim.five_hour![kOld]!.chat, 3)
@@ -1801,8 +1801,8 @@ test('0.5.0 Review 2: model.fork und model.classify mit {deny} buchen nichts und
   await w.start($)
   w.st.rl = RL(T5, 10)
   // Die Probe fängt die Ablehnung bei fork/classify nicht ab: ihr command.run scheitert, cost-ledger bucht nichts
-  await expect($.command.run({ command: 'probe', args: 'fork' })).rejects.toThrow()
-  await expect($.command.run({ command: 'probe', args: 'classify' })).rejects.toThrow()
+  await expect($.command.run({ command: 'probe', args: 'fork' } as never)).rejects.toThrow()
+  await expect($.command.run({ command: 'probe', args: 'classify' } as never)).rejects.toThrow()
   expect(w.rec()).toBeUndefined()
 })
 
@@ -2112,7 +2112,7 @@ const ownDevice = (w: { saved: Map<string, unknown>; st: { cli: Record<string, s
   const named = [...w.st.cli].reverse().find((c) => c.deviceName !== undefined)?.deviceName
   return { id: d.id, name: named || d.name || `Gerät ${d.id.slice(0, 4)}` }
 }
-const ownPath = (w: { saved: Map<string, unknown> }) => inDir(SYNC, fileName(ownDevice(w).id))
+const ownPath = (w: { saved: Map<string, unknown>; st: { cli: Record<string, string>[] } }) => inDir(SYNC, fileName(ownDevice(w).id))
 
 test('0.7.0 sync.ts: Ordner prüfen, Dateinamen, Geräte-ID und -Name, gespeicherte Einstellungen', () => {
   expect(validDir('E:\\Mein Sync\\cost-ledger\\')).toBe('E:\\Mein Sync\\cost-ledger')
@@ -2379,7 +2379,7 @@ test('0.7.0 Schreiben nach Turns höchstens alle 15 Minuten, nie in session.end 
   expect(writes()).toBe(n0 + 1)
   near(Object.values((JSON.parse(w.files.get(ownPath(w))!) as SyncFile).recs)[0]!.days[TODAY]!, 0.7)
   await w.clock.advance(20 * 60_000)
-  expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:OK')
+  expect((await $.command.run({ command: 'probe', args: '' } as never)).text).toBe('complete:OK')
   w.st.cost = 0.8
   await $.session.end({ reason: 'other' } as never)
   expect(writes()).toBe(n0 + 1)
@@ -2786,7 +2786,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     await w.start($)
     await w.turn($, 2, { usage: U('claude-opus-5-5', 1000, 2000) })
     await w.turn($, 2.5, { usage: U('claude-sonnet-5-5', 1000, 2000) })
-    await $.command.run({ command: 'probe', args: '' }) // Mod-Aufruf
+    await $.command.run({ command: 'probe', args: '' } as never) // Mod-Aufruf
     // Schmale Breite (Review 0.8.1 K6): keine feste Breite und keine Zeile ohne Umbruch breiter als die Zeile
     const narrow = await mountLedger($, await w.ledger($, 'models'), surface, 40, 'models')
     expect(await narrow.find({ text: /^ENGINE:/ })).toBeUndefined()
@@ -2887,7 +2887,7 @@ test('0.10.0 here-State: nach Start, Turn, Mod-Aufruf und /clear; dieselben Zahl
   await w.turn($, 5)
   expect(s.last()).toEqual({ chatUsd: 5, projectUsd: 39, project: 'ClaudeMods', since: TODAY, devices: 1 })
   // Mod-Aufruf eines anderen Mods zählt zum Chat
-  expect((await $.command.run({ command: 'probe', args: '' })).text).toBe('complete:OK')
+  expect((await $.command.run({ command: 'probe', args: '' } as never)).text).toBe('complete:OK')
   await settle() // nach Mod-Aufrufen ohne Warten geschrieben (Review 0.10.0 K2)
   const v = s.last()!
   expect(v.chatUsd > 5 && v.projectUsd! > 39, JSON.stringify(v)).toBe(true)
@@ -3051,10 +3051,10 @@ test('0.10.0 here-State: Reset während eines laufenden Lesens: das alte Ergebni
 test('0.11.0 Einstellungen: /ledger plan sagt, wo es gilt; abgelehnt → nichts geändert', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
-  const r = (await $.command.run({ command: 'ledger', args: 'plan max20 8 207' })).text as string
+  const r = (await $.command.run({ command: 'ledger', args: 'plan max20 8 207' } as never)).text as string
   expect(r).toMatch(/\n\nGespeichert\. Gilt in diesem Chat sofort, in anderen offenen Chats nach `\/reload-plugins`\.$/)
   w.st.cliFail = 'Billing day: nope'
-  expect((await $.command.run({ command: 'ledger', args: 'plan pro 3' })).text).toBe('Nicht gespeichert: Billing day: nope.')
+  expect((await $.command.run({ command: 'ledger', args: 'plan pro 3' } as never)).text).toBe('Nicht gespeichert: Billing day: nope.')
   expect(await w.ledger($, 'plan')).toMatch(/^Abo: Ultra, Abrechnungstag 8, 207,00 \$ im Monat\./)
 })
 
@@ -3130,7 +3130,7 @@ const planRow = (value: string, owner = 'cost-ledger@fynn-mods') => ({
   label: 'Subscription',
   kind: 'choice',
   value,
-  options: SETTINGS.plan!.options,
+  options: (SETTINGS.plan as { options?: readonly string[] }).options,
   provider: { plugin: owner, tier: 'user' },
   isLocked: false,
 })
@@ -3139,7 +3139,7 @@ const OLD_MAX20 = { language: 'de', plan: 'max20', billingDay: 8, planPrice: 0 }
 test('0.12.0 Pläne: Auswahl, Listenpreise, jeder Alias zum neuen Namen (auch großgeschrieben)', () => {
   expect(Object.keys(PLANS)).toEqual(['pro', 'max', 'ultra', 'team', 'enterprise'])
   // max5 und max20 bleiben nur für den Umzug in der Auswahl (sonst käme ein gespeichertes max20 als none an, types:8067-8069)
-  expect(SETTINGS.plan!.options).toEqual(['none', 'pro', 'max', 'ultra', 'team', 'enterprise', 'max5', 'max20'])
+  expect((SETTINGS.plan as { options?: readonly string[] }).options).toEqual(['none', 'pro', 'max', 'ultra', 'team', 'enterprise', 'max5', 'max20'])
   expect(LEGACY_PLANS).toEqual({ max5: 'max', max20: 'ultra' })
   expect(Object.fromEntries(Object.entries(PLANS).map(([k, v]) => [k, v.price ?? null]))).toEqual({ pro: 20, max: 100, ultra: 200, team: null, enterprise: null })
   const alias: Record<string, string> = { max: 'max', max5: 'max', max5x: 'max', '5x': 'max', ultra: 'ultra', max20: 'ultra', max20x: 'ultra', '20x': 'ultra', pro: 'pro', team: 'team', enterprise: 'enterprise' }
