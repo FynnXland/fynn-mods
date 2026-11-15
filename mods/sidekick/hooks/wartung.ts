@@ -1,7 +1,7 @@
 // sidekick: Wartungs-Hinweise (SPEC Nachtrag 0.2.0). Reine Logik ohne `$`: Messwerte aus dem breakdown, die Regel-Tabelle,
 // die Auswahl eines fälligen Hinweises und die Erkennung „erledigt“. Neue Regeln kommen als Zeile in RULES dazu.
-import { dayKey } from './cache.ts'
-import { shortDate, t, tokensText } from './i18n.ts'
+import { dayKey } from './cache.js'
+import { shortDate, t, tokensText } from './i18n.js'
 
 export const RULE_IDS = ['skills-cut', 'audit', 'memory', 'skills-heavy', 'init'] as const
 export type RuleId = (typeof RULE_IDS)[number]

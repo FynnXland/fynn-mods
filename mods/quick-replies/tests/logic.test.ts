@@ -1,8 +1,8 @@
 import { expect, test } from 'claude-code/testing'
-import { forkStateText, langOf, T } from '../hooks/i18n.ts'
-import { clean, forkPrompt, heldDigit, keyOf, merge, parseFork } from '../hooks/logic.ts'
-import { chooseLayout, label } from '../hooks/view.ts'
-import { addCall, callCost, NO_COST, priceFor } from '../hooks/cost.ts'
+import { forkStateText, langOf, T } from '../hooks/i18n.js'
+import { clean, forkPrompt, heldDigit, keyOf, merge, parseFork } from '../hooks/logic.js'
+import { chooseLayout, label } from '../hooks/view.js'
+import { addCall, callCost, NO_COST, priceFor } from '../hooks/cost.js'
 
 test('Zusammenführen: Claude Code vorn, dann Fork, höchstens 4, ohne Doppelte; ohne Quellen leer', () => {
   const r = merge('Teste es!', ['teste es', 'Zeig den Log', 'Mach weiter', 'Vierter'])

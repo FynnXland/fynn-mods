@@ -1,10 +1,10 @@
 // tune-strip: Zeichnung des Plays im Band, ohne `$`-Aufrufe (die Elementkonstruktoren kommen aus `$.ui.resolve(e)` und werden übergeben).
-// Desktop: volle Stufe als eigene Leiste (Ebene), kompakt und mini als Platz in der Zeile; Cover als Svg (<image> mit data:-URL), Knöpfe nur mit Symbol. Terminal: eine Zeile.
-import type { StageWidths, Stage } from './model.ts'
-import { fmtTime, ratio } from './model.ts'
-import { T } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import type { Track } from './ps.ts'
+// Immer eine eigene Leiste (Ebene 40, Fynn 2026-11-15). Desktop: Cover als Svg (<image> mit data:-URL), Knöpfe nur mit Symbol; kompakt und mini kleiner. Terminal: eine Zeile.
+import type { StageWidths, Stage } from './model.js'
+import { fmtTime, ratio } from './model.js'
+import { T } from './i18n.js'
+import type { Lang } from './i18n.js'
+import type { Track } from './ps.js'
 
 // Die Konstruktoren aus $.ui.resolve(e), grob typisiert: view.ts bleibt frei von $-Aufrufen und testbar
 export type Els = {
@@ -34,13 +34,15 @@ export const HORIZON_S = 3600
 const CHAR_PX = 7.2 // Breite eines Zeichens der Mono-Schrift bei 12 px, großzügig gerechnet
 const SEP_W = 2400 // die Trennlinie ist breiter als jedes Fenster; ihre Box schneidet sie ab
 const SEP_H = 26
-const COMPACT_COLUMN_PX = 190 // Platz in der Zeile: Titel (gekürzt) und drei Knöpfe
-const GAP_PX = 16 // Cover – Spalte
-/** Höhe der eigenen Leiste in der Ebenen-Ordnung (docs/BAND.md): über quick-replies (20) und sidekick (30). */
-export const BAR_LEVEL = 40
+// Seit Band 2 (0.12.0): Layout-Zahlen (`width`, `columnGap` …) zählen auch im Desktop in Zellen, nur `Svg` in px (docs/BAND-SPEC-2.md §3
+// „Breite“, Probe 7b: ≈ 7,8 px je Zelle). Bis 0.11.x stand die Spalte der kompakten Stufe als `width: 190` da, gemeint waren Pixel.
+const PX_PER_CELL = 7.8
+const COVER_CELLS = Math.ceil(COVER_PX / PX_PER_CELL) // 56 px → 8 Zellen
+const COMPACT_COLUMN = 24 // Spalte der kompakten Stufe (Titel gekürzt, drei Knöpfe), ≈ 190 px wie bisher gemeint
+const MINI_BUTTON = 5 // ein Knopf der Desktop-App in fester Größe, großzügig
 
-/** Breiten der Stufen im Desktop in Pixeln, soweit sie einen Platz in der Zeile belegen; `full` ist die Leiste und belegt keinen. */
-export const DESKTOP_WIDTHS: StageWidths = { full: 0, compact: COVER_PX + GAP_PX + COMPACT_COLUMN_PX, mini: COVER_PX + GAP_PX + 48 }
+/** Mindestbreiten der Stufen im Desktop in Zellen von `bodyColumns`; `full` passt immer (die Leiste kürzt den Titel selbst). */
+export const DESKTOP_WIDTHS: StageWidths = { full: 0, compact: COVER_CELLS + 2 + COMPACT_COLUMN, mini: Math.max(10, COVER_CELLS + 1 + MINI_BUTTON) }
 
 /** Svg für das Cover: JPEG (Base64) als <image>, ohne Cover ein graues Feld mit Note. */
 export function coverSvg(cover: string | undefined, size = COVER_PX): string {
@@ -183,8 +185,8 @@ function titleOf(t: Track): string {
 }
 
 /**
- * Desktop. `full`: eine eigene Leiste (Ebene `BAR_LEVEL`) über allen Mods: Cover, Titel – Interpret, Zeit mit Balken, rechts alle Knöpfe.
- * `compact`/`mini`: ein Platz in der Zeile (Cover, Titel auf feste Breite gekürzt, Knöpfe). Die Knöpfe zeigen nur Symbole: der Desktop
+ * Desktop. `full`: eine eigene Leiste (Ebene 40, band.ts `LEVEL.tuneStrip`) über der Grundzeile: Cover, Titel – Interpret, Zeit mit Balken, rechts alle Knöpfe.
+ * `compact`/`mini`: kleinere Fassungen in derselben Leiste (Cover, Titel auf feste Breite gekürzt, Knöpfe). Die Knöpfe zeigen nur Symbole: der Desktop
  * zeichnet `label` als Knopftext, deshalb ist das Symbol das einzige Kind und der Knopf hat keinen ausgeschriebenen `label`.
  *
  * Knöpfe im Desktop (Nachtrag 0.9.0): Die App zeichnet ihren eigenen Knopf aus dem Kindtext, ohne Farbe der Kinder (docs/raw/en/reference.md:307),
@@ -223,7 +225,7 @@ export function desktopTree(els: Els, h: Handlers, v: ViewInput) {
         Box({
           flexDirection: 'column',
           flexShrink: 0,
-          width: COMPACT_COLUMN_PX,
+          width: COMPACT_COLUMN,
           children: [title, Box({ flexDirection: 'row', alignItems: 'center', columnGap: 1, children: [btn('prev', '⏮', 'prev'), toggle, btn('next', '⏭', 'next')] })],
         }),
       ],
@@ -320,5 +322,10 @@ export function terminalLine(v: ViewInput): string {
   return `♪ ${titleOf(t)}  ${time}  ⏮ ${play} ⏭`
 }
 
-/** Schwellen der Stufen im Terminal in Spalten von `bodyColumns` (keine Breitenmeldung der anderen Mods im Terminal, docs/BAND.md); der Titel kürzt sich selbst. */
-export const TERMINAL_WIDTHS: StageWidths = { full: 110, compact: 80, mini: 56 }
+/**
+ * Mindestbreiten der Stufen im Terminal in Zellen von `bodyColumns` (seit 0.12.0 hat die eigene Leiste die volle Bandbreite; bis 0.11.x
+ * teilte tune-strip die Zeile, daher 110/80/56).
+ * full: ♪ Titel (≥ 12) Zeit (≤ 11) und drei Knöpfe; compact ohne Zeit; mini nur ♪ und Abspielen, unter 10 Zellen gar nichts (MIN_ROOM).
+ * Der Titel kürzt sich selbst (`truncate-end`).
+ */
+export const TERMINAL_WIDTHS: StageWidths = { full: 32, compact: 22, mini: 10 }

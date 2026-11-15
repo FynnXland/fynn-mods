@@ -3,8 +3,8 @@
 // `prompt.submit` auf. Fremde Skills werden nur gelesen und kopiert, nie ausgeführt; sidekick installiert nichts (SPEC E4).
 // Lizenzen über die GitHub-API geprüft (SPDX), Installationszeilen nur, wenn die README der Quelle sie nennt (Stand `checkedAt`).
 
-import { cut } from './logic.ts'
-import { lang } from './i18n.ts'
+import { cut } from './logic.js'
+import { lang } from './i18n.js'
 
 export type CatalogEntry = {
   id: string

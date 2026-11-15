@@ -2,8 +2,8 @@
 // Die Sprache wird einmal in `register(on, options)` gesetzt; eine Änderung über /config lädt das Modul neu.
 // `de` war in 0.3.0 wortgleich zu 0.2.4. Seit 0.4.0 steht statt „Haiku“ der Name aus models.ts (CHECK_NAME, HANDOFF_NAME).
 
-import { CHECK_NAME, HANDOFF_NAME, genitiveDe } from './models.ts'
-import { PREFIX } from './prompts.ts'
+import { CHECK_NAME, HANDOFF_NAME, genitiveDe } from './models.js'
+import { PREFIX } from './prompts.js'
 
 export type Lang = 'en' | 'de'
 
@@ -521,14 +521,14 @@ const de = {
     buttonReason: 'per Knopf „Danach“',
     prefixReason: 'mit „danach:“',
     // Knopf in der Fußzeile während einer Runde; ✓ = die nächste Nachricht gilt als „danach“ (0.24.2, statt Farbe)
-    btn: (armed: boolean) => (armed ? 'Danach ✓' : 'Danach'),
+    btn: (armed: boolean): string => (armed ? 'Danach ✓' : 'Danach'),
     // Unsichtbar für den Nutzer, Claude liest ihn neben der Nachricht (types@2.1.319:9800-9808); nimmt die Frage-Regel aus E2 mit
     context:
       'sidekick: Der Nutzer hat diese Nachricht geschrieben, während du arbeitest, und meint sie als eigenen, späteren Punkt. Mach die laufende Aufgabe erst vollständig fertig, ohne sie dafür zu unterbrechen. Endet sie mit einer Frage an den Nutzer oder einem Fehler, stell erst die Frage bzw. melde den Fehler und kümmere dich um diesen Punkt erst nach seiner Antwort. Sonst erledige ihn danach.',
     state: (on: boolean, guide: boolean) =>
       `**Warteschlange** · ${on ? 'an' : 'aus'}${on && !guide ? ' (wirkt nur auf der Stufe Begleiter)' : ''}\n\nSchreibst du, während Claude arbeitet, und ist die Nachricht klar ein eigener, späterer Punkt, geht sie wie bisher sofort rein. Claude bekommt dazu den Hinweis, erst die laufende Aufgabe fertig zu machen, und unter deiner Nachricht steht „kommt nach dieser Aufgabe“. Selbst festlegen: im Desktop der Knopf „Danach“ links in der Fußzeile (während Claude arbeitet), überall „danach:“ am Anfang der Nachricht.\n\nUmschalten: \`/sidekick queue on|off\` (gilt sofort) oder auf der Einstellungsseite des Desktops (gilt erst in neuen Chats).`,
     already: (on: boolean) => `Die Warteschlange ist schon ${on ? 'an' : 'aus'}.`,
-    set: (on: boolean) => (on ? '✓ Warteschlange an: spätere Punkte bekommen den Hinweis an Claude.' : '✓ Warteschlange aus: Nachrichten während der Arbeit gehen ohne Hinweis rein.'),
+    set: (on: boolean): string => (on ? '✓ Warteschlange an: spätere Punkte bekommen den Hinweis an Claude.' : '✓ Warteschlange aus: Nachrichten während der Arbeit gehen ohne Hinweis rein.'),
     usage: 'Aufruf: `/sidekick queue` · `on` · `off`',
     savingsRow: (n: number, usd: string, marked: number) => `Warteschlange: ${n} ${n === 1 ? 'Urteil' : 'Urteile'} (${usd}), ${marked}× als späterer Punkt an Claude`,
   },
@@ -571,7 +571,7 @@ const de = {
     copied: (line: string) => `Kopiert: ${line}`,
     copyFailed: (line: string) => `Kopieren ging nicht. Befehl: ${line}`,
     already: (on: boolean) => `Der Skill-Katalog ist schon ${on ? 'an' : 'aus'}.`,
-    set: (on: boolean) => (on ? '✓ Skill-Katalog an: passende fremde Skills werden vor dem Senden vorgeschlagen.' : '✓ Skill-Katalog aus: keine Vorschläge mehr.'),
+    set: (on: boolean): string => (on ? '✓ Skill-Katalog an: passende fremde Skills werden vor dem Senden vorgeschlagen.' : '✓ Skill-Katalog aus: keine Vorschläge mehr.'),
     muteSet: (name: string, on: boolean) => (on ? `✓ ${name} ist stumm.` : `✓ ${name} wird wieder vorgeschlagen.`),
     unknownId: (id: string, ids: string) => `Unbekannter Eintrag „${id}“. Vorhanden: ${ids}`,
     usage: 'Aufruf: `/sidekick catalog` · `on` · `off` · `mute <id>` · `unmute <id>`',

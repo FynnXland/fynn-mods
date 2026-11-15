@@ -3,11 +3,11 @@
 // Farbe tragen nur die Balken. Spalten sind Boxen mit fester Breite. Im Desktop sind Balken Boxen mit Hintergrundfarbe und
 // ganzzahliger Prozentbreite (Kommaprozente verwirft er, cost-ledger-Befund), im Terminal dünne `▄`.
 import type { RenderElement, RenderNode } from 'claude-code'
-import { tokensText, t, usdFine, usdText } from './i18n.ts'
-import { ARTS, ROLES, active, compareNote, dayModels, dayRows, factorText, hasTipp, keyDate, missShare, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf, stufenSpread, tipRuns, tipSaved, tipsRows } from './logic.ts'
-import type { Day, Period, Span } from './logic.ts'
-import { modelLabel } from './models.ts'
-import { RULE_IDS } from './wartung.ts'
+import { tokensText, t, usdFine, usdText } from './i18n.js'
+import { ARTS, ROLES, active, compareNote, dayModels, dayRows, factorText, hasTipp, keyDate, missShare, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf, stufenSpread, tipRuns, tipSaved, tipsRows } from './logic.js'
+import type { Day, Period, Span } from './logic.js'
+import { modelLabel } from './models.js'
+import { RULE_IDS } from './wartung.js'
 
 export type Surface = 'terminal' | 'desktop'
 

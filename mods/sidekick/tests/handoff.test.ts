@@ -1,8 +1,9 @@
 // Tests zum Ausbau 0.22.0 (SPEC „Tests“): /handoff mit Wahl der Methode (Fork oder Text), Speicher, Skill, Vorschlag kurz vor
 // Cache-Ablauf, /savings detail und Hilfe. Eigene, kleine Welt mit Stubs.
-import type { Engine, On } from 'claude-code'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { MIN, dayKey } from '../hooks/cache.ts'
+import { MIN, dayKey } from '../hooks/cache.js'
 import {
   COOL_MIN_MS,
   DEFAULT_SETTINGS,
@@ -27,11 +28,11 @@ import {
   suggestDue,
   textCost,
   withFacts,
-} from '../hooks/logic.ts'
-import type { Ledger, MethodIn } from '../hooks/logic.ts'
-import { T, setLang } from '../hooks/i18n.ts'
-import { savingsTree } from '../hooks/view.ts'
-import { sidekickHelp } from '../hooks/helpdata.ts'
+} from '../hooks/logic.js'
+import type { Ledger, MethodIn } from '../hooks/logic.js'
+import { T, setLang } from '../hooks/i18n.js'
+import { savingsTree } from '../hooks/view.js'
+import { sidekickHelp } from '../hooks/helpdata.js'
 
 const NOW = new Date(2026, 10, 7, 10, 0, 0).getTime()
 const DE = { options: { language: 'de' } }
@@ -225,7 +226,7 @@ deTest('Hilfe: /handoff, fork|text, show, continue, Skill und die Zeile vor Abla
   const facts = { settings: { ...DEFAULT_SETTINGS }, ttl: { min: 60, source: 'default' as const }, hints: { on: true, off: [] }, known: 0, now: NOW }
   const h = sidekickHelp(facts)
   for (const c of ['/handoff', '/handoff fork|text', '/handoff show', '/handoff continue', 'Skill write-handoff']) expect(h.commands.some((x) => x.cmd === c), c).toBe(true)
-  expect(h.controls.some((c) => c.cmd.includes('/keepwarm'))).toBe(true)
+  expect((h.controls ?? []).some((c) => c.cmd.includes('/keepwarm'))).toBe(true)
   setLang('en')
   const en = sidekickHelp(facts)
   expect(en.commands.some((x) => x.cmd === 'skill write-handoff')).toBe(true)
@@ -271,7 +272,7 @@ function world(on: On, o: W = {}) {
   on('session.root', () => ({ value: 'C:\\Proj\\App' }))
   on('session.messages', () => ({ value: messages as never }))
   on('command.list', () => ({ value: (o.cmds ?? []) as never }))
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
     saved.set(e.key, e.value)
@@ -324,7 +325,12 @@ function world(on: On, o: W = {}) {
   on('turn.complete', () => ({ text: '' }))
   on('session.start', () => ({ cwd: 'C:\\Proj\\App' }) as never)
   on('state.get', () => ({ value: { value: undefined, version: 0 } }))
-  on('state.set', () => ({ value: { isSet: true, version: 1 } }))
+  // 0.26.0: geschriebene Werte merken (sidekick.status.handoff)
+  const states: { key: string; value: unknown }[] = []
+  on('state.set', ($: unknown, e: any) => {
+    states.push({ key: e.key, value: e.value })
+    return { value: { isSet: true, version: 1 } }
+  })
   on('ui.render', ($, e) => ({ type: 'Text', props: {}, children: [String((e.props as { text?: string }).text ?? '')] }))
   let next: StepU = stepUsage(0, 0)
   let turn = 0
@@ -355,6 +361,7 @@ function world(on: On, o: W = {}) {
   return {
     clock,
     saved,
+    states,
     asks,
     sent,
     toasts,
@@ -545,6 +552,21 @@ deTest('/handoff auf Stufe Aus geht; in -p nur show und help', async ($, on) => 
   await run($)
   await settle(w)
   expect(w.forks.length).toBe(1)
+})
+
+// Stufe über die Test-Optionen (userConfig seit 0.23.0); `world({ level })` setzt nur den alten Store-Wert
+test('0.26.0: status.handoff auch auf Stufe Aus (busy bleibt dort false), solange die Übergabe läuft; danach weg (BAND-SPEC-2 §4)', { options: { language: 'de', level: 'off' } }, async ($, on) => {
+  setLang('de')
+  const w = world(on, { level: 'off' })
+  w.setAnswer('Hier weiterarbeiten')
+  await w.turnWith($, stepUsage(150000, 0))
+  const st = () => w.states.filter((x) => x.key === 'status').map((x) => x.value as { level: string; busy: boolean; handoff?: true } | null)
+  await run($)
+  await settle(w)
+  expect(w.forks.length).toBe(1)
+  // Während der Box: handoff true bei busy false (Stufe Aus); danach fehlt handoff wieder
+  expect(st().some((v) => v?.handoff === true && v.busy === false && v.level === 'off')).toBe(true)
+  expect(st().at(-1)?.handoff).toBeUndefined()
 })
 
 deTest('/handoff in -p: „nur im interaktiven Chat“; show und help gehen', async ($, on) => {

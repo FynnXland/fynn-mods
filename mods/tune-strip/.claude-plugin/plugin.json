@@ -1,6 +1,6 @@
 {
   "name": "tune-strip",
-  "version": "0.11.5",
+  "version": "0.12.0",
   "description": "Windows only. Shows the song playing in Spotify above the prompt, with cover and playback controls. No login, and nothing leaves your computer.",
   "author": {
     "name": "Fynn Hansen"
@@ -11,7 +11,7 @@
     "size": {
       "type": "string",
       "title": "Size",
-      "description": "auto: its own bar in the desktop app, compact in the row when it fits. full, compact, mini: fixed. off: hidden. Also /tune size and /tune on|off.",
+      "description": "auto: the bar in the desktop app; in the terminal the largest size that fits. full, compact, mini: fixed. off: hidden. Also /tune size and /tune on|off.",
       "default": "auto",
       "options": [
         "auto",

@@ -3,8 +3,8 @@
 // eigener, späterer Punkt, bekommt Claude einen Hinweis (`context`), die Nachricht selbst geht unverändert sofort rein.
 // Fail-open (E3): Was nicht klar ein eigener, späterer Punkt ist, bekommt keinen Hinweis.
 
-import { cut, isHostText, isKorrektur } from './logic.ts'
-import { lang } from './i18n.ts'
+import { cut, isHostText, isKorrektur } from './logic.js'
+import { lang } from './i18n.js'
 
 /** Ab dieser Sicherheit gilt ein Haiku-„danach“ (Verhalten 1.3; Probe P2 in SPEC „Bau 0.24.0“). */
 export const QUEUE_MIN = 0.7

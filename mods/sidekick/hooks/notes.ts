@@ -1,8 +1,8 @@
 // sidekick: „Gut zu wissen“ (SPEC Nachtrag 0.13.0). Während Claude arbeitet, fragt sidekick an Schritt 6, 12, 18 … einer Runde über
 // `$.model.fork` (den ganzen Verlauf, aus dem Cache, types:2551-2569), ob der Nutzer etwas Wichtiges übersehen hat. Vorbild ist der
 // eingebaute Mod `cc-plugin-you-should-know` (nur die Mechanik; Code und Prompt sind eigene). Hier nur Logik ohne `$`, direkt getestet.
-import { KONTEXT_REDE } from './logic.ts'
-import type { Lang } from './i18n.ts'
+import { KONTEXT_REDE } from './logic.js'
+import type { Lang } from './i18n.js'
 
 /** Wörter nach `/sidekick notes`; `notesCommand` nimmt nur diese, ein Test prüft jedes gegen `/sidekick help` (Nachtrag 0.14.0). */
 export const NOTES_WORDS = ['status', 'on', 'off', 'forget'] as const

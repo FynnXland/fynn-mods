@@ -5,12 +5,12 @@
 // „Neuer Chat mit Übergabe“ wird bei einem Fehler nie stillschweigend in den kalten Chat gesendet, es wird erneut gefragt.
 // Eine Fassung geht nur nach der Antwort im Dialog raus (seit 0.15.0 gibt es keine Stufe, die ohne Rückfrage sendet).
 import type { EngineInterface, On, RenderElement, RenderNode, Timer, UiPressArgument } from 'claude-code'
-import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.ts'
-import { lang, setLang, shortDate, spanText, t, tokensText, usdText } from './i18n.ts'
-import { isLanguage, languageCommand } from './language.ts'
-import { NOTES_WORDS, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, nonNeg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.ts'
-import type { Note } from './notes.ts'
-import { CATALOG as CATALOG_SPEC, CHECK, HANDOFF, QUEUE, RATE, TIP_TARGETS, modelLabel, modelName } from './models.ts'
+import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.js'
+import { lang, setLang, shortDate, spanText, t, tokensText, usdText } from './i18n.js'
+import { isLanguage, languageCommand } from './language.js'
+import { NOTES_WORDS, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, nonNeg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.js'
+import type { Note } from './notes.js'
+import { CATALOG as CATALOG_SPEC, CHECK, HANDOFF, QUEUE, RATE, TIP_TARGETS, modelLabel, modelName } from './models.js'
 import {
   CATALOG,
   byId,
@@ -26,15 +26,15 @@ import {
   isInstalled,
   parseCatalog,
   skillContext,
-} from './catalog.ts'
-import type { CatalogEntry, CatalogVerdict } from './catalog.ts'
-import { QUEUE_TAIL, isHostNote, laterByVerdict, laterPrefix, parseQueue, queuePrompt, queueRule, queueSystem, stripLeadReminders } from './queue.ts'
-import type { CacheMem, CompleteUsage, StepUsage } from './cache.ts'
-import { joinBand, layer, nameOf, splitBand } from './band.ts'
-import { changed, migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
-import { storeOffDefaults } from './offdefaults.ts'
-import type { Values, WriteResult } from './settings.ts'
-import { SETTINGS } from './fields.ts'
+} from './catalog.js'
+import type { CatalogEntry, CatalogVerdict } from './catalog.js'
+import { QUEUE_TAIL, isHostNote, laterByVerdict, laterPrefix, parseQueue, queuePrompt, queueRule, queueSystem, stripLeadReminders } from './queue.js'
+import type { CacheMem, CompleteUsage, StepUsage } from './cache.js'
+import { LEVEL, arrange, layer } from './band.js'
+import { changed, migrateSettings, readSettings, writeNote, writeSettings } from './settings.js'
+import { storeOffDefaults } from './offdefaults.js'
+import type { Values, WriteResult } from './settings.js'
+import { SETTINGS } from './fields.js'
 import {
   DEFAULT_RUNTIME,
   MIN_OF,
@@ -121,9 +121,9 @@ import {
   nextOf,
   suggestDue,
   withFacts,
-} from './logic.ts'
-import type { Art, Booking, BuddyWhy, Choice, Day, HandoffHow, HandoffRec, Ignored, Ledger, Level, Loop, LoopChoice, MethodOut, NoteField, Period, Rate, Runtime, Settings, Skill, TipWay, Tips, Trigger, Verdict } from './logic.ts'
-import { savingsTree } from './view.ts'
+} from './logic.js'
+import type { Art, Booking, BuddyWhy, Choice, Day, HandoffHow, HandoffRec, Ignored, Ledger, Level, Loop, LoopChoice, MethodOut, NoteField, Period, Rate, Runtime, Settings, Skill, TipWay, Tips, Trigger, Verdict } from './logic.js'
+import { savingsTree } from './view.js'
 import {
   SAVED_MAX,
   TEXT_MAX,
@@ -157,11 +157,11 @@ import {
   remembers,
   seenSet,
   useBudget,
-} from './prompts.ts'
-import type { NameCheck, Recent as PromptRecent, Saved } from './prompts.ts'
-import { helpMarkdown, helpTree } from './help.ts'
-import type { HelpData } from './help.ts'
-import { sidekickHelp } from './helpdata.ts'
+} from './prompts.js'
+import type { NameCheck, Recent as PromptRecent, Saved } from './prompts.js'
+import { helpMarkdown, helpTree } from './help.js'
+import type { HelpData } from './help.js'
+import { sidekickHelp } from './helpdata.js'
 import {
   HEAVY_TOKENS,
   REST,
@@ -188,8 +188,8 @@ import {
   restOf,
   rootFromFiles,
   unusedSkills,
-} from './wartung.ts'
-import type { Hint, HintSettings, Measure, MemFile, RuleId, Wartung } from './wartung.ts'
+} from './wartung.js'
+import type { Hint, HintSettings, Measure, MemFile, RuleId, Wartung } from './wartung.js'
 
 const DAY = 24 * 60 * 60000
 const HEADER = 'Sidekick'
@@ -462,8 +462,9 @@ let skillCache: { at: number; list: Skill[] } | null = null
 type Breakdown = Awaited<ReturnType<EngineInterface['session']['usage']>>['context']['breakdown']
 type Cmd = Awaited<ReturnType<EngineInterface['command']['list']>>[number]
 // Ein breakdown-Aufruf (lokale Schätzung, kostenlos) und die Befehlsliste, geteilt von Skill-Liste und Wartungs-Hinweisen
-let baseCache: { at: number; b: Breakdown | undefined; cmds: Cmd[] } | null = null
-let basePending: Promise<NonNullable<typeof baseCache>> | null = null // ein laufender Aufruf wird geteilt (Wartung parallel zur Prüfung)
+type BaseCache = { at: number; b: Breakdown | undefined; cmds: Cmd[] }
+let baseCache: BaseCache | null = null
+let basePending: Promise<BaseCache> | null = null // ein laufender Aufruf wird geteilt (Wartung parallel zur Prüfung)
 type WHint = Hint & { key: string }
 let wChain: Promise<unknown> = Promise.resolve() // Lesen, Ändern, Schreiben von `wartung:<schlüssel>` nacheinander
 let chain: Promise<unknown> = Promise.resolve() // Buchungen dieser Session nacheinander (Lesen, Ändern, Schreiben)
@@ -474,14 +475,19 @@ let reportNo = 0
 const helps = new Map<string, HelpData>()
 let helpNo = 0
 
+/** Spalten des Fensters, wo die Zeichen-Eingabe sie hat (`viewport` fehlt in manchen Varianten von ResolveInput, types@2.1.325); sonst 100. */
+function viewportCols(e: unknown): number {
+  const c = (e as { viewport?: { columns?: unknown } } | null)?.viewport?.columns
+  return typeof c === 'number' ? c : 100
+}
+
 /** Ein Zeichen-Element als reine Daten (StyledElement, types:8851): Box oder Text mit einfachen Props. */
 function el(type: 'Box' | 'Text', props: Record<string, string | number | boolean>, children: RenderNode[]): RenderElement {
   return { type, props, children }
 }
 
-// Höhe der sidekick-Ebene im Band (Nachtrag 0.15.2): über der Spotify-Leiste (40, mods/spotify/hooks/view.ts BAR_LEVEL). Steht hier
-// statt in band.ts, weil band.ts in allen Mods dieselbe Kopie ist; LEVEL folgt beim nächsten gemeinsamen Band-Update (docs/BAND.md)
-const SIDEKICK_LEVEL = 50
+// Höhe der sidekick-Ebene im Band (Nachtrag 0.15.2): über der Spotify-Leiste (40). Seit Band 2 (0.26.0) aus band.ts (docs/BAND.md)
+const SIDEKICK_LEVEL = LEVEL.sidekick
 // Streifen wie die orange Trennlinie der Spotify-Leiste (mods/spotify/hooks/view.ts sepSvg): breiter als jedes Fenster, die Box schneidet ab
 const STRIPE_W = 2400
 const STRIPE_H = 26
@@ -499,13 +505,16 @@ function sidekickLayer(content: RenderElement, surface: string): RenderElement {
   return layer(SIDEKICK_LEVEL, 'sidekick', el('Box', { flexDirection: 'column', flexShrink: 0 }, [content, stripe]))
 }
 
-/** Den Teilbaum mit `props.key === key` entfernen (z. B. die Pille von quick-replies); alles andere bleibt, wie es ist. */
-function withoutKey(node: RenderElement, key: string): RenderElement | null {
-  const n = node as { props?: Record<string, unknown>; children?: unknown[] }
-  if (n.props?.key === key) return null
-  if (!Array.isArray(n.children)) return node
-  const kids = n.children.map((c) => (c && typeof c === 'object' ? withoutKey(c as RenderElement, key) : c)).filter((c) => c !== null)
-  return { ...node, children: kids } as RenderElement
+/**
+ * Steht die Pille von quick-replies (`quick-replies.band`, docs/BAND.md „Absprachen“)? Seit Band 2 sieht sidekick fremde Zeilen
+ * nicht mehr (en/interface.md:200-204); das Lesen in `ui.render` abonniert den Wert (Probe §4). Fehler: als „steht nicht“.
+ */
+async function qrShown($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.state.get({ plugin: 'quick-replies', key: 'band' })).value?.shown === true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -629,7 +638,9 @@ function startColdTimer($: EngineInterface) {
 // Regeln wie bei `buddy`: nie warten, Fehler verschlucken, nacheinander.
 // `tip`: Name des Zielmodells, solange sidekick in diesem Chat umstellt (Ausbau 0.18.0: „→ Sonnet“ im Label)
 // `cold` (Ausbau 0.20.0): nur `true` oder fehlend; auf `off` fehlt es immer (coldOf)
-type Status = { level: Level; busy: boolean; tip?: string; cold?: true }
+// `handoff` (0.26.0, BAND-SPEC-2 §4): nur `true` oder fehlend; `true`, solange die Übergabe-Box steht (`busy !== null`), auf jeder
+// Stufe. quick-replies zeichnet dann keine Zeile (Selbstausblenden statt Herausfiltern im Band)
+type Status = { level: Level; busy: boolean; tip?: string; cold?: true; handoff?: true }
 let statusLast: string | undefined = undefined // `undefined` = unbekannt (nach einem Neuladen): sicher schreiben
 let statusChain: Promise<unknown> = Promise.resolve()
 /**
@@ -655,7 +666,13 @@ const busyNow = () => buddyKind === 'check' || buddyKind === 'stop' || buddyKind
 function pushStatus($: EngineInterface) {
   const tipName = tip && !tip.ended && tip.way === 'chat' ? modelName(tip.to) : ''
   const cold = coldNow && settings.level !== 'off'
-  const value: Status = { level: settings.level, busy: settings.level !== 'off' && busyNow(), ...(tipName ? { tip: tipName } : {}), ...(cold ? { cold: true as const } : {}) }
+  const value: Status = {
+    level: settings.level,
+    busy: settings.level !== 'off' && busyNow(),
+    ...(tipName ? { tip: tipName } : {}),
+    ...(cold ? { cold: true as const } : {}),
+    ...(busy !== null ? { handoff: true as const } : {}),
+  }
   const key = JSON.stringify(value)
   if (key === statusLast) return
   statusLast = key
@@ -688,6 +705,8 @@ async function bindNow($: EngineInterface): Promise<void> {
   if (!id || id === sessionId) return
   sessionId = id
   baseCache = null // /clear, /resume oder Projektwechsel: frisch messen
+  // /clear setzt $.state zurück (en/interface.md:942): den Status beim nächsten pushStatus sicher neu schreiben (Review 0.26.0 K1)
+  statusLast = undefined
   mem = emptyMem()
   ses = emptySitzung()
   pending = null
@@ -743,7 +762,7 @@ function bookDay($: EngineInterface, at: number, fn: (d: Day) => void) {
 }
 
 /** Skill-Namen aus der lokalen Schätzung (kostenlos, types:2150-2168), die Beschreibung aus `$.command.list()` (types:1650-1668). */
-async function loadBase($: EngineInterface, now: number) {
+async function loadBase($: EngineInterface, now: number): Promise<BaseCache> {
   if (baseCache && now - baseCache.at < 30 * 60000) return baseCache
   if (!basePending) {
     basePending = (async () => {
@@ -2366,14 +2385,6 @@ async function pressNote($: EngineInterface, shownAt: number, action: NoteAction
   }
 }
 
-/** Steht irgendwo im Baum ein Element mit diesem `key` (z. B. die Pillen von quick-replies)? */
-function hasKey(node: unknown, key: string): boolean {
-  const n = node as { props?: Record<string, unknown>; children?: unknown[] } | null
-  if (!n || typeof n !== 'object') return false
-  if (n.props?.key === key) return true
-  return Array.isArray(n.children) && n.children.some((c) => hasKey(c, key))
-}
-
 type NoteButton = (p: { key: string; label: string; hotkey?: string; plain?: true; onPress: () => void }) => RenderNode
 
 /**
@@ -3038,7 +3049,7 @@ function promptsTree($: EngineInterface, e: Parameters<EngineInterface['ui']['re
   const rows: RenderNode[] = snap.map((s0) => {
     const s = saved.find((y) => y.name === s0.name)
     // Breite nach dem Platz (Review 0.21.0 K3): ein Drittel der Spalten, höchstens 26
-    const cols = typeof e.viewport?.columns === 'number' ? e.viewport.columns : 100
+    const cols = viewportCols(e)
     const name = el('Box', { width: Math.max(10, Math.min(26, Math.floor(cols / 3))), flexShrink: 0 }, [el('Text', { color: ACCENT }, [`/${cmdOf(s0.name)}`])])
     if (!s) return el('Box', { key: `sidekick-pr-${s0.name}`, flexDirection: 'row' }, [name, el('Text', { dimColor: true }, [x.deleted(s0.name).split('.')[0] ?? ''])])
     const state = s.button ? (shown.has(s.name) ? x.on : `${x.on} (5+)`) : x.off
@@ -3213,7 +3224,7 @@ function catalogTree($: EngineInterface, e: Parameters<EngineInterface['ui']['re
   const x = t().cat
   const ui = $.ui.resolve(e)
   const Button = (p: { key: string; label: string; onPress: (press: UiPressArgument) => void }) => ui.Button(p) as RenderNode
-  const cols = typeof e.viewport?.columns === 'number' ? e.viewport.columns : 100
+  const cols = viewportCols(e)
   const rows: RenderNode[] = CATALOG.map((c) => {
     const isMuted = snap.muted.includes(c.id)
     const line = copyLine(c)
@@ -4075,8 +4086,10 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   })
 
   // Während „Neuer Chat“ läuft: kleine blaue Box über dem Prompt (sonst nichts Sichtbares, während das Modell
-  // die Übergabe schreibt). Sonst unverändert durchreichen; das Band teilen sich limit-bars und clawd-buddy (types:9702-9713).
-  // Seit 0.13.0 außerdem „Gut zu wissen“: der Hinweis auf derselben Ebene; die Übergabe-Box hat Vorrang, der Hinweis wartet.
+  // die Übergabe schreibt). Seit 0.13.0 außerdem „Gut zu wissen“: der Hinweis auf derselben Ebene; die Übergabe-Box hat Vorrang.
+  // Band 2 (0.26.0, ab Claude Code 2.1.323): sidekick zeichnet nur seine eigene Zeile `layer:50:sidekick` (en/interface.md:200-204,
+  // docs/BAND.md); nichts zu zeigen heißt `next(e)` = keine Zeile. Das Band ordnet der AbovePromptList-Hook unten (band.ts).
+  // quick-replies blendet sich während der Übergabe selbst aus (`sidekick.status.handoff`), sidekick filtert nichts mehr heraus.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if ((e.surface !== 'terminal' && e.surface !== 'desktop') || e.props.hasSurvey) return next(e)
     const step = busy
@@ -4101,48 +4114,45 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     // Vorschlag kurz vor Ablauf (Ausbau 0.22.0): steht, bis er ausgeblendet wird; kein eigenes Neuzeichnen im Takt
     const s = step ? null : sug
     if (!step && !note && !s && !btns.length) return next(e)
-    const theirs = await next(e)
     const btnRow = btns.length ? el('Box', { key: 'sidekick-prompts', flexDirection: 'row', columnGap: 1, flexWrap: 'wrap' }, btns) : null
     if (!step) {
       try {
-        const { layers, slots, base } = splitBand(theirs)
         const ui = $.ui.resolve(e)
         const views: RenderNode[] = []
         if (note) {
           const n = note
           // Ziffern nur, solange Claude arbeitet: Danach löst eine allein getippte Ziffer im leeren Eingabefeld den Knopf aus
-          // (docs/raw/en/reference.md:244), etwa die Antwort „2“ auf „Variante 1 oder 2?“ (Review 0.13.0 K1). quick-replies belegt
-          // 1 … n ebenfalls erst nach der Runde; liegt es doch im Band, ohne Ziffern
-          const qr = layers.some((l) => nameOf(l) === 'quick-replies') || hasKey(base, 'quick-replies')
-          const digits = e.props.isWorking && !qr
+          // (docs/raw/en/reference.md:320), etwa die Antwort „2“ auf „Variante 1 oder 2?“ (Review 0.13.0 K1). Und nur ohne Pille von
+          // quick-replies (BAND-SPEC-2 §5): gleiche Ziffern in zwei Zeilen lösen nichts aus (Probe §5)
+          const digits = e.props.isWorking && !(await qrShown($))
           views.push(noteView(n, e.props.bodyColumns, e.surface, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a, e.surface)))
         }
         if (s) views.push(suggestView(s, e.props.bodyColumns, e.surface, (p) => ui.Button(p) as RenderNode, (a) => void pressSuggest($, a)))
         if (btnRow) views.push(btnRow)
         const content = views.length === 1 ? (views[0] as RenderElement) : el('Box', { flexDirection: 'column' }, views)
-        return joinBand([...layers, sidekickLayer(content, e.surface)], base, slots)
+        return sidekickLayer(content, e.surface)
       } catch {
-        return theirs
+        return next(e)
       }
     }
-    if (!step) return theirs
     try {
       const secs = Math.max(0, Math.round(((await $.clock.now()) - step.since) / 1000))
       // Eine Leerzeile Abstand unter der Box (wirkt sauberer; marginBottom wie unter der Hinweis-Zeile). Im Desktop nicht: Dort steht
       // der blaue Streifen 8 px darunter wie die orange Linie unter der Spotify-Leiste; mit Leerzeile hinge er ab (Nachtrag 0.15.2)
-      const gap = e.surface === 'desktop' ? {} : { marginBottom: 1 }
+      const gap: Record<string, number> = e.surface === 'desktop' ? {} : { marginBottom: 1 }
       const box = el('Box', { key: 'sidekick-busy', flexShrink: 0, borderStyle: 'round', borderColor: ACCENT, paddingX: 1, ...gap }, [
         el('Text', { color: ACCENT }, [`sidekick ${{ fork: t().ho.busyFork, text: t().ho.busyText, plain: t().busyPlain, clear: t().busyClear }[step.step]} … ${secs} s`]),
       ])
-      // Oberste Ebene über allen anderen Mods, in jeder Reihenfolge der Kette (band.ts, docs/BAND.md); Quick-Replies blenden
-      // während der Übergabe aus, sidekick rückt dann auf ihre Höhe
-      const { layers, slots, base } = splitBand(theirs)
-      const rest = base ? withoutKey(base as RenderElement, 'quick-replies') : null
-      return joinBand([...layers.filter((l) => nameOf(l) !== 'quick-replies'), sidekickLayer(box, e.surface)], rest, slots)
+      // Oberste Ebene (layer:50); quick-replies liest `sidekick.status.handoff` und zeichnet während der Übergabe keine Zeile
+      return sidekickLayer(box, e.surface)
     } catch {
-      return theirs
+      return next(e)
     }
   })
+
+  // Band 2: die Anordnung aller Band-Zeilen, in jeder Band-Mod derselbe Hook (templates/band/README.md). Idempotent: Liegt eine
+  // andere Band-Mod weiter außen, ordnet sie, und dieser Hook reicht die schon geordneten Teilmengen unverändert weiter.
+  on('ui.render', { component: 'AbovePromptList' }, async (_$, e, next) => arrange(e, next))
 
   on('command.run', { command: 'sidekick' }, async ($, e) => {
     // Sprache aller fynn-mods (docs/LANGUAGE-SPEC.md §6 Punkt 2) vor allem, was Store, Uhr oder Zustand liest; fängt Fehler selbst ab

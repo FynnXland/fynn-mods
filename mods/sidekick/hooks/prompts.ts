@@ -1,6 +1,6 @@
 // sidekick: gespeicherte Prompts (SPEC Nachtrag 0.21.0). Reine Logik ohne `$`: Verlauf eigener Nachrichten, Wortmenge, Vorfilter,
 // Namensprüfung, Haiku-Prompt und Parser. register.ts liest und schreibt den Store und ruft das Modell.
-import type { Lang } from './i18n.ts'
+import type { Lang } from './i18n.js'
 
 /** Ein gemerkter eigener Prompt für die Erkennung (`$.store` `prompts:recent`). `id` = `<session>:<zeit>`. */
 export type Recent = { id: string; sid: string; at: number; text: string; words: string[]; intent?: string }

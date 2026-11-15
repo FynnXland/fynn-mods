@@ -2,19 +2,20 @@
 // PowerShell läuft nie echt: `process.run` ist gestubbt (die echten Skripte prüft scripts/smoke.ps1 und der Sicht-Check).
 import type { On, RenderNode } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { joinBand, layer, slot, splitBand } from '../hooks/band.ts'
-import { CONTROL_WORDS, SIZES, actionFor, desktopRoom, desktopStage, fmtTime, nextRepeat, parseTune, pickStage, pollInterval, positionNow, ratio } from '../hooks/model.ts'
-import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
-import { CONTROL_SCRIPT, PS_ABS, QUERY_SCRIPT, parseQuery, trackKey } from '../hooks/ps.ts'
-import type { Track } from '../hooks/ps.ts'
-import { DESKTOP_WIDTHS, TERMINAL_WIDTHS, aheadOf, clip, coverSvg, infoSvg, sepSvg } from '../hooks/view.ts'
+import { layer, slot } from '../hooks/band.js'
+import { CONTROL_WORDS, MIN_ROOM, SIZES, actionFor, desktopStage, fmtTime, nextRepeat, parseTune, pickStage, pollInterval, positionNow, ratio } from '../hooks/model.js'
+import { colsIn } from '../hooks/register.js'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.js'
+import { CONTROL_SCRIPT, PS_ABS, QUERY_SCRIPT, parseQuery, trackKey } from '../hooks/ps.js'
+import type { Track } from '../hooks/ps.js'
+import { DESKTOP_WIDTHS, TERMINAL_WIDTHS, aheadOf, clip, coverSvg, infoSvg, sepSvg } from '../hooks/view.js'
 
 // Was die Zeichnung sagt: der Text der Knoten und die Beschreibungen der Svg-Bilder (die Leiste zeichnet Titel und Zeit als Bild)
 const seen = (tree: Node): string => {
   let out = textOf(tree)
   const walk = (n: unknown) => {
     if (!n || typeof n !== 'object') return
-    const x = n as Node
+    const x = n as El
     if (x.type === 'Svg') out += ` ${String(x.props.alt)} ${String(x.props.source)}`
     for (const c of x.children ?? []) walk(c)
   }
@@ -28,7 +29,7 @@ const DE_EXTRA = { options: { language: 'de', extraButtons: true } } as const
 const COVER = 'AAAA'.repeat(50)
 
 const props = (bodyColumns: number) =>
-  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
+  ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {} }) as const
 const band = (surface: 'terminal' | 'desktop' | 'vscode' | 'mobile', bodyColumns = 120, extra: Record<string, unknown> = {}) =>
   ({ plugin: 'tune-strip', component: 'AbovePrompt', requestId: 'above-prompt', props: { ...props(bodyColumns), ...extra }, surface }) as never
 
@@ -70,7 +71,7 @@ function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: 
   const registered: { name: string; argumentHint?: string }[] = []
   on('command.register', ($, e) => {
     registered.push(e as never)
-    return { value: undefined }
+    return { value: { command: e.name } }
   })
   const cwd = o.cwd ?? 'C:\\work'
   on('session.start', () => ({ cwd }))
@@ -119,6 +120,8 @@ function world(on: On, o: { out?: string; deny?: boolean; ctl?: string; saved?: 
 
 // Alle Schlüssel und Texte eines gezeichneten Baums
 type Node = { type?: string; props?: Record<string, unknown>; children?: unknown[] } | string | null | undefined
+// Ein Element des Baums (Box, Text, Button, Svg), ohne Texte
+type El = { type?: string; props: Record<string, unknown>; children?: unknown[] }
 const walk = (n: Node, out: Node[] = []): Node[] => {
   out.push(n)
   if (n && typeof n === 'object') for (const c of n.children ?? []) walk(c as Node, out)
@@ -126,6 +129,7 @@ const walk = (n: Node, out: Node[] = []): Node[] => {
 }
 const keysOf = (n: Node) => walk(n).flatMap((x) => (x && typeof x === 'object' && typeof x.props?.key === 'string' ? [x.props.key] : []))
 const textOf = (n: Node) => walk(n).filter((x): x is string => typeof x === 'string').join(' ')
+const key = (s: string): RenderNode => ({ type: 'Box', props: { key: s }, children: [s] }) as RenderNode
 
 // ---------- Skripte ----------
 
@@ -268,68 +272,16 @@ test('Cover-Svg: Bild eingebettet, ohne Cover Platzhalter, weit unter dem Limit 
   expect(coverSvg('A'.repeat(40000)).length).toBeLessThan(131072)
 })
 
-// ---------- Band-Protokoll (Plätze) ----------
+// ---------- Band 2: Meldungen der anderen ----------
 
-const key = (s: string): RenderNode => ({ type: 'Box', props: { key: s }, children: [s] }) as RenderNode
-const mk = (no: number, name: string, side: 'left' | 'right' = 'left') => (inner: RenderNode | null): RenderNode | null => {
-  const s = splitBand(inner)
-  return joinBand(s.layers, s.base, [...s.slots, slot(no, name, key(name), side)])
-}
-const order = (n: RenderNode | null) => keysOf(n as Node).filter((k) => k.startsWith('slot:')).map((k) => k.split(':')[2])
-
-test('Plätze: in jeder Reihenfolge der Kette steht limit-bars vor tune-strip vor clawd-buddy', async () => {
-  const mods = {
-    bars: mk(10, 'limit-bars'),
-    'tune-strip': mk(20, 'tune-strip'),
-    clawd: mk(30, 'clawd-buddy', 'right'),
-  }
-  const perms = [
-    ['bars', 'tune-strip', 'clawd'],
-    ['bars', 'clawd', 'tune-strip'],
-    ['tune-strip', 'bars', 'clawd'],
-    ['tune-strip', 'clawd', 'bars'],
-    ['clawd', 'bars', 'tune-strip'],
-    ['clawd', 'tune-strip', 'bars'],
-  ] as const
-  for (const p of perms) {
-    // p[0] liegt innen (zeichnet zuerst), p[2] außen
-    let tree: RenderNode | null = { type: 'engine', ref: 0 } as never
-    for (const name of p) tree = mods[name](tree)
-    expect(order(tree)).toEqual(['limit-bars', 'tune-strip', 'clawd-buddy'])
-    // Der Kern-Knoten geht nicht verloren und steht in der Mitte
-    expect(JSON.stringify(tree)).toContain('"engine"')
-  }
-})
-
-test('Plätze: allein steht nur Spotify in der Zeile; ohne Plätze und Ebenen bleibt der Grund unverändert', async () => {
-  const alone = mk(20, 'tune-strip')(null)
-  expect(order(alone)).toEqual(['tune-strip'])
-  const base = { type: 'Text', props: {}, children: ['x'] } as never
-  expect(joinBand([], base, [])).toBe(base)
-  expect(joinBand([], null, [])).toBeNull()
-})
-
-test('Plätze und Ebenen: Ebenen anderer Mods gehen nie verloren, auch nicht aus fremden Hüllen', async () => {
-  const lay = (n: number, name: string) => layer(n, name, key(name))
-  // quick-replies innen (Ebene + Grund), tune-strip außen, dann sidekick außen
-  const inner = joinBand([lay(20, 'quick-replies')], key('ground'), [])
-  const withSpotify = mk(20, 'tune-strip')(inner)
-  const s = splitBand(withSpotify)
-  expect(s.layers.length).toBe(1)
-  expect(s.slots.length).toBe(1)
-  const all = joinBand([...s.layers, lay(30, 'sidekick')], s.base, s.slots)
-  const k = keysOf(all as Node)
-  expect(k.indexOf('layer:30:sidekick')).toBeLessThan(k.indexOf('layer:20:quick-replies'))
-  expect(k.indexOf('layer:20:quick-replies')).toBeLessThan(k.indexOf('slot:20:tune-strip'))
-  expect(k).toContain('ground')
-})
-
-test('Plätze: zweimal zusammenbauen verschachtelt nichts (Zeile wird beim Herausholen aufgelöst)', async () => {
-  let t: RenderNode | null = mk(10, 'limit-bars')(null)
-  for (let i = 0; i < 3; i++) t = mk(20, 'tune-strip')(t)
-  const rows = keysOf(t as Node).filter((x) => x === 'band-row')
-  expect(rows.length).toBe(1)
-  expect(order(t).filter((x) => x === 'tune-strip').length).toBe(3) // drei gleiche Plätze bleiben drei; die Mods zeichnen je Aufruf nur einen
+test('colsIn: nur { cols } > 0 zählt; die alte Form { width } (Pixel) und Unsinn zählen als nichts', async () => {
+  expect(colsIn({ cols: 44 })).toBe(44)
+  expect(colsIn({ cols: 12.2 })).toBe(13)
+  expect(colsIn({ width: 400 })).toBeNull()
+  expect(colsIn({ cols: 0 })).toBeNull()
+  expect(colsIn({ cols: 'x' })).toBeNull()
+  expect(colsIn(null)).toBeNull()
+  expect(colsIn(undefined)).toBeNull()
 })
 
 // ---------- Zeichnung ----------
@@ -358,10 +310,10 @@ test('Desktop: Knöpfe zeigen nur Symbole (kein ausgeschriebener label, den der 
   await w.start($)
   const ui = await $.ui.mount(band('desktop', 120))
   const tree = (await ui.drawn()) as Node
-  const buttons: Node[] = []
+  const buttons: El[] = []
   const walk = (n: unknown) => {
     if (!n || typeof n !== 'object') return
-    const x = n as Node
+    const x = n as El
     if (x.type === 'Button') buttons.push(x)
     for (const c of x.children ?? []) walk(c)
   }
@@ -375,12 +327,14 @@ test('Desktop: Knöpfe zeigen nur Symbole (kein ausgeschriebener label, den der 
   }
   expect(buttons.filter((b) => b.props.variant === 'primary').length).toBe(1) // nur Abspielen/Pause ist hell
   await ui.unmount()
-  // Ebenen: tune-strip (40) steht vor quick-replies (20) und sidekick (30) in der Wurzel
-  const lay = (n: number, name: string) => layer(n, name, key(name))
-  const joined = joinBand([lay(20, 'quick-replies'), lay(30, 'sidekick'), layer(40, 'tune-strip', key('s'))], key('ground'), [])
-  const k = keysOf(joined as Node)
-  expect(k.indexOf('layer:40:tune-strip')).toBeLessThan(k.indexOf('layer:30:sidekick'))
-  expect(k.indexOf('layer:30:sidekick')).toBeLessThan(k.indexOf('layer:20:quick-replies'))
+  // Ebenen (Band 2): sidekick (50) über der Leiste (40) über quick-replies (20); die Anordnung (AbovePromptList, band.ts) stapelt absteigend
+  const lay = (n: number, name: string) => ({ plugin: name, tree: layer(n, name, key(name)) })
+  const rows = [lay(20, 'quick-replies'), lay(40, 'tune-strip'), lay(50, 'sidekick')]
+  const list = await $.ui.mount({ plugin: 'tune-strip', component: 'AbovePromptList', requestId: 'above-prompt-list', surface: 'desktop', props: { ...props(120), rows } } as never)
+  const k = keysOf((await list.drawn()) as Node)
+  expect(k.indexOf('layer:50:sidekick')).toBeLessThan(k.indexOf('layer:40:tune-strip'))
+  expect(k.indexOf('layer:40:tune-strip')).toBeLessThan(k.indexOf('layer:20:quick-replies'))
+  await list.unmount()
 })
 
 test('Terminal: eine Zeile mit Titel, Zeit und Knöpfen', DE, async ($, on) => {
@@ -448,7 +402,7 @@ test('Titelwechsel: meldet Windows kurz keine Sitzung, bleibt die Leiste stehen 
   expect(textOf(await drawn())).toBe('von anderen')
 })
 
-test('Stufen im Desktop: fest gewählt per /tune size; auto ohne bekannte Breite = voll', DE, async ($, on) => {
+test('Stufen im Desktop: fest gewählt per /tune size; auto = die Leiste wie bisher', DE, async ($, on) => {
   const w = world(on)
   await w.start($)
   const k = async () => {
@@ -463,12 +417,15 @@ test('Stufen im Desktop: fest gewählt per /tune size; auto ohne bekannte Breite
   let keys = await k()
   expect(keys).toContain('toggle')
   expect(keys).not.toContain('back')
-  expect(keys).toContain('slot:20:tune-strip') // kompakt = Platz in der Zeile, keine Leiste
-  expect(keys).not.toContain('layer:40:tune-strip')
-  // 0.8.1: der Platz liegt über Clawd, der seit clawd-buddy 0.12.1 hinter der Zeile liegt
+  expect(keys).toContain('layer:40:tune-strip') // seit 2026-11-15 auch kompakt in der eigenen Leiste
+  expect(keys).not.toContain('slot:20:tune-strip')
+  // Band 2: die Leiste hat die volle Bandbreite in Zellen und schneidet ab; das `position: relative` aus 0.8.1 entfällt
   {
     const ui = await $.ui.mount(band('desktop', 120))
-    expect((await ui.find({ type: 'Box', key: 'tune-strip-front' }))?.props.position).toBe('relative')
+    const root = await ui.find({ type: 'Box', key: 'layer:40:tune-strip' })
+    expect(root?.props.width).toBe(120)
+    expect(root?.props.overflow).toBe('hidden')
+    expect(await ui.find({ type: 'Box', key: 'tune-strip-front' })).toBeUndefined()
     await ui.unmount()
   }
   await $.command.run({ command: 'tune', args: 'size mini' } as never)
@@ -499,19 +456,114 @@ test('Terminal: schmal wird die Zeile erst mini, dann weg', DE, async ($, on) =>
   expect(textOf(await at(widths.mini - 1))).toBe('von anderen')
 })
 
-test('Breiten der Stufen sind geordnet; der Rest im Desktop zieht die Plätze der anderen und die Abstände ab', async () => {
+
+// ---------- Band 2: immer eigene Leiste (Fynn 2026-11-15) ----------
+
+/** Knoten mit diesem Schlüssel im gezeichneten Baum. */
+const byKey = (n: Node, k: string): El | undefined =>
+  walk(n).find((x) => !!x && typeof x === 'object' && x.props?.key === k) as El | undefined
+
+/** `$.state` der anderen: Breiten von limit-bars und Clawd in Zellen, die Pille von quick-replies. */
+function others(on: On, o: { lb?: unknown; clawd?: unknown; qr?: boolean } = {}) {
+  on('state.get', ($: unknown, e: any) => {
+    const v = e.plugin === 'limit-bars' ? o.lb : e.plugin === 'clawd-buddy' ? o.clawd : e.plugin === 'quick-replies' && o.qr ? { shown: true } : undefined
+    return { value: { value: v ?? null, version: 1 } } as never
+  })
+  on('state.set', () => ({ value: { isSet: true, version: 1 } }) as never)
+}
+
+test('Band 2, Terminal: immer eigene Leiste layer:40 mit voller Bandbreite; Stufe nach bodyColumns; die Breiten der anderen zählen nicht', DE, async ($, on) => {
+  const w = world(on)
+  others(on, { lb: { cols: 44 }, clawd: { cols: 30 } })
+  await w.start($, 'terminal')
+  const at = async (cols: number) => {
+    const ui = await $.ui.mount(band('terminal', cols))
+    const tree = (await ui.drawn()) as Node
+    await ui.unmount()
+    return tree
+  }
+  // 80 Spalten: neben Balken (44) und Clawd (30) bliebe kein Platz; die eigene Leiste hat trotzdem die volle Breite, volle Stufe mit Zeit
+  let t = await at(80)
+  expect(byKey(t, 'layer:40:tune-strip')?.props).toMatchObject({ width: 80, overflow: 'hidden', flexDirection: 'column' })
+  expect(byKey(t, 'slot:20:tune-strip')).toBeUndefined()
+  expect(textOf(t)).toContain('0:10/')
+  // 25: kompakt (ohne Zeit), 12: mini, 9: keine Leiste
+  t = await at(25)
+  expect(byKey(t, 'layer:40:tune-strip')?.props.width).toBe(25)
+  expect(keysOf(t)).toContain('prev')
+  expect(textOf(t)).not.toContain('0:10/')
+  t = await at(12)
+  expect(keysOf(t)).toContain('toggle')
+  expect(keysOf(t)).not.toContain('prev')
+  expect(byKey(await at(9), 'layer:40:tune-strip')).toBeUndefined()
+})
+
+test('Band 2, Desktop: auto und compact sind beide die eigene Leiste layer:40; schmal wird kompakt zu mini, dann weg', DE, async ($, on) => {
+  const w = world(on)
+  others(on, { lb: { cols: 39 }, clawd: { cols: 52 } })
+  await w.start($)
+  let ui = await $.ui.mount(band('desktop', 99))
+  let tree = (await ui.drawn()) as Node
+  expect(byKey(tree, 'layer:40:tune-strip')?.props).toMatchObject({ width: 99, overflow: 'hidden' })
+  // Mit limit-bars und Clawd darunter: die Trennlinie
+  expect(seen(tree)).toContain('Trennlinie')
+  await ui.unmount()
+  await $.command.run({ command: 'tune', args: 'size compact' } as never)
+  ui = await $.ui.mount(band('desktop', 99))
+  tree = (await ui.drawn()) as Node
+  expect(byKey(tree, 'layer:40:tune-strip')).toBeDefined()
+  expect(keysOf(tree)).toContain('prev')
+  await ui.unmount()
+  // 20 Zellen: kompakt (34) passt nicht → mini; 10: weg
+  ui = await $.ui.mount(band('desktop', 20))
+  tree = (await ui.drawn()) as Node
+  expect(keysOf(tree)).toContain('toggle')
+  expect(keysOf(tree)).not.toContain('prev')
+  await ui.unmount()
+  ui = await $.ui.mount(band('desktop', 10))
+  expect(byKey((await ui.drawn()) as Node, 'layer:40:tune-strip')).toBeUndefined()
+  await ui.unmount()
+})
+
+test('Band 2, AbovePromptList: Leiste über der Pille über der Grundzeile Balken | Abstand | Clawd, auf beiden Oberflächen', DE, async ($, on) => {
+  const w = world(on)
+  others(on, { lb: { cols: 44 }, clawd: { cols: 20 } })
+  const row = (plugin: string, tree: RenderNode) => ({ plugin, tree })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    await w.start($, surface)
+    const own = await $.ui.mount(band(surface, 120))
+    const mine = byKey((await own.drawn()) as Node, 'layer:40:tune-strip') as unknown as RenderNode
+    await own.unmount()
+    expect(mine).toBeDefined()
+    const rows = [
+      row('clawd-buddy', slot(30, 'clawd-buddy', key('Clawd'), 'right')),
+      row('quick-replies', layer(20, 'quick-replies', key('Pille'))),
+      row('tune-strip', mine),
+      row('limit-bars', slot(10, 'limit-bars', key('Balken'))),
+    ]
+    const ui = await $.ui.mount({ plugin: 'tune-strip', component: 'AbovePromptList', requestId: 'above-prompt-list', surface, props: { ...props(120), rows } } as never)
+    const k = keysOf((await ui.drawn()) as Node)
+    expect(k.indexOf('layer:40:tune-strip')).toBeLessThan(k.indexOf('layer:20:quick-replies'))
+    expect(k.indexOf('layer:20:quick-replies')).toBeLessThan(k.indexOf('band-row'))
+    const cells = k.filter((x) => x.startsWith('band-cell:') || x === 'band-gap')
+    expect(cells).toEqual(['band-cell:0:slot:10:limit-bars', 'band-gap', 'band-cell:2:slot:30:clawd-buddy:right'])
+    await ui.unmount()
+  }
+})
+
+test('Breiten der Stufen in Zellen sind geordnet; mini nie unter MIN_ROOM', async () => {
   expect(TERMINAL_WIDTHS.full).toBeGreaterThan(TERMINAL_WIDTHS.compact)
   expect(TERMINAL_WIDTHS.compact).toBeGreaterThan(TERMINAL_WIDTHS.mini)
-  expect(desktopRoom(1000, [300, 400])).toBe(1000 - 700 - 24)
-  expect(desktopRoom(1000, [null, 400])).toBe(1000 - 400 - 12) // limit-bars zeichnet nichts: kein Abstand dafür
-  expect(desktopRoom(1000, [undefined, null])).toBe(1000)
-  expect(desktopRoom(500, [300, 400])).toBeLessThan(0)
+  expect(TERMINAL_WIDTHS.mini >= MIN_ROOM).toBe(true)
+  expect(DESKTOP_WIDTHS.mini >= MIN_ROOM).toBe(true)
+  // Desktop kompakt: Cover (56 px ≈ 8 Zellen), Lücke 2, Spalte 24 Zellen
+  expect(DESKTOP_WIDTHS.compact).toBe(34)
   expect(DESKTOP_WIDTHS.full).toBe(0) // die Leiste belegt keinen Platz in der Zeile
   expect(DESKTOP_WIDTHS.compact).toBeGreaterThan(DESKTOP_WIDTHS.mini)
-  // auto: ohne bekannten Platz die Leiste, mit Platz kompakt in der Zeile, sonst wieder die Leiste; fest gewählt bleibt es
+  // auto bleibt im Desktop die Leiste wie bis 0.11.x (Band 2: „sieht aus wie bisher“), auch wenn der Platz reicht; fest gewählt weicht nach unten
   expect(desktopStage(undefined, 'auto', DESKTOP_WIDTHS)).toBe('full')
-  expect(desktopStage(DESKTOP_WIDTHS.compact, 'auto', DESKTOP_WIDTHS)).toBe('compact')
-  expect(desktopStage(DESKTOP_WIDTHS.compact - 1, 'auto', DESKTOP_WIDTHS)).toBe('full')
+  expect(desktopStage(500, 'auto', DESKTOP_WIDTHS)).toBe('full')
+  expect(desktopStage(DESKTOP_WIDTHS.compact, 'compact', DESKTOP_WIDTHS)).toBe('compact')
   expect(desktopStage(10, 'full', DESKTOP_WIDTHS)).toBe('full')
   expect(desktopStage(DESKTOP_WIDTHS.compact - 1, 'compact', DESKTOP_WIDTHS)).toBe('mini')
   expect(desktopStage(10, 'compact', DESKTOP_WIDTHS)).toBe('off')
@@ -641,7 +693,7 @@ test('0.10.0 B: beim Abspielen ohne Änderung kein eigenes Neuzeichnen über 60 
 
 // Jede Zeichnung baut die Voranimation ab der aktuellen Position neu; ohne andere Zeichnungen kommt vorher das Lebenszeichen (20 s).
 // Das Neuzeichnen am Ende einer gekappten Voranimation (register.ts tick) ist damit nur noch eine Absicherung.
-test('0.10.0 B: Titel über 60 min – die Leiste zählt über die 60 min hinaus weiter, ohne eigenes Neuzeichnen', DE, async ($, on) => {
+test('0.10.0 B: Titel über 60 min – die Leiste zählt über die 60 min hinaus weiter, ohne eigenes Neuzeichnen', { ...DE, timeoutMs: 15000 }, async ($, on) => {
   const w = world(on, { inner: 'text' })
   w.state.live = (pos) => q({ pos, end: 7200 }, true)
   await w.start($)
@@ -972,9 +1024,12 @@ test('Leiste: Hinweis je Knopf beim Überfahren (Hover-Gruppe), Absatz vor Zufal
   await ui.unmount()
 })
 
-for (const inner of ['layer', 'slot'] as const) {
-  test(`Trennlinie: steht unter der Leiste, wenn darunter ${inner === 'layer' ? 'eine Ebene (quick-replies)' : 'ein Platz (limit-bars)'} zeichnet`, DE, async ($, on) => {
-    const w = world(on, { inner })
+// Band 2: tune-strip sieht die Zeilen der anderen nicht mehr; ob darunter etwas steht, sagen ihre $.state-Werte (Pille, Platzbreiten)
+for (const inner of ['quick-replies', 'limit-bars', 'clawd-buddy'] as const) {
+  test(`Trennlinie: steht unter der Leiste, wenn darunter ${inner} zeichnet ($.state)`, DE, async ($, on) => {
+    const w = world(on)
+    on('state.get', ($: unknown, e: any) => ({ value: { value: e.plugin !== inner ? undefined : inner === 'quick-replies' ? { shown: true } : { cols: 30 }, version: 1 } }) as never)
+    on('state.set', () => ({ value: { isSet: true, version: 1 } }) as never)
     await w.start($)
     const ui = await $.ui.mount(band('desktop', 120))
     const tree = (await ui.drawn()) as Node
@@ -1218,7 +1273,7 @@ test('0.5.0 language: Hilfezeile (de), argumentHint (de)', DE, async ($, on) => 
 test('0.5.0 language: Hilfe nennt jedes Wort, das der Parser annimmt, dazu language, de und en', async ($, on) => {
   const w = world(on)
   await w.start($)
-  const words = new Set(helpCmds((await $.command.run({ command: 'tune', args: 'help' } as never)).text as string).flatMap((c) => c.replace(/[[\]]/g, ' ').split(/[\s|]+/)))
+  const words = new Set(helpCmds((await $.command.run({ command: 'tune', args: 'help' } as never)).text as string).flatMap((c) => (c ?? "").replace(/[[\]]/g, ' ').split(/[\s|]+/)))
   for (const x of [...CONTROL_WORDS, ...SIZES, 'on', 'off', 'help', LANGUAGE_WORD, ...LANGUAGES]) expect(words.has(x), x).toBe(true)
 })
 

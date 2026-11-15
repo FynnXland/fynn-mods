@@ -1,6 +1,6 @@
 // fields.ts: die userConfig-Felder dieser Mod, gleich .claude-plugin/plugin.json (scripts/check-mods.ps1 vergleicht Typ, Standard,
 // Grenzen und Auswahl; docs/SETTINGS-SPEC.md §4, §5 „sidekick 0.22.0 → 0.23.0“). Ein Feld je Zeile.
-import type { FieldDefs } from './settings.ts'
+import type { FieldDefs } from './settings.js'
 
 export const SETTINGS: FieldDefs = {
   level: { type: 'string', default: 'guide', options: ['off', 'cache', 'guide'] },

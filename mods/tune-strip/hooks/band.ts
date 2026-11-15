@@ -1,171 +1,214 @@
-// band.ts: gemeinsames Protokoll für das Band über dem Prompt (AbovePrompt). Gleiche Kopie in limit-bars, clawd-buddy,
-// quick-replies, sidekick und spotify (Mods importieren nur relativ); Beschreibung in docs/BAND.md, Änderungen immer in allen Kopien.
-// ENTWURF (Protokoll mit Plätzen, mods/spotify/PROTOKOLL-ENTWURF.md): bis zur Freigabe nur in spotify, die anderen Kopien bleiben.
+// band.ts: gemeinsamer Baustein für das Band über dem Prompt ab Claude Code 2.1.323 (docs/BAND.md, docs/BAND-SPEC-2.md §3).
+// Vorlage: templates/band/band.ts. Jede Band-Mod (clawd-buddy, limit-bars, quick-replies, sidekick, tune-strip) hat eine
+// wörtliche Kopie in hooks/band.ts und importiert sie als './band.js'; scripts/check-mods.ps1 vergleicht die Kopien.
+// Die Datei ruft nichts an `$` auf und braucht deshalb keine Rechte.
 //
-// Die Reihenfolge der Mods in der Kette hängt von der Installation ab (docs/raw/en/events.md:291-305). Damit das Band trotzdem
-// immer gleich aussieht, gibt es drei Arten von Inhalt:
-// - Platz: ein Teil der Grund-Zeile (limit-bars 10, spotify 20, clawd-buddy 30 rechts). Box-Knoten mit key `slot:<Zahl>:<Name>`
-//   (links) bzw. `slot:<Zahl>:<Name>:right`. Die Zeile sortiert alle Plätze nach der Zahl, egal wer in der Kette außen liegt.
-// - Rest: was weder Platz noch Ebene ist (der Kern-Knoten `{type:'engine'}` oder die Zeichnung eines noch nicht umgestellten
-//   Mods). Er steht in der Mitte der Zeile und füllt den freien Platz.
-// - Ebenen: was als eigene Zeile über dem Grund steht (Quick-Replies, sidekick). Ein Box-Knoten mit key `layer:<Höhe>:<Name>`.
-// Jeder Mod holt Plätze und Ebenen aus dem, was `next` liefert, heraus, ergänzt seinen Teil und baut alles neu zusammen.
+// Seit 2.1.323 zeichnet jede Mod in `AbovePrompt` nur ihre eigene Zeile (en/interface.md:200-204, types@2.1.325:11360-11375).
+// Die Wurzel dieser Zeile trägt einen Schlüssel:
+// - Ebene `layer:<Höhe>:<Name>`: eigene Zeile über der Grundzeile, die höhere Zahl steht oben.
+// - Platz `slot:<Zahl>:<Name>` bzw. `slot:<Zahl>:<Name>:right`: Teil der einen Grundzeile, aufsteigend von links.
+// - Platz 0 ist Clawds Bühne im Desktop (absolut an der eigenen Wurzel): eine eigene, unterste Zeile nach der Grundzeile.
+// `arrange` setzt die Zeilen in `AbovePromptList` danach zusammen (types@2.1.325:11440-11489, Probe docs/BAND-PROBE-2.1.325.md).
 import type { RenderElement, RenderNode } from 'claude-code'
+
+/** Höhen der Ebenen: weiter oben = größere Zahl. */
+export const LEVEL = { quickReplies: 20, tuneStrip: 40, sidekick: 50 } as const
+
+/** Plätze: kleinere Zahl = weiter links. Platz 0 ist Clawds Bühne im Desktop (eigene unterste Zeile). */
+export const SLOTS = { clawdStage: 0, limitBars: 10, tuneStrip: 20, clawdBuddy: 30 } as const
+
+/** Abstand zwischen den Plätzen der Grundzeile, in Zellen (Terminal und Desktop, Probe 7b). */
+export const SLOT_GAP = 2
 
 const LAYER = 'layer:'
 const SLOT = 'slot:'
-const ROOT = 'band'
-const BASE = 'band-base'
-const ROW = 'band-row'
-const REST = 'band-rest'
+const RIGHT = ':right'
 
-export type Split = { layers: RenderElement[]; slots: RenderElement[]; base: RenderNode | null }
+/** Eine Zeile des Bands, wie `AbovePromptList` sie in `e.props.rows` liefert (types@2.1.325:111-121). */
+export type BandRow = { readonly plugin: string; readonly tree: RenderElement }
+
+/** Was ein Schlüssel bedeutet. */
+export type BandKey =
+  | { kind: 'layer'; level: number; name: string }
+  | { kind: 'slot'; no: number; name: string; right: boolean }
+  | { kind: 'rest' }
+
+/** Stilangaben für die eigene Wurzel, z. B. `width`, `overflow` oder Clawds `position: 'absolute'`. */
+export type RootStyle = Record<string, string | number | boolean>
+
+function box(props: RootStyle, children: RenderNode[]): RenderElement {
+  // Elemente als reine Daten (types@2.1.325:10385-10393), ohne $.ui.resolve
+  return { type: 'Box', props, children }
+}
+
+const list = (content: RenderNode | readonly RenderNode[]): RenderNode[] =>
+  Array.isArray(content) ? [...(content as readonly RenderNode[])] : [content as RenderNode]
+
+/**
+ * Wurzel einer Ebene: `Box{key:'layer:<Höhe>:<Name>', column}` um den Inhalt. `style` geht an dieselbe Wurzel;
+ * `key` und `flexDirection` setzt immer diese Funktion.
+ */
+export function layer(level: number, name: string, content: RenderNode | readonly RenderNode[], style: RootStyle = {}): RenderElement {
+  return box({ ...style, key: `${LAYER}${level}:${name}`, flexDirection: 'column' }, list(content))
+}
+
+/**
+ * Wurzel eines Platzes: `Box{key:'slot:<Zahl>:<Name>[:right]', column}` um den Inhalt. Feste Breite in Zellen und
+ * `overflow: 'hidden'` gehören in `style` (Probe 7b: Flexbox schrumpft über die Hüllen nicht), ebenso Clawds Bühne
+ * (`position: 'absolute', bottom: 0, right: 0`, nur die eigene Wurzel darf das, Probe §2 c′).
+ * Ein rechter Platz bekommt `alignItems: 'flex-end'` an der eigenen Wurzel: Steht er allein (ohne `band-row`), geht seine
+ * Zeile über die volle Breite, und sein Inhalt bleibt trotzdem rechts (wie bisher hinter dem wachsenden Rest).
+ * `style` kann das überschreiben.
+ */
+export function slot(no: number, name: string, content: RenderNode | readonly RenderNode[], side: 'left' | 'right' = 'left', style: RootStyle = {}): RenderElement {
+  const key = `${SLOT}${no}:${name}${side === 'right' ? RIGHT : ''}`
+  const align: RootStyle = side === 'right' ? { alignItems: 'flex-end' } : {}
+  return box({ ...align, ...style, key, flexDirection: 'column' }, list(content))
+}
+
+const NUMBER = /^\d+$/
+
+/** Schlüssel lesen: `layer:20:quick-replies`, `slot:30:clawd-buddy:right`; alles andere ist Rest. */
+export function parseKey(key: string): BandKey {
+  if (key.startsWith(LAYER)) {
+    const [n = '', ...rest] = key.slice(LAYER.length).split(':')
+    const name = rest.join(':')
+    if (NUMBER.test(n) && name !== '') return { kind: 'layer', level: Number(n), name }
+  }
+  if (key.startsWith(SLOT)) {
+    const [n = '', ...rest] = key.slice(SLOT.length).split(':')
+    const right = rest.length > 1 && rest[rest.length - 1] === 'right'
+    const name = (right ? rest.slice(0, -1) : rest).join(':')
+    if (NUMBER.test(n) && name !== '') return { kind: 'slot', no: Number(n), name, right }
+  }
+  return { kind: 'rest' }
+}
 
 type Data = { type?: unknown; props?: Record<string, unknown>; children?: unknown[] }
-
-const keyOf = (n: unknown): string => {
+const ownKey = (n: unknown): string => {
   const k = (n as Data | null)?.props?.key
   return typeof k === 'string' ? k : ''
 }
 
-/** Höhe einer Ebene aus ihrem key (`layer:20:quick-replies` → 20); kein Ebenen-key → -1. */
-export function levelOf(n: unknown): number {
-  const k = keyOf(n)
-  if (!k.startsWith(LAYER)) return -1
-  const v = Number(k.slice(LAYER.length).split(':')[0])
-  return Number.isFinite(v) ? v : 0
-}
-
-/** Name einer Ebene (`layer:20:quick-replies` → quick-replies). */
-export function nameOf(n: unknown): string {
-  const k = keyOf(n)
-  return k.startsWith(LAYER) ? k.slice(LAYER.length).split(':').slice(1).join(':') : ''
-}
-
-/** Platznummer aus dem key (`slot:20:spotify` → 20); kein Platz-key → -1. */
-export function slotNo(n: unknown): number {
-  const k = keyOf(n)
-  if (!k.startsWith(SLOT)) return -1
-  const v = Number(k.slice(SLOT.length).split(':')[0])
-  return Number.isFinite(v) && v >= 0 ? v : -1
-}
-
-/** Name eines Platzes (`slot:20:spotify` → spotify, `slot:30:clawd-buddy:right` → clawd-buddy). */
-export function slotName(n: unknown): string {
-  const k = keyOf(n)
-  return k.startsWith(SLOT) ? (k.slice(SLOT.length).split(':')[1] ?? '') : ''
-}
-
-const isRight = (n: unknown): boolean => keyOf(n).endsWith(':right')
-
-/** Den Grund aus einer Wurzel holen, die joinBand gebaut hat. */
-function baseOf(root: Data): unknown {
-  const wrap = (root.children ?? []).find((c) => keyOf(c) === BASE) as Data | undefined
-  const inner = wrap?.children?.[0] as Data | undefined
-  return inner?.children?.[0] ?? null
-}
-
-function lift(node: unknown, layers: RenderElement[], slots: RenderElement[]): unknown {
-  if (!node || typeof node !== 'object') return node
-  const n = node as Data
-  if (levelOf(n) >= 0) {
-    layers.push(n as RenderElement)
-    return null
-  }
-  if (slotNo(n) >= 0) {
-    slots.push(n as RenderElement)
-    return null
-  }
-  // Wurzel eines anderen Mods: ihre Ebenen einsammeln, an ihrer Stelle steht nur noch ihr Grund
-  if (keyOf(n) === ROOT) {
-    for (const c of n.children ?? []) if (levelOf(c) >= 0) layers.push(c as RenderElement)
-    return lift(baseOf(n), layers, slots)
-  }
-  // Zeile aus joinBand: ihre Plätze einsammeln, an ihrer Stelle steht nur noch der Rest
-  if (keyOf(n) === ROW) {
-    let rest: unknown = null
-    for (const c of n.children ?? []) {
-      if (slotNo(c) >= 0) slots.push(c as RenderElement)
-      else if (keyOf(c) === REST) rest = (c as Data).children?.[0] ?? null
+/**
+ * Schlüssel einer Zeile. Die Engine reicht die Wurzel der Mod unverändert weiter (gemessen mit 2.1.325, README
+ * „Form von rows[].tree“); gesucht wird trotzdem bis zu drei Box-Ebenen tiefer, damit auch eine Hülle oder eine
+ * noch nicht umgebaute Zeile (Platz unter `band-row`) eingeordnet wird. Der erste Band-Schlüssel zählt; ohne einen
+ * ist die Zeile Rest.
+ */
+export function keyOfRow(row: BandRow): string {
+  let level: unknown[] = [row.tree]
+  for (let depth = 0; depth < 4 && level.length > 0; depth++) {
+    const next: unknown[] = []
+    for (const n of level) {
+      const k = ownKey(n)
+      if (parseKey(k).kind !== 'rest') return k
+      const d = n as Data | null
+      if (d && typeof d === 'object' && d.type === 'Box' && Array.isArray(d.children)) next.push(...d.children)
     }
-    return lift(rest, layers, slots)
+    level = next
   }
-  if (!Array.isArray(n.children)) return node
-  let changed = false
-  const kids: unknown[] = []
-  for (const c of n.children) {
-    const l = lift(c, layers, slots)
-    if (l !== c) changed = true
-    if (l !== null) kids.push(l)
-  }
-  // Nichts gefunden: derselbe Knoten, damit ein Band ohne Ebenen und Plätze genau so bleibt, wie es war
-  return changed ? { ...n, children: kids } : node
+  return ''
 }
 
-/** Ebenen und Plätze aus dem Ergebnis von `next` herausholen, auch aus fremden Hüllen; der Rest ist der Grund. */
-export function splitBand(theirs: RenderNode | null | undefined): Split {
-  const layers: RenderElement[] = []
-  const slots: RenderElement[] = []
-  const base = lift(theirs ?? null, layers, slots) as RenderNode | null
-  return { layers, slots, base }
+/** Die Zeilen eingeteilt und sortiert; jede Zeile kommt genau einmal vor. */
+export type Split = {
+  /** Ebenen, absteigend nach Höhe (bei gleicher Höhe in Kettenfolge). */
+  layers: BandRow[]
+  /** Zeilen ohne Band-Schlüssel, in Kettenfolge (fremde Mods). */
+  rest: BandRow[]
+  /** Linke Plätze ab 1, aufsteigend. */
+  left: BandRow[]
+  /** Rechte Plätze ab 1, aufsteigend. */
+  right: BandRow[]
+  /** Platz 0 (Clawds Bühne im Desktop), in Kettenfolge. */
+  stage: BandRow[]
+}
+
+/** Einteilen nach Schlüssel (SPEC §3 Schritt 1). Rein, ohne `$`. */
+export function splitRows(rows: readonly BandRow[]): Split {
+  const keyed = rows.map((row, i) => ({ row, i, key: parseKey(keyOfRow(row)) }))
+  const by = (a: { i: number }, b: { i: number }) => a.i - b.i
+  const layers = keyed
+    .filter((x) => x.key.kind === 'layer')
+    .sort((a, b) => (b.key.kind === 'layer' ? b.key.level : 0) - (a.key.kind === 'layer' ? a.key.level : 0) || by(a, b))
+  const slots = keyed.filter((x) => x.key.kind === 'slot')
+  const no = (x: (typeof keyed)[number]) => (x.key.kind === 'slot' ? x.key.no : 0)
+  const isRight = (x: (typeof keyed)[number]) => x.key.kind === 'slot' && x.key.right
+  const asc = (a: (typeof keyed)[number], b: (typeof keyed)[number]) => no(a) - no(b) || by(a, b)
+  return {
+    layers: layers.map((x) => x.row),
+    rest: keyed.filter((x) => x.key.kind === 'rest').map((x) => x.row),
+    left: slots.filter((x) => no(x) > 0 && !isRight(x)).sort(asc).map((x) => x.row),
+    right: slots.filter((x) => no(x) > 0 && isRight(x)).sort(asc).map((x) => x.row),
+    stage: slots.filter((x) => no(x) === 0).map((x) => x.row),
+  }
+}
+
+/** Die Reihenfolge, in der die Zeilen untereinander stehen: Ebenen, Rest, Plätze, Bühne. */
+export function orderOf(s: Split): BandRow[] {
+  return [...s.layers, ...s.rest, ...s.left, ...s.right, ...s.stage]
 }
 
 /**
- * Ebenen (höchste oben) über den Grund setzen; ohne Ebenen und Plätze bleibt der Grund unverändert.
- * Mit Plätzen entsteht die Zeile: linke Plätze aufsteigend, der Rest in der Mitte (füllt), rechte Plätze aufsteigend.
+ * Ob die Anordnung nichts zu tun hat (SPEC §3 Schritt 2): höchstens ein Platz in der Grundzeile und die Zeilen
+ * stehen schon in der Reihenfolge von `orderOf`. Dann gibt `arrange` `next(e)` unverändert zurück. Das macht die
+ * Anordnung idempotent: Die inneren Hooks sehen nur noch die Teilmengen, die der äußere einzeln weitergibt.
  */
-export function joinBand(layers: readonly RenderElement[], base: RenderNode | null | undefined, slots: readonly RenderElement[] = []): RenderNode | null {
-  const row = rowOf(slots, base)
-  if (layers.length === 0) return row
-  const sorted = layers
-    .map((l, i) => ({ l, i }))
-    .sort((a, b) => levelOf(b.l) - levelOf(a.l) || a.i - b.i)
-    .map((x) => x.l)
-  const kids: RenderNode[] = [...sorted]
-  if (row !== null) {
-    // Der Grund steht in einer eigenen Zeile unten bündig, nie direkt in der Spalte (quick-replies, Lehren 4 und 5)
-    kids.push(
-      box({ key: BASE, flexDirection: 'row', alignItems: 'flex-end' }, [
-        box({ flexGrow: 1, flexDirection: 'column', justifyContent: 'flex-end' }, [row]),
-      ]),
-    )
+export function isSettled(rows: readonly BandRow[], s: Split = splitRows(rows)): boolean {
+  if (s.left.length + s.right.length > 1) return false
+  const order = orderOf(s)
+  return order.every((row, i) => row === rows[i])
+}
+
+/**
+ * Zellen, die `band-row` für Abstände braucht: `SLOT_GAP` je Lücke zwischen zwei Kindern. Der Abstandhalter vor den
+ * rechten Plätzen ist selbst ein Kind und hat Lücken auf beiden Seiten. Ohne `band-row` (höchstens ein Platz) 0.
+ * Für die Breitenrechnung von tune-strip: Rest = bodyColumns − Breiten der anderen Plätze − rowGapCells(links, rechts).
+ */
+export function rowGapCells(left: number, right: number): number {
+  if (left + right <= 1) return 0
+  const children = left + right + (right > 0 ? 1 : 0)
+  return SLOT_GAP * (children - 1)
+}
+
+/** Was `arrange` von `e` braucht: die Zeilen in `e.props.rows`. Alle anderen Props reicht es unverändert weiter. */
+export type ListEvent = { readonly props: { readonly rows: readonly BandRow[] } }
+
+/**
+ * Anordnung für `on('ui.render', { component: 'AbovePromptList' }, ($, e, next) => arrange(e, next))`.
+ *
+ * - Grundzeile mit höchstens einem Platz: `next(e)` unverändert, bzw. ein `next` mit den Zeilen in der richtigen Folge.
+ * - Sonst `Box{column, key:'band'}`: Ebenen (ein `next`), Rest (ein `next`, falls vorhanden), `Box{row, key:'band-row'}`
+ *   mit je einem `next` pro Platz in `Box{flexShrink:0}` (links aufsteigend, Abstand `Box{flexGrow:1}`, rechts
+ *   aufsteigend), danach Clawds Bühne (ein `next`) als unterste Zeile.
+ * - Hüllen um fremde Zeilen tragen nur `key`, `flexDirection`, `flexShrink`, `flexGrow`, `columnGap`, `rowGap`, `alignItems`
+ *   (Probe 7: `minWidth` oder `position` darum wird abgelehnt).
+ * - Scheitert etwas: `next(e)`, lieber gestapelt als leer (SPEC §3 Schritt 4).
+ */
+export async function arrange<E extends ListEvent>(e: E, next: (e: NoInfer<E>) => Promise<RenderElement>): Promise<RenderElement> {
+  try {
+    const rows = e.props.rows
+    const s = splitRows(rows)
+    if (isSettled(rows, s)) return await next(e)
+    const sub = (rs: readonly BandRow[]): Promise<RenderElement> => next({ ...e, props: { ...e.props, rows: rs } })
+    if (s.left.length + s.right.length <= 1) return await sub(orderOf(s))
+    const kids: RenderNode[] = []
+    if (s.layers.length > 0) kids.push(await sub(s.layers))
+    if (s.rest.length > 0) kids.push(await sub(s.rest))
+    const line: RenderNode[] = []
+    // Index im Schlüssel: Zwei Zeilen mit gleichem Schlüssel (z. B. @inline neben @fynn-mods beim Testen) bleiben unterscheidbar
+    const cell = async (row: BandRow): Promise<RenderElement> =>
+      box({ key: `band-cell:${line.length}:${keyOfRow(row)}`, flexShrink: 0 }, [await sub([row])])
+    for (const row of s.left) line.push(await cell(row))
+    if (s.right.length > 0) {
+      line.push(box({ key: 'band-gap', flexGrow: 1 }, []))
+      for (const row of s.right) line.push(await cell(row))
+    }
+    kids.push(box({ key: 'band-row', flexDirection: 'row', columnGap: SLOT_GAP, alignItems: 'flex-end' }, line))
+    if (s.stage.length > 0) kids.push(await sub(s.stage))
+    return box({ key: 'band', flexDirection: 'column' }, kids)
+  } catch {
+    return next(e)
   }
-  return box({ key: ROOT, flexDirection: 'column', justifyContent: 'flex-end' }, kids)
 }
-
-/** Ohne Plätze der Grund selbst, sonst die Zeile mit den Plätzen. */
-function rowOf(slots: readonly RenderElement[], base: RenderNode | null | undefined): RenderNode | null {
-  if (slots.length === 0) return base ?? null
-  const sorted = slots
-    .map((s, i) => ({ s, i }))
-    .sort((a, b) => slotNo(a.s) - slotNo(b.s) || a.i - b.i)
-    .map((x) => x.s)
-  const left = sorted.filter((s) => !isRight(s))
-  const right = sorted.filter(isRight)
-  const rest = box({ key: REST, flexGrow: 1, flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'flex-end' }, base ? [base] : [])
-  return box({ key: ROW, flexDirection: 'row', alignItems: 'flex-end', columnGap: SLOT_GAP }, [...left, rest, ...right])
-}
-
-/** Abstand zwischen den Plätzen. */
-export const SLOT_GAP = 2
-
-/** Eine Ebene: eigener Box-Knoten mit `layer:<Höhe>:<Name>`, der Inhalt unverändert darin. */
-export function layer(level: number, name: string, content: RenderNode): RenderElement {
-  return box({ key: `${LAYER}${level}:${name}`, flexDirection: 'column', flexShrink: 0 }, [content])
-}
-
-/** Ein Platz der Grund-Zeile: Box-Knoten mit `slot:<Zahl>:<Name>` (rechts: `…:right`), unten bündig, schrumpft nie. */
-export function slot(no: number, name: string, content: RenderNode, side: 'left' | 'right' = 'left'): RenderElement {
-  return box({ key: `${SLOT}${no}:${name}${side === 'right' ? ':right' : ''}`, flexShrink: 0, flexDirection: 'column', justifyContent: 'flex-end' }, [content])
-}
-
-// Elemente als reine Daten (types@2.1.289:11659-11684), ohne $.ui.resolve
-function box(props: Record<string, string | number | boolean>, children: RenderNode[]): RenderElement {
-  return { type: 'Box', props, children } as RenderElement
-}
-
-/** Höhen der Ebenen: weiter oben = größere Zahl. */
-export const LEVEL = { quickReplies: 20, sidekick: 30 } as const
-
-/** Plätze der Grund-Zeile: kleinere Zahl = weiter links. */
-export const SLOTS = { limitBars: 10, spotify: 20, clawdBuddy: 30 } as const

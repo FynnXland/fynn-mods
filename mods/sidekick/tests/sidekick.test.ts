@@ -1,6 +1,10 @@
-import type { Engine, On } from 'claude-code'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { MIN, completeCost, dayKey, priceFor, rewriteCost } from '../hooks/cache.ts'
+
+// Ab 2.1.325 verlangt CommandRunInput origin und presentation (docs/BAND-PROBE-2.1.325.md §1); eigene Angaben im Aufruf gehen vor
+const CMD = { origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 100 } }
+import { MIN, completeCost, dayKey, priceFor, rewriteCost } from '../hooks/cache.js'
 import {
   DEFAULT_SETTINGS,
   addDay,
@@ -40,25 +44,25 @@ import {
   triggerOf,
   cleanSettings,
   whyOf,
-} from '../hooks/logic.ts'
-import type { Ledger, Level } from '../hooks/logic.ts'
-import { DEFAULT_HINTS, fillOutcome, applyHints, availOf, cleanWartung, doneFromSkill, doneFromText, memoryMeasure, normModel, pickHint, projectKey, rebase, rootFromFiles, unusedSkills } from '../hooks/wartung.ts'
-import type { Measure, Wartung } from '../hooks/wartung.ts'
-import { T, dec, setLang, shortDate, spanText, tokensText, usdText } from '../hooks/i18n.ts'
-import { CHECK, CHECK_NAME, HANDOFF as HANDOFF_ROLE, genitiveDe, modelLabel, modelName } from '../hooks/models.ts'
-import { savingsTree } from '../hooks/view.ts'
-import { IGNORE_AFTER, NOTE_MAX, NOTES_EVERY, NOTES_KEEP, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, normTopic, notesPrompt, parseNote, shouldCheck, skipAfter } from '../hooks/notes.ts'
-import type { Note } from '../hooks/notes.ts'
-import { NOTES_WORDS } from '../hooks/notes.ts'
-import { HELP_WORDS, SAVINGS_WORDS, SETTING_WORDS, TIPS_FORMS, TTL_WORDS } from '../hooks/logic.ts'
-import { HINTS_WORDS, RULE_IDS } from '../hooks/wartung.ts'
-import { sidekickHelp } from '../hooks/helpdata.ts'
-import type { HelpFacts } from '../hooks/helpdata.ts'
-import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
-import { cliStubs, settingsNow, written } from './cli.ts'
-import type { Cli } from './cli.ts'
-import { MIN_OF, legacyOf } from '../hooks/logic.ts'
-import { SETTINGS } from '../hooks/fields.ts'
+} from '../hooks/logic.js'
+import type { Ledger, Level } from '../hooks/logic.js'
+import { DEFAULT_HINTS, fillOutcome, applyHints, availOf, cleanWartung, doneFromSkill, doneFromText, memoryMeasure, normModel, pickHint, projectKey, rebase, rootFromFiles, unusedSkills } from '../hooks/wartung.js'
+import type { Measure, Wartung } from '../hooks/wartung.js'
+import { T, dec, setLang, shortDate, spanText, tokensText, usdText } from '../hooks/i18n.js'
+import { CHECK, CHECK_NAME, HANDOFF as HANDOFF_ROLE, genitiveDe, modelLabel, modelName } from '../hooks/models.js'
+import { savingsTree } from '../hooks/view.js'
+import { IGNORE_AFTER, NOTE_MAX, NOTES_EVERY, NOTES_KEEP, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, normTopic, notesPrompt, parseNote, shouldCheck, skipAfter } from '../hooks/notes.js'
+import type { Note } from '../hooks/notes.js'
+import { NOTES_WORDS } from '../hooks/notes.js'
+import { HELP_WORDS, SAVINGS_WORDS, SETTING_WORDS, TIPS_FORMS, TTL_WORDS } from '../hooks/logic.js'
+import { HINTS_WORDS, RULE_IDS } from '../hooks/wartung.js'
+import { sidekickHelp } from '../hooks/helpdata.js'
+import type { HelpFacts } from '../hooks/helpdata.js'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.js'
+import { cliStubs, settingsNow, written } from './cli.js'
+import type { Cli } from './cli.js'
+import { MIN_OF, legacyOf } from '../hooks/logic.js'
+import { SETTINGS } from '../hooks/fields.js'
 
 // Die bisherigen Tests prüfen die deutschen Texte (language: de, Fynns Einstellung); eigene Tests unten prüfen Englisch.
 const DE = { options: { language: 'de' } }
@@ -356,10 +360,10 @@ function world(on: On, o: W = {}) {
   })
   on('command.list', () => ({
     value: [
-      { name: 'mod-review', description: 'Prüft einen Mod\nzweite Zeile', source: 'user' },
-      { name: 'code-review', description: 'Review the diff', source: 'builtin' },
-      { name: 'clear', description: 'Clear', source: 'builtin' },
-      ...(o.cmds ?? []),
+      { name: 'mod-review', description: 'Prüft einen Mod\nzweite Zeile', source: 'user' as const },
+      { name: 'code-review', description: 'Review the diff', source: 'builtin' as const },
+      { name: 'clear', description: 'Clear', source: 'builtin' as const },
+      ...((o.cmds ?? []) as never[]),
     ],
   }))
   on('model.complete', async ($, e) => {
@@ -394,7 +398,7 @@ function world(on: On, o: W = {}) {
   const registered: { name: string; argumentHint?: string }[] = [] // angemeldete Befehle (0.17.0 language)
   on('command.register', ($, e) => {
     registered.push(e as never)
-    return { value: undefined }
+    return { value: { command: e.name } }
   })
   // „Gut zu wissen“ (Nachtrag 0.13.0): Fork und Eingabefeld
   const forks: string[] = []
@@ -455,8 +459,12 @@ function world(on: On, o: W = {}) {
   const buddyVals: unknown[] = []
   const statusVals: unknown[] = []
   const stateVals = new Map<string, unknown>()
+  // Band 2 (0.26.0): `quick-replies.band` = Pille steht (docs/BAND.md „Absprachen“), über setQr gesetzt
+  let qrBand: unknown = undefined
+  let getFails = false
   on('state.get', ($: unknown, e: any) => {
-    if (o.stateGetFails) return { deny: 'get abgelehnt' }
+    if (o.stateGetFails || getFails) return { deny: 'get abgelehnt' }
+    if (e.plugin === 'quick-replies' && e.key === 'band') return { value: { value: qrBand, version: buddyVersion } }
     return { value: { value: e.plugin === 'sidekick' ? stateVals.get(e.key) : undefined, version: buddyVersion } }
   })
   on('state.set', ($: unknown, e: any) => {
@@ -473,6 +481,8 @@ function world(on: On, o: W = {}) {
   let bandTree: unknown = null
   on('ui.render', ($, e) => {
     if (e.component === 'AbovePrompt' && bandTree) return bandTree as never
+    // Band 2: steht für den Kern, der die Zeilen stapelt (types@2.1.325:11440-11489)
+    if (e.component === 'AbovePromptList') return { type: 'Box', props: { flexDirection: 'column' }, children: (e.props as unknown as { rows: { tree: unknown }[] }).rows.map((r) => r.tree) } as never
     // SessionMode: die Labels so, wie die Engine sie zeigt (mit „ & “ verbunden)
     if (e.component === 'SessionMode') return { type: 'Text', props: {}, children: [((e.props as { modes?: string[] }).modes ?? []).join(' & ')] }
     return { type: 'Text', props: {}, children: [String((e.props as { text?: string }).text ?? '')] }
@@ -520,6 +530,8 @@ function world(on: On, o: W = {}) {
     setMessages: (m: unknown[]) => (messages = m),
     setMessagesFail: (f: boolean) => (messagesFail = f),
     setBand: (t: unknown) => (bandTree = t),
+    setQr: (v: unknown) => (qrBand = v),
+    setStateGetFails: (f: boolean) => (getFails = f),
     ledger: (sid = 'sess-1') => cleanLedger(saved.get(`bilanz:${sid}`)),
     forks,
     setFork: (r: unknown) => (forkReply = r),
@@ -857,7 +869,7 @@ deTest('Neuer Chat: Übergabe → clear → submit mit ursprünglicher Nachricht
   // Kosten je Rolle mit deren Modell: Prüfung (CHECK) und Übergabe (HANDOFF)
   expect(near(today(w.ledger('sess-1')).kosten, completeCost(MODEL_USAGE, CHECK.model) + completeCost(MODEL_USAGE, HANDOFF_ROLE.model))).toBe(true)
   // /savings sieht beide Sessions (getrennte Schlüssel)
-  const s = await $.command.run({ command: 'savings', args: 'detail today' } as never)
+  const s = await $.command.run({ ...CMD, command: 'savings', args: 'detail today' } as never)
   expect(s.text).toContain('| Kaltstart vermieden | 1 |')
   expect(s.text).toContain('Übergaben: **1**')
 })
@@ -892,7 +904,7 @@ deTest('Neuer Chat: /clear scheitert → Toast, Übergabe gespeichert', async ($
   expect(w.toasts.at(-1)).toContain('/handoff show')
   expect((w.saved.get('handoffs') as unknown[])[0]).toMatchObject({ msg: 'neu' })
   expect(w.sent).toEqual([])
-  const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  const st = await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)
   expect(st.text).toContain('# Übergabe: Test')
 })
 
@@ -922,15 +934,15 @@ deTest('turn.step mit agentId wird ignoriert; ohne offene Buchung kein Bilanz-Ei
 
 deTest('/sidekick: Einstellungen persistent, Status zeigt Schwelle, Unbekanntes wird erklärt', async ($, on) => {
   const w = world(on)
-  const r1 = await $.command.run({ command: 'sidekick', args: 'threshold 5k' } as never)
+  const r1 = await $.command.run({ ...CMD, command: 'sidekick', args: 'threshold 5k' } as never)
   expect(r1.text).toContain('| **Schwelle** | 5,0k')
   // Seit 0.23.0 in userConfig (Weg 2: claude plugin configure), gilt hier sofort
-  expect(r1.text.split('\n')[0]).toBe('Gespeichert. Gilt in diesem Chat sofort, in anderen offenen Chats nach `/reload-plugins`.')
+  expect((r1.text ?? '').split('\n')[0]).toBe('Gespeichert. Gilt in diesem Chat sofort, in anderen offenen Chats nach `/reload-plugins`.')
   expect(written(w.cli)).toEqual({ threshold: '5000' })
   expect(w.saved.has('settings')).toBe(false)
-  const r2 = await $.command.run({ command: 'sidekick', args: 'quatsch' } as never)
+  const r2 = await $.command.run({ ...CMD, command: 'sidekick', args: 'quatsch' } as never)
   expect(r2.text).toContain('Unbekannt')
-  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)
   w.setCtx(500000)
   await $.prompt.submit(userPrompt('aus'))
   expect(w.checks.length).toBe(0)
@@ -939,12 +951,12 @@ deTest('/sidekick: Einstellungen persistent, Status zeigt Schwelle, Unbekanntes 
 deTest('0.23.0 Befehl: Schreiben scheitert → „Nicht gespeichert“ mit Grund, Wert bleibt; zu klein → Minimum genannt (Review K1, K4)', async ($, on) => {
   const w = world(on)
   w.cli.fail = 'N: It takes a number from 1000.'
-  const r = String((await $.command.run({ command: 'sidekick', args: 'threshold 5k' } as never)).text)
+  const r = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'threshold 5k' } as never)).text)
   expect(r).toBe('Nicht gespeichert: N: It takes a number from 1000..')
-  expect(String((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text)).toContain('| **Schwelle** | 80k')
+  expect(String((await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)).text)).toContain('| **Schwelle** | 80k')
   w.cli.fail = ''
-  expect(String((await $.command.run({ command: 'sidekick', args: 'big 500' } as never)).text)).toBe('Zu klein: „big 500“. Mindestens 1,0k.')
-  expect(String((await $.command.run({ command: 'sidekick', args: 'hints audit-min 50' } as never)).text)).toBe('Zu klein: „audit-min 50“. Mindestens 100.')
+  expect(String((await $.command.run({ ...CMD, command: 'sidekick', args: 'big 500' } as never)).text)).toBe('Zu klein: „big 500“. Mindestens 1,0k.')
+  expect(String((await $.command.run({ ...CMD, command: 'sidekick', args: 'hints audit-min 50' } as never)).text)).toBe('Zu klein: „audit-min 50“. Mindestens 100.')
   expect(w.cli.writes).toEqual([])
 })
 
@@ -957,7 +969,7 @@ test('0.23.0 Befehl: Weg 1 (Plugin-Zeilen da) → $.config.set nur für das eige
     sets.push({ key: e.key, value: e.value })
     return { value: e.value }
   })
-  const r = String((await $.command.run({ command: 'sidekick', args: 'notes on' } as never)).text)
+  const r = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'notes on' } as never)).text)
   expect(r.split('\n')[0]).toBe('Gespeichert, gilt sofort.')
   expect(sets).toEqual([{ key: 'sidekick.notes', value: true }])
   expect(w.cli.writes).toEqual([])
@@ -972,7 +984,7 @@ test('0.23.0 Befehl: fremde Kopie (--plugin-dir) schreibt nicht in die installie
     runs.push(e.argv.join(' '))
     return { value: { exitCode: 0, stdout: JSON.stringify([{ id: 'sidekick@fynn-mods', enabled: true, installPath: 'C:/anderer/Ordner/sidekick' }]), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  const r = String((await $.command.run({ command: 'sidekick', args: 'notes on' } as never)).text)
+  const r = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'notes on' } as never)).text)
   expect(r).toContain('Nicht gespeichert: diese Kopie ist aus einem anderen Ordner geladen')
   expect(runs).toEqual(['claude plugin list --json'])
 })
@@ -1010,9 +1022,9 @@ deTest('Persistenz: Bilanz und Einstellungen überleben einen Neustart (Store-St
   await flush(400)
   expect(saved.has('bilanz:alte-session')).toBe(false)
   expect(cleanLedger(saved.get('bilanz:tage')).aus).toEqual(['alte-session'])
-  const all = await $.command.run({ command: 'savings', args: 'detail all' } as never)
+  const all = await $.command.run({ ...CMD, command: 'savings', args: 'detail all' } as never)
   expect(all.text).toContain('Prüfungen: **5**')
-  const tdy = await $.command.run({ command: 'savings', args: 'today detail' } as never)
+  const tdy = await $.command.run({ ...CMD, command: 'savings', args: 'today detail' } as never)
   expect(tdy.text).toContain('Prüfungen: **2**')
   // Alte Einstellung aus dem Store (bis 0.22.0) wird beim Start umgezogen und gilt sofort: 6k Kontext löst (b) aus
   w.setCtx(6000)
@@ -1055,7 +1067,7 @@ deTest('Review K8: Senden nach /clear scheitert → Toast, Übergabe in /sidekic
   await flush()
   expect(w.commands).toEqual(['clear'])
   expect(w.toasts.at(-1)).toContain('Chat geleert, aber die Nachricht ließ sich nicht senden')
-  const st = await $.command.run({ command: 'sidekick', args: '' } as never)
+  const st = await $.command.run({ ...CMD, command: 'sidekick', args: '' } as never)
   expect(st.text).toContain('neu und wichtig')
 })
 
@@ -1184,109 +1196,48 @@ deTest('Während der Übergabe: blaue Box über dem Prompt mit Sekunden, danach 
   await band.unmount()
 })
 
-deTest('Übergabe läuft und sidekick liegt außen: Box über allem, Quick-Replies ausgeblendet, Balken bleiben', async ($, on) => {
-  const w = world(on, { handoffDelayMs: 5000 })
-  w.setCtx(90000)
-  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
-  w.setAnswer('Neuer Chat mit Übergabe')
-  await $.prompt.submit(userPrompt('neues Thema'))
-  await w.clock.advance(1400)
-  // Das Band, wie es von innen kommt: Quick-Replies-Pille und Balken (stellvertretend für die anderen Mods)
-  w.setBand({ type: 'Box', props: { flexDirection: 'column' }, children: [
-    { type: 'Box', props: { key: 'quick-replies' }, children: [{ type: 'Text', props: {}, children: ['Pille'] }] },
-    { type: 'Box', props: { key: 'limit-bars' }, children: [{ type: 'Text', props: {}, children: ['5h 40 %'] }] },
-  ] })
-  const band = await $.ui.mount({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface: 'desktop', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } } as never)
-  expect(await band.find({ key: 'sidekick-busy' })).toBeDefined()
-  expect(await band.find({ key: 'quick-replies' })).toBeUndefined()
-  expect(await band.find({ key: 'limit-bars' })).toBeDefined()
-  await band.unmount()
-})
-
-deTest('Übergabe läuft, Band nach band.ts von innen: sidekick-Ebene zuoberst, Pillen-Ebene raus, Balken im Grund', async ($, on) => {
-  const w = world(on, { handoffDelayMs: 5000 })
-  w.setCtx(90000)
-  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
-  w.setAnswer('Neuer Chat mit Übergabe')
-  await $.prompt.submit(userPrompt('neues Thema'))
-  await w.clock.advance(1400)
-  // quick-replies und limit-bars liegen innen: Wurzel des Bands mit Pillen-Ebene über dem Grund (docs/BAND.md)
-  w.setBand({ type: 'Box', props: { key: 'band', flexDirection: 'column', justifyContent: 'flex-end' }, children: [
-    { type: 'Box', props: { key: 'layer:20:quick-replies', flexDirection: 'column', flexShrink: 0 }, children: [{ type: 'Box', props: { key: 'quick-replies' }, children: ['Pille'] }] },
-    { type: 'Box', props: { key: 'band-base', flexDirection: 'row', alignItems: 'flex-end' }, children: [{ type: 'Box', props: { flexGrow: 1 }, children: [
-      { type: 'Box', props: { key: 'limit-bars' }, children: [{ type: 'Text', props: {}, children: ['5h 40 %'] }] },
-    ] }] },
-  ] })
-  const band = await $.ui.mount({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface: 'desktop', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } } as never)
-  type N = { props: { key?: string }; children: N[] }
-  const tree = (await band.drawn()) as N
-  // sidekick rückt auf die Höhe der Pille: direkt über dem Grund
-  expect(tree.children.map((c) => c.props.key)).toEqual(['layer:50:sidekick', 'band-base'])
-  expect(await band.find({ key: 'quick-replies' })).toBeUndefined()
-  expect(await band.find({ key: 'limit-bars' })).toBeDefined()
-  await band.unmount()
-})
-
-deTest('0.15.1: Übergabe läuft, die Plätze der Grund-Zeile (limit-bars, spotify, Clawd) bleiben neben dem Rest, sidekick liegt zuoberst', async ($, on) => {
-  const w = world(on, { handoffDelayMs: 5000 })
-  w.setCtx(90000)
-  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
-  w.setAnswer('Neuer Chat mit Übergabe')
-  await $.prompt.submit(userPrompt('neues Thema'))
-  await w.clock.advance(1400)
-  const slot = (key: string) => ({ type: 'Box', props: { key, flexShrink: 0 }, children: [key] })
-  w.setBand({ type: 'Box', props: { key: 'band-row', flexDirection: 'row' }, children: [slot('slot:10:limit-bars'), slot('slot:20:spotify'), { type: 'Box', props: { key: 'band-rest', flexGrow: 1 }, children: [{ type: 'engine', ref: 0 }] }, slot('slot:30:clawd-buddy:right')] })
-  const band = await $.ui.mount({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface: 'desktop', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } } as never)
-  type N = { props: { key?: string }; children: N[] }
-  const tree = (await band.drawn()) as N
-  expect(tree.children.map((c) => c.props.key)).toEqual(['layer:50:sidekick', 'band-base'])
-  for (const k of ['slot:10:limit-bars', 'slot:20:spotify', 'slot:30:clawd-buddy:right']) expect(await band.find({ key: k })).toBeDefined()
-  await band.unmount()
-})
-
-// ---------- 0.15.2: über der Spotify-Leiste, blauer Streifen im Desktop (SPEC Nachtrag 0.15.2) ----------
+// ---------- 0.26.0: Band 2, eigene Zeile layer:50:sidekick (BAND-SPEC-2 §3–§5, docs/BAND.md) ----------
 
 type Tier = 'prepend' | 'append'
 type BN = { type?: string; props?: Record<string, unknown>; children?: BN[] }
 const bkey = (n: unknown) => String((n as BN)?.props?.key ?? '')
 const bkeys = (n: unknown): string[] => (n && typeof n === 'object' ? [bkey(n), ...((n as BN).children ?? []).flatMap(bkeys)] : [])
 const types = (n: unknown): string[] => (n && typeof n === 'object' ? [String((n as BN).type ?? ''), ...((n as BN).children ?? []).flatMap(types)] : [])
-// Wie spotify im Desktop, Stufe full: eigene Ebene 40 über dem Grund (mods/spotify/hooks/register.ts). Partner-Mods laufen in eigener
-// Umgebung (keine Importe aus dem Test), darum eine knappe eigene Fassung des Protokolls (docs/BAND.md). Andere Oberflächen: durchreichen
-const spotifyBar = (tier: Tier) => ({
-  name: `spotify-${tier}`,
-  tier,
-  register(on: On) {
-    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-      const bkey = (n: unknown) => String((n as BN)?.props?.key ?? '')
-      const theirs = (await next(e)) as BN
-      if (e.surface !== 'desktop') return theirs as never
-      const bar: BN = { type: 'Box', props: { key: 'layer:40:spotify', flexDirection: 'column', flexShrink: 0 }, children: [{ type: 'Box', props: { key: 'spotify' }, children: [] }] }
-      const isRoot = bkey(theirs) === 'band'
-      const layers = isRoot ? (theirs.children ?? []).filter((c) => bkey(c).startsWith('layer:')) : []
-      const ground = isRoot
-        ? (theirs.children ?? []).find((c) => bkey(c) === 'band-base')
-        : { type: 'Box', props: { key: 'band-base', flexDirection: 'row' }, children: [{ type: 'Box', props: { flexGrow: 1 }, children: [theirs] }] }
-      const all = [...layers, bar].sort((a, b) => Number(bkey(b).split(':')[1]) - Number(bkey(a).split(':')[1]))
-      return { type: 'Box', props: { key: 'band', flexDirection: 'column' }, children: [...all, ...(ground ? [ground] : [])] } as never
-    })
-  },
-})
-// Spotify außen (prepend) heißt sidekick innen und umgekehrt (docs/raw/en/test.md:362-363; prepend liegt außen: docs/raw/en/admin.md:283)
-const skSide = (tier: Tier) => (tier === 'prepend' ? 'innen' : 'außen')
 const BUSY_BAND = (surface: string) =>
-  ({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface, props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } }) as never
+  ({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface, props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} } }) as never
+// Die Zeile des Test-Stubs (Plugin `test`): Das Kit fragt AbovePrompt je Plugin und stapelt die Zeilen (types@2.1.325:11360-11375).
+// Steht sie in sidekicks eigener Zeile, hätte sidekick eine fremde Zeichnung übernommen (seit Band 2 nie)
+const FREMD = { type: 'Text', props: {}, children: ['FREMD'] }
+const hasFremd = (n: unknown) => JSON.stringify(n).includes('FREMD')
+/** sidekicks eigene Zeile im gestapelten Band, über ihren Schlüssel gefunden. */
+function skRow(n: unknown): BN | undefined {
+  if (!n || typeof n !== 'object') return undefined
+  if (bkey(n) === 'layer:50:sidekick') return n as BN
+  for (const c of (n as BN).children ?? []) {
+    const f = skRow(c)
+    if (f) return f
+  }
+  return undefined
+}
+const startHandoff = async ($: Engine, w: ReturnType<typeof world>) => {
+  w.setCtx(90000)
+  w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
+  w.setAnswer('Neuer Chat mit Übergabe')
+  await $.prompt.submit(userPrompt('neues Thema'))
+  await w.clock.advance(1400)
+}
+const lastBand = (w: ReturnType<typeof world>) => w.statusVals[w.statusVals.length - 1] as { handoff?: true } | null | undefined
 
 /** Die sidekick-Ebene im Desktop: Inhalt (`key`) und darunter der blaue Streifen als Svg 2400 × 26 in Akzentfarbe. */
 function expectStripe(layer: BN, key: string) {
   expect(bkey(layer)).toBe('layer:50:sidekick')
-  const inner = (layer.children ?? [])[0]
+  const inner = (layer.children ?? [])[0] as BN
   expect((inner.children ?? []).map(bkey)).toEqual([key, 'sidekick-stripe'])
   // Keine Leerzeile zwischen Anzeige und Streifen (Sicht-Check 0.15.2)
   expect(JSON.stringify((inner.children ?? [])[0])).not.toContain('marginBottom')
-  const stripe = (inner.children ?? [])[1]
+  const stripe = (inner.children ?? [])[1] as BN
   expect(stripe.props).toMatchObject({ width: '100%', overflow: 'hidden', flexShrink: 0 })
-  const svg = (stripe.children ?? [])[0]
+  const svg = (stripe.children ?? [])[0] as BN
   expect(svg.type).toBe('Svg')
   expect(svg.props).toMatchObject({ alt: 'Trennlinie unter der sidekick-Anzeige', width: 2400, height: 26 })
   const src = String(svg.props?.source)
@@ -1295,84 +1246,123 @@ function expectStripe(layer: BN, key: string) {
   expect(src).toContain('opacity="0.85"')
 }
 
-for (const tier of ['prepend', 'append'] as const) {
-  test(`0.15.2: Übergabe, sidekick ${skSide(tier)}: Box (50) über der Spotify-Leiste (40), Streifen nur im Desktop`, { ...DE, plugins: [spotifyBar(tier)] }, async ($, on) => {
-    setLang('de')
-    const w = world(on, { handoffDelayMs: 5000 })
-    // Vorher: nur die Spotify-Leiste, keine sidekick-Ebene, kein Streifen
-    let band = await $.ui.mount(BUSY_BAND('desktop'))
-    let tree = (await band.drawn()) as BN
-    expect((tree.children ?? []).map(bkey)).toEqual(['layer:40:spotify', 'band-base'])
-    expect(bkeys(tree)).not.toContain('sidekick-stripe')
-    await band.unmount()
-    w.setCtx(90000)
-    w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
-    w.setAnswer('Neuer Chat mit Übergabe')
-    await $.prompt.submit(userPrompt('neues Thema'))
-    await w.clock.advance(1400)
-    band = await $.ui.mount(BUSY_BAND('desktop'))
-    tree = (await band.drawn()) as BN
-    expect((tree.children ?? []).map(bkey)).toEqual(['layer:50:sidekick', 'layer:40:spotify', 'band-base'])
-    expectStripe((tree.children ?? [])[0], 'sidekick-busy')
-    await band.unmount()
-    // Terminal: Box ohne Streifen und ohne Svg (Spotify ist dort ein Platz der Grund-Zeile)
-    band = await $.ui.mount(BUSY_BAND('terminal'))
-    tree = (await band.drawn()) as BN
-    expect((tree.children ?? []).map(bkey)).toEqual(['layer:50:sidekick', 'band-base'])
+deTest('0.26.0: Übergabe zeichnet nur die eigene Zeile layer:50:sidekick, nie fremde Zeilen; status.handoff, solange die Box steht', async ($, on) => {
+  const w = world(on, { handoffDelayMs: 5000 })
+  w.setBand(FREMD)
+  // Vorher: keine eigene Zeile (next(e)), kein handoff
+  let band = await $.ui.mount(BUSY_BAND('terminal'))
+  expect(skRow(await band.drawn())).toBeUndefined()
+  await band.unmount()
+  await startHandoff($, w)
+  expect(lastBand(w)?.handoff).toBe(true)
+  for (const surface of ['terminal', 'desktop']) {
+    band = await $.ui.mount(BUSY_BAND(surface))
+    const tree = skRow(await band.drawn())
+    expect(tree).toBeDefined()
     expect(bkeys(tree)).toContain('sidekick-busy')
-    expect(bkeys(tree)).not.toContain('sidekick-stripe')
-    expect(JSON.stringify((tree.children ?? [])[0])).toContain('"marginBottom":1')
-    expect(types(tree)).not.toContain('Svg')
+    expect(hasFremd(tree)).toBe(false)
     await band.unmount()
-    // VS Code und mobile: unverändert, auch während der Übergabe (Review 0.15.2 K1)
-    for (const surface of ['vscode', 'mobile']) {
-      band = await $.ui.mount(BUSY_BAND(surface))
-      tree = (await band.drawn()) as BN
-      expect(bkeys(tree).some((k) => k.startsWith('layer:') || k.startsWith('sidekick'))).toBe(false)
-      await band.unmount()
-    }
-    // Übergabe fertig: Ebene und Streifen weg, die Spotify-Leiste bleibt
-    await w.clock.advance(5000)
-    await flush()
-    expect(w.commands).toEqual(['clear'])
-    band = await $.ui.mount(BUSY_BAND('desktop'))
-    tree = (await band.drawn()) as BN
-    expect((tree.children ?? []).map(bkey)).toEqual(['layer:40:spotify', 'band-base'])
-    expect(bkeys(tree)).not.toContain('sidekick-stripe')
-    await band.unmount()
-  })
+  }
+  // Übergabe fertig: Zeile weg, handoff fehlt wieder
+  await w.clock.advance(5000)
+  await flush()
+  expect(w.commands).toEqual(['clear'])
+  band = await $.ui.mount(BUSY_BAND('desktop'))
+  expect(skRow(await band.drawn())).toBeUndefined()
+  await band.unmount()
+  expect(lastBand(w)?.handoff).toBeUndefined()
+  // handoff unabhängig von der Stufe (BAND-SPEC-2 §4): jede Fassung mit handoff kam nur während der Box
+  expect(w.statusVals.filter((v) => (v as { handoff?: true } | null)?.handoff === true).length).toBeGreaterThan(0)
+})
 
-  test(`0.15.2: Gut zu wissen, sidekick ${skSide(tier)}: Hinweis (50) über der Spotify-Leiste (40), Streifen nur im Desktop; VS Code und mobile unverändert`, { ...DE, plugins: [spotifyBar(tier)] }, async ($, on) => {
-    setLang('de')
-    world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
-    // „Gut zu wissen“ aus: keine sidekick-Ebene, kein Streifen
-    let ui = await $.ui.mount(bandNote('desktop'))
-    let tree = (await ui.drawn()) as BN
-    expect((tree.children ?? []).map(bkey)).toEqual(['layer:40:spotify', 'band-base'])
-    expect(bkeys(tree)).not.toContain('sidekick-stripe')
+deTest('0.26.0: AbovePromptList mit der echten sidekick-Zeile: sidekick oben, dann tune-strip (40), quick-replies (20), die Grundzeile, Clawds Bühne zuletzt', async ($, on) => {
+  const w = world(on, { handoffDelayMs: 5000 })
+  await startHandoff($, w)
+  const text = (s: string) => ({ type: 'Text' as const, props: {}, children: [s] })
+  const row = (plugin: string, key: string, extra: Record<string, string | number | boolean> = {}) => ({ plugin, tree: { type: 'Box' as const, props: { ...extra, key, flexDirection: 'column' }, children: [text(plugin)] } })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const own = await $.ui.mount(BUSY_BAND(surface))
+    const sk = { plugin: 'sidekick', tree: skRow(await own.drawn()) as never }
+    await own.unmount()
+    const rows = [
+      row('limit-bars', 'slot:10:limit-bars', { width: 40 }),
+      ...(surface === 'desktop' ? [row('clawd-buddy', 'slot:0:clawd-buddy', { position: 'absolute', bottom: 0, right: 0 })] : [row('clawd-buddy', 'slot:30:clawd-buddy:right')]),
+      row('quick-replies', 'layer:20:quick-replies'),
+      sk,
+      // tune-strip ist seit 2026-11-15 immer eigene Leiste (BAND-SPEC-2 §3, Entscheidung Fynn)
+      row('tune-strip', 'layer:40:tune-strip'),
+    ]
+    const ui = await $.ui.mount({ plugin: 'sidekick', component: 'AbovePromptList', requestId: 'above-prompt-list', viewport: { columns: 125, rows: 40 }, surface, props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {}, rows } } as never)
+    const keys = bkeys(await ui.drawn()).filter((k) => /^(layer|slot):|^band-row$/.test(k))
+    const want =
+      surface === 'desktop'
+        ? // Desktop, tune-strip als Ebene: nur ein Platz in der Grundzeile, also kein band-row (templates/band/README.md Schritt 2)
+          ['layer:50:sidekick', 'layer:40:tune-strip', 'layer:20:quick-replies', 'slot:10:limit-bars', 'slot:0:clawd-buddy']
+        : ['layer:50:sidekick', 'layer:40:tune-strip', 'layer:20:quick-replies', 'band-row', 'slot:10:limit-bars', 'slot:30:clawd-buddy:right']
+    expect(keys, surface).toEqual(want)
+    expect(await ui.find({ key: 'sidekick-busy' })).toBeDefined()
     await ui.unmount()
-    await notesOn($)
-    ui = await $.ui.mount(bandNote('desktop'))
+  }
+})
+
+test('0.26.0 / 0.15.2: Übergabe-Box mit blauem Streifen nur im Desktop; Terminal mit Leerzeile; VS Code und mobile keine Zeile', DE, async ($, on) => {
+  setLang('de')
+  const w = world(on, { handoffDelayMs: 5000 })
+  w.setBand(FREMD)
+  await startHandoff($, w)
+  let band = await $.ui.mount(BUSY_BAND('desktop'))
+  expectStripe(skRow(await band.drawn()) as BN, 'sidekick-busy')
+  await band.unmount()
+  band = await $.ui.mount(BUSY_BAND('terminal'))
+  let tree = skRow(await band.drawn()) as BN
+  expect(bkey(tree)).toBe('layer:50:sidekick')
+  expect(bkeys(tree)).toContain('sidekick-busy')
+  expect(bkeys(tree)).not.toContain('sidekick-stripe')
+  expect(JSON.stringify(tree)).toContain('"marginBottom":1')
+  expect(types(tree)).not.toContain('Svg')
+  await band.unmount()
+  for (const surface of ['vscode', 'mobile']) {
+    band = await $.ui.mount(BUSY_BAND(surface))
+    tree = (await band.drawn()) as BN
+    expect(bkeys(tree).some((k) => k.startsWith('layer:') || k.startsWith('sidekick'))).toBe(false)
+    await band.unmount()
+  }
+})
+
+test('0.26.0 / 0.15.2: Gut zu wissen als eigene Zeile, Streifen nur im Desktop; aus = keine Zeile; VS Code und mobile keine Zeile', DE, async ($, on) => {
+  setLang('de')
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+  w.setBand(FREMD)
+  // „Gut zu wissen“ aus: keine eigene Zeile
+  let ui = await $.ui.mount(bandNote('desktop'))
+  let tree = (await ui.drawn()) as BN
+  expect(bkeys(tree)).not.toContain('layer:50:sidekick')
+  await ui.unmount()
+  await notesOn($)
+  ui = await $.ui.mount(bandNote('desktop'))
+  tree = skRow(await ui.drawn()) as BN
+  expectStripe(tree, 'sidekick-note')
+  expect(hasFremd(tree)).toBe(false)
+  await ui.unmount()
+  ui = await $.ui.mount(bandNote('terminal'))
+  tree = skRow(await ui.drawn()) as BN
+  expect(bkey(tree)).toBe('layer:50:sidekick')
+  expect(bkeys(tree)).toContain('sidekick-note')
+  expect(bkeys(tree)).not.toContain('sidekick-stripe')
+  expect(JSON.stringify(tree)).toContain('"marginBottom":1')
+  expect(types(tree)).not.toContain('Svg')
+  await ui.unmount()
+  // Eingeklappt: die Zeile wird weiter gezeichnet (nichts davon ist zu sehen, types@2.1.325:11393)
+  ui = await $.ui.mount(bandNote('terminal', { isCollapsed: true }))
+  expect(skRow(await ui.drawn())).toBeDefined()
+  await ui.unmount()
+  for (const surface of ['vscode', 'mobile']) {
+    ui = await $.ui.mount(bandNote(surface))
     tree = (await ui.drawn()) as BN
-    expect((tree.children ?? []).map(bkey)).toEqual(['layer:50:sidekick', 'layer:40:spotify', 'band-base'])
-    expectStripe((tree.children ?? [])[0], 'sidekick-note')
+    expect(bkeys(tree).some((k) => k.startsWith('layer:') || k.startsWith('sidekick'))).toBe(false)
     await ui.unmount()
-    ui = await $.ui.mount(bandNote('terminal'))
-    tree = (await ui.drawn()) as BN
-    expect(bkey((tree.children ?? [])[0])).toBe('layer:50:sidekick')
-    expect(bkeys(tree)).toContain('sidekick-note')
-    expect(bkeys(tree)).not.toContain('sidekick-stripe')
-    expect(JSON.stringify((tree.children ?? [])[0])).toContain('"marginBottom":1')
-    expect(types(tree)).not.toContain('Svg')
-    await ui.unmount()
-    for (const surface of ['vscode', 'mobile']) {
-      ui = await $.ui.mount(bandNote(surface))
-      tree = (await ui.drawn()) as BN
-      expect(bkeys(tree).some((k) => k.startsWith('layer:') || k.startsWith('sidekick'))).toBe(false)
-      await ui.unmount()
-    }
-  })
-}
+  }
+})
 
 // ---------- Wartungs-Hinweise (SPEC Nachtrag 0.2.0) ----------
 
@@ -1631,7 +1621,7 @@ deTest('Wartung, Fehlerpfad: root wirft → Schlüssel aus der Anweisungsdatei, 
 deTest('/sidekick hints status: fehlt ein Befehl in der Session, steht „(Befehl fehlt)“ nur bei seinen Regeln (CMD_OF, 0.10.6)', async ($, on) => {
   // Ohne /claude-api und ohne consolidate-memory: audit und memory fehlen, skill-doctor und init sind da
   world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS.filter((c) => c.name === 'skill-doctor' || c.name === 'init') })
-  const status = String((await $.command.run({ command: 'sidekick', args: 'hints status' }) as { text?: string }).text)
+  const status = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'hints status' }) as { text?: string }).text)
   const row = (label: string) => status.split('\n').find((l) => l.startsWith(`| ${label}`)) ?? ''
   expect(row('prompt-audit')).toContain('(Befehl fehlt)')
   expect(row('Memory aufräumen')).toContain('(Befehl fehlt)')
@@ -1642,26 +1632,26 @@ deTest('/sidekick hints status: fehlt ein Befehl in der Session, steht „(Befeh
 
 deTest('/sidekick hints: status, Regel aus, done, audit-min, unbekannt', async ($, on) => {
   const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS })
-  const status = String((await $.command.run({ command: 'sidekick', args: 'hints status' }) as { text?: string }).text)
+  const status = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'hints status' }) as { text?: string }).text)
   expect(status).toContain('**Wartungs-Hinweise** an')
   expect(status).toContain('prompt-audit')
   expect(status).toContain('3,4k (ab 2,0k)')
-  await $.command.run({ command: 'sidekick', args: 'hints audit off' })
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'hints audit off' })
   // Einzelne Regeln bleiben im Store `hints`, Schalter und Schwelle gehen seit 0.23.0 nach userConfig
   expect(w.saved.get('hints')).toEqual({ off: ['audit'] })
   expect(w.cli.writes).toEqual([])
-  const min = String((await $.command.run({ command: 'sidekick', args: 'hints audit-min 3k' }) as { text?: string }).text)
+  const min = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'hints audit-min 3k' }) as { text?: string }).text)
   expect(min.split('\n')[0]).toBe('Gespeichert. Gilt in diesem Chat sofort, in anderen offenen Chats nach `/reload-plugins`.')
   expect(written(w.cli)).toEqual({ auditMin: '3000' })
   expect(w.saved.get('hints')).toEqual({ off: ['audit'] })
-  await $.command.run({ command: 'sidekick', args: 'hints off' })
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'hints off' })
   expect(written(w.cli)).toEqual({ auditMin: '3000', maintenanceHints: 'false' })
-  await $.command.run({ command: 'sidekick', args: 'hints on' })
-  await $.command.run({ command: 'sidekick', args: 'hints done memory' })
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'hints on' })
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'hints done memory' })
   expect(wStore(w).regeln.memory?.doneAt).toBe(NOW)
-  const bad = String((await $.command.run({ command: 'sidekick', args: 'hints quatsch' }) as { text?: string }).text)
+  const bad = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'hints quatsch' }) as { text?: string }).text)
   expect(bad).toContain('Unbekannt')
-  const main = String((await $.command.run({ command: 'sidekick', args: 'status' }) as { text?: string }).text)
+  const main = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'status' }) as { text?: string }).text)
   expect(main).toContain('**Wartungs-Hinweise:** an (aus: audit)')
 })
 
@@ -1727,7 +1717,7 @@ deTest('/savings zeigt die Wartungs-Tabelle mit gezeigt und angenommen', async (
   const day = { ...emptyDay(), wartung: { audit: { gezeigt: 2, angenommen: 1 } } }
   const saved = new Map<string, unknown>([['bilanz:x', { tage: { [dayKey(NOW)]: day }, upd: NOW }]])
   world(on, { saved })
-  const text = String(((await $.command.run({ command: 'savings', args: 'detail today' })) as { text?: string }).text)
+  const text = String(((await $.command.run({ ...CMD, command: 'savings', args: 'detail today' })) as { text?: string }).text)
   expect(text).toContain('| Wartung | gezeigt | angenommen |')
   expect(text).toContain('| prompt-audit | 2 | 1 |')
 })
@@ -1766,7 +1756,7 @@ deTest('0.2.2: /sidekick hints … setzt die Prüfung des laufenden Chats zurüc
   const w = world(on, { memory: [projectFile(1800)], cmds: ALL_CMDS })
   await $.prompt.submit(userPrompt('erste'))
   expect(await lineUnder($, 'erste', 'w1')).not.toContain('sidekick') // 1,8k < 3k
-  await $.command.run({ command: 'sidekick', args: 'hints audit-min 1k' })
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'hints audit-min 1k' })
   await $.prompt.submit(userPrompt('zweite'))
   expect(await lineUnder($, 'zweite', 'w2')).toContain('Anweisungen ≈ 1,8k Tokens, prompt-audit lief hier noch nie')
   await $.prompt.submit(userPrompt('dritte'))
@@ -1827,7 +1817,7 @@ test('i18n: beide Tabellen haben dieselben Schlüssel und keine leeren Texte', a
     for (const [k, v] of Object.entries(T[lang])) {
       if (typeof v === 'string') expect(v.trim().length > 0).toBe(true)
       else if (typeof v === 'object') {
-        expect(keys(v)).toEqual(keys((T.de as Record<string, object>)[k]!))
+        expect(keys(v)).toEqual(keys((T.de as unknown as Record<string, object>)[k]!))
         for (const x of Object.values(v)) expect(String(x).trim().length > 0).toBe(true)
       } else {
         // splitAsk nimmt die Liste der Titel
@@ -1887,13 +1877,13 @@ test('i18n: Englisch ist Standard; Rückfrage, Zeile und Befehle auf Englisch', 
   await ui.unmount()
   // Die Anweisung der Prüfung verlangt Englisch
   expect(w.checks[0]!.system).toContain('auf Englisch')
-  const status = String(((await $.command.run({ command: 'sidekick', args: 'status' })) as { text?: string }).text)
+  const status = String(((await $.command.run({ ...CMD, command: 'sidekick', args: 'status' })) as { text?: string }).text)
   expect(status).toContain('**Guide** · status')
   expect(status).toContain('| **Threshold** | 80k context (checks from here) |')
   expect(status).toContain('**Maintenance hints:** on')
-  const bad = String(((await $.command.run({ command: 'sidekick', args: 'quatsch' })) as { text?: string }).text)
+  const bad = String(((await $.command.run({ ...CMD, command: 'sidekick', args: 'quatsch' })) as { text?: string }).text)
   expect(bad).toContain('Unknown: "quatsch". Possible:')
-  const savings = String(((await $.command.run({ command: 'savings', args: 'details today' })) as { text?: string }).text)
+  const savings = String(((await $.command.run({ ...CMD, command: 'savings', args: 'details today' })) as { text?: string }).text)
   expect(savings).toContain('**Cost**')
   expect(savings).toContain('| Clearer version accepted | 1 |')
   expect(savings).toContain('- Checks: **1**')
@@ -1923,11 +1913,11 @@ test('i18n: Wartungs-Zeile und hints-Status auf Englisch', async ($, on) => {
   const w = world(on, { memory: [projectFile(3400)], cmds: ALL_CMDS })
   await $.prompt.submit(userPrompt('first real message here'))
   expect(await lineUnder($, 'first real message here', 'w1')).toContain('Instructions ≈ 3.4k tokens, prompt-audit never ran here → /claude-api prompt-audit (separate chat)')
-  const status = String(((await $.command.run({ command: 'sidekick', args: 'hints status' })) as { text?: string }).text)
+  const status = String(((await $.command.run({ ...CMD, command: 'sidekick', args: 'hints status' })) as { text?: string }).text)
   expect(status).toContain('**Maintenance hints** on')
   expect(status).toContain('| Rule | Measured | done | shown | next possible |')
   expect(status).toContain('3.4k (from 2.0k)')
-  const err = String(((await $.command.run({ command: 'sidekick', args: 'hints done nope' })) as { text?: string }).text)
+  const err = String(((await $.command.run({ ...CMD, command: 'sidekick', args: 'hints done nope' })) as { text?: string }).text)
   expect(err).toContain('Unknown rule "nope". Possible:')
   void w
 })
@@ -2157,7 +2147,7 @@ deTest('0.5.0: /savings gezeichnet im Terminal und Desktop; VS Code und unbekann
   w.setAnswer('Abbrechen (empfohlen)')
   await $.prompt.submit(userPrompt(WRONG_MSG))
   await flush()
-  const out = await $.command.run({ command: 'savings', args: 'detail today' } as never)
+  const out = await $.command.run({ ...CMD, command: 'savings', args: 'detail today' } as never)
   const text = String(out.text)
   expect(/^\*\*Heute \(05\.10\.\)\*\* · Details · #[0-9a-z]{5,}$/.test(text.split('\n')[0]!)).toBe(true)
   for (const surface of ['terminal', 'desktop'] as const) {
@@ -2365,16 +2355,16 @@ deTest('0.6.0: /savings und /savings detail über den Befehl; falsches Argument 
   const { days } = twoDays()
   const saved = new Map<string, unknown>([['bilanz:x', { tage: days, upd: NOW }]])
   world(on, { saved })
-  const short = String(((await $.command.run({ command: 'savings', args: '' })) as { text?: string }).text)
+  const short = String(((await $.command.run({ ...CMD, command: 'savings', args: '' })) as { text?: string }).text)
   expect(short).not.toContain('Sonnet')
-  const det = String(((await $.command.run({ command: 'savings', args: 'detail' })) as { text?: string }).text)
+  const det = String(((await $.command.run({ ...CMD, command: 'savings', args: 'detail' })) as { text?: string }).text)
   expect(det.split('\n')[0]).toContain('**Gesamt** · Details · #')
   const ui = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', surface: 'desktop', props: { command: 'savings', args: 'detail', text: det, isErrored: false } } as never)
   const tree = JSON.stringify(await ui.find({ key: 'sidekick-savings' }))
   expect(tree).toContain('Vergleich der Prüfung')
   expect(tree).toContain('Verlauf je Tag')
   await ui.unmount()
-  const bad = String(((await $.command.run({ command: 'savings', args: 'monat' })) as { text?: string }).text)
+  const bad = String(((await $.command.run({ ...CMD, command: 'savings', args: 'monat' })) as { text?: string }).text)
   expect(bad).toContain('/savings detail [today|week|all]')
 })
 
@@ -2712,13 +2702,13 @@ deTest('0.10.0/0.15.0: Stufen: Übernahme on true/false, off|cache|guide|on, sta
   expect(applySetting(s, 'auto')).toBe(null)
   expect(applySetting(s, 'long 800')).toBe(null)
   world(on)
-  const r = await $.command.run({ command: 'sidekick', args: 'cache' } as never)
+  const r = await $.command.run({ ...CMD, command: 'sidekick', args: 'cache' } as never)
   expect(r.text).toContain('**Cache** · Status')
   expect(r.text).toContain('| **Stufe** | Cache (nur die Kalt-Rückfrage nach Regeln')
   expect(r.text).not.toContain('worklist')
-  expect((await $.command.run({ command: 'sidekick', args: 'off' } as never)).text).toContain('**Aus** · Status')
-  expect((await $.command.run({ command: 'sidekick', args: 'on' } as never)).text).toContain('**Cache** · Status')
-  expect((await $.command.run({ command: 'sidekick', args: 'plan' } as never)).text).toContain('Unbekannt')
+  expect((await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)).text).toContain('**Aus** · Status')
+  expect((await $.command.run({ ...CMD, command: 'sidekick', args: 'on' } as never)).text).toContain('**Cache** · Status')
+  expect((await $.command.run({ ...CMD, command: 'sidekick', args: 'plan' } as never)).text).toContain('Unbekannt')
 })
 
 deTest('0.15.0: gespeicherte Stufe plan oder auto (auch als lastOn) wird still zu guide; das Feld long verschwindet', async ($, on) => {
@@ -2740,7 +2730,7 @@ deTest('0.15.0: gespeicherte Stufe plan oder auto (auch als lastOn) wird still z
   // Wie im Begleiter: 70k liegen über der gespeicherten Schwelle 60k, also wird geprüft
   await $.prompt.submit(userPrompt('mittel'))
   expect(w.checks.length).toBe(1)
-  const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  const st = await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)
   expect(st.text).toContain('**Begleiter** · Status')
 })
 
@@ -2796,10 +2786,10 @@ deTest('0.23.0 Umzug: hints on/auditMin nach userConfig, abgeschaltete Regeln bl
   expect(saved.get('settings')).toMatchObject({ level: 'off', migrated: true })
   expect(saved.get('runtime')).toEqual({ lastOn: 'cache', tips: { declined: 2, restUntil: NOW + DAY }, loop: { declined: 1, restUntil: 0 } })
   // Gilt sofort: Stufe Aus, `/sidekick on` holt die zuletzt aktive Stufe Cache zurück
-  const st = String((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text)
+  const st = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)).text)
   expect(st).toContain('**Aus** · Status')
   expect(st).toContain('**Wartungs-Hinweise:** aus (aus: audit)')
-  const back = String((await $.command.run({ command: 'sidekick', args: 'on' } as never)).text)
+  const back = String((await $.command.run({ ...CMD, command: 'sidekick', args: 'on' } as never)).text)
   expect(back).toContain('**Cache** · Status')
   // Zweiter Start: nichts mehr umzuziehen
   const n = w.cli.writes.length
@@ -2815,7 +2805,7 @@ deTest('0.23.0 Umzug: Schreiben scheitert → Werte gelten trotzdem hier, alter 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await flush(400)
   expect(w.saved.get('settings')).toMatchObject({ level: 'cache' })
-  expect(String((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text)).toContain('**Cache** · Status')
+  expect(String((await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)).text)).toContain('**Cache** · Status')
 })
 
 deTest('0.10.0: Cache: (c) mit Dialog ohne Modellaufruf; (a)/(b) ohne Aufruf, ohne Zeile, ohne Wartung', { level: 'cache' }, async ($, on) => {
@@ -2855,12 +2845,12 @@ deTest('0.10.0 Anzeige: Label an modes angehängt, fremde bleiben; Kreis je Zust
   const vs = await mountMode($, 'vscode')
   expect(await modeText(vs)).toBe('plan mode')
   await vs.unmount()
-  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)
   await flush()
   const off = await mountMode($, 'terminal', [])
   expect(await modeText(off)).toBe('🔴 sidekick aus')
   await off.unmount()
-  await $.command.run({ command: 'sidekick', args: 'cache' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'cache' } as never)
   await flush()
   expect(w.status).toEqual(['guide', 'off', 'cache'])
 })
@@ -2904,13 +2894,13 @@ deTest('0.10.0 Anzeige: Schreiben scheitert → Prüfung und Nachricht laufen no
 test('0.10.0 en: levels and footer label in English', { options: { level: 'cache' } }, async ($, on) => {
   setLang('en')
   world(on)
-  const r = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  const r = await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)
   expect(r.text).toContain('**Cache** · status')
   expect(r.text).toContain('| **Level** | Cache (only the cold-cache question by rules')
   const ui = await mountMode($, 'terminal', [])
   expect(await modeText(ui)).toBe('🟢 sidekick · Cache')
   await ui.unmount()
-  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)
   const off = await mountMode($, 'terminal', [])
   expect(await modeText(off)).toBe('🔴 sidekick off')
   await off.unmount()
@@ -2920,13 +2910,13 @@ test('0.10.0 en: levels and footer label in English', { options: { level: 'cache
 
 deTest('0.10.1: $.state.get scheitert → Label aus der eingestellten Stufe, Fehler in /sidekick status', async ($, on) => {
   world(on, { stateGetFails: true })
-  const before = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  const before = await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)
   expect(before.text).toContain('**Anzeige in der Fußzeile:** von Claude Code noch nie angefragt')
   const ui = await mountMode($)
   expect(await modeText(ui)).toBe('plan mode & 🟢 sidekick · Begleiter')
   await ui.unmount()
   await flush()
-  const st = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  const st = await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)
   expect(st.text).toContain('**Anzeige in der Fußzeile:** zuletzt angefragt 10:00 (terminal), Lesen des Werts scheiterte:')
 })
 
@@ -2935,11 +2925,11 @@ deTest('0.10.1: Diagnose nennt die Oberfläche, auch ohne Label (VS Code)', asyn
   const ui = await mountMode($, 'terminal')
   await ui.unmount()
   await flush()
-  expect((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text).toContain('zuletzt angefragt 10:00 (terminal)')
+  expect((await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)).text).toContain('zuletzt angefragt 10:00 (terminal)')
   const vs = await mountMode($, 'vscode')
   await vs.unmount()
   await flush()
-  expect((await $.command.run({ command: 'sidekick', args: 'status' } as never)).text).toContain('zuletzt angefragt 10:00 (vscode)')
+  expect((await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)).text).toContain('zuletzt angefragt 10:00 (vscode)')
 })
 
 deTest('0.10.2: Desktop: eigener Baum mit farbigem ● neben der Zeichnung der Engine; Kreis je Zustand', async ($, on) => {
@@ -2971,7 +2961,7 @@ deTest('0.10.2: Desktop: eigener Baum mit farbigem ● neben der Zeichnung der E
   expect(d.mine).toContain('#F0883E')
   await w.clock.advance(3000)
   await flush(120)
-  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)
   await flush()
   d = await desk()
   expect(d.mine).toContain('#F85149')
@@ -3228,7 +3218,7 @@ deTest('0.12.0 Wartung: Regel ausgeschaltet → offener Hinweis verfällt', asyn
 deTest('0.12.0 Wartung: /sidekick hints … setzt den offenen Hinweis zurück wie die Prüfung', async ($, on) => {
   const saved = new Map<string, unknown>([['sitzung:sess-1', { own: 2, wartung: true, wartungOffen: OFFEN }]])
   const w = world(on, { saved, memory: [projectFile(3400)], cmds: ALL_CMDS })
-  await $.command.run({ command: 'sidekick', args: 'hints audit-min 2k' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'hints audit-min 2k' } as never)
   await flush()
   expect(w.saved.get('sitzung:sess-1')).toMatchObject({ wartung: false, wartungOffen: null })
 })
@@ -3389,7 +3379,7 @@ const THEMA = 'Unter der neuen Adresse fehlt der gespeicherte Plan, er liegt wei
 const noteJson = (o: Record<string, unknown> = {}) => '```json\n' + JSON.stringify({ thema: THEMA, art: 'achtung', titel: 'Plan unter alter Adresse', erklaerung: 'Der Planer speichert je Adresse.', ...o }) + '\n```'
 const NOTE: Note = { thema: THEMA, art: 'achtung', titel: 'Plan unter alter Adresse', text: 'Der Planer speichert je Adresse.', shownAt: NOW, turnId: 't0', survived: 0, open: false }
 const bandNote = (surface = 'terminal', o: Record<string, unknown> = {}) =>
-  ({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface, props: { hasSurvey: false, isWorking: true, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {}, ...o } }) as never
+  ({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface, props: { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {}, ...o } }) as never
 
 /** Ein Schritt der Hauptschleife an Position `index` der Runde `turnId`; danach laufen die Hintergrund-Aufgaben ab. */
 async function stepAt($: Engine, index: number, turnId = 'tn1', agentId?: string) {
@@ -3398,7 +3388,7 @@ async function stepAt($: Engine, index: number, turnId = 'tn1', agentId?: string
   while (r.done !== true) r = await s.next()
   await flush(200)
 }
-const notesOn = ($: Engine) => $.command.run({ command: 'sidekick', args: 'notes on' } as never)
+const notesOn = ($: Engine) => $.command.run({ ...CMD, command: 'sidekick', args: 'notes on' } as never)
 /** Hintergrund-Arbeit abwarten, bis `ok()` gilt: Wie viele Runden ein API-Aufruf im Test-Kit braucht, hängt von der Version ab (2.1.295 mehr als 2.1.291). */
 async function until(ok: () => boolean, rounds = 50) {
   for (let i = 0; i < rounds && !ok(); i++) await flush(50)
@@ -3512,7 +3502,7 @@ deTest('0.13.0: kein Fork ohne Schalter, in Stufe Aus, im Subagenten, ohne Oberf
   expect(w.saved.get('notes:skip')).toBe(0)
   await stepAt($, 6, 'e')
   expect(w.forks.length).toBe(1)
-  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)
   await stepAt($, 6, 'f')
   expect(w.forks.length).toBe(1)
 })
@@ -3575,21 +3565,35 @@ deTest('0.13.0: Band zeigt den Hinweis mit 1/2/0 (Terminal und Desktop); mit qui
     expect(box).toContain('"width":100')
     await ui.unmount()
   }
-  w.setBand({ type: 'Box', props: { key: 'band', flexDirection: 'column', justifyContent: 'flex-end' }, children: [
-    { type: 'Box', props: { key: 'layer:20:quick-replies', flexDirection: 'column', flexShrink: 0 }, children: [{ type: 'Box', props: { key: 'quick-replies' }, children: ['Pille'] }] },
-  ] })
+  // Pille von quick-replies steht (Band 2: `quick-replies.band`, BAND-SPEC-2 §5): keine Ziffern, Knöpfe bleiben
+  w.setQr({ shown: true })
   ui = await $.ui.mount(bandNote())
   expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.hotkey).toBeUndefined()
-  expect(await ui.find({ key: 'quick-replies' })).toBeDefined()
+  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.label).toBe('Erklären')
   await ui.unmount()
-  w.setBand(null)
+  w.setQr(null)
+  ui = await $.ui.mount(bandNote())
+  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.hotkey).toBe('1')
+  await ui.unmount()
+  // Scheitert das Lesen von quick-replies.band, gilt die Pille als nicht stehend: Ziffern bleiben
+  w.setQr({ shown: true })
+  w.setStateGetFails(true)
+  ui = await $.ui.mount(bandNote())
+  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.hotkey).toBe('1')
+  await ui.unmount()
+  w.setStateGetFails(false)
+  w.setQr(null)
+  // Nach der Runde (isWorking false) nie Ziffern, auch ohne Pille
+  ui = await $.ui.mount(bandNote('terminal', { isWorking: false }))
+  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.hotkey).toBeUndefined()
+  await ui.unmount()
   ui = await $.ui.mount(bandNote('terminal', { hasSurvey: true }))
   expect(await ui.find({ key: 'sidekick-note' })).toBeUndefined()
   await ui.unmount()
   ui = await $.ui.mount(bandNote('vscode'))
   expect(await ui.find({ key: 'sidekick-note' })).toBeUndefined()
   await ui.unmount()
-  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)
   ui = await $.ui.mount(bandNote())
   expect(await ui.find({ key: 'sidekick-note' })).toBeUndefined()
   await ui.unmount()
@@ -3798,28 +3802,28 @@ deTest('0.13.0: ignoriert: nach 2 eigenen Nachrichten weg, Zurückhaltung zählt
 
 deTest('0.13.0: /sidekick notes on|off|forget|status; off räumt den Hinweis ab; Status-Zeile', async ($, on) => {
   const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }], ['notes:known', ['A.', 'B.']]]) })
-  let r = await $.command.run({ command: 'sidekick', args: 'notes' } as never)
+  let r = await $.command.run({ ...CMD, command: 'sidekick', args: 'notes' } as never)
   expect(r.text).toContain('**Gut zu wissen:** aus · bekannte Themen: 2')
   r = await notesOn($)
   expect(r.text).toContain('**Gut zu wissen:** an')
-  expect(r.text.split('\n')[0]).toBe('Gespeichert. Gilt in diesem Chat sofort, in anderen offenen Chats nach `/reload-plugins`.')
+  expect((r.text ?? '').split('\n')[0]).toBe('Gespeichert. Gilt in diesem Chat sofort, in anderen offenen Chats nach `/reload-plugins`.')
   expect(written(w.cli)).toEqual({ notes: 'true' })
   // Schon an: nichts geschrieben, keine Speicher-Zeile
   r = await notesOn($)
-  expect(r.text.split('\n')[0]).toContain('**Gut zu wissen:** an')
+  expect((r.text ?? '').split('\n')[0]).toContain('**Gut zu wissen:** an')
   expect(w.cli.writes.length).toBe(1)
-  r = await $.command.run({ command: 'sidekick', args: 'status' } as never)
+  r = await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)
   expect(r.text).toContain('| **Gut zu wissen** | an · 2 bekannte Themen · `/sidekick notes` |')
-  r = await $.command.run({ command: 'sidekick', args: 'notes off' } as never)
+  r = await $.command.run({ ...CMD, command: 'sidekick', args: 'notes off' } as never)
   expect(r.text).toContain('**Gut zu wissen:** aus')
   await flush()
   expect(savedNote(w)).toBe(null)
-  r = await $.command.run({ command: 'sidekick', args: 'notes forget' } as never)
+  r = await $.command.run({ ...CMD, command: 'sidekick', args: 'notes forget' } as never)
   expect(r.text).toBe('2 bekannte Themen vergessen.')
   expect(w.saved.get('notes:known')).toEqual([])
-  r = await $.command.run({ command: 'sidekick', args: 'notes quatsch' } as never)
+  r = await $.command.run({ ...CMD, command: 'sidekick', args: 'notes quatsch' } as never)
   expect(r.text).toContain('Unbekannt: „quatsch“')
-  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)
   r = await notesOn($)
   expect(r.text).toContain('(ruht: Stufe Aus)')
 })
@@ -3879,8 +3883,8 @@ test('0.13.0 en: tags, buttons and status in English', async ($, on) => {
 
 // Akzent der Hilfe als Theme-Key seit 0.14.1 (HELP-SPEC §4); die übrige sidekick-Farbe bleibt #6CB6FF
 const BLUE = 'ide'
-const helpRun = async ($: Engine, args = 'help') => String((await $.command.run({ command: 'sidekick', args } as never)).text ?? '')
-const savingsRun = async ($: Engine, args: string) => String((await $.command.run({ command: 'savings', args } as never)).text ?? '')
+const helpRun = async ($: Engine, args = 'help') => String((await $.command.run({ ...CMD, command: 'sidekick', args } as never)).text ?? '')
+const savingsRun = async ($: Engine, args: string) => String((await $.command.run({ ...CMD, command: 'savings', args } as never)).text ?? '')
 let mountNo = 0
 const mountHelp = ($: Engine, text: string, surface = 'terminal', columns = 100, isErrored = false, args = 'help') =>
   $.ui.mount({
@@ -4391,7 +4395,7 @@ deTest('0.17.0 language: /sidekick language ist kein unbekanntes Argument und ä
 // ---------- Ausbau 0.20.0: Schnittstelle zu clawd-buddy 0.13.0 (Grund, Hinweis, Wartung, Cache kalt) ----------
 
 type BV = { kind: string; at: number; why?: string } | null
-type SV = { level: string; busy: boolean; tip?: string; cold?: true } | null
+type SV = { level: string; busy: boolean; tip?: string; cold?: true; handoff?: true } | null
 const stops = (w: ReturnType<typeof world>) => (w.buddyVals as BV[]).filter((v) => v?.kind === 'stop')
 const lastStatus = (w: ReturnType<typeof world>) => (w.statusVals as SV[]).at(-1)
 const START = { cwd: '/work', surface: 'terminal', isInteractive: true } as never
@@ -4592,18 +4596,18 @@ deTest('0.20.0: status.cold: kippt nach Ablauf der TTL auf true, mit der nächst
 deTest('0.20.0: status.cold: 5-min-TTL (gesetzt) kippt nach 5 min; auf off fehlt das Feld, zurück auf guide ist es wieder da', async ($, on) => {
   const w = coldWorld(on)
   await $.session.start(START)
-  await $.command.run({ command: 'sidekick', args: 'ttl 5' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'ttl 5' } as never)
   await w.step($, stepUsage(0, 300000))
   await w.clock.advance(6 * MIN)
   await flush(200)
   expect(lastStatus(w)?.cold).toBe(true)
-  await $.command.run({ command: 'sidekick', args: 'off' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)
   await flush(200)
   expect(lastStatus(w)).toEqual({ level: 'off', busy: false })
   await w.clock.advance(5 * MIN)
   await flush(200)
   expect((w.statusVals as SV[]).filter((s) => s?.level === 'off' && s.cold)).toEqual([])
-  await $.command.run({ command: 'sidekick', args: 'cache' } as never)
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'cache' } as never)
   await flush(200)
   expect(lastStatus(w)).toEqual({ level: 'cache', busy: false, cold: true })
 })
@@ -4675,7 +4679,7 @@ for (const tier of ['prepend', 'append'] as const) {
   test(`0.20.0: Zusammenspiel mit clawd-buddy (${tier}): Clawd liest sk_stop_cold, sk_hint, und ein kalter Chat führt zum Würfel`, { ...DE, plugins: [clawdProbe(tier)] }, async ($, on) => {
     setLang('de')
     const w = coldWorld(on)
-    const probe = async () => String(((await $.command.run({ command: 'clawdprobe' } as never)) as { text?: string }).text)
+    const probe = async () => String(((await $.command.run({ ...CMD, command: 'clawdprobe' } as never)) as { text?: string }).text)
     await $.session.start(START)
     w.setCtx(undefined)
     await w.step($, stepUsage(0, 300000))

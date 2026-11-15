@@ -1,16 +1,18 @@
-import type { Engine, On, RenderNode } from 'claude-code'
+import type { On, PromptEditInput, PromptEditResult, RenderElement } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { joinBand, layer, LEVEL, levelOf, nameOf, splitBand } from '../hooks/band.ts'
-import { HELP_WORDS, MORE_WORD, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from '../hooks/logic.ts'
-import { T } from '../hooks/i18n.ts'
-import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.ts'
-import { offFields, toStore } from '../hooks/offdefaults.ts'
-import { SETTINGS } from '../hooks/fields.ts'
+import { HELP_WORDS, MORE_WORD, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from '../hooks/logic.js'
+import { T } from '../hooks/i18n.js'
+import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.js'
+import { offFields, toStore } from '../hooks/offdefaults.js'
+import { SETTINGS } from '../hooks/fields.js'
 
-type Over = { isWorking?: boolean; hasSurvey?: boolean }
+// Ab 2.1.325 verlangt CommandRunInput origin und presentation (Probe docs/BAND-PROBE-2.1.325.md §1)
+const CMD = { origin: { kind: 'composer' as const }, presentation: { isFullscreen: false, columns: 100 } }
+type Over = { isWorking?: boolean; hasSurvey?: boolean; isCollapsed?: boolean }
 type Surface = 'terminal' | 'desktop'
 const props = (bodyColumns: number, over: Over = {}) =>
-  ({ hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {}, ...over }) as const
+  ({ hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 10, bodyColumns, scroll: { offset: 0, bodyRows: 10 }, view: {}, ...over }) as const
 const band = (surface: Surface, bodyColumns = 120, over: Over = {}) =>
   ({ plugin: 'quick-replies', component: 'AbovePrompt', requestId: 'above-prompt', props: props(bodyColumns, over), surface }) as const
 
@@ -43,6 +45,10 @@ function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'drop'; stored?: unk
     cli: [] as Record<string, string>[],
     sets: [] as { key: string; value: unknown }[],
     runs: [] as string[],
+    // $.state sidekick.status (Vertrag wie sidekick, docs/BAND-SPEC-2.md §4); skDeny lässt das Lesen scheitern
+    sk: null as { level: 'off' | 'cache' | 'guide'; busy: boolean; handoff?: true } | null,
+    skDeny: false,
+    skReads: 0,
   }
   on('config.list', () => ({ value: JSON.parse(JSON.stringify(opts.rows ?? [])) }))
   on('config.set', ($, e) => {
@@ -86,7 +92,7 @@ function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'drop'; stored?: unk
     w.registered.push(e.name)
     w.descriptions.push(e.description ?? '')
     w.hints.push(e.argumentHint ?? '')
-    return { value: undefined }
+    return { value: { command: e.name } }
   })
   on('store.get', ($, e) => ({ value: w.store.get(e.key) }))
   on('store.set', ($, e) => {
@@ -96,6 +102,15 @@ function world(on: On, opts: { fork?: Fork; submit?: 'ok' | 'drop'; stored?: unk
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
   on('ui.log', () => ({ value: undefined }))
+  on('state.get', ($, e) => {
+    const x = e as unknown as { plugin: string; key: string }
+    if (x.plugin === 'sidekick' && x.key === 'status') {
+      w.skReads += 1
+      if (w.skDeny) return { deny: 'kaputt' } as never
+      return { value: { value: w.sk ?? undefined, version: w.sk ? 1 : 0 } } as never
+    }
+    return { value: { value: undefined, version: 0 } } as never
+  })
   on('prompt.suggest', () => ({ isShown: true }))
   on('prompt.edit', ($, e) => ({ text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end), cursor: e.start + e.inputText.length }))
   on('prompt.submit', ($, e) => {
@@ -130,14 +145,16 @@ const finish = ($: Engine, answer = LONG, more: { agentId?: string; isAborted?: 
     isAborted: more.isAborted ?? false,
     reason: more.isAborted ? 'aborted' : (more.reason ?? 'answer'),
     agentId: more.agentId,
-    usage: more.model ? { ...usage, model: more.model } : null,
+    usage: more.model ? { ...usage, model: more.model } : undefined,
   })
+// prompt.edit feuert im Kit, steht in 2.1.325 aber nicht im Typ von $.prompt (EventCalls['prompt'], types@2.1.325:5085) [UNKLAR]
+const edit = ($: Engine, e: PromptEditInput) => ($.prompt as unknown as { edit: (e: PromptEditInput) => Promise<PromptEditResult> }).edit(e)
 const suggest = ($: Engine, text: string) => $.prompt.suggest({ text, origin: { kind: 'suggestion' } })
 const type = ($: Engine, text: string, inputText: string) =>
-  $.prompt.edit({ origin: { kind: 'composer' }, text, cursor: text.length, start: text.length, end: text.length, inputText })
+  edit($, { origin: { kind: 'composer' }, text, cursor: text.length, start: text.length, end: text.length, inputText })
 // Prompt leeren (Backspace über alles)
 const clear = ($: Engine, text: string) =>
-  $.prompt.edit({ origin: { kind: 'composer' }, text, cursor: text.length, start: 0, end: text.length, inputText: '' })
+  edit($, { origin: { kind: 'composer' }, text, cursor: text.length, start: 0, end: text.length, inputText: '' })
 const labels = async (ui: { find: (q: { key: string }) => Promise<{ props: Record<string, unknown> } | undefined> }) => {
   const out: string[] = []
   for (const n of [1, 2, 3, 4]) {
@@ -178,17 +195,15 @@ test('Standard: nur der eine Vorschlag von Claude Code als einzelner Knopf, auf 
     expect(r).toEqual({ isShown: true })
     expect(await labels(ui)).toEqual(['Committe die Änderungen'])
     expect((await ui.find({ key: 'reply-1' }))?.props).toMatchObject({ hotkey: '1', plain: true })
-    const tree = (await ui.drawn()) as Node
-    // Wurzel des Bands (band.ts): oben die eigene Ebene, darin die Pille; darunter der Grund
-    expect(tree).toMatchObject({ type: 'Box', props: { key: 'band', flexDirection: 'column', justifyContent: 'flex-end' } })
-    expect(tree.children[0].props).toMatchObject({ key: 'layer:20:quick-replies', flexShrink: 0 })
-    const pill = tree.children[0].children[0]
+    const tree = await ui.drawn()
+    // Eigene Zeile (band.ts layer): Wurzel mit Schlüssel, darin die Pille; die Zeile des Test-Plugins steht darunter (Band 2)
+    const row = findKey(tree, OWN)!
+    expect(row).toMatchObject({ type: 'Box', props: { key: OWN, flexDirection: 'column' } })
+    const pill = row.children[0]!
     expect(pill.props).toMatchObject({ key: 'quick-replies', flexShrink: 0 })
     expect(pill.props.borderStyle).toBe(surface === 'desktop' ? 'round' : undefined)
-    // theirs nie direkt in der Spalte (Lehre 4)
-    expect(tree.children[1].props).toMatchObject({ key: 'band-base', flexDirection: 'row', alignItems: 'flex-end' })
-    expect(tree.children[1].children[0].props).toMatchObject({ flexGrow: 1 })
-    expect(tree.children[1].children[0].children[0]).toMatchObject({ type: 'Text', children: ['clawd'] })
+    const json = JSON.stringify(tree)
+    expect(json.indexOf(OWN)).toBeLessThan(json.indexOf('clawd'))
     await ui.unmount()
   }
   expect(w.forks).toEqual([])
@@ -216,12 +231,12 @@ test('more an: Fork über den Timer nach dem Turn, Claude Code vorn, bis zu 4 im
   expect(w.forks[0]).toContain('JSON array')
   expect(w.forks[0]).toContain('written in English')
   expect(await labels(ui)).toEqual(['Committe die Änderungen', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
-  const pill = ((await ui.drawn()) as Node).children[0].children[0]
+  const pill = findKey(await ui.drawn(), OWN)!.children[0]!
   expect(pill.children.length).toBe(2)
-  expect(pill.children[0].children.map((c) => c.children[0].props.key)).toEqual(['reply-1', 'reply-2'])
+  expect(pill.children[0]!.children.map((c) => c.children[0]!.props.key)).toEqual(['reply-1', 'reply-2'])
   await ui.unmount()
   const narrow = await $.ui.mount(band('terminal', 40))
-  expect(((await narrow.drawn()) as Node).children[0].children[0].children.length).toBe(4)
+  expect(findKey(await narrow.drawn(), OWN)!.children[0]!.children.length).toBe(4)
   await narrow.unmount()
 })
 
@@ -287,7 +302,7 @@ test('0.7.0 Weg 1: eigene Zeilen gelistet → $.config.set auf quick-replies.mor
   const row = (key: string, value: unknown, plugin = 'quick-replies@fynn-mods'): CfgRow => ({ key, label: key, kind: 'boolean', value, provider: { plugin, tier: 'user' }, isLocked: false })
   const w = world(on, { rows: [row('quick-replies.more', false), row('quick-replies.enabled', true), row('other.more', false, 'other@x')] })
   await boot($)
-  const text = String((await $.command.run({ command: 'replies', args: 'more on' })).text)
+  const text = String((await $.command.run({ ...CMD, command: 'replies', args: 'more on' })).text)
   expect(text).toContain('Saved, applies now.')
   expect(w.sets).toEqual([{ key: 'quick-replies.more', value: true }])
   expect(w.runs).toEqual([])
@@ -296,9 +311,9 @@ test('0.7.0 Weg 1: eigene Zeilen gelistet → $.config.set auf quick-replies.mor
 test('0.7.0 Schreiben abgelehnt: Meldung mit Grund, Einstellung bleibt', async ($, on) => {
   const w = world(on, { cliFail: 'N: nope' })
   await boot($)
-  const text = String((await $.command.run({ command: 'replies', args: 'off' })).text)
+  const text = String((await $.command.run({ ...CMD, command: 'replies', args: 'off' })).text)
   expect(text).toBe('Not saved: N: nope.')
-  expect(String((await $.command.run({ command: 'replies', args: 'status' })).text)).toContain('quick-replies: on')
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: 'status' })).text)).toContain('quick-replies: on')
   expect(w.cli).toEqual([])
 })
 
@@ -311,7 +326,7 @@ test('Fork-Fehlerpfade: Müll, keine Antwort, nichts zu forken, abgelehnt → nu
   expect(w.forks.length).toBe(1)
   expect(await labels(ui)).toEqual(['Weiter'])
   expect(w.toasts).toEqual([])
-  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork no suggestions')
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: '' })).text)).toContain('Fork no suggestions')
   await ui.unmount()
 })
 
@@ -322,7 +337,7 @@ test('de: Fork verlangt deutsche Vorschläge, Status nennt den Fork-Zustand deut
   await suggest($, 'Weiter')
   await w.clock.advance(100)
   expect(w.forks[0]).toContain('written in German')
-  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork keine Vorschläge')
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: '' })).text)).toContain('Fork keine Vorschläge')
   await ui.unmount()
 })
 
@@ -343,7 +358,7 @@ for (const kind of ['unanswered', 'nothing', 'deny'] as const) {
 test('kein Fork: aus, kurze Antwort, ohne gezeichnetes Band (-p), Subagent, Abbruch, Fehler-Turn', async ($, on) => {
   const w = world(on, { stored: { enabled: true, more: false } })
   await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
-  await $.command.run({ command: 'replies', args: 'more on' })
+  await $.command.run({ ...CMD, command: 'replies', args: 'more on' })
   // ohne Band (wie -p): kein Fork
   await finish($)
   await w.clock.advance(100)
@@ -355,11 +370,11 @@ test('kein Fork: aus, kurze Antwort, ohne gezeichnetes Band (-p), Subagent, Abbr
   await finish($, LONG, { reason: 'error' })
   await w.clock.advance(100)
   expect(w.forks.length).toBe(0)
-  await $.command.run({ command: 'replies', args: 'more off' })
+  await $.command.run({ ...CMD, command: 'replies', args: 'more off' })
   await finish($)
   await w.clock.advance(100)
   expect(w.forks.length).toBe(0)
-  await $.command.run({ command: 'replies', args: 'more on' })
+  await $.command.run({ ...CMD, command: 'replies', args: 'more on' })
   await finish($)
   await w.clock.advance(100)
   expect(w.forks.length).toBe(1)
@@ -445,9 +460,9 @@ test('leer bei isWorking, hasSurvey, Text im Prompt, Subagent-Ansicht und /repli
   await type($, '', 'x')
   expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
   // Ein Befehl ohne Turn: danach gilt der Prompt wieder als leer
-  await $.command.run({ command: 'replies', args: 'status' })
+  await $.command.run({ ...CMD, command: 'replies', args: 'status' })
   expect(await ui.find({ key: 'reply-1' })).toBeDefined()
-  await $.command.run({ command: 'replies', args: 'off' })
+  await $.command.run({ ...CMD, command: 'replies', args: 'off' })
   expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
   expect(w.cli).toEqual([{ enabled: 'false' }])
   await ui.unmount()
@@ -584,7 +599,7 @@ test('Stabilität: späte Vorschläge innerhalb von 2 s nach einer Eingabe werde
   // Der Nutzer tippt kurz vor dem Eintreffen der Fork-Antwort (nach 9 s) etwas und löscht es wieder
   await w.clock.advance(8000)
   await type($, '', 'x')
-  await $.prompt.edit({ origin: { kind: 'composer' }, text: 'x', cursor: 1, start: 0, end: 1, inputText: '' })
+  await edit($, { origin: { kind: 'composer' }, text: 'x', cursor: 1, start: 0, end: 1, inputText: '' })
   await w.clock.advance(1500)
   expect(await labels(ui)).toEqual(['Weiter'])
   await w.clock.advance(600)
@@ -630,7 +645,7 @@ for (const language of ['en', 'de'] as const) {
     await w.clock.advance(10)
     expect(w.registered).toEqual(['replies'])
     expect(w.descriptions[0]).toContain(x.registered)
-    const run = async (args: string) => String((await $.command.run({ command: 'replies', args })).text)
+    const run = async (args: string) => String((await $.command.run({ ...CMD, command: 'replies', args })).text)
     expect(await run('')).toContain(x.head)
     expect(await run('status')).toContain(x.surface)
     expect(await run('on')).toContain(x.note)
@@ -700,9 +715,9 @@ test('Ziffer allein abgeschickt bleibt Text: ohne Vorschlag, über der Zahl, meh
   expect(await submit($, '1', { origin: { kind: 'bridge' } })).toMatchObject({ text: '1' })
   // die eigene Sendung eines Vorschlags, der selbst eine Ziffer ist, bleibt, wie sie ist
   expect(await submit($, '1', { origin: { kind: 'plugin', name: 'quick-replies', asUser: true } })).toMatchObject({ text: '1' })
-  await $.command.run({ command: 'replies', args: 'off' })
+  await $.command.run({ ...CMD, command: 'replies', args: 'off' })
   expect(await submit($, '1')).toMatchObject({ text: '1' })
-  await $.command.run({ command: 'replies', args: 'on' })
+  await $.command.run({ ...CMD, command: 'replies', args: 'on' })
   // Session-ID nicht lesbar: lieber die Ziffer als einen womöglich fremden Vorschlag
   w.sid = 'DENY'
   expect(await submit($, '1')).toMatchObject({ text: '1' })
@@ -760,123 +775,188 @@ test('nach /clear sendet ein Druck nicht den Vorschlag des alten Chats', async (
   await ui.unmount()
 })
 
-// ---- Reihenfolge der Mods (band.ts, docs/BAND.md): das Band sieht immer gleich aus, egal wer in der Kette außen liegt
+// ---- Band 2 (0.8.0, docs/BAND-SPEC-2.md): eigene Zeile, Anordnung in AbovePromptList, sidekick über $.state
+
+// Seit 2.1.323 zeichnet der Mount von AbovePrompt im Kit die ganze Liste: Der `ui.render`-Stub aus `world` (ohne `{ plugin }`) ist die
+// Zeile des Test-Plugins („clawd“), daneben steht die von quick-replies. Die eigene Zeile über ihren Schlüssel suchen (docs/BAND.md).
+const OWN = 'layer:20:quick-replies'
+function findKey(t: unknown, key: string): Node | undefined {
+  const n = t as Node | null
+  if (!n || typeof n !== 'object') return undefined
+  if (n.props?.key === key) return n
+  for (const c of n.children ?? []) {
+    const hit = findKey(c, key)
+    if (hit) return hit
+  }
+  return undefined
+}
+const keys = (n: unknown): string[] =>
+  n && typeof n === 'object' ? [String((n as Node).props?.key ?? ''), ...((n as Node).children ?? []).flatMap(keys)] : []
+const bandKeys = (n: unknown) => keys(n).filter((k) => /^(layer|slot):/.test(k))
 
 type Tier = 'prepend' | 'append'
-// Partner-Mods laufen in eigener Umgebung (keine Importe aus dem Test): darum hier eine knappe eigene Fassung des Protokolls,
-// so wie ein anderer Mod es nach docs/BAND.md umsetzen würde
-// Wie limit-bars: Balken links neben den Grund, Ebenen bleiben oben
+// Partner-Mods laufen in eigener Umgebung (keine Importe, keine Variablen der Testdatei): je eine Zeile mit Band-Schlüssel, wie
+// limit-bars und clawd-buddy sie seit Band 2 zeichnen. Zusammensetzen muss quick-replies selbst (arrange in AbovePromptList).
 const bars = (tier: Tier) => ({
   name: `bars-${tier}`,
   tier,
   register(on: On) {
-    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-      type N = { props?: Record<string, unknown>; children?: unknown[] }
-      const key = (n: unknown) => String((n as N)?.props?.key ?? '')
-      const layers: unknown[] = []
-      const lift = (n: unknown): unknown => {
-        if (!n || typeof n !== 'object') return n
-        if (key(n).startsWith('layer:')) return (layers.push(n), null)
-        if (key(n) === 'band') {
-          for (const c of (n as N).children ?? []) if (key(c).startsWith('layer:')) layers.push(c)
-          const wrap = ((n as N).children ?? []).find((c) => key(c) === 'band-base') as N | undefined
-          return lift((wrap?.children?.[0] as N | undefined)?.children?.[0] ?? null)
-        }
-        return Array.isArray((n as N).children) ? { ...(n as N), children: (n as N).children!.map(lift).filter((c) => c !== null) } : n
-      }
-      const base = lift(await next(e))
-      const mine = { type: 'Box', props: { key: 'limit-bars' }, children: ['5h 7d'] }
-      const row = { type: 'Box', props: { flexDirection: 'row' }, children: base ? [mine, base] : [mine] }
-      if (layers.length === 0) return row as RenderNode
-      layers.sort((a, b) => Number(key(b).split(':')[1]) - Number(key(a).split(':')[1]))
-      const ground = { type: 'Box', props: { key: 'band-base', flexDirection: 'row' }, children: [{ type: 'Box', props: { flexGrow: 1 }, children: [row] }] }
-      return { type: 'Box', props: { key: 'band', flexDirection: 'column' }, children: [...layers, ground] } as RenderNode
-    })
+    on('ui.render', { component: 'AbovePrompt' }, async () =>
+      ({ type: 'Box', props: { key: 'slot:10:limit-bars', flexDirection: 'column', width: 12 }, children: ['5h 7d'] }) as RenderElement)
   },
 })
-// Wie sidekick während der Übergabe: oberste Ebene, Quick-Replies ausgeblendet
-const busy = (tier: Tier) => ({
-  name: `busy-${tier}`,
+const buddy = (tier: Tier) => ({
+  name: `buddy-${tier}`,
   tier,
   register(on: On) {
-    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-      type N = { props?: Record<string, unknown>; children?: unknown[] }
-      const key = (n: unknown) => String((n as N)?.props?.key ?? '')
-      const theirs = (await next(e)) as N
-      const box = { type: 'Box', props: { key: 'layer:30:sidekick', flexDirection: 'column' }, children: [{ type: 'Box', props: { key: 'sidekick-busy' }, children: ['sidekick'] }] }
-      // Liegt schon eine Wurzel vor: Pille raus, eigene Ebene obenauf; sonst eine neue Wurzel über dem Grund
-      if (key(theirs) === 'band') {
-        const kids = (theirs.children ?? []).filter((c) => key(c) !== 'layer:20:quick-replies')
-        return { ...theirs, children: [box, ...kids] } as RenderNode
-      }
-      const ground = { type: 'Box', props: { key: 'band-base', flexDirection: 'row' }, children: [{ type: 'Box', props: { flexGrow: 1 }, children: [theirs] }] }
-      return { type: 'Box', props: { key: 'band', flexDirection: 'column' }, children: [box, ground] } as RenderNode
-    })
+    on('ui.render', { component: 'AbovePrompt' }, async () =>
+      ({ type: 'Box', props: { key: 'slot:30:clawd-buddy:right', flexDirection: 'column', alignItems: 'flex-end' }, children: ['Clawd'] }) as RenderElement)
   },
 })
-const keys = (n: Node): string[] => (n && typeof n === 'object' ? [String(n.props?.key ?? ''), ...(n.children ?? []).flatMap(keys)] : [])
+
+test('Band 2: eigene Zeile layer:20:quick-replies, Pille darin, next(e) nicht gerufen; ohne Pille keine Zeile', async ($, on) => {
+  const w = world(on)
+  // Antwortet nur auf next(e) von quick-replies selbst (en/test.md:146): zählt, ob quick-replies beim Zeichnen weiterreicht
+  let ownNext = 0
+  on('ui.render', { plugin: 'quick-replies' }, () => {
+    ownNext += 1
+    return { type: 'Text', props: {}, children: ['keine Zeile'] }
+  })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    ownNext = 0
+    const ui = await boot($, surface)
+    // Noch kein Turn: keine eigene Zeile, quick-replies reicht weiter
+    expect(findKey(await ui.drawn(), OWN)).toBeUndefined()
+    expect(ownNext > 0).toBe(true)
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    ownNext = 0
+    const row = findKey(await ui.drawn(), OWN)!
+    expect(row).toMatchObject({ type: 'Box', props: { key: OWN, flexDirection: 'column' } })
+    const pill = row.children[0]!
+    expect(pill.props).toMatchObject({ key: 'quick-replies', flexShrink: 0 })
+    expect(pill.props.borderStyle).toBe(surface === 'desktop' ? 'round' : undefined)
+    expect(ownNext).toBe(0)
+    // Die Zeile des Test-Plugins steht weiter darunter
+    expect(JSON.stringify(await ui.drawn())).toContain('clawd')
+    await ui.unmount()
+    await $.turn.start({ turnId: `t-${surface}`, text: 'weiter' })
+  }
+  expect(w.sent).toEqual([])
+})
 
 for (const tier of ['prepend', 'append'] as const) {
-  test(`Reihenfolge: Balken ${tier === 'prepend' ? 'außen' : 'innen'} → Pille über Balken und Clawd, nie daneben`, { plugins: [bars(tier)] }, async ($, on) => {
-    world(on)
+  test(`Band 2, Anordnung: Balken und Clawd ${tier === 'prepend' ? 'außen' : 'innen'} → Pille oben, darunter eine Grundzeile`, { plugins: [bars(tier), buddy(tier)] }, async ($, on) => {
+    const w = world(on)
     for (const surface of ['terminal', 'desktop'] as const) {
+      w.sent.length = 0
       const ui = await boot($, surface)
       await finish($)
       await suggest($, 'Committe die Änderungen')
-      const tree = (await ui.drawn()) as Node
-      expect(tree.props.key).toBe('band')
-      expect(tree.children.length).toBe(2)
-      expect(tree.children[0].props.key).toBe('layer:20:quick-replies')
-      // Der Grund: Balken und Clawd in einer Zeile, die Pille steckt nicht darin
-      const ground = keys(tree.children[1])
-      expect(ground).toContain('limit-bars')
-      expect(ground).not.toContain('quick-replies')
-      expect(JSON.stringify(tree.children[1])).toContain('clawd')
+      const tree = await ui.drawn()
+      expect((tree as Node).props.key).toBe('band')
+      // Ebene zuerst, dann die Plätze aufsteigend; die Pille steckt nicht in der Grundzeile
+      expect(bandKeys(tree)).toEqual([OWN, 'slot:10:limit-bars', 'slot:30:clawd-buddy:right'])
+      const row = findKey(tree, 'band-row')!
+      expect(bandKeys(row)).toEqual(['slot:10:limit-bars', 'slot:30:clawd-buddy:right'])
+      expect(keys(row)).not.toContain('quick-replies')
+      // Fremde Zeile ohne Schlüssel (Test-Plugin) bleibt erhalten
+      expect(JSON.stringify(tree)).toContain('clawd')
+      // Knöpfe und Ziffer bleiben bedienbar
+      expect(await labels(ui)).toEqual(['Committe die Änderungen'])
+      expect(await type($, '', '1')).toMatchObject({ text: '' })
+      // Über die Haltezeit (HOLD_MS) hinaus: sonst gilt die 1 der nächsten Runde als gehaltene Taste
+      await w.clock.advance(1300)
+      expect(w.sent).toEqual([{ text: 'Committe die Änderungen', asUser: true }])
       await ui.unmount()
+      await $.turn.start({ turnId: `t-${surface}`, text: 'weiter' })
     }
   })
 }
 
-for (const [qrTier, skTier] of [['prepend', 'append'], ['append', 'prepend']] as const) {
-  test(`Reihenfolge: sidekick ${skTier === 'prepend' ? 'außen' : 'innen'}, Balken ${qrTier === 'prepend' ? 'außen' : 'innen'} → sidekick zuoberst, Pille ausgeblendet`, { plugins: [bars(qrTier), busy(skTier)] }, async ($, on) => {
-    world(on)
+test('Band 2, sidekick-Übergabe: handoff → keine Zeile, Ziffer bleibt Ziffer; danach kommt die Pille zurück', async ($, on) => {
+  const w = world(on)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    w.sent.length = 0
+    w.sk = { level: 'guide', busy: true, handoff: true }
+    const ui = await boot($, surface)
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    expect(findKey(await ui.drawn(), OWN)).toBeUndefined()
+    expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+    expect(w.skReads > 0).toBe(true)
+    // Die Ziffer sendet nichts und bleibt im Prompt; allein abgeschickt geht sie als Text raus
+    expect(await type($, '', '1')).toMatchObject({ text: '1' })
+    await clear($, '1')
+    expect(await submit($, '1')).toMatchObject({ text: '1' })
+    expect(w.sent).toEqual([{ text: '1', asUser: undefined }])
+    // Übergabe vorbei (sidekick schreibt neu, das Lesen im Zeichnen hat abonniert): Pille wieder da
+    w.sk = { level: 'guide', busy: false }
+    await ui.redraw()
+    expect(findKey(await ui.drawn(), OWN)).toBeDefined()
+    expect(await labels(ui)).toEqual(['Committe die Änderungen'])
+    await ui.unmount()
+    await $.turn.start({ turnId: `t-${surface}`, text: 'weiter' })
+  }
+})
+
+test('Band 2, sidekick prüft nur (busy ohne handoff) oder ist aus: die Pille steht', async ($, on) => {
+  const w = world(on)
+  for (const sk of [{ level: 'guide', busy: true }, { level: 'off', busy: false }, null] as const) {
+    w.sk = sk
     const ui = await boot($, 'desktop')
     await finish($)
     await suggest($, 'Committe die Änderungen')
-    const tree = (await ui.drawn()) as Node
-    expect(tree.props.key).toBe('band')
-    // sidekick rückt auf die Höhe der Pille: direkt über dem Grund
-    expect(tree.children.map((c) => c.props.key)).toEqual(['layer:30:sidekick', 'band-base'])
-    expect(keys(tree)).not.toContain('quick-replies')
-    expect(keys(tree.children[1])).toContain('limit-bars')
+    expect(findKey(await ui.drawn(), OWN)).toBeDefined()
     await ui.unmount()
-  })
-}
-
-test('band.ts: höchste Ebene oben, ohne Ebenen bleibt der Grund unverändert, eine fremde Hülle gibt ihre Ebenen frei', () => {
-  const ground = { type: 'Text', props: {}, children: ['clawd'] } as RenderNode
-  expect(joinBand([], ground)).toBe(ground)
-  expect(splitBand(ground)).toEqual({ layers: [], slots: [], base: ground })
-  const a = layer(20, 'quick-replies', 'A')
-  const b = layer(30, 'sidekick', 'B')
-  const joined = joinBand([a, b], ground) as Node
-  expect(joined.children.map((c) => c.props.key)).toEqual(['layer:30:sidekick', 'layer:20:quick-replies', 'band-base'])
-  // Ein Mod ohne Protokoll packt die Wurzel in seine Zeile: die Ebenen kommen trotzdem heraus, der Grund bleibt in der Hülle
-  const foreign = { type: 'Box', props: { flexDirection: 'row' }, children: ['x', joined] } as RenderNode
-  const s = splitBand(foreign)
-  expect(s.layers.map(nameOf)).toEqual(['sidekick', 'quick-replies'])
-  expect(s.base).toEqual({ type: 'Box', props: { flexDirection: 'row' }, children: ['x', ground] })
-  expect(levelOf(a)).toBe(20)
-  expect(levelOf(ground)).toBe(-1)
-  expect(joinBand([a], null)).toMatchObject({ props: { key: 'band' }, children: [a] })
+    await $.turn.start({ turnId: 't2', text: 'weiter' })
+  }
 })
 
+test('Band 2, sidekick.status nicht lesbar: keine Zeile, kein Wurf, die anderen Zeilen bleiben (fail-closed)', async ($, on) => {
+  const w = world(on)
+  w.skDeny = true
+  const ui = await boot($, 'terminal')
+  await finish($)
+  await suggest($, 'Committe die Änderungen')
+  const tree = await ui.drawn()
+  expect(findKey(tree, OWN)).toBeUndefined()
+  expect(JSON.stringify(tree)).toContain('clawd')
+  expect(await type($, '', '1')).toMatchObject({ text: '1' })
+  expect(w.sent).toEqual([])
+  await ui.unmount()
+})
+
+test('Band 2, eingeklappt (isCollapsed): keine Zeile, keine Ziffer sendet; ausgeklappt wieder da', async ($, on) => {
+  const w = world(on)
+  for (const surface of ['terminal', 'desktop'] as const) {
+    w.sent.length = 0
+    await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+    const ui = await $.ui.mount(band(surface, 120, { isCollapsed: true }))
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    expect(findKey(await ui.drawn(), OWN)).toBeUndefined()
+    expect(await type($, '', '1')).toMatchObject({ text: '1' })
+    await clear($, '1')
+    // Nie zu sehen gewesen: die allein abgeschickte Ziffer bleibt Text
+    expect(await submit($, '1')).toMatchObject({ text: '1' })
+    expect(w.sent).toEqual([{ text: '1', asUser: undefined }])
+    await ui.unmount()
+    await $.turn.start({ turnId: `t-${surface}`, text: 'weiter' })
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    const open = await $.ui.mount(band(surface))
+    expect(findKey(await open.drawn(), OWN)).toBeDefined()
+    await open.unmount()
+    await $.turn.start({ turnId: `u-${surface}`, text: 'weiter' })
+  }
+})
 test('Kostenzeile: Fork-Aufrufe dieses Chats mit geschätztem API-Wert, nach /clear wieder leer', async ($, on) => {
   // 1000 Input, 38k aus dem Cache, 50 Output auf Opus 5.5: (1000 × 4 + 38000 × 0,2 + 50 × 20) / 1e6 = 0,0126 $
   const forkUsage = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 38000, cache_creation_input_tokens: 0 }
   const w = world(on, { stored: { enabled: true, more: true }, forkUsage })
   const ui = await boot($, 'terminal')
-  const status = async () => String((await $.command.run({ command: 'replies', args: '' })).text)
+  const status = async () => String((await $.command.run({ ...CMD, command: 'replies', args: '' })).text)
   expect(await status()).toContain('Fork in this chat: –')
   await finish($, LONG, { model: 'claude-opus-5-5' })
   await w.clock.advance(100)
@@ -900,7 +980,7 @@ test('Kostenzeile 0.4.3: Haiku-5.5-Session, Fork mit 120k Prompt-Tokens bleibt a
   const ui = await boot($, 'terminal')
   await finish($, LONG, { model: 'claude-haiku-5-5' })
   await w.clock.advance(100)
-  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork in this chat: 1× · ~$0.004 ')
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: '' })).text)).toContain('Fork in this chat: 1× · ~$0.004 ')
   await ui.unmount()
 })
 
@@ -910,7 +990,7 @@ test('Kostenzeile de', { options: { language: 'de' } }, async ($, on) => {
   const ui = await boot($, 'terminal')
   await finish($, LONG, { model: 'claude-opus-5-5' })
   await w.clock.advance(100)
-  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain(
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: '' })).text)).toContain(
     'Fork in diesem Chat: 1× · ~0,013 $ (API-Preis, geschätzt; im Abo zählt es gegen die Nutzungslimits) · 39k Tokens, 97 % aus dem Cache',
   )
   await ui.unmount()
@@ -922,13 +1002,13 @@ test('Kostenzeile: „nothing-to-fork“ zählt nicht', async ($, on) => {
   await finish($)
   await w.clock.advance(100)
   expect(w.forks.length).toBe(1)
-  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork in this chat: –')
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: '' })).text)).toContain('Fork in this chat: –')
   await ui.unmount()
 })
 
 test('Kostenzeile: zählt einen abgelösten oder abgebrochenen Fork, nicht einen, der nach /clear zurückkommt', async ($, on) => {
   const forkUsage = { input_tokens: 1000, output_tokens: 50, cache_read_input_tokens: 38000, cache_creation_input_tokens: 0 }
-  const status = async () => String((await $.command.run({ command: 'replies', args: '' })).text)
+  const status = async () => String((await $.command.run({ ...CMD, command: 'replies', args: '' })).text)
   {
     // Turn abgelöst, während der Fork läuft: die Tokens sind verbraucht und zählen
     const w = world(on, { stored: { enabled: true, more: true }, forkUsage, fork: 'slow' })
@@ -958,11 +1038,11 @@ test('Kostenzeile: abgebrochener Fork zählt, was vor dem Abbruch kam; direkt na
   await finish($, LONG, { model: 'claude-opus-5-5' })
   await w.clock.advance(100)
   // Stub-Usage: 1 Input, 1 Output → 24 µ$, 2 Tokens
-  const text = String((await $.command.run({ command: 'replies', args: '' })).text)
+  const text = String((await $.command.run({ ...CMD, command: 'replies', args: '' })).text)
   expect(text).toContain('Fork in this chat: 1× · <$0.001')
   expect(text).toContain('· 2 tokens, 0 % from cache')
   w.sid = 's2'
-  expect(String((await $.command.run({ command: 'replies', args: '' })).text)).toContain('Fork in this chat: –')
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: '' })).text)).toContain('Fork in this chat: –')
   await ui.unmount()
 })
 
@@ -970,7 +1050,7 @@ test('Kostenzeile: abgebrochener Fork zählt, was vor dem Abbruch kam; direkt na
 
 const ACCENT = 'autoAccept'
 const DE = { options: { language: 'de' } }
-const replies = async ($: Engine, args: string) => String((await $.command.run({ command: 'replies', args })).text)
+const replies = async ($: Engine, args: string) => String((await $.command.run({ ...CMD, command: 'replies', args })).text)
 const mountHelp = ($: Engine, text: string, surface: string, columns = 120, isErrored = false, args = 'help') =>
   $.ui.mount({
     plugin: 'quick-replies',
@@ -1022,7 +1102,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     await boot($)
     const ui = await mountHelp($, await replies($, 'help'), surface)
     expect(await ui.find({ text: /^ENGINE:/ })).toBeUndefined()
-    const tree = await ui.drawn()
+    const tree = (await ui.drawn()) as Node
     expect(tree.props).toMatchObject({ borderStyle: 'round', borderDimColor: true, paddingX: 1, width: '100%', key: 'quick-replies-help' })
     expect((await ui.find({ type: 'Text', text: 'quick-replies · Hilfe' }))?.props).toMatchObject({ color: ACCENT, bold: true })
     for (const h of ['BEFEHLE', 'BEDIENUNG', 'FUNKTIONEN', 'STATUS', 'UMSCHALTEN', 'EINSTELLUNGEN (/plugin)', 'WERT'])
@@ -1168,45 +1248,47 @@ test('0.5.0 Hilfe Vollständigkeit: jedes Wort, das der Parser annimmt, steht in
   }
 })
 
-// ---- 0.5.3: Plätze der Grund-Zeile (limit-bars, spotify, Clawd) gehen nie verloren (band.ts, docs/BAND.md)
-
-// Partner-Mod weiter innen: baut die Zeile mit drei Plätzen (so wie limit-bars, spotify und clawd-buddy sie nach docs/BAND.md setzen)
-const slots = (tier: Tier) => ({
-  name: `slots-${tier}`,
-  tier,
-  register(on: On) {
-    on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-      const theirs = await next(e)
-      const slot = (key: string) => ({ type: 'Box', props: { key, flexShrink: 0 }, children: [key] })
-      return {
-        type: 'Box',
-        props: { key: 'band-row', flexDirection: 'row' },
-        children: [slot('slot:10:limit-bars'), slot('slot:20:spotify'), { type: 'Box', props: { key: 'band-rest', flexGrow: 1 }, children: [theirs] }, slot('slot:30:clawd-buddy:right')],
-      } as RenderNode
-    })
-  },
+test('Review 0.8.0 S2: gezeigt, dann eingeklappt oder Übergabe → eine allein abgeschickte 1 bleibt Text', async ($, on) => {
+  const w = world(on)
+  for (const later of ['collapsed', 'handoff'] as const) {
+    w.sent.length = 0
+    w.sk = null
+    const ui = await boot($, 'desktop')
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    // Die Pille war zu sehen
+    expect(findKey(await ui.drawn(), OWN)).toBeDefined()
+    if (later === 'handoff') {
+      w.sk = { level: 'guide', busy: true, handoff: true }
+      await ui.redraw()
+      expect(findKey(await ui.drawn(), OWN)).toBeUndefined()
+      await ui.unmount()
+    } else {
+      await ui.unmount()
+      const folded = await $.ui.mount(band('desktop', 120, { isCollapsed: true }))
+      expect(findKey(await folded.drawn(), OWN)).toBeUndefined()
+      await folded.unmount()
+    }
+    expect(await submit($, '1', { origin: { kind: 'sdk' } })).toMatchObject({ text: '1' })
+    expect(w.sent).toEqual([{ text: '1', asUser: undefined }])
+    await $.turn.start({ turnId: `t-${later}`, text: '1' })
+  }
 })
 
-// Nur innen: ein Partner außen müsste selbst band.ts nutzen; die Reihenfolge aller Mods mit band.ts prüft mods/spotify/tests
-for (const tier of ['append'] as const) {
-  test(`Plätze anderer Mods bleiben im Grund (Partner innen), die Pille steht darüber`, { plugins: [slots(tier)] }, async ($, on) => {
-    world(on)
-    for (const surface of ['terminal', 'desktop'] as const) {
-      const ui = await boot($, surface)
-      await finish($)
-      await suggest($, 'Committe die Änderungen')
-      const tree = (await ui.drawn()) as Node
-      expect(tree.props.key).toBe('band')
-      expect(tree.children[0].props.key).toBe('layer:20:quick-replies')
-      const ground = keys(tree.children[1])
-      expect(ground).toEqual(expect.arrayContaining(['slot:10:limit-bars', 'slot:20:spotify', 'slot:30:clawd-buddy:right']))
-      expect(ground.indexOf('slot:10:limit-bars')).toBeLessThan(ground.indexOf('slot:20:spotify'))
-      expect(ground).not.toContain('quick-replies')
-      await ui.unmount()
-    }
-  })
-}
-
+test('Review 0.8.0 S1: turn.start eines Subagents lässt die Pille und den Vorschlag stehen', async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  const ui = await boot($, 'terminal')
+  await finish($)
+  await suggest($, 'Committe die Änderungen')
+  await w.clock.advance(2100)
+  expect(await labels(ui)).toEqual(['Committe die Änderungen', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+  await $.turn.start({ turnId: 'sub-1', text: 'Hintergrund', agentId: 'a1' })
+  expect(await labels(ui)).toEqual(['Committe die Änderungen', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+  // Der Turn der Hauptsession setzt dagegen zurück
+  await $.turn.start({ turnId: 't2', text: 'weiter' })
+  expect(await ui.find({ key: 'reply-1' })).toBeUndefined()
+  await ui.unmount()
+})
 // ---------- 0.6.0: /replies language (docs/LANGUAGE-SPEC.md; Kernfälle in tests/language.test.ts) ----------
 
 test('0.6.0 language: Wort im argumentHint, Zeile in der Hilfe (en) direkt vor help', async ($, on) => {
@@ -1278,7 +1360,7 @@ test('0.6.2: quick-replies.band: ein abgelehntes Schreiben wird beim nächsten N
   await clear($, 'a')
   await w.clock.settle()
   expect(writes.at(-1)).toEqual({ shown: true })
-  await $.command.run({ command: 'replies', args: 'off' })
+  await $.command.run({ ...CMD, command: 'replies', args: 'off' })
   await w.clock.settle()
   expect(writes.at(-1)).toBeNull()
   await ui.unmount()
@@ -1290,7 +1372,7 @@ test('0.7.0 Sperre: eine Kopie aus einem anderen Ordner (--plugin-dir, @inline) 
   await w.clock.advance(10)
   expect(w.cli).toEqual([])
   expect(w.store.get('settings')).toEqual({ enabled: true, more: true })
-  const text = String((await $.command.run({ command: 'replies', args: 'off' })).text)
+  const text = String((await $.command.run({ ...CMD, command: 'replies', args: 'off' })).text)
   expect(text).toBe('Not saved: this copy is loaded from another folder; only the installed quick-replies@fynn-mods saves settings here.')
   expect(w.runs.filter((r) => r.includes('configure'))).toEqual([])
 })
@@ -1302,14 +1384,14 @@ const cfgRow = (field: string, value: unknown, o: { locked?: boolean } = {}): Cf
 test('0.7.0 Vorlage Weg 1: gesperrte Zeile → nichts gesetzt, Meldung; abgelehntes set → Grund', async ($, on) => {
   const w = world(on, { rows: [cfgRow('enabled', true, { locked: true })] })
   await boot($)
-  expect(String((await $.command.run({ command: 'replies', args: 'off' })).text)).toBe('Not saved: enabled is locked by a managed setting.')
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: 'off' })).text)).toBe('Not saved: enabled is locked by a managed setting.')
   expect(w.sets).toEqual([])
 })
 
 test('0.7.0 Vorlage Weg 1: config.set antwortet deny → Nicht gespeichert mit Grund', async ($, on) => {
   const w = world(on, { rows: [cfgRow('more', false)], setDeny: 'nope' })
   await boot($)
-  expect(String((await $.command.run({ command: 'replies', args: 'more on' })).text)).toBe('Not saved: nope.')
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: 'more on' })).text)).toBe('Not saved: nope.')
   expect(w.cli).toEqual([])
 })
 
@@ -1321,14 +1403,14 @@ for (const [list, why] of [
   test(`0.7.0 Vorlage Weg 2: plugin list ${list} → Nicht gespeichert, kein configure`, async ($, on) => {
     const w = world(on, { list })
     await boot($)
-    expect(String((await $.command.run({ command: 'replies', args: 'off' })).text)).toBe(`Not saved: ${why}.`)
+    expect(String((await $.command.run({ ...CMD, command: 'replies', args: 'off' })).text)).toBe(`Not saved: ${why}.`)
     expect(w.runs.filter((r) => r.includes('configure'))).toEqual([])
   })
 
 test('0.7.0 Vorlage Weg 2: Marketplace-Ordner hinter einer Junction (readFromFolder anders, letzte vier Ordner gleich) gilt als installierte Kopie', async ($, on) => {
   const w = world(on, { list: 'junction' })
   await boot($)
-  expect(String((await $.command.run({ command: 'replies', args: 'off' })).text)).toContain('Saved.')
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: 'off' })).text)).toContain('Saved.')
   expect(w.cli).toEqual([{ enabled: 'false' }])
 })
 
@@ -1422,7 +1504,7 @@ test('offdefaults: CLI meldet „saved“, aber ein paralleler Prozess hat es ü
 test('settings: Weg 2 liest nach; vom parallelen Prozess überschrieben → ein zweiter Versuch, dann gespeichert', async ($, on) => {
   const w = world(on, { readBack: (n) => ({ more: n >= 2 ? 'true' : 'false', enabled: 'true' }) })
   await boot($)
-  const text = String((await $.command.run({ command: 'replies', args: 'more on' })).text)
+  const text = String((await $.command.run({ ...CMD, command: 'replies', args: 'more on' })).text)
   expect(w.cli).toEqual([{ more: 'true' }, { more: 'true' }])
   expect(text).toContain('Saved. Applies in this chat now')
 })
@@ -1430,8 +1512,8 @@ test('settings: Weg 2 liest nach; vom parallelen Prozess überschrieben → ein 
 test('settings: Weg 2 auch beim zweiten Versuch überschrieben → „Not saved“ mit Grund, Einstellung bleibt', async ($, on) => {
   const w = world(on, { readBack: () => ({ more: 'false', enabled: 'true' }) })
   await boot($)
-  const text = String((await $.command.run({ command: 'replies', args: 'more on' })).text)
+  const text = String((await $.command.run({ ...CMD, command: 'replies', args: 'more on' })).text)
   expect(w.cli.length).toBe(2)
   expect(text).toContain('Not saved: another process overwrote more at the same moment; run the command again.')
-  expect(String((await $.command.run({ command: 'replies', args: 'status' })).text)).not.toMatch(/more suggestions:? on/i)
+  expect(String((await $.command.run({ ...CMD, command: 'replies', args: 'status' })).text)).not.toMatch(/more suggestions:? on/i)
 })

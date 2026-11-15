@@ -1,17 +1,17 @@
 // language.ts: `/<befehl> language [de|en]` stellt die Sprache aller installierten fynn-mods um (docs/LANGUAGE-SPEC.md).
-// Vorlage für alle sechs Mods: templates/language/ (README dort), wörtlich als hooks/language.ts kopiert.
+// Vorlage für alle fynn-mods: templates/language/ (README dort), wörtlich als hooks/language.ts kopiert.
 //
 // Weg 1 (Terminal): `$.config.list()` liefert die userConfig-Felder jedes aktivierten Plugins als `<name>.<feld>` (types
 // ConfigRow), `$.config.set` ändert eines wie im /config-Menü. Die Engine lädt die Mod dabei sofort neu, `register` läuft
 // mit den neuen options (types@2.1.318:10004).
 // Weg 2 (Desktop, -p, SDK): Dort listet `$.config.list()` keine Plugin-Zeilen (LANGUAGE-SPEC §2). Dann über die offizielle
 // CLI: `claude plugin list --json`, `claude plugin configure <id> --json` und `… --values-stdin` (rel/plugins-cli-reference.md:
-// 388-414). Die Befehle stehen hier fest; nur `<name>@fynn-mods` der sechs Mods und `{"language":"de|en"}` werden eingesetzt.
+// 388-414). Die Befehle stehen hier fest; nur `<name>@fynn-mods` der Mods in FYNN_MODS und `{"language":"de|en"}` werden eingesetzt.
 // Gilt ab dem nächsten Chat, im laufenden nach `/reload-plugins` (LANGUAGE-SPEC §10).
 import type { ConfigRow, EngineInterface } from 'claude-code'
 
 /** Die Mods, deren Feld `language` der Befehl umstellt; nie andere Plugins, nie andere Felder. */
-export const FYNN_MODS: readonly string[] = ['clawd-buddy', 'cost-ledger', 'limit-bars', 'quick-replies', 'sidekick', 'tune-strip']
+export const FYNN_MODS: readonly string[] = ['clawd-buddy', 'cost-ledger', 'limit-bars', 'poly-world', 'quick-replies', 'sidekick', 'tune-strip']
 export const LANGUAGE_WORD = 'language'
 export const LANGUAGES: readonly string[] = ['en', 'de']
 /** Marketplace der Mods (Weg 2 setzt nur `<name>@fynn-mods` um). */

@@ -1,9 +1,10 @@
 // Tests zum Ausbau 0.19.0 (SPEC „Tests (geplant)“ ohne den Effort-Tipp, den Fynn nach Probe P2 abgewählt hat): Korrektur-Schleife,
 // Zusammenfassungs-Zähler und B2 (Kalt-Cache-Frage nach einer Compaction). Eigene, kleine Welt mit Stubs.
-import type { Engine, On } from 'claude-code'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { MIN, dayKey } from '../hooks/cache.ts'
-import { cliStubs, settingsNow } from './cli.ts'
+import { MIN, dayKey } from '../hooks/cache.js'
+import { cliStubs, settingsNow } from './cli.js'
 import {
   DEFAULT_LOOP,
   DEFAULT_SETTINGS,
@@ -18,11 +19,11 @@ import {
   loopChoices,
   parseVerdict,
   savingsReport,
-} from '../hooks/logic.ts'
-import type { Ledger } from '../hooks/logic.ts'
-import { setLang } from '../hooks/i18n.ts'
-import { savingsTree } from '../hooks/view.ts'
-import { sidekickHelp } from '../hooks/helpdata.ts'
+} from '../hooks/logic.js'
+import type { Ledger } from '../hooks/logic.js'
+import { setLang } from '../hooks/i18n.js'
+import { savingsTree } from '../hooks/view.js'
+import { sidekickHelp } from '../hooks/helpdata.js'
 
 const NOW = new Date(2026, 10, 6, 10, 0, 0).getTime()
 const DAY = 24 * 60 * MIN
@@ -180,7 +181,7 @@ function world(on: On, o: { compactAfter?: number; handoffFails?: boolean } = {}
   on('session.root', () => ({ value: 'C:\\Proj' }))
   on('session.messages', () => ({ value: [{ role: 'assistant', text: 'vorher', toolUses: [] }] as never }))
   on('command.list', () => ({ value: [] }))
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
     saved.set(e.key, e.value)
@@ -221,7 +222,7 @@ function world(on: On, o: { compactAfter?: number; handoffFails?: boolean } = {}
     sent.push({ text: e.text, ...(e.context ? { context: e.context } : {}) })
     return { text: e.text }
   })
-  on('session.compact', () => (compactSkip ? { skip: 'nein' } : { messages: SUMMARY, tokensBefore: 300000, tokensAfter: o.compactAfter ?? 25000 }))
+  on('session.compact', () => (compactSkip ? { skip: 'nein' } : { messages: SUMMARY, tokensBefore: 300000, tokensAfter: o.compactAfter ?? 25000 }) as never)
   let next: StepU = stepUsage(0, 0)
   let turn = 0
   on('turn.step', async function* (_$, e) {

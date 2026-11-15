@@ -2,10 +2,10 @@
 // Die Idee, die Session zu forken und nach den nächsten Nachrichten zu fragen, stammt vom Community-Plugin next-steps
 // (anthropics/claude-plugins-community). Umsetzung, Frage und Bereinigung sind eigene; aus dem Plugin ist kein Code übernommen.
 
-import type { HelpData } from './help.ts'
-import type { Lang } from './i18n.ts'
-import { T } from './i18n.ts'
-import { languageHelp } from './language.ts'
+import type { HelpData } from './help.js'
+import type { Lang } from './i18n.js'
+import { T } from './i18n.js'
+import { languageHelp } from './language.js'
 
 export type Source = 'engine' | 'fork'
 export type Reply = { text: string; source: Source }

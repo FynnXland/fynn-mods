@@ -1,6 +1,6 @@
 // quick-replies: Texte in beiden Sprachen (ohne `$`). Die Sprache kommt aus userConfig `language` (Standard en).
 
-import type { ForkCost } from './cost.ts'
+import type { ForkCost } from './cost.js'
 
 export type Lang = 'en' | 'de'
 
@@ -29,9 +29,6 @@ export type ForkState =
   | { kind: 'none' }
   | { kind: 'error'; message: string }
 
-/** Wo quick-replies in der Kette des Bands sitzt. */
-export type Position = 'alone' | 'inner' | 'outer'
-
 export const T = {
   en: {
     description: 'Reply suggestions above Clawd: status, on/off, more suggestions via fork, help',
@@ -54,8 +51,6 @@ export const T = {
     notDrawn: 'not drawn yet',
     band: (columns: number) => `band ${columns} columns`,
     layout: 'layout',
-    position: 'position',
-    positions: { alone: 'alone', inner: 'inner (only the core after me)', outer: 'outer (other mods draw below)' },
     fork: {
       running: 'running',
       unanswered: (reason: string) => `no answer (${reason})`,
@@ -121,8 +116,6 @@ export const T = {
     notDrawn: 'noch nicht gezeichnet',
     band: (columns: number) => `Band ${columns} Spalten`,
     layout: 'Anordnung',
-    position: 'Position',
-    positions: { alone: 'allein', inner: 'innen (nach mir nur der Kern)', outer: 'außen (andere Mods zeichnen darunter)' },
     fork: {
       running: 'läuft',
       unanswered: (reason: string) => `keine Antwort (${reason})`,

@@ -1,8 +1,9 @@
 // Tests zum Modell-Tipp (Ausbau 0.18.0, SPEC „Tests (geplant)“). Eigene, kleine Welt mit Stubs; die übrigen Tests stehen in sidekick.test.ts.
-import type { Engine, On } from 'claude-code'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { MIN, completeCost, dayKey } from '../hooks/cache.ts'
-import { cliStubs, settingsNow, written } from './cli.ts'
+import { MIN, completeCost, dayKey } from '../hooks/cache.js'
+import { cliStubs, settingsNow, written } from './cli.js'
 import {
   DEFAULT_SETTINGS,
   DEFAULT_TIPS,
@@ -33,12 +34,12 @@ import {
   tipSaved,
   mdCell,
   tipsSwitch,
-} from '../hooks/logic.ts'
-import type { Ledger } from '../hooks/logic.ts'
-import { setLang } from '../hooks/i18n.ts'
-import { RATE, TIP_TARGETS } from '../hooks/models.ts'
-import { savingsTree } from '../hooks/view.ts'
-import { sidekickHelp } from '../hooks/helpdata.ts'
+} from '../hooks/logic.js'
+import type { Ledger } from '../hooks/logic.js'
+import { setLang } from '../hooks/i18n.js'
+import { RATE, TIP_TARGETS } from '../hooks/models.js'
+import { savingsTree } from '../hooks/view.js'
+import { sidekickHelp } from '../hooks/helpdata.js'
 
 const NOW = new Date(2026, 10, 4, 10, 0, 0).getTime()
 const DAY = 24 * 60 * MIN
@@ -238,7 +239,7 @@ function world(on: On, o: { tips?: { declined?: number; restUntil?: number }; ma
   on('session.root', () => ({ value: 'C:\\Proj' }))
   on('session.messages', () => ({ value: messages as never }))
   on('command.list', () => ({ value: [] }))
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
     saved.set(e.key, e.value)
@@ -293,7 +294,7 @@ function world(on: On, o: { tips?: { declined?: number; restUntil?: number }; ma
     steps.push({ model: e.model, ...(e.agentId ? { agentId: e.agentId } : {}) })
     // Die API meldet die volle ID des Modells, auf dem der Schritt lief (hier: was unten ankommt)
     const ran = e.model.includes('sonnet') ? SONNET : e.model.includes('haiku') ? HAIKU : e.model
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { ...nextUsage, model: ran } }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: { ...nextUsage, model: ran } as never }
   })
   let turn = 0
   async function step($: Engine, model: string, u: Record<string, unknown>, agentId?: string) {

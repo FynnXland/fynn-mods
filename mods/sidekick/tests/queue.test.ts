@@ -1,16 +1,17 @@
 // Tests zum Ausbau 0.24.0: Warteschlange, Variante B (Entscheidung Fynn 2026-11-08): Eine Nachricht während der Arbeit, die ein
 // eigener, späterer Punkt ist, geht sofort rein, mit einem Hinweis an Claude (`context`) und sidekicks grauer Zeile darunter.
-import type { Engine, On } from 'claude-code'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { dayKey } from '../hooks/cache.ts'
-import { DEFAULT_SETTINGS, addDay, bookQueue, cleanLedger, countQueue, emptyDay, savingsReport } from '../hooks/logic.ts'
-import type { Ledger } from '../hooks/logic.ts'
-import { T, setLang } from '../hooks/i18n.ts'
-import { savingsTree } from '../hooks/view.ts'
-import { sidekickHelp } from '../hooks/helpdata.ts'
-import { QUEUE } from '../hooks/models.ts'
-import { QUEUE_MIN, isHostNote, laterByVerdict, laterPrefix, parseQueue, queuePrompt, queueRule, queueSystem, stripLeadReminders } from '../hooks/queue.ts'
-import { cliStubs, written } from './cli.ts'
+import { dayKey } from '../hooks/cache.js'
+import { DEFAULT_SETTINGS, addDay, bookQueue, cleanLedger, countQueue, emptyDay, savingsReport } from '../hooks/logic.js'
+import type { Ledger } from '../hooks/logic.js'
+import { T, setLang } from '../hooks/i18n.js'
+import { savingsTree } from '../hooks/view.js'
+import { sidekickHelp } from '../hooks/helpdata.js'
+import { QUEUE } from '../hooks/models.js'
+import { QUEUE_MIN, isHostNote, laterByVerdict, laterPrefix, parseQueue, queuePrompt, queueRule, queueSystem, stripLeadReminders } from '../hooks/queue.js'
+import { cliStubs, written } from './cli.js'
 
 const NOW = new Date(2026, 10, 8, 10, 0, 0).getTime()
 const DE = { options: { language: 'de' } }
@@ -252,7 +253,7 @@ function world(on: On, o: { surfaces?: string[]; host?: boolean; read?: 'stale' 
     return { text: e.text, ...(e.context ? { context: e.context } : {}) }
   })
   on('turn.step', async function* (_$, e) {
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: e.model } }
   })
   on('turn.complete', ($, e) => ({ text: e.answer }) as never)
   on('ui.render', ($, e) => {

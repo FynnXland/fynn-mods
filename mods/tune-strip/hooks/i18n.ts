@@ -40,7 +40,7 @@ const en = {
   seeHelp: 'All commands: /tune help',
   hint: 'play|pause|toggle|next|prev|back|forward|shuffle|repeat|size|beat|on|off|language|help',
   beat: {
-    set: (v: boolean) =>
+    set: (v: boolean): string =>
       v ? "beat detection on. Spotify's audio is analysed locally for tempo only; nothing is recorded, stored or sent." : 'beat detection off.',
     offsetSet: (ms: string) => `beat offset ${ms} ms.`,
     line: (state: string, rest: string) => `beat: ${state}${rest}`,

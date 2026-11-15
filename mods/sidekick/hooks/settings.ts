@@ -11,7 +11,7 @@
 // Mehrere Felder auf einmal gehen über Weg 2 (ein Schreiben); Weg 1 lädt die Mod bei jedem `set` neu (Review 0.x S3).
 // Nur eigene Felder: Schlüssel `<mod>.<feld>`, Besitzer `<mod>` bzw. `<mod>@…`. Nie andere Plugins.
 import type { ConfigRow, EngineInterface } from 'claude-code'
-import { MARKETPLACE } from './language.ts'
+import { MARKETPLACE } from './language.js'
 
 export type SettingValue = string | number | boolean
 /** Ein Feld wie in plugin.json `userConfig` (Standard Pflicht; Zahl ohne Wert gibt es nicht, die CLI kann Zahlen nicht leeren). */

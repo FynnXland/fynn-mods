@@ -268,8 +268,8 @@ own pill above Clawd. Click it, or type `1` into the empty prompt, and it's sent
 **Windows only.** A music bar for Spotify in the band above the prompt: album cover, title and artist, a position bar in the
 style of the limit bars, and buttons for restart/previous, play/pause and next. It reads and controls the Spotify
 desktop app through the Windows media controls: no login, no token, no network, no Spotify API. Browsers and other
-players are ignored. In the desktop app it gets its own bar on top of the band; in the terminal it is one line
-(`♪ Title – Artist 1:23/3:45 ⏮ ⏯ ⏭`) that shrinks when the window gets narrow. With `extraButtons` the bar adds
+players are ignored. It gets its own bar above the limit bars and Clawd, in the desktop app with cover and position
+bar, in the terminal as one line (`♪ Title – Artist 1:23/3:45 ⏮ ⏯ ⏭`) that shrinks when the window gets narrow. With `extraButtons` the bar adds
 −15 s, +15 s, shuffle and repeat.
 
 **Beat for Clawd:** while Spotify plays, tune-strip finds the tempo and the beats of the song and whether it sounds
@@ -346,10 +346,10 @@ The terminal and VS Code draw no theme, so there you see nothing.
 ## How they work together
 
 - **One band above the prompt.** clawd-buddy, limit-bars, quick-replies, tune-strip and sidekick all draw into the band
-  above the prompt and share a small layout convention: the limit bars and cache ring sit left of Clawd, the
-  quick-replies pill sits above both, tune-strip's bar sits on top in the desktop app (in the terminal it takes a place
-  between the bars and Clawd), and sidekick's boxes appear there only while it has something to show. In the desktop
-  app Clawd walks behind the row, and the bars and tune-strip are drawn on top of him. Each mod also works alone.
+  above the prompt. Since Claude Code 2.1.323 each mod draws its own row, and a small shared helper in every band mod
+  puts the rows back into one band: the limit bars and cache ring sit left of Clawd in one row, tune-strip's bar and
+  the quick-replies pill sit above it, and sidekick's boxes appear on top only while it has something to show. In the
+  desktop app Clawd stands behind the row at the right edge. Each mod also works alone.
 - **Clawd moves to your music.** With tune-strip playing, Clawd nods on the beat of the song when he has time, picks
   his moves by how it sounds and sometimes puts on headphones. tune-strip tells him only that music is playing, the
   tempo and the group (calm, groove, hard, sad), never what is playing.

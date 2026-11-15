@@ -14,9 +14,9 @@
 //   4. Nur nicht gesetzte Aus-Felder in einem Aufruf als false schreiben (`--values-stdin`). Gesetzte Werte bleiben unberührt.
 // Fängt jeden Fehler selbst ab; ohne Erfolg keine Markierung, dann beim nächsten Start wieder.
 import type { EngineInterface } from 'claude-code'
-import { MARKETPLACE } from './language.ts'
-import { isInstalledCopy } from './settings.ts'
-import type { FieldDefs } from './settings.ts'
+import { MARKETPLACE } from './language.js'
+import { isInstalledCopy } from './settings.js'
+import type { FieldDefs } from './settings.js'
 
 const CLI_TIMEOUT = 30000
 // `offDefaults2`: die erste Fassung (`offDefaults`) vermerkte auch verlorene Schreibvorgänge; der neue Schlüssel prüft einmal neu

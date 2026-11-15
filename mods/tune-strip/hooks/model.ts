@@ -1,6 +1,6 @@
 // tune-strip: reine Logik ohne `$`: Position, Zeitformat, Befehle von `/tune`, Wahl der Stufe, Takt.
-import { REPEAT_MODES } from './ps.ts'
-import type { ControlCmd, RepeatMode, Track } from './ps.ts'
+import { REPEAT_MODES } from './ps.js'
+import type { ControlCmd, RepeatMode, Track } from './ps.js'
 
 /** Sprung der Tasten −15 s / +15 s (Fynn, 2026-11-03). */
 export const SEEK_STEP = 15
@@ -128,7 +128,7 @@ export function actionFor(word: ControlWord, arg: string | undefined, t: Track |
   }
 }
 
-/** Breiten der Stufen in der Einheit der Oberfläche (Pixel im Desktop, Spalten im Terminal). */
+/** Mindestbreiten der Stufen in Zellen von `bodyColumns` (Terminal und Desktop, seit 0.12.0). */
 export type StageWidths = { full: number; compact: number; mini: number }
 
 /**
@@ -147,26 +147,17 @@ export function pickStage(room: number | undefined, size: Size, widths: StageWid
 }
 
 /**
- * Stufe im Desktop. `full` ist die eigene Leiste über allen Mods und braucht keinen Platz in der Zeile; `compact` und `mini` stehen
- * als Platz in der Zeile. `auto` nimmt `compact` nur, wenn der Platz bekannt ist und reicht, sonst die Leiste (Fynn, 2026-11-03).
+ * Stufe im Desktop. Alle Stufen stehen in der eigenen Leiste (Ebene 40, Fynn 2026-11-15). `auto` und `full` = volle Leiste (der Titel
+ * kürzt sich selbst); `compact` und `mini` weichen nach unten bis `off`, wenn `room` (= `bodyColumns`) nicht reicht.
  */
 export function desktopStage(room: number | undefined, size: Size, widths: StageWidths): Stage {
-  if (size === 'full') return 'full'
-  if (size === 'auto') return room !== undefined && room >= widths.compact ? 'compact' : 'full'
+  if (size === 'full' || size === 'auto') return 'full'
   return pickStage(room, size, widths)
 }
 
-/** Abstand zwischen den Plätzen im Desktop in Pixeln (Fynn, 2026-11-03). */
-export const SLOT_GAP_PX = 12
+/** Unter so vielen Zellen Bandbreite zeichnet tune-strip nichts (kleinste Stufe `mini`). */
+export const MIN_ROOM = 10
 
-/**
- * Platz für Spotify im Desktop in Pixeln: Breite des Bands minus die Plätze der anderen und der Abstand zu jedem. `others` sind die
- * gemeldeten Breiten (`null`/`undefined` = der Mod zeichnet nichts); `total` ist die Breite des Bands in Pixeln.
- */
-export function desktopRoom(total: number, others: readonly (number | null | undefined)[]): number {
-  const w = others.filter((x): x is number => typeof x === 'number' && x > 0)
-  return total - w.reduce((a, b) => a + b, 0) - SLOT_GAP_PX * w.length
-}
 
 /** Taktlänge in ms nach dem Zustand (SPEC „Fehlerverhalten“): nach drei Fehlern in Folge und ohne Sitzung länger. */
 export function pollInterval(o: { pollSeconds: number; failures: number; hasSession: boolean }): number {

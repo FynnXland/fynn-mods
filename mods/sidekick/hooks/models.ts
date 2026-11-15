@@ -1,6 +1,6 @@
 // sidekick: welches Modell welche Rolle übernimmt (SPEC Nachtrag 0.4.0). Eine Konstante je Rolle; Aufruf, Kostenbuchung,
 // Kostenschätzung und die sichtbaren Namen („Sonnets Fassung“) folgen ihr.
-import { priceFor } from './cache.ts'
+import { priceFor } from './cache.js'
 
 /**
  * Prüfung vor dem Senden: Haiku 5.5, effort `medium` (Nachtrag 0.11.0, Probe 2026-10-07, Claude Code 2.1.291, 13 Fälle × 2).

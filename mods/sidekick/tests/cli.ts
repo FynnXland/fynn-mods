@@ -2,9 +2,9 @@
 // `claude plugin configure` (Weg 2, hooks/settings.ts). `cliStubs` meldet keine Plugin-Zeilen (`config.list` leer) und nimmt
 // nur `claude plugin list --json` und genau diesen `configure`-Aufruf an; die geschriebenen Werte stehen in `writes`.
 import type { On } from 'claude-code'
-import { SETTINGS } from '../hooks/fields.ts'
-import { cleanRuntime, settingsOf } from '../hooks/logic.ts'
-import { readSettings } from '../hooks/settings.ts'
+import { SETTINGS } from '../hooks/fields.js'
+import { cleanRuntime, settingsOf } from '../hooks/logic.js'
+import { readSettings } from '../hooks/settings.js'
 
 export type Cli = { writes: Record<string, string>[]; fail: string }
 

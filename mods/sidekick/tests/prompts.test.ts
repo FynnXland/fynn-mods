@@ -1,13 +1,14 @@
 // Tests zum Nachtrag 0.21.0: gespeicherte Prompts als Befehl und Knopf (SPEC „Tests“). Eigene, kleine Welt mit Stubs.
-import type { Engine, On } from 'claude-code'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { MIN, dayKey } from '../hooks/cache.ts'
-import { cliStubs } from './cli.ts'
-import { DEFAULT_SETTINGS, addDay, bookPrompts, cleanLedger, countPrompt, emptyDay, savingsReport } from '../hooks/logic.ts'
-import type { Ledger } from '../hooks/logic.ts'
-import { setLang } from '../hooks/i18n.ts'
-import { savingsTree } from '../hooks/view.ts'
-import { sidekickHelp } from '../hooks/helpdata.ts'
+import { MIN, dayKey } from '../hooks/cache.js'
+import { cliStubs } from './cli.js'
+import { DEFAULT_SETTINGS, addDay, bookPrompts, cleanLedger, countPrompt, emptyDay, savingsReport } from '../hooks/logic.js'
+import type { Ledger } from '../hooks/logic.js'
+import { setLang } from '../hooks/i18n.js'
+import { savingsTree } from '../hooks/view.js'
+import { sidekickHelp } from '../hooks/helpdata.js'
 import {
   BUTTONS_MAX,
   JACCARD,
@@ -40,8 +41,8 @@ import {
   upsert,
   useBudget,
   wordSet,
-} from '../hooks/prompts.ts'
-import type { Saved } from '../hooks/prompts.ts'
+} from '../hooks/prompts.js'
+import type { Saved } from '../hooks/prompts.js'
 
 const NOW = new Date(2026, 10, 6, 10, 0, 0).getTime()
 const DAY = 24 * 60 * MIN
@@ -295,7 +296,7 @@ function world(on: On, o: { submitDrop?: string; cmds?: { name: string; source: 
     return { type: 'Text', props: {}, children: [String((e.props as { text?: string }).text ?? '')] }
   })
   on('turn.step', async function* (_$, e) {
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: e.model } }
   })
   return {
     clock,

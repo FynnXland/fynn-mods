@@ -1,14 +1,15 @@
 // Tests zum Ausbau 0.25.0: Skill-Katalog. Vorfilter über Stichwörter ohne Modell, Urteil mit Haiku (oder im Aufruf der Prüfung),
 // Rückfrage „Mit … senden“ (Skill-Text als `context`, Probe P1 Weg B) bzw. „Befehl kopieren“, Hinweiszeile bei schweren Verweisen.
-import type { Engine, On } from 'claude-code'
+import type { On } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
-import { dayKey } from '../hooks/cache.ts'
-import { DEFAULT_SETTINGS, addDay, bookCatalog, cleanLedger, countCatalog, emptyDay, savingsReport } from '../hooks/logic.ts'
-import type { Ledger } from '../hooks/logic.ts'
-import { T, setLang } from '../hooks/i18n.ts'
-import { savingsTree } from '../hooks/view.ts'
-import { sidekickHelp } from '../hooks/helpdata.ts'
-import { CATALOG as SPEC } from '../hooks/models.ts'
+import { dayKey } from '../hooks/cache.js'
+import { DEFAULT_SETTINGS, addDay, bookCatalog, cleanLedger, countCatalog, emptyDay, savingsReport } from '../hooks/logic.js'
+import type { Ledger } from '../hooks/logic.js'
+import { T, setLang } from '../hooks/i18n.js'
+import { savingsTree } from '../hooks/view.js'
+import { sidekickHelp } from '../hooks/helpdata.js'
+import { CATALOG as SPEC } from '../hooks/models.js'
 import {
   CATALOG,
   CATALOG_GAP,
@@ -26,8 +27,8 @@ import {
   keywordHit,
   parseCatalog,
   skillContext,
-} from '../hooks/catalog.ts'
-import { cliStubs, written } from './cli.ts'
+} from '../hooks/catalog.js'
+import { cliStubs, written } from './cli.js'
 
 const NOW = new Date(2026, 10, 9, 10, 0, 0).getTime()
 function deTest(name: string, a: Record<string, string | number | boolean> | (($: Engine, on: On) => unknown), b?: ($: Engine, on: On) => unknown) {

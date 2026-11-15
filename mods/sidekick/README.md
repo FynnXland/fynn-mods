@@ -4,7 +4,9 @@ Checks your message just before it is sent: first with fixed rules, and only whe
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.319** · Plugin version **0.25.1**
+Tested with Claude Code **v2.1.325** · Plugin version **0.26.0** · Requires Claude Code **2.1.323 or later**
+
+**New in 0.26.0: one band again on Claude Code 2.1.323 and later.** Since Claude Code 2.1.323 each mod draws only its own row above the prompt. sidekick now draws its handoff box, the Good-to-know note and its suggestion as its own row on top, and carries a small `AbovePromptList` hook, the same in every band mod, that puts the rows back into one band: sidekick on top, the tune-strip bar and the quick-replies pill below, then limit-bars and Clawd in one line. While a handoff runs, `sidekick.status` says `handoff: true`, and quick-replies 0.8.0 hides its pill by itself (sidekick no longer filters it out). The digits of a Good-to-know note now also stay away while the quick-replies pill shows (it reports that through `quick-replies.band`). Update limit-bars (0.17), clawd-buddy (0.15), tune-strip (0.12), quick-replies (0.8.0) and sidekick together; older versions of the other band mods still show, but stacked as separate rows.
 
 **New in 0.25.0: Skill catalog.** sidekick knows a small, hand-picked list of good third-party open-source skills. When your message clearly asks for what one of them does ("make the design feel more like Apple"), it asks once per chat before sending: **Send with apple-design (recommended)**, **Send anyway** or **Don't suggest again**. Three plain-Markdown skills by Emil Kowalski ship with sidekick (MIT, with their license); for the rest it only copies the install command from the source's README, it never installs anything itself. See [Skill catalog](#skill-catalog-since-0250).
 
@@ -85,7 +87,7 @@ Tested with Claude Code **v2.1.319** · Plugin version **0.25.1**
 
 **Fail-open:** on error, timeout (6 s per model call), an unusable model answer or a closed dialog, the message goes through unchanged. **Exception:** if the handoff fails after "New chat with handoff", sidekick does not silently send into the cold chat; it asks again.
 
-The handoff **never** comes from the main model. On a cold cache, the main model would have to re-read the whole history to write it, including via `/compact` or a handoff skill.
+On a **cold** cache the handoff never comes from the main model: it would have to re-read the whole history to write it, including via `/compact` or a handoff skill, so Sonnet writes it from the history instead. While the cache is **warm**, the main model writes it from the chat (fork) since 0.22.0, because reading the cache is cheap (see [Handoff](#handoff-since-0220-moved-here-from-limit-bars)).
 
 ## Maintenance hints
 
@@ -276,7 +278,7 @@ There are good skills out there that Claude only uses if you have them and remem
 | `/sidekick catalog on` · `off` | suggest fitting third-party skills once per chat before sending (default on) |
 | `/sidekick catalog mute <id>` · `unmute <id>` | mute an entry or suggest it again |
 | `/sidekick:apple-design`, `/sidekick:emil-design-eng`, `/sidekick:break-ui` `[text]` | run a bundled skill yourself (since 0.25.0; Claude never loads them on its own) |
-| `/sidekick language [de\|en]` | switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language (since 0.17.0). Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.17.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
+| `/sidekick language [de\|en]` | switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, poly-world, quick-replies, sidekick, tune-strip), one line per mod in the answer; without a value, show each mod's current language (since 0.17.0). Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.17.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/savings [today\|week\|all]` | short balance, default `week`: cost, savings, ratio and the savings items; drawn as a framed card in the terminal and the desktop app (like cost-ledger's `/ledger`), Markdown elsewhere |
 | `/savings detail [today\|week\|all]` | everything, default `all`: also how it is computed, models, checks compared per model, by day, hints and counts (`details` works too, words in any order) |
 | `/savings help` | points to `/sidekick help` |
@@ -332,7 +334,8 @@ Maintenance lines have their own buttons since 0.16.0 (**Insert in prompt** / **
 - **limit-bars** stays a display. Since limit-bars 0.14.0 its cold-cache warning steps aside by itself while sidekick runs on `cache` or `guide`, so there are no two dialogs in a row; with an older limit-bars, turn it off once with **`/cache warn off`** (the German `/cache warnung aus` works too). Since sidekick 0.22.0 and limit-bars 0.15.0, `/handoff` lives only in sidekick, and limit-bars' notice before expiry stays quiet while sidekick suggests it. Update both together: with limit-bars 0.14 still installed, whichever plugin loads first owns `/handoff`.
 - Claude Code's built-in plugin **`cc-plugin-you-should-know`** (off by default, availability depends on your organization) does what sidekick's **Good to know** does. Use one of them: with both on, every check runs twice. `/savings` only includes sidekick's own.
 - **tune-strip** (since 0.15.2): in the desktop app, the handoff box and the Good-to-know note stand above the full tune-strip bar, with a thin blue line below them that disappears with them. In the terminal nothing changed.
-- **quick-replies:** its suggestions use the digits 1, 2, 3 … after a turn; a Good-to-know note only carries digits while Claude is working, so they never clash.
+- **quick-replies:** its suggestions use the digits 1, 2, 3 … after a turn; a Good-to-know note only carries digits while Claude is working and the quick-replies pill is not showing (`quick-replies.band`, since 0.26.0), so they never clash. While a handoff runs, `sidekick.status` carries `handoff: true` and quick-replies 0.8.0 draws no pill.
+- **The band** (since 0.26.0, Claude Code 2.1.323 or later): every band mod draws only its own row; sidekick's row has the key `layer:50:sidekick`. The `AbovePromptList` hook that each band mod carries arranges all rows the same way, whichever mod runs it. It only reorders the rows it is handed and calls nothing.
 
 ## Stored data
 
@@ -403,10 +406,10 @@ Texts are English by default. For German, set `language` to `de`, or run `/sidek
 `claude plugin validate` shows:
 
 ```text
-hooks: session.start, turn.step, agent.spawn, turn.complete, session.compact, tool.call{tool=Bash|PowerShell|mcp__ccd_session__start_session}, prompt.submit, skill.prompt, command.run{command=handoff}, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, command.run{command=sidekick}, ui.render{component=SessionMode}, command.run{command=p}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
+hooks: session.start, turn.step, agent.spawn, turn.complete, session.compact, tool.call{tool=Bash|PowerShell|mcp__ccd_session__start_session}, prompt.submit, skill.prompt, command.run{command=handoff}, ui.render{component=UserMessage}, ui.render{component=AbovePrompt}, ui.render{component=AbovePromptList}, command.run{command=sidekick}, ui.render{component=SessionMode}, command.run{command=p}, command.run{command=savings}, ui.render{component=CommandOutput, props has {command=savings}}, ui.render{component=CommandOutput, props has {command=sidekick}}
 calls: $.clock.every, $.clock.now, $.command.list, $.command.register, $.command.run, $.config.list, $.config.set, $.fs.read, $.model.complete, $.model.fork, $.process.run, $.prompt.fill, $.prompt.read, $.prompt.submit, $.session.id, $.session.messages, $.session.model, $.session.root, $.session.surfaces, $.session.usage, $.state.get, $.state.set, $.store.delete, $.store.get, $.store.keys, $.store.set, $.ui.ask, $.ui.copy, $.ui.invalidate, $.ui.notice, $.ui.resolve, $.ui.toast
 state writes: sidekick.buddy, sidekick.prompts, sidekick.status
-state reads: sidekick.prompts, sidekick.status
+state reads: quick-replies.band, sidekick.prompts, sidekick.status
 ```
 
 In plain language:
@@ -436,7 +439,9 @@ In plain language:
 - `$.ui.copy` (since 0.16.0, only after a click on **Copy** or **Insert in prompt**, and only when the prompt box refused the text): puts the maintenance command of that line on the clipboard of the surface you clicked on. Nothing else is copied.
 - `ui.render{component=CommandOutput, props has {command=savings}}`: draws the output of `/savings` as a card in the terminal and the desktop app. Only its own command's output; other surfaces and older outputs get the Markdown text.
 - `ui.render{component=CommandOutput, props has {command=sidekick}}` (since 0.14.0): draws the output of `/sidekick help` as a table in the terminal and the desktop app. Display only; `/sidekick status`, other outputs and other surfaces stay Markdown.
-- `ui.render{component=AbovePrompt}`: only while a new chat is being started, a small blue box above the prompt shows progress and seconds; and, with Good to know on, the current note with its buttons. Otherwise the hook passes the band through unchanged to other mods (limit-bars, Clawd).
+- `ui.render{component=AbovePrompt}`: only while a new chat is being started, a small blue box above the prompt shows progress and seconds; and, with Good to know on, the current note with its buttons. That is sidekick's own row; otherwise it draws no row.
+- `ui.render{component=AbovePromptList}` (since 0.26.0): arranges the rows of all band mods into one band (layers on top, one line below). It reorders the rows Claude Code hands it and wraps them in layout boxes; it changes no row and calls nothing.
+- State read `quick-replies.band` (since 0.26.0): whether the quick-replies pill is showing, so a Good-to-know note leaves out its digits.
 - `$.model.complete`: since 0.21.0 also Haiku 5.5 (effort `low`) for the repeat detection: for the intent, the single new message (up to 1,000 characters) together with the short intents sidekick already knows (no texts from other chats); for a proposal, the messages of that group (at most 4, up to 1,000 characters each). Haiku 5.5 for the check (effort `medium`, full ID `claude-haiku-5-5`), Haiku 5.5 for the model tip's rating of a subagent's or new chat's task (effort `low`, since 0.18.0) and Sonnet 5.5 for the handoff (effort `medium`). The only `$.model.complete` calls. Your messages and those tasks reach the model only through your session's own login; the rating prompt tells the model to judge the task and never follow instructions in it.
 - `prompt.submit` also attaches the model tip's guideline (since 0.18.0, only with `/sidekick tips auto on`, once per chat) as context the model reads and you don't see.
 - `$.session.messages`: beginning and end of the history for the handoff, the end of Claude's last reply for the check, and to detect the first message.

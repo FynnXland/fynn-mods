@@ -6,23 +6,23 @@
 // aus einem Fork der Session (Claude Codes Vorschlag vorn, die aus dem Fork rücken nach) ($.model.fork, voller Kontext, gleicher Cache), nach dem Vorbild von next-steps.
 // Der Mod beobachtet nur: Jeder Event-Hook gibt das Ergebnis von next(e) weiter; nur eine Ziffer, die einen Vorschlag sendet,
 // landet nicht im Prompt bzw. wird beim Absenden durch den Vorschlag ersetzt. Er sendet nie von selbst, nur auf Klick oder Taste.
-import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
-import { joinBand, layer, LEVEL, nameOf, splitBand } from './band.ts'
-import { addCall, NO_COST } from './cost.ts'
-import type { ForkCost } from './cost.ts'
-import { forkCostText, forkStateText, langOf, T } from './i18n.ts'
-import type { ForkState, Lang, Position } from './i18n.ts'
-import { helpMarkdown, helpTree } from './help.ts'
-import type { HelpData } from './help.ts'
-import { isLanguage, languageCommand } from './language.ts'
-import { changed, migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
-import { storeOffDefaults } from './offdefaults.ts'
-import type { Values } from './settings.ts'
-import { SETTINGS } from './fields.ts'
-import { forkPrompt, heldDigit, HELP_WORDS, MIN_ANSWER, merge, MORE_WORD, parseFork, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from './logic.ts'
-import type { Reply } from './logic.ts'
-import { chooseLayout, GAP, label } from './view.ts'
-import type { Layout, LayoutPref } from './view.ts'
+import type { EngineInterface, On, RenderElement, RenderInput, RenderNode, Timer } from 'claude-code'
+import { arrange, layer, LEVEL } from './band.js'
+import { addCall, NO_COST } from './cost.js'
+import type { ForkCost } from './cost.js'
+import { forkCostText, forkStateText, langOf, T } from './i18n.js'
+import type { ForkState, Lang } from './i18n.js'
+import { helpMarkdown, helpTree } from './help.js'
+import type { HelpData } from './help.js'
+import { isLanguage, languageCommand } from './language.js'
+import { changed, migrateSettings, readSettings, writeNote, writeSettings } from './settings.js'
+import { storeOffDefaults } from './offdefaults.js'
+import type { Values } from './settings.js'
+import { SETTINGS } from './fields.js'
+import { forkPrompt, heldDigit, HELP_WORDS, MIN_ANSWER, merge, MORE_WORD, parseFork, repliesHelp, STATUS_WORDS, TOGGLE_WORDS } from './logic.js'
+import type { Reply } from './logic.js'
+import { chooseLayout, GAP, label } from './view.js'
+import type { Layout, LayoutPref } from './view.js'
 
 const CMD = 'replies'
 const ARG_HINT = '[status|on|off|more on|more off|language|help]'
@@ -40,6 +40,8 @@ const HOLD_MS = 1200
 const USER_ORIGINS: ReadonlySet<string> = new Set(['composer', 'sdk'])
 
 type Settings = { enabled: boolean; more: boolean }
+/** Ein Zeichnen des Bands dort, wo es eins gibt. */
+type AbovePromptEvent = RenderInput<'AbovePrompt', 'terminal' | 'desktop'>
 
 // Einstellungen (0.7.0, docs/SETTINGS-SPEC.md §4): einzige Quelle ist userConfig. /replies on|off|more schreibt das Feld über
 // hooks/settings.ts (Terminal: $.config.set, die Mod lädt neu; Desktop/-p: claude plugin configure, hier sofort nachgezogen).
@@ -79,7 +81,6 @@ let cached: { sig: string; node: RenderNode } | null = null
 let surface = ''
 let bodyColumns = 0
 let layout: Layout | '' = ''
-let position: Position | '' = ''
 let engineSeen = 0
 // /clear-Prüfung im Desktop nicht bei jedem der ~13 Bilder pro Sekunde: bei neuen Vorschlägen und sonst jedes 10. Zeichnen.
 // Im Terminal wird das Band nur bei Änderungen gezeichnet, dort jedes Mal.
@@ -303,11 +304,13 @@ function fail($: EngineInterface, text: string) {
   $.ui.toast(T[lang].sendFailed(text))
 }
 
-/** Wo quick-replies in der Kette sitzt: Der Kern antwortet ohne weitere Mods mit `{type:'engine'}` (types@2.1.289:9160-9170). */
-function positionOf(theirs: RenderNode | null | undefined): Position {
-  if (theirs === null || theirs === undefined) return 'alone'
-  if (typeof theirs === 'object' && 'type' in theirs && theirs.type === 'engine') return 'inner'
-  return 'outer'
+/**
+ * Startet sidekick gerade einen neuen Chat (Übergabe-Box)? `sidekick.status.handoff` (docs/BAND-SPEC-2.md §4). Im Zeichnen gelesen:
+ * Das abonniert den Wert, ein Schreiben von sidekick zeichnet neu, auch über Mod-Grenzen (Probe §4). Ohne sidekick: `undefined`.
+ */
+async function sidekickHandoff($: EngineInterface): Promise<boolean> {
+  const st = (await $.state.get({ plugin: 'sidekick', key: 'status' })).value
+  return st?.handoff === true
 }
 
 function status(): string {
@@ -322,8 +325,76 @@ function status(): string {
     `${t.lastSources}: ${t.sourceEngine} ${engine ? t.yes : t.no} · ${t.sourceFork} ${settings.more ? forkStateText(t, forkState) : t.off}`,
     forkCostText(t, forkCost),
     `${t.engineSeen}: ${engineSeen}×`,
-    `${t.surface}: ${surface || t.notDrawn} · ${t.band(bodyColumns)} · ${t.layout} ${layout || '–'} · ${t.position} ${position ? t.positions[position] : '–'}`,
+    `${t.surface}: ${surface || t.notDrawn} · ${t.band(bodyColumns)} · ${t.layout} ${layout || '–'}`,
   ].join('\n')
+}
+
+/** Die eigene Zeile, oder `null`, wenn gerade keine Pille steht. Setzt `shown` und `seen` nur, wenn sie gezeichnet wird. */
+async function ownRow($: EngineInterface, e: AbovePromptEvent): Promise<RenderElement | null> {
+  // Zuerst lesen, damit das Abonnement immer steht: Ein Ende der Übergabe zeichnet neu (Probe §4)
+  const handoff = await sidekickHandoff($)
+  // Nur zeichnen, wenn alles passt; sonst keine Zeile, keine zusätzliche Höhe (Lehren 3 und 8)
+  if (!settings.enabled || !ready || replies.length === 0) return null
+  if (e.props.hasSurvey || e.props.isWorking || !promptEmpty(promptText)) return null
+  // Eingeklappt (ctrl+x ctrl+a): nichts zu sehen, also sendet keine Ziffer (SPEC §5, Review 0.7.6 S2; types@2.1.325:11393)
+  if (e.props.isCollapsed) {
+    // Auch eine allein abgeschickte Ziffer sendet dann nichts (Review 0.8.0 S2)
+    seen = []
+    return null
+  }
+  // Transkript eines Subagents offen: die Vorschläge gehören zur Hauptsession (types@2.1.289:9750-9758)
+  if (e.props.view.agentId) return null
+  // Während sidekick einen neuen Chat startet, keine Pille (docs/BAND-SPEC-2.md §4)
+  if (handoff) {
+    seen = []
+    return null
+  }
+  // Nach /clear: neue Session-ID, die Vorschläge gehören zum alten Chat (Lehre 13)
+  sidCheck += 1
+  if (e.surface === 'terminal' || sidCheck >= SID_EVERY) {
+    sidCheck = 0
+    const now = await $.session.id()
+    if (sid && now !== sid) {
+      newChat(now)
+      publishSoon($)
+      // Auch der Prompt mit „/clear“ ist abgeschickt
+      promptText = ''
+      return null
+    }
+  }
+
+  const { Box, Button } = $.ui.resolve(e)
+  // Desktop: gerahmte Pille. Terminal: kompakt ohne Rahmen und Abstand
+  const framed = e.surface === 'desktop'
+  const inner = e.props.bodyColumns - (framed ? FRAME : 0)
+  const texts = replies.map((r) => r.text)
+  layout = chooseLayout(texts, inner, layoutPref)
+  const sig = `${e.surface}|${inner}|${layout}|${texts.join('\u0000')}`
+  if (!cached || cached.sig !== sig) {
+    const half = Math.floor((inner - GAP) / 2)
+    const buttons = texts.map((text, i) =>
+      Button({ key: `reply-${i + 1}`, label: label(text), hotkey: String(i + 1), plain: true, onPress: () => send($, text) }),
+    )
+    const cell = (b: RenderNode) => Box({ width: e.surface === 'terminal' ? half : '50%', flexShrink: 0, children: [b] })
+    const rows: RenderNode[] = []
+    if (layout === 'grid') {
+      // 2 × 2: links 1/3, rechts 2/4
+      for (let i = 0; i < buttons.length; i += 2) {
+        rows.push(Box({ flexDirection: 'row', columnGap: GAP, flexShrink: 0, children: buttons.slice(i, i + 2).map(cell) }))
+      }
+    } else {
+      for (const b of buttons) rows.push(Box({ flexDirection: 'row', flexShrink: 0, children: [b] }))
+    }
+    // Eigene Pille: gedimmter Rahmen, eine Zeile Abstand zu Clawd und den Balken darunter
+    const node = framed
+      ? Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, borderStyle: 'round', borderDimColor: true, paddingX: 1, marginBottom: 1, children: rows })
+      : Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, children: rows })
+    cached = { sig, node }
+  }
+  shown = true
+  seen = texts
+  // Eigene Ebene über der Grundzeile (Clawd, Balken), unter tune-strip und sidekick (band.ts LEVEL, docs/BAND.md)
+  return layer(LEVEL.quickReplies, 'quick-replies', cached.node)
 }
 
 export function register(on: On, options: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
@@ -352,6 +423,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   })
 
   on('turn.start', async ($, e, next) => {
+    // Turns von Subagents und Teammates lassen die Pille stehen (Review 0.8.0 S1, types@2.1.325:15488-15491)
+    if (e.agentId !== undefined) return next(e)
     resetTurn()
     // Der Prompt wurde gerade abgeschickt
     promptText = ''
@@ -536,85 +609,27 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     return data ? helpTree(data, e.viewport?.columns ?? 100, e.surface, ACCENT) : next(e)
   })
 
+  // Band 2 (0.8.0, docs/BAND-SPEC-2.md §3): quick-replies zeichnet nur die eigene Zeile `layer:20:quick-replies`. Keine Zeile = next(e).
+  // Seit 2.1.323 enthält next(e) keine fremden Zeilen mehr (types@2.1.325:11360-11375); zusammengesetzt wird in AbovePromptList.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    let called = false
-    let nextFailed = false
-    let theirs: RenderNode | null | undefined = null
     shown = false
     // Das Band gibt es nur auf Terminal und Desktop (types@2.1.289:9711)
     if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e)
+    // Die Oberfläche nennt erst das Zeichnen zuverlässig (Lehre 9)
+    surface = e.surface
+    bodyColumns = e.props.bodyColumns
+    let row: RenderElement | null = null
     try {
-      called = true
-      try {
-        theirs = await next(e)
-      } catch (err) {
-        nextFailed = true
-        throw err
-      }
-      // Die Oberfläche nennt erst das Zeichnen zuverlässig (Lehre 9)
-      surface = e.surface
-      bodyColumns = e.props.bodyColumns
-      position = positionOf(theirs)
-      // Nur zeichnen, wenn alles passt; sonst den Bandinhalt unverändert lassen, keine zusätzliche Höhe (Lehren 3 und 8)
-      if (!settings.enabled || !ready || replies.length === 0) return theirs
-      if (e.props.hasSurvey || e.props.isWorking || !promptEmpty(promptText)) return theirs
-      // Transkript eines Subagents offen: die Vorschläge gehören zur Hauptsession (types@2.1.289:9750-9758)
-      if (e.props.view.agentId) return theirs
-      // Nach /clear: neue Session-ID, die Vorschläge gehören zum alten Chat (Lehre 13)
-      sidCheck += 1
-      if (e.surface === 'terminal' || sidCheck >= SID_EVERY) {
-        sidCheck = 0
-        const now = await $.session.id()
-        if (sid && now !== sid) {
-          newChat(now)
-          publishSoon($)
-          // Auch der Prompt mit „/clear“ ist abgeschickt
-          promptText = ''
-          return theirs
-        }
-      }
-
-      const { Box, Button } = $.ui.resolve(e)
-      // Desktop: gerahmte Pille. Terminal: kompakt ohne Rahmen und Abstand, sonst läuft das Band neben Clawd über („n more“)
-      const framed = e.surface === 'desktop'
-      const inner = e.props.bodyColumns - (framed ? FRAME : 0)
-      const texts = replies.map((r) => r.text)
-      layout = chooseLayout(texts, inner, layoutPref)
-      const sig = `${e.surface}|${inner}|${layout}|${texts.join('\u0000')}`
-      if (!cached || cached.sig !== sig) {
-        const half = Math.floor((inner - GAP) / 2)
-        const buttons = texts.map((text, i) =>
-          Button({ key: `reply-${i + 1}`, label: label(text), hotkey: String(i + 1), plain: true, onPress: () => send($, text) }),
-        )
-        const cell = (b: RenderNode) => Box({ width: e.surface === 'terminal' ? half : '50%', flexShrink: 0, children: [b] })
-        const rows: RenderNode[] = []
-        if (layout === 'grid') {
-          // 2 × 2: links 1/3, rechts 2/4
-          for (let i = 0; i < buttons.length; i += 2) {
-            rows.push(Box({ flexDirection: 'row', columnGap: GAP, flexShrink: 0, children: buttons.slice(i, i + 2).map(cell) }))
-          }
-        } else {
-          for (const b of buttons) rows.push(Box({ flexDirection: 'row', flexShrink: 0, children: [b] }))
-        }
-        // Eigene Pille: gedimmter Rahmen, eine Zeile Abstand zu Clawd und den Balken darunter
-        const node = framed
-          ? Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, borderStyle: 'round', borderDimColor: true, paddingX: 1, marginBottom: 1, children: rows })
-          : Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, children: rows })
-        cached = { sig, node }
-      }
-      // Eigene Ebene über dem Grund (Clawd, Balken), unter sidekick; gilt in jeder Reihenfolge der Mods (band.ts, docs/BAND.md)
-      // Plätze der Grund-Zeile (limit-bars, spotify, Clawd) gehen unverändert weiter
-      const { layers, slots, base } = splitBand(theirs)
-      // Während sidekick einen neuen Chat startet, keine Pille; sidekick weiter innen sieht sie nicht
-      if (layers.some((l) => nameOf(l) === 'sidekick')) return joinBand(layers, base, slots)
-      shown = true
-      seen = texts
-      return joinBand([...layers, layer(LEVEL.quickReplies, 'quick-replies', cached.node)], base, slots)
+      row = await ownRow($, e)
     } catch (err) {
-      // Fehler aus der Kette weiterwerfen (docs/raw/en/events.md:313-316); eigener Fehler: Clawd und Balken bleiben stehen
-      if (nextFailed) throw err
+      // Eigener Fehler: keine Zeile, die anderen Zeilen bleiben stehen
+      shown = false
       $.ui.log(`quick-replies ui.render: ${String(err)}`, { to: 'debug' })
-      return called ? theirs : next(e)
     }
+    // Fehler aus der Kette gehen weiter (docs/raw/en/events.md:313-316)
+    return row ?? next(e)
   })
+
+  // Anordnung aller Zeilen des Bands, in jeder Band-Mod derselbe Hook (templates/band/README.md); band.ts ruft nichts an `$` auf
+  on('ui.render', { component: 'AbovePromptList' }, async (_$, e, next) => arrange(e, next))
 }

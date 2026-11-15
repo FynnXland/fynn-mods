@@ -286,8 +286,9 @@ Mit `/replies more on` füllt ein Fork der Session bis zu vier Plätze; Claude C
 **Nur Windows.** Eine Musikleiste für Spotify im Band über dem Prompt: Albumcover, Titel und Interpret, ein Positionsbalken im
 Stil der Limit-Balken und Knöpfe für Neustart/zurück, Abspielen/Pause und weiter. Er liest und steuert die
 Spotify-Desktop-App über die Windows-Mediensteuerung: keine Anmeldung, kein Token, kein Netzwerk, keine Spotify-API.
-Browser und andere Player bleiben außen vor. In der Desktop-App bekommt er eine eigene Leiste ganz oben im Band, im
-Terminal ist er eine Zeile (`♪ Titel – Interpret 1:23/3:45 ⏮ ⏯ ⏭`), die bei schmalem Fenster schrumpft. Mit
+Browser und andere Player bleiben außen vor. Er bekommt eine eigene Leiste über den Limit-Balken und Clawd, in der
+Desktop-App mit Cover und Positionsbalken, im Terminal als eine Zeile (`♪ Titel – Interpret 1:23/3:45 ⏮ ⏯ ⏭`), die bei
+schmalem Fenster schrumpft. Mit
 `extraButtons` kommen −15 s, +15 s, Zufall und Wiederholen dazu.
 
 **Takt für Clawd:** Während Spotify spielt, findet tune-strip Tempo und Schläge des Songs und ob er ruhig,
@@ -365,10 +366,11 @@ bläulicher Laptop-Schein. Terminal und VS Code zeichnen kein Theme, dort siehst
 ## Zusammenspiel
 
 - **Ein Band über dem Prompt.** clawd-buddy, limit-bars, quick-replies, tune-strip und sidekick zeichnen alle ins Band
-  über dem Prompt und folgen einer kleinen gemeinsamen Absprache: Limit-Balken und Cache-Ring stehen links neben Clawd,
-  die quick-replies-Pille darüber, die tune-strip-Leiste in der Desktop-App ganz oben (im Terminal ein Platz zwischen den
-  Balken und Clawd), und die Boxen von sidekick erscheinen dort nur, solange er etwas zu zeigen hat. In der Desktop-App
-  läuft Clawd hinter der Zeile, Balken und tune-strip liegen über ihm. Jeder Mod funktioniert auch allein.
+  über dem Prompt. Seit Claude Code 2.1.323 zeichnet jede Mod ihre eigene Zeile, und ein kleiner gemeinsamer Baustein
+  in jeder Band-Mod setzt die Zeilen wieder zu einem Band zusammen: Limit-Balken und Cache-Ring stehen links neben Clawd
+  in einer Zeile, die tune-strip-Leiste und die quick-replies-Pille darüber, und die Boxen von sidekick erscheinen ganz
+  oben, solange er etwas zu zeigen hat. In der Desktop-App steht Clawd hinter der Zeile am rechten Rand. Jeder Mod
+  funktioniert auch allein.
 - **Clawd bewegt sich zur Musik.** Läuft tune-strip, nickt Clawd auf den Takt des Songs, wenn er Zeit hat, wählt seine
   Bewegungen nach dem Klang und setzt manchmal Kopfhörer auf. tune-strip verrät ihm nur, dass Musik läuft, das Tempo
   und die Gruppe (ruhig, Groove, hart, traurig), nie was läuft.

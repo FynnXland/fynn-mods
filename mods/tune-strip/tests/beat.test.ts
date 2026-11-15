@@ -2,12 +2,12 @@
 // der Zeilen liefert, wenn der Test sie schickt. Die echte Analyse prüfen scripts/smoke.ps1, die Kalibrierung und Fynns Sicht-Check.
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
-import { BEAT_BOOT, BEAT_CS } from '../hooks/beat-cs.ts'
-import { GROUPS, MODEL, TUNING, Tracker, classify, foldBpm, needsWrite, parseLine, phaseOff, splitLines } from '../hooks/beat.ts'
-import type { Beat, FeatureVec, Group, Measure } from '../hooks/beat.ts'
-import { parseTune } from '../hooks/model.ts'
-import { CALIB } from './calib-data.ts'
-import { PS_ABS, QUERY_SCRIPT, parseQuery } from '../hooks/ps.ts'
+import { BEAT_BOOT, BEAT_CS } from '../hooks/beat-cs.js'
+import { GROUPS, MODEL, TUNING, Tracker, classify, foldBpm, needsWrite, parseLine, phaseOff, splitLines } from '../hooks/beat.js'
+import type { Beat, FeatureVec, Group, Measure } from '../hooks/beat.js'
+import { parseTune } from '../hooks/model.js'
+import { CALIB } from './calib-data.js'
+import { PS_ABS, QUERY_SCRIPT, parseQuery } from '../hooks/ps.js'
 // Ordner der Mod, wie `$.plugin.root` ihn im Test meldet: Weg 2 schreibt nur für die installierte Kopie (hooks/settings.ts)
 const MOD_ROOT = String((import.meta as { dir?: string }).dir ?? '').replace(/[\\/]tests$/, '')
 
@@ -39,7 +39,7 @@ function meas(o: M & { origin?: number; g?: Group }): Measure {
   const f = FEAT[o.g ?? 'groove']
   const at = o.at ?? origin + Math.floor((o.end - 20 - origin) / P) * P
   const { origin: _o, g: _g, ...rest } = o
-  return { win: 6, tclar: 1.3, pclar: 5, rms: 0.01, ...f, ...rest, bpm, at } as Measure
+  return { win: 6, rms: 0.01, ...f, ...rest, bpm, at } as Measure // tclar und pclar bringt f immer mit
 }
 const line = (m: Measure) =>
   `b ${m.win} ${Math.round(m.end)} ${m.bpm.toFixed(2)} ${m.tclar.toFixed(2)} ${Math.round(m.at)} ${m.pclar.toFixed(2)} ${m.bass.toFixed(4)} ${m.high.toFixed(4)} ${m.cent.toFixed(0)} ${m.flat.toFixed(4)} ${m.dens.toFixed(2)} ${m.rms.toFixed(5)}`
@@ -337,7 +337,7 @@ function world(on: On, o: { cwd?: string; denySpawn?: boolean } = {}) {
     saved.set(e.key, e.value)
     return { value: undefined }
   })
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
   const cwd = o.cwd ?? 'C:\\work'
   on('session.start', () => ({ cwd }))
   on('process.run', ($: unknown, e: any) => {
@@ -744,7 +744,7 @@ test('/tune beat sagt, worauf er wartet: Pause, Band nicht sichtbar (0.6.3)', DE
 
 test('Terminal zu schmal (Stufe aus): kein Helfer, obwohl der Abfragetakt läuft (K3)', async ($, on) => {
   const w = world(on)
-  await playing($, w, 'terminal', 12)
+  await playing($, w, 'terminal', 8) // unter MIN_ROOM (10 Zellen): Stufe aus
   await w.clock.advance(10_000)
   expect(w.h.spawns.length).toBe(0)
 })

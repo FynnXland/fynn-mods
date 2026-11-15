@@ -1,5 +1,6 @@
-// Vertrag von tune-strip für `$.state`. tune-strip liest die Breite der Plätze von limit-bars (10) und clawd-buddy (30) im Band: `band` =
-// Breite in Pixeln im Desktop, `null`, wenn der Mod nichts zeichnet (docs/BAND.md „Platzbreite“, Weg A, Fynn 2026-11-03).
+// Vertrag von tune-strip für `$.state`. tune-strip liest `band` von limit-bars (10) und clawd-buddy (30) nur noch für die Trennlinie (gesetzt = die Grundzeile steht): `band` =
+// `{ cols }` in Zellen auf Terminal und Desktop seit Band 2 (tune-strip 0.12.0, limit-bars 0.17.0, clawd-buddy 0.15.0; bis dahin `{ width }`
+// in Pixeln), `null`, wenn der Mod nichts zeichnet (docs/BAND.md „Absprachen über $.state“, docs/BAND-SPEC-2.md §4).
 // Seit 0.3.0 schreibt tune-strip `tune-strip.playing`: ob gerade Musik läuft (`{ playing }`), `null` ohne Spotify-Sitzung, wenn tune-strip aus ist;
 // außerhalb von Windows nie geschrieben (leer). Kein Titel, kein Interpret. clawd-buddy liest ihn und wippt mit (mods/clawd-buddy/types/index.d.ts).
 // Seit 0.6.0 zusätzlich `tune-strip.beat` (Takt und Gruppe), ebenfalls für clawd-buddy.
@@ -17,10 +18,10 @@ declare module 'claude-code' {
       beat: { bpm: number; at: number; sure: boolean; group: 'calm' | 'groove' | 'hard' | 'sad' | null } | null
     }
     'limit-bars': {
-      band: { width: number } | null
+      band: { cols: number } | null
     }
     'clawd-buddy': {
-      band: { width: number } | null
+      band: { cols: number } | null
     }
     // 0.7.1: quick-replies meldet, ob seine Pille (Ebene 20) gerade im Band steht; tune-strip setzt danach die Trennlinie
     'quick-replies': {

@@ -1,29 +1,29 @@
 // tune-strip: Hooks-Modul. Ein Spotify-Regler im Band über dem Prompt (AbovePrompt): Cover, Titel, Interpret, Position, klickbare Knöpfe.
 // Quelle ist die Windows-Mediensteuerung per Windows PowerShell 5.1 (`$.process.run`, ps.ts): kein Login, keine Tokens, kein Netzwerk,
 // keine Datei. Der Takt (`$.clock.every`) läuft nur, solange das Band gezeichnet wird; keine Zeichnung → er beendet sich selbst.
-// Das Band ist ein Platz (Nr. 20) in der Grund-Zeile (band.ts, docs/BAND.md): zwischen limit-bars (10) und clawd-buddy (30).
+// Band 2 (0.12.0): immer eine eigene Leiste, Ebene 40 über der Grundzeile (band.ts, docs/BAND.md; Fynn 2026-11-15). Ab Claude Code 2.1.323.
 // Texte en/de nach `userConfig.language` (i18n.ts); Befehle und Argumente englisch.
-// Fail-open: Ein Fehler heißt nur „keine Anzeige“; was andere Mods ins Band zeichnen, bleibt erhalten.
+// Fail-open: Ein Fehler heißt nur „keine Anzeige“; die Zeilen der anderen Mods berührt tune-strip nicht.
 import type { EngineInterface, On, RenderNode, Timer } from 'claude-code'
-import { joinBand, layer, levelOf, slot, splitBand, SLOTS } from './band.ts'
-import { helpMarkdown, helpTree } from './help.ts'
-import type { HelpData } from './help.ts'
-import { T, langOf } from './i18n.ts'
-import type { Lang } from './i18n.ts'
-import { BEAT_BOOT, BEAT_CS } from './beat-cs.ts'
-import { Tracker, needsWrite, parseLine, sameBeat, splitLines } from './beat.ts'
-import type { Beat } from './beat.ts'
-import { actionFor, desktopRoom, desktopStage, fmtTime, OFFSET_MAX, parseTune, pickStage, pollInterval, positionNow, SIZES } from './model.ts'
-import { isLanguage, languageCommand, languageHelp } from './language.ts'
-import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.ts'
-import { storeOffDefaults } from './offdefaults.ts'
-import type { Values } from './settings.ts'
-import { SETTINGS } from './fields.ts'
-import type { Action, ControlWord, Size, Stage } from './model.ts'
-import { CONTROL_SCRIPT, PS_ABS, PS_ARGS, QUERY_SCRIPT, REPEAT_MODES, parseQuery, trackKey } from './ps.ts'
-import type { Query, Track } from './ps.ts'
-import { BAR_LEVEL, DESKTOP_WIDTHS, TERMINAL_WIDTHS, aheadOf, desktopTree, terminalTree } from './view.ts'
-import type { Els, Handlers } from './view.ts'
+import { LEVEL, arrange, layer } from './band.js'
+import { helpMarkdown, helpTree } from './help.js'
+import type { HelpData } from './help.js'
+import { T, langOf } from './i18n.js'
+import type { Lang } from './i18n.js'
+import { BEAT_BOOT, BEAT_CS } from './beat-cs.js'
+import { Tracker, needsWrite, parseLine, sameBeat, splitLines } from './beat.js'
+import type { Beat } from './beat.js'
+import { actionFor, desktopStage, fmtTime, OFFSET_MAX, parseTune, pickStage, pollInterval, positionNow, SIZES } from './model.js'
+import { isLanguage, languageCommand, languageHelp } from './language.js'
+import { migrateSettings, readSettings, writeNote, writeSettings } from './settings.js'
+import { storeOffDefaults } from './offdefaults.js'
+import type { Values } from './settings.js'
+import { SETTINGS } from './fields.js'
+import type { Action, ControlWord, Size, Stage } from './model.js'
+import { CONTROL_SCRIPT, PS_ABS, PS_ARGS, QUERY_SCRIPT, REPEAT_MODES, parseQuery, trackKey } from './ps.js'
+import type { Query, Track } from './ps.js'
+import { DESKTOP_WIDTHS, TERMINAL_WIDTHS, aheadOf, desktopTree, terminalTree } from './view.js'
+import type { Els, Handlers } from './view.js'
 
 const ACCENT = 'success' // Akzent der Hilfe (Theme-Key, HELP-SPEC §4); Spotify-Grün
 const TICK = 1000 // Takt in ms; gelesen wird alle pollSeconds
@@ -31,7 +31,8 @@ const TICK = 1000 // Takt in ms; gelesen wird alle pollSeconds
 // unter den eigenen Nachrichten flackern (clawd-buddy SPEC.md:278). Nur das Terminal zeigt die Zeit als Text und zeichnet dafür alle 5 s neu.
 const TERM_REDRAW = 5000
 const JUMP_S = 1.5 // weicht die abgefragte Position so weit von der vorausgerechneten ab, wurde in Spotify gesprungen: neu zeichnen
-// Lebenszeichen: Jede Zeichnung des Bands läuft durch tune-strip, auch die der anderen Mods. Kam so lange keine, zeichnet tune-strip selbst
+// Lebenszeichen: Jede Zeichnung des Bands läuft durch tune-strip, auch die der anderen Mods (seit 2.1.323 gemessen: vor jedem
+// `AbovePromptList` lief auch der eigene `AbovePrompt`-Hook, 13 von 13, Terminal, CC 2.1.325, SPEC Nachtrag 0.12.0). Kam so lange keine, zeichnet tune-strip selbst
 // einmal neu; bleibt auch die aus, gilt das Band als verdeckt und der Takt hält an (RENDER_GRACE). Früher erledigte das Neuzeichnen alle 5 s.
 // Beim Abspielen kürzer: dann kann der Takt-Helfer laufen, und der soll bald nach der letzten Zeichnung enden (SPEC „Takt-Helfer“, Review 0.10.0 S1).
 const LIVE_MS = 120_000
@@ -657,26 +658,26 @@ async function tick($: EngineInterface, getLast: () => number, setLast: (v: numb
 }
 
 /**
- * Pixel je Spalte von `bodyColumns` im Desktop. [UNKLAR] bis Phase 0 (3) gemessen ist, ob `bodyColumns` die Fensterbreite abbildet;
- * solange `undefined`, weicht Spotify im Desktop nicht von selbst (nur per `/tune size`).
+ * Breite eines gemeldeten Platzes in Zellen (Band 2, `{ cols }` auf beiden Oberflächen, docs/BAND-SPEC-2.md §4); nie gemeldet, nicht
+ * lesbar oder noch die alte Form `{ width }` (Pixel, bis limit-bars 0.16.x / clawd-buddy 0.14.x) zählt als nichts.
  */
-const PX_PER_COLUMN: number | undefined = undefined
-
-/** Breite eines gemeldeten Platzes (Pixel); nie gemeldet oder nicht lesbar zählt als nichts. */
-const widthIn = (v: { width: number } | null | undefined): number | null => (v && typeof v.width === 'number' && v.width > 0 ? v.width : null)
+export const colsIn = (v: unknown): number | null => {
+  const c = (v as { cols?: unknown } | null | undefined)?.cols
+  return typeof c === 'number' && Number.isFinite(c) && c > 0 ? Math.ceil(c) : null
+}
 
 // `$.state.get` braucht Literale für plugin und key (validate); Lesen beim Zeichnen abonniert den Wert: schreibt der andere Mod ihn neu,
-// zeichnet das Band neu (types:3308-3313)
-async function limitBarsWidth($: EngineInterface): Promise<number | null> {
+// zeichnet das Band neu (types:3308-3313, Probe §4)
+async function limitBarsCols($: EngineInterface): Promise<number | null> {
   try {
-    return widthIn((await $.state.get({ plugin: 'limit-bars', key: 'band' })).value)
+    return colsIn((await $.state.get({ plugin: 'limit-bars', key: 'band' })).value)
   } catch {
     return null
   }
 }
-async function clawdWidth($: EngineInterface): Promise<number | null> {
+async function clawdCols($: EngineInterface): Promise<number | null> {
   try {
-    return widthIn((await $.state.get({ plugin: 'clawd-buddy', key: 'band' })).value)
+    return colsIn((await $.state.get({ plugin: 'clawd-buddy', key: 'band' })).value)
   } catch {
     return null
   }
@@ -690,13 +691,6 @@ async function quickRepliesShown($: EngineInterface): Promise<true | null> {
   }
 }
 
-/** Platz, den Spotify hat; `undefined` = unbekannt (dann gilt die gewählte Stufe). */
-async function roomFor($: EngineInterface, s: string | null, bodyColumns: number): Promise<{ room: number | undefined; widths: 'terminal' | 'desktop' }> {
-  if (s === 'terminal') return { room: bodyColumns, widths: 'terminal' }
-  if (PX_PER_COLUMN === undefined) return { room: undefined, widths: 'desktop' }
-  const others = [await limitBarsWidth($), await clawdWidth($)]
-  return { room: desktopRoom(bodyColumns * PX_PER_COLUMN, others), widths: 'desktop' }
-}
 
 // ---- Hilfe (docs/HELP-SPEC.md, Muster templates/help)
 const HELP_WORDS = ['help', '?']
@@ -901,13 +895,21 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
   })
 
   // ---- Zeichnen
+  // Band 2 (0.12.0, docs/BAND-SPEC-2.md): Seit Claude Code 2.1.323 zeichnet jede Mod in `AbovePrompt` nur ihre eigene Zeile; `next(e)`
+  // heißt „keine Zeile“ und enthält keine fremden Zeilen mehr (en/interface.md:200-204). tune-strip ist immer die eigene Ebene
+  // `layer:40:tune-strip` über der Grundzeile (Fynn 2026-11-15). `arrange` (band.ts) setzt die Zeilen in `AbovePromptList` zusammen.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const theirs = await next(e)
+    let called = false
+    // Jeder Aufruf von `next` läuft hierüber: so läuft er höchstens einmal, auch im Fehlerfall
+    const none = async () => {
+      called = true
+      return next(e)
+    }
     try {
-      if (e.surface !== 'terminal' && e.surface !== 'desktop') return theirs
+      if (e.surface !== 'terminal' && e.surface !== 'desktop') return await none()
       drawSurface = e.surface
       // Eine Umfrage hält das Band; ein Hook weicht ihr (types@2.1.288:9580)
-      if (e.props.hasSurvey || !isWindows) return theirs
+      if (e.props.hasSurvey || !isWindows) return await none()
       awaitingRender = false
       renderMissed = 0
       bandDrawn = false
@@ -919,11 +921,14 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
         sepOn = false
         sepLostAt = 0
         sepHeld = false
-        return theirs
+        return await none()
       }
       const now = await $.clock.now()
       lastDrawAt = now
       ensureTimer($, now)
+      // Breiten der anderen Plätze und die Pille von quick-replies bei jedem Zeichnen lesen, nie überspringen: Lesen abonniert die Werte,
+      // ein Schreiben zeichnet das Band neu (types:3308-3313, Probe §4). Auch ohne Titel, damit das Abo von Anfang an steht.
+      const [lbCols, clawdC, qrShown] = await Promise.all([limitBarsCols($), clawdCols($), quickRepliesShown($)])
       if (!track || failures >= 3) {
         drawsTime = false
         anim = null
@@ -937,28 +942,29 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
             })
             .catch(() => {})
         }
-        return theirs
+        return await none()
       }
-      const { room } = await roomFor($, e.surface, e.props.bodyColumns)
-      const stage: Stage = e.surface === 'desktop' ? desktopStage(room, sizeNow(), DESKTOP_WIDTHS) : pickStage(room, sizeNow(), TERMINAL_WIDTHS)
+      // Fynn 2026-11-15: immer eine eigene Leiste über der Grundzeile (Terminal und Desktop), docs/BAND-SPEC-2.md §3. Die Leiste hat die
+      // volle Bandbreite; die Stufe richtet sich nach `bodyColumns` (Desktop: `auto` = volle Leiste, Terminal: die größte, die passt)
+      const width = e.props.bodyColumns
+      const stage: Stage = e.surface === 'desktop' ? desktopStage(width, sizeNow(), DESKTOP_WIDTHS) : pickStage(width, sizeNow(), TERMINAL_WIDTHS)
       drawsTime = e.surface === 'terminal' && stage === 'full'
       bandDrawn = stage !== 'off'
       anim = null
-      if (stage === 'off') return theirs
-      const { Box, Text, Button, Svg } = $.ui.resolve(e)
-      const els = { Box, Text, Button, Svg } as unknown as Els
+      if (stage === 'off') return await none()
+      // Svg gibt es nur im Desktop (types: Svg-Konstruktor nur für surface desktop); view.ts nutzt es dort, das Terminal nie
+      const ui = $.ui.resolve(e)
+      const els = { Box: ui.Box, Text: ui.Text, Button: ui.Button, Svg: 'Svg' in ui ? ui.Svg : undefined } as unknown as Els
       const handlers: Handlers = {
         press: (word) => {
           pressButton($, word).catch(() => {})
         },
       }
-      const { layers, slots, base } = splitBand(theirs)
-      // Trennlinie unter der Leiste nur, wenn darunter etwas steht: Ebenen unter BAR_LEVEL (sidekick liegt darüber) und Plätze aus der
-      // Kette, dazu die Zeichnung von limit-bars, clawd-buddy und quick-replies (ihr `$.state`-Wert; liegen sie in der Kette außen,
-      // sehen wir sie nicht in `theirs`). Alle drei Werte werden bei jedem Zeichnen gelesen, nie übersprungen: Lesen abonniert sie,
-      // ein Schreiben zeichnet das Band neu. Allein im Band gibt es nichts zu trennen.
-      const others = await Promise.all([limitBarsWidth($), clawdWidth($), quickRepliesShown($)])
-      const below = layers.some((l) => levelOf(l) < BAR_LEVEL) || slots.length > 0 || others.some((x) => x !== null)
+      // Trennlinie unter der Leiste nur, wenn darunter etwas steht. Seit Band 2 sieht tune-strip die Zeilen der anderen nicht mehr
+      // (next(e) ist leer); unter der Ebene 40 stehen bei den fynn-mods die Pille von quick-replies (Ebene 20) und die Grundzeile mit
+      // limit-bars und Clawd. Deren `$.state`-Werte sagen, ob sie gerade zeichnen. sidekick (Ebene 50) liegt darüber und zählt nicht.
+      // Fremde Mods ohne solche Meldung sieht tune-strip nicht. Allein im Band gibt es nichts zu trennen.
+      const below = lbCols !== null || clawdC !== null || qrShown !== null
       // Uhr noch einmal lesen: die Awaits oben haben Zeit gekostet, und die Voranimation des Bilds beginnt jetzt bei genau dieser Position
       const drawNow = await $.clock.now().catch(() => now)
       // 0.9.0: Linie mit Haltezeit (SEP_HOLD_MS); `sepHeld` lässt den Takt nach ihrem Ende neu zeichnen
@@ -981,17 +987,17 @@ export function register(on: On, options?: Readonly<Record<string, unknown>>) {
       }
       const input = { lang, stage, track, cover, pos, extraButtons, sep: sepOn }
       const mine = (e.surface === 'desktop' ? desktopTree(els, handlers, input) : terminalTree(els, handlers, input)) as unknown as RenderNode
-      // Desktop, volle Stufe: eigene Leiste über allen Mods (kein Platz in der Zeile); sonst der Platz 20
-      if (e.surface === 'desktop' && stage === 'full') return joinBand([...layers, layer(BAR_LEVEL, 'tune-strip', mine)], base, slots)
-      // 0.8.1: im Desktop `position: relative`, damit Leiste und Buttons über Clawd liegen, der seit clawd-buddy 0.12.1 hinter der Zeile
-      // liegt (docs/BAND.md „Platz hinter der Zeile“). Ohne Versatz verschiebt es nichts (types:946-958).
-      const inRow = e.surface === 'desktop'
-        ? ({ type: 'Box', props: { key: 'tune-strip-front', position: 'relative', flexDirection: 'column', justifyContent: 'flex-end' }, children: [mine] } as unknown as RenderNode)
-        : mine
-      return joinBand(layers, base, [...slots, slot(SLOTS.spotify, 'tune-strip', inRow)])
-    } catch {
-      // Eigener Fehler (fail-open): ohne Anzeige, der Inhalt der anderen bleibt
-      return theirs
+      // Eigene Leiste als Ebene 40: über quick-replies (20) und der Grundzeile, unter sidekick (50). Feste Breite in Zellen an der eigenen
+      // Wurzel, `overflow: 'hidden'`; der Titel kürzt sich selbst (Probe 7b: Flexbox schrumpft über die Hüllen der Anordnung nicht)
+      return layer(LEVEL.tuneStrip, SELF, mine, { width, overflow: 'hidden' })
+    } catch (err) {
+      // Fehler aus der Kette: weiterwerfen (docs/raw/en/events.md:448-451); eigener Fehler (fail-open): keine Zeile
+      if (called) throw err
+      return next(e)
     }
   })
+
+  // Anordnung des ganzen Bands, in jeder Band-Mod derselbe Hook (docs/BAND.md Regel 2, templates/band/README.md). Idempotent:
+  // Liegen mehrere Band-Mods in der Kette, ordnet die äußere, die inneren reichen unverändert weiter. band.ts ruft nichts an `$` auf.
+  on('ui.render', { component: 'AbovePromptList' }, async (_$, e, next) => arrange(e, next))
 }

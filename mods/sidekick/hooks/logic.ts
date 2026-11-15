@@ -1,12 +1,12 @@
 // sidekick: Logik ohne `$`. Regeln (SPEC Verhalten 3), Prompts für Prüfung und Übergabe und Antwort-Parser, Kürzung des Verlaufs,
 // Ersparnis-Buchungen und /savings (SPEC Verhalten 8). Alles hier ist rein und wird direkt getestet.
-import { MIN, completeCost, dayKey, parseTokens, priceFor, rewriteCost } from './cache.ts'
-import type { CompleteUsage, StateKind } from './cache.ts'
-import { dec, lang, shortDate, spanText, t, tokensText, usdFine, usdText } from './i18n.ts'
-import { HANDOFF, modelLabel } from './models.ts'
-import { RULE_IDS } from './wartung.ts'
-import type { RuleId } from './wartung.ts'
-import type { Values } from './settings.ts'
+import { MIN, completeCost, dayKey, parseTokens, priceFor, rewriteCost } from './cache.js'
+import type { CompleteUsage, StateKind } from './cache.js'
+import { dec, lang, shortDate, spanText, t, tokensText, usdFine, usdText } from './i18n.js'
+import { HANDOFF, modelLabel } from './models.js'
+import { RULE_IDS } from './wartung.js'
+import type { RuleId } from './wartung.js'
+import type { Values } from './settings.js'
 
 // ---------- Einstellungen ----------
 

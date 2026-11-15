@@ -1,12 +1,12 @@
 // sidekick: Inhalt von `/sidekick help` (SPEC Nachtrag 0.14.0, docs/HELP-SPEC.md §5 „sidekick 0.14.0“). Aus Einstellungen und
 // Zustand beim Aufruf ein Schnappschuss `HelpData`; gezeichnet wird er von help.ts (Kopie von templates/help/help.ts). Rein, ohne `$`.
-import type { HelpCommand, HelpData, HelpFeature, HelpSetting } from './help.ts'
-import { SETTINGS } from './fields.ts'
-import { lang, shortDate, t, tokensText } from './i18n.ts'
-import { languageHelp } from './language.ts'
-import { DEFAULT_SETTINGS, LEVELS } from './logic.ts'
-import type { Settings } from './logic.ts'
-import { RULE_IDS } from './wartung.ts'
+import type { HelpCommand, HelpData, HelpFeature, HelpSetting } from './help.js'
+import { SETTINGS } from './fields.js'
+import { lang, shortDate, t, tokensText } from './i18n.js'
+import { languageHelp } from './language.js'
+import { DEFAULT_SETTINGS, LEVELS } from './logic.js'
+import type { Settings } from './logic.js'
+import { RULE_IDS } from './wartung.js'
 
 /** Was die Hilfe über den Zustand wissen muss; `register.ts` sammelt es beim Aufruf. */
 export type HelpFacts = {
