@@ -45,6 +45,8 @@ export type PropSprite = {
    * durchsichtig, ohne dass sein Bild von der Pose abhängt. Die Prüfung „Effekte überlappen sich nie“ zählt ihn nicht als Gegenstand.
    */
   under?: true
+  /** Weniger Bewegung (0.16.0): stattdessen dieses ruhige Bild zeigen (z. B. das Lagerfeuer flackert nicht). */
+  still?: string
 }
 /** Verweis auf eine Requisite im Frame: [Name, x, y, 'g'?]. Ohne 'g' relativ zur Figur, mit 'g' relativ zum Heimatplatz. */
 export type PropRef = readonly [name: string, x: number, y: number, flag?: 'g' | 'G']

@@ -177,7 +177,9 @@ test('Band: Desktop setzt nahtlos fort (die nächste Animation beginnt mit dem B
   on('turn.complete', () => ({ text: '' }))
   on('session.measure', ($: unknown, e: any) => ({ changed: e.changed }))
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  for (const [i, ms] of [2025, 1275, 3075].entries()) { // ganze Takte
+  // Ganze Takte. Der dritte Durchgang wartet, bis die Denk-Schleife des ersten Turns sicher verlassen ist (0.16.0): Läuft sie noch, darf ein
+  // neuer Turn-Start sie gewollt weiterspielen lassen (engine.ts stillFits), das Bild bliebe gleich; mit 3075 ms hing das an der Zufallswahl.
+  for (const [i, ms] of [2025, 1275, 9075].entries()) {
     const before = await svgOf(ui)
     await clock.advance(ms)
     // Neu zeichnen ohne neue Fakten (z. B. für einen anderen Mod): neu gerechnet ab dem Bild, das gerade zu sehen ist (0.8.1). Startet
@@ -456,7 +458,7 @@ test('Fakten: turn.start → arbeitet, tool.call je Art, Subagent ändert nichts
   await ui.unmount()
 })
 
-test('Fakten: tool.check ask → wartet auf dich, bis das Tool endet; AskUserQuestion ebenso', async ($, on) => {
+test('Fakten: tool.check ask → wartet auf deine Freigabe (permission), bis das Tool endet', async ($, on) => {
   const clock = mock.clock(on)
   stubs(on)
   on('turn.start', ($: unknown, e: any) => ({ turnId: e.turnId }))
@@ -478,19 +480,19 @@ test('Fakten: tool.check ask → wartet auf dich, bis das Tool endet; AskUserQue
   await clock.advance(500)
   await chk
   await ui.redraw()
-  expect((await clientProps(ui)).facts.ask).toBe(true)
+  expect((await clientProps(ui)).facts.ask).toBe('permission')
   await clock.advance(5000)
   await call
   await ui.redraw()
-  expect((await clientProps(ui)).facts.ask).toBe(false)
+  expect((await clientProps(ui)).facts.ask).toBe('')
   // Eine hypothetische Prüfung ohne echten Aufruf (keine tool_use_id) ist keine Rückfrage
   await $.tool.check({ tool: 'Bash', input: { command: 'ls' } })
   await ui.redraw()
-  expect((await clientProps(ui)).facts.ask).toBe(false)
+  expect((await clientProps(ui)).facts.ask).toBe('')
   await ui.unmount()
 })
 
-test('Fakten: AskUserQuestion lässt ihn warten, solange die Frage offen ist', async ($, on) => {
+test('Fakten: AskUserQuestion lässt ihn warten (question), solange die Frage offen ist', async ($, on) => {
   const clock = mock.clock(on)
   stubs(on)
   on('turn.start', ($: unknown, e: any) => ({ turnId: e.turnId }))
@@ -503,11 +505,11 @@ test('Fakten: AskUserQuestion lässt ihn warten, solange die Frage offen ist', a
   const call = $.tool.call({ tool: 'AskUserQuestion', tool_use_id: 'q', questions: [] } as any)
   await clock.advance(500)
   await ui.redraw()
-  expect((await clientProps(ui)).facts.ask).toBe(true)
+  expect((await clientProps(ui)).facts.ask).toBe('question')
   await clock.advance(5000)
   await call
   await ui.redraw()
-  expect((await clientProps(ui)).facts.ask).toBe(false)
+  expect((await clientProps(ui)).facts.ask).toBe('')
   await ui.unmount()
 })
 
@@ -670,8 +672,8 @@ test('Besondere Tage, lange Rückfrage, Erfolgsserie', () => {
   expect(specialDay(at('2026-12-31T10:00:00'), '05.01.')).toBe('')
   expect(specialDay(at('2027-01-01T03:00:00'), '05.01.')).toBe('newyear')
   const t = 9_000_000
-  expect(deriveMood({ ...NO_FACTS, ask: true, askSince: t }, t + 10_000)).toBe('waitUser')
-  expect(deriveMood({ ...NO_FACTS, ask: true, askSince: t }, t + 46_000)).toBe('waitUserLong')
+  expect(deriveMood({ ...NO_FACTS, ask: 'question', askSince: t }, t + 10_000)).toBe('waitUser')
+  expect(deriveMood({ ...NO_FACTS, ask: 'question', askSince: t }, t + 46_000)).toBe('waitUserLong')
   expect(deriveMood({ ...NO_FACTS, endedKind: 'done', endedAt: t, streakAt: t }, t + 1000)).toBe('streak')
   expect(deriveMood({ ...NO_FACTS, endedKind: 'done', endedAt: t, streakAt: t }, t + 5000)).toBe('idle')
 })
@@ -696,7 +698,7 @@ test('Limits: ausgeschöpftes Wochen- bzw. 5-h-Limit hat Vorrang (außer Rückfr
   expect(deriveMood({ ...NO_FACTS, limits: lim(100, 40) }, t)).toBe('limit_5h')
   expect(deriveMood({ ...NO_FACTS, limits: lim(100, 100) }, t)).toBe('limit_week')
   expect(deriveMood({ ...NO_FACTS, turnActive: true, limits: lim(100, 40) }, t)).toBe('limit_5h')
-  expect(deriveMood({ ...NO_FACTS, ask: true, limits: lim(100, 40) }, t)).toBe('waitUser')
+  expect(deriveMood({ ...NO_FACTS, ask: 'question', limits: lim(100, 40) }, t)).toBe('waitUser')
   expect(deriveMood({ ...NO_FACTS, limits: lim(99, 99) }, t)).toBe('idle')
   // Reset-Zeitpunkt vorbei: 6 s Freude, dann normal
   expect(deriveMood({ ...NO_FACTS, limits: lim(100, 40) }, t + 3_600_000 + 1000)).toBe('limit_back')
@@ -730,7 +732,7 @@ test('Subagenten: laufende (auch im Hintergrund) zeigen die Helfer (beliebig vie
   expect(deriveMood({ ...NO_FACTS, turnActive: true, tool: { kind: 'read', since: t }, agents: [t] }, t + 500)).toBe('work_read')
   expect(deriveMood({ ...NO_FACTS, turnActive: true, tool: { kind: 'read', since: t }, agents: Array(10).fill(t) }, t + 500)).toBe('work_read')
   // Rückfrage bleibt oben, ein eben beendeter Turn zeigt erst "fertig"
-  expect(deriveMood({ ...NO_FACTS, ask: true, agents: [t, t, t, t] }, t)).toBe('waitUser')
+  expect(deriveMood({ ...NO_FACTS, ask: 'question', agents: [t, t, t, t] }, t)).toBe('waitUser')
   expect(deriveMood({ ...NO_FACTS, endedKind: 'done', endedAt: t, agents: [t] }, t + 1000)).toBe('done')
 })
 
@@ -764,7 +766,7 @@ test('Stimmungsableitung: Priorität, Schwellen 10 s und 60 s, Subagent-Tool zä
   expect(deriveMood({ ...base, tool: { kind: 'shell', since: 0 } }, 10_000)).toBe('wait10')
   expect(deriveMood({ ...base, tool: { kind: 'shell', since: 0 } }, 61_000)).toBe('wait60')
   expect(deriveMood({ ...base, tool: { kind: 'agent', since: 0 } }, 120_000)).toBe('work_agent')
-  expect(deriveMood({ ...base, tool: { kind: 'read', since: 0 }, ask: true }, 100)).toBe('waitUser')
+  expect(deriveMood({ ...base, tool: { kind: 'read', since: 0 }, ask: 'question' }, 100)).toBe('waitUser')
   expect(deriveMood({ ...NO_FACTS, endedKind: 'done', endedAt: 1000 }, 2000)).toBe('done')
   expect(deriveMood({ ...NO_FACTS, endedKind: 'oops', endedAt: 1000 }, 2000)).toBe('oops')
   expect(deriveMood({ ...NO_FACTS, endedKind: 'done', endedAt: 1000 }, 9000)).toBe('idle')
@@ -963,7 +965,7 @@ test('sidekick, Komprimieren, Skill: Stimmungen mit Vorrang und Ablauf', () => {
   expect(deriveMood(sk('check'), t + 1000)).toBe('sk_check')
   expect(deriveMood(sk('check'), t + 31_000)).toBe('idle') // Sicherheitsnetz: hängende Prüfung
   expect(deriveMood(sk('stop'), t + 60_000)).toBe('sk_stop')
-  expect(deriveMood({ ...sk('stop'), ask: true }, t)).toBe('waitUser') // Claudes eigene Rückfrage geht vor
+  expect(deriveMood({ ...sk('stop'), ask: 'question' }, t)).toBe('waitUser') // Claudes eigene Rückfrage geht vor
   expect(deriveMood(sk('handoff'), t + 20_000)).toBe('sk_handoff')
   // Neuer Chat: der Turn darin beginnt sofort, die Freude geht kurz vor, dann Arbeit
   const fresh = { ...sk('fresh'), turnActive: true }

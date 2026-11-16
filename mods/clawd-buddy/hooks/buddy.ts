@@ -224,6 +224,12 @@ export default function Buddy(props: BuddyProps, surface: ClientSurface<State>) 
       seenDemo: props.demoN, seenNap: props.napN, seenBoop: props.boopN, lastAnnoy: props.annoy, lastHour: -1, napUntil: -1, seenBack: 0,
     }
     engine.start()
+    // Begrüßung (0.16.0): gleich als erstes Bild, ganz hinter der Linie
+    const m0 = deriveMood(props.facts, props.now)
+    if (m0 === 'hello') {
+      engine.begin(m0)
+      ctl.mood = m0
+    }
     const st: State = { engine, ctl, n: 0 }
     surface.setState(st)
     surface.every(TICK, () => tick(surface))

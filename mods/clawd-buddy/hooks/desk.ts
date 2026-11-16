@@ -227,6 +227,12 @@ export function createDesk(o: DeskOpts): Desk {
 
   /** Neu zeichnen: nachziehen, Zeitplan fortschreiben, vorausrechnen, Fälliges anwenden. */
   function redraw(now: number, facts: Facts, strain: Strain, scale: number): Plan {
+    // Erste Zeichnung (0.16.0): Ist die erste Stimmung die Begrüßung, beginnt schon das erste Bild mit ihr, ganz hinter der Linie
+    // (sonst zeigte es noch einen Takt lang den stehenden Clawd aus engine.start)
+    if (D.n === 0 && D.mood === '' && deriveMood(facts, now) === 'hello') {
+      D.mood = 'hello'
+      engine.begin('hello')
+    }
     if (segs.length) follow(now)
     else advance(now, facts, strain)
     const n = D.n

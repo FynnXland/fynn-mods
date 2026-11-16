@@ -33,6 +33,8 @@ type Texts = {
   frost: (o: { src: '' | 'new' | 'resume' | 'sidekick' | 'estimate' | 'manual'; rolled: boolean; result: '' | 'frozen' | 'no' | 'music' | 'already' | 'turn' | 'warm' | 'off'; at: string; chat: boolean }) => string
   unknown: (sub: string) => string
   status: (o: { on: boolean; mood: string; temper: string; tired: number; annoy: number; desk: string; beat: string }) => string
+  /** Offene Rückfrage in /clawd status (0.16.0 Teil B) */
+  ask: (kind: '' | 'question' | 'permission') => string
   /** Takt aus tune-strip für /clawd status (0.11.0) */
   beat: (o: { bpm: string; group: string; sure: boolean } | null) => string
   groups: { calm: string; groove: string; hard: string; sad: string; none: string }
@@ -93,6 +95,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     },
     unknown: (sub) => `unknown: ${sub}.`,
     status: (o) => `clawd-buddy: ${o.on ? 'on' : 'off'}, ${o.mood} (${o.temper}), tiredness ${o.tired}%, annoyance ${o.annoy}. ${o.beat}. ${o.desk}.`,
+    ask: (k) => (k === 'permission' ? 'Waiting for: your approval.' : k === 'question' ? 'Waiting for: your answer to a question.' : 'Waiting for: nothing.'),
     beat: (o) => (o ? `Beat ${o.bpm} bpm, ${o.group}, ${o.sure ? 'sure' : 'unsure'}` : 'No beat from tune-strip'),
     groups: { calm: 'calm', groove: 'groove/hip-hop', hard: 'hard', sad: 'sad', none: 'group open' },
     mood: { veryGrumpy: 'very grumpy', grumpy: 'grumpy', great: 'in a great mood', good: 'in a good mood', even: 'calm' },
@@ -111,7 +114,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     seeHelp: '→ /clawd help',
     hx: {
       intro: 'An animated pixel mascot above the prompt that reacts to Claude\'s work, waiting times and the time of day, with a mood of his own that builds up over the session.',
-      status: 'Status: on/off, mood, tiredness, annoyance; in the desktop app also drawing measurements',
+      status: 'Status: on/off, mood, tiredness, annoyance, what he is waiting for (approval or answer); in the desktop app also drawing measurements',
       on: 'Show Clawd (persists)',
       off: 'Hide Clawd (persists)',
       list: 'All animations by group',
@@ -168,6 +171,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     },
     unknown: (sub) => `unbekannt: ${sub}.`,
     status: (o) => `clawd-buddy: ${o.on ? 'an' : 'aus'}, ${o.mood} (${o.temper}), Müdigkeit ${o.tired} %, Ärger ${o.annoy}. ${o.beat}. ${o.desk}.`,
+    ask: (k) => (k === 'permission' ? 'Wartet auf: deine Freigabe.' : k === 'question' ? 'Wartet auf: deine Antwort auf eine Frage.' : 'Wartet auf: nichts.'),
     beat: (o) => (o ? `Takt ${o.bpm} bpm, ${o.group}, ${o.sure ? 'sicher' : 'unsicher'}` : 'Kein Takt von tune-strip'),
     groups: { calm: 'ruhig', groove: 'Groove/Hip-Hop', hard: 'hart', sad: 'traurig', none: 'Gruppe offen' },
     mood: { veryGrumpy: 'sehr gereizt', grumpy: 'gereizt', great: 'bester Laune', good: 'gut gelaunt', even: 'ausgeglichen' },
@@ -186,7 +190,7 @@ export const T: Readonly<Record<Lang, Texts>> = {
     seeHelp: '→ /clawd help',
     hx: {
       intro: 'Ein animiertes Pixel-Maskottchen über dem Prompt, das auf Claudes Arbeit, Wartezeiten und die Tageszeit reagiert, mit eigener Laune, die sich im Lauf der Sitzung aufbaut.',
-      status: 'Status: an/aus, Laune, Müdigkeit, Ärger; im Desktop auch Messwerte der Zeichnung',
+      status: 'Status: an/aus, Laune, Müdigkeit, Ärger, worauf er wartet (Freigabe oder Antwort); im Desktop auch Messwerte der Zeichnung',
       on: 'Zeigt Clawd (bleibt gespeichert)',
       off: 'Blendet Clawd aus (bleibt gespeichert)',
       list: 'Zeigt alle Animationen nach Gruppen',
@@ -424,6 +428,18 @@ export const CLIP_EN: Readonly<Record<string, string>> = {
   sk_bulb: 'Light bulb: a hint sits above the input',
   sk_oil_can: 'Oils the input a little',
   sk_sweep: 'Sweeps the input',
+  // 0.16.0: Szenen nach Ideen aus clawd-companion
+  think_gears: 'Gears turning',
+  ring_bell: 'Rings a bell (approval)',
+  ring_bell_long: 'Rings two bells (approval waiting long)',
+  wave_flags: 'Waves signal flags (approval)',
+  party_hat: 'Party with hat and balloon (long turn)',
+  trophy_lift: 'Lifts a trophy (long turn)',
+  forge_hammer: 'Forges at the anvil',
+  hammock_sleep: 'Sleeps in a hammock (zZz)',
+  campfire_sleep: 'Sleeps by the campfire (zZz)',
+  hello_peek: 'Peeks out and waves (new chat)',
+  hello_hat: 'Tips his hat (new chat)',
 }
 
 /** Bezeichnung eines Clips in der eingestellten Sprache. */

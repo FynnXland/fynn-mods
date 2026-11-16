@@ -68,7 +68,7 @@ test('Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstellungen un
   const lines = text.split('\n')
   expect(lines[0]).toMatch(/^\*\*clawd-buddy · Hilfe\*\* · #[0-9a-z]{5,}$/)
   expect(lines).toContain('**BEFEHLE**')
-  expect(lines).toContain('- `/clawd [status]`: Status: an/aus, Laune, Müdigkeit, Ärger; im Desktop auch Messwerte der Zeichnung')
+  expect(lines).toContain('- `/clawd [status]`: Status: an/aus, Laune, Müdigkeit, Ärger, worauf er wartet (Freigabe oder Antwort); im Desktop auch Messwerte der Zeichnung')
   expect(lines).toContain('- `/clawd nap`: Schickt ihn für etwa 5 Minuten schlafen')
   expect(lines).toContain('**BEDIENUNG**')
   expect(lines).toContain('- `Klick auf Clawd`: Terminal: kichert; viele Klicks ärgern ihn (zählt in status)')

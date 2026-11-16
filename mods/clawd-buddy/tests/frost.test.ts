@@ -62,7 +62,7 @@ test('Ablauf in der Stimmung: frozen → Risse (Stufen) → gesendet: frost_brea
 })
 
 test('Vorrang: Rückfrage, Limits und Komprimieren gehen vor dem Eis; im Turn friert er nie ein; Begrüßung entfällt im Eis', () => {
-  expect(deriveMood(iced({}, { ask: true }), T0 + 100)).toBe('waitUser')
+  expect(deriveMood(iced({}, { ask: 'question' }), T0 + 100)).toBe('waitUser')
   expect(deriveMood(iced({}, { limits: { five: 100, fiveReset: T0 + 3_600_000 } }), T0 + 100)).toBe('limit_5h')
   expect(deriveMood(iced({}, { compactSince: T0 }), T0 + 100)).toBe('compact')
   expect(deriveMood(iced({}, { turnActive: true }), T0 + 100)).toBe('work_think')

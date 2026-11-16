@@ -1,7 +1,7 @@
 {
   "name": "clawd-buddy",
-  "version": "0.15.2",
-  "description": "Clawd, an animated pixel mascot above the prompt. He reacts to what Claude is doing and keeps you company while you wait.",
+  "version": "0.16.1",
+  "description": "Clawd, an animated pixel mascot above the prompt. He reacts to what Claude is doing, rings a bell when a tool needs your approval, greets you in a new chat and keeps you company while you wait.",
   "author": {
     "name": "Fynn Hansen"
   },

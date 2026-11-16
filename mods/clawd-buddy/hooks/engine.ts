@@ -144,9 +144,12 @@ const FRONT_MATES = 6
 const BACK_Y = 4
 const MATE_HIDE = 5
 
-const ONE_SHOT_SET = new Set(['done', 'done_long', 'ctx_full', 'oops', 'limit_back', 'agent_done', 'streak', 'sk_fresh', 'skill', 'sk_hint', 'sk_upkeep'])
+// 0.16.0: `hello` (Begrüßung bei neuem Chat) läuft einmal ganz durch
+const ONE_SHOT_SET = new Set(['done', 'done_long', 'ctx_full', 'oops', 'limit_back', 'agent_done', 'streak', 'sk_fresh', 'skill', 'sk_hint', 'sk_upkeep', 'hello'])
 // sidekick-Zustände, Komprimieren und Skill-Start sind kurz bzw. eindeutig: ohne Entprellung und Mindestdauer
+// 0.16.0: die Freigabe (waitPermission*) ist so dringend wie die Frage (SPEC „Ausbau 0.16.0“ Teil B)
 const URGENT_SET = new Set(['waitUser', 'done', 'done_long', 'ctx_full', 'oops', 'limit_5h', 'limit_week', 'limit_back', 'agent_done', 'streak', 'waitUserLong',
+  'waitPermission', 'waitPermissionLong',
   'sk_check', 'sk_stop', 'sk_handoff', 'sk_fresh', 'compact', 'skill', 'sk_hint', 'sk_upkeep',
   'sk_stop_cold', 'sk_stop_wrong', 'sk_stop_model', 'sk_stop_rewrite', 'sk_stop_topic'])
 /** Eis (0.13.0): Risse, Zerbrechen und Schmelzen je Riss-Stufe; die Stimmung heißt wie der Clip (frost_crack2, frost_break, frost_melt3 …). */
@@ -181,7 +184,22 @@ const FINISH_URGENT = 27 // ~2 s
 // (Review 0.6.7, S1/K2).
 const SHORT_PLAY = 53 // ~4 s
 const HOLD_PLAY = 107 // ~8 s
-const ASK = new Set(['waitUser', 'waitUserLong'])
+const ASK = new Set(['waitUser', 'waitUserLong', 'waitPermission', 'waitPermissionLong'])
+/**
+ * Freigabe (0.16.0 Teil B): zu den eigenen Clips (Glocke, Flaggen) kommen zwei vorhandene aus „wartet auf dich“, damit es nicht nur zwei
+ * sind. Sie stehen vorn im Pool: Weniger Bewegung nimmt den ersten, und der schaut nur ruhig zur Eingabe.
+ */
+const ASK_SHARED: Readonly<Record<string, readonly string[]>> = {
+  waitPermission: ['look_prompt', 'point_prompt'],
+  waitPermissionLong: ['look_prompt', 'point_prompt', 'ring_bell', 'wave_flags'],
+}
+/**
+ * Schlaf-Varianten (0.16.0): statt fest `sleep` wählt er beim Einschlafen eine davon. Hängematte und Lagerfeuer bringen ihr Aufwachen im
+ * eigenen Ausklang mit („!“, aufstehen, wegräumen); `startled` setzt dagegen die Schlafmütze von `sleep` voraus. Weniger Bewegung: keine
+ * schaukelnde Hängematte (das Feuer steht dann still, siehe `still` in stage.ts).
+ */
+const SLEEP_VARIANTS: readonly string[] = ['sleep', 'hammock_sleep', 'campfire_sleep']
+const OWN_WAKE = new Set(['hammock_sleep', 'campfire_sleep'])
 const COOLDOWN = 280 // ~21 s: ein eben gespielter Clip wird so lange deutlich seltener gewählt
 const NIGHT_PLAY = 3 // nachts: so viele Leerlaufzeiten Zeitvertreib, bevor er einschläft
 /** Stimmungen, in denen er bei Musik mitwippt (0.9.0, Fynn: „wenn er Zeit hat“): Leerlauf, du tippst, langes Warten. */
@@ -277,7 +295,13 @@ export function createEngine(opts: EngineOpts) {
       if (FROST_THAW.test(mood) && S.reduced) return byName.thaw ? [byName.thaw] : []
       return byName[mood] ? [byName[mood]] : []
     }
-    return clips.filter((c) => (c.cat === mood || (c.cat === 'music' && musicIn(mood))) && when(c))
+    const shared = (ASK_SHARED[mood] ?? []).map((n) => byName[n]).filter((c): c is ClipDef => !!c && when(c))
+    return [...shared, ...clips.filter((c) => (c.cat === mood || (c.cat === 'music' && musicIn(mood))) && when(c))]
+  }
+  /** Schlafclip beim Einschlafen (0.16.0): eine der Varianten, gewichtet wie sonst auch. */
+  function sleepClip(): string {
+    const pool = SLEEP_VARIANTS.filter((n) => byName[n] && !(S.reduced && n === 'hammock_sleep')).map((n) => byName[n]!)
+    return pool.length > 1 ? pick(pool, 'sleep') : 'sleep'
   }
   /**
    * Gewicht nach Laune: Frust-Clips erst ab etwas Frust und mit ihm immer häufiger, bis sie die Gruppe dominieren; Clips für gute
@@ -357,7 +381,7 @@ export function createEngine(opts: EngineOpts) {
           return 'drowsy'
         }
         S.sleepStage = 3
-        return 'sleep'
+        return sleepClip()
       }
       // Nur Zeitvertreib, der zur Tageszeit passt (nachts z. B. nur die ruhigen); sonst Grundpose
       // Musik: meist wippt er mit (nachts nur die ruhige Variante, when: 'night')
@@ -439,6 +463,10 @@ export function createEngine(opts: EngineOpts) {
       const have = new Set(p.props.map((x) => x[0]))
       const extra = S.carry.props.filter((x) => !have.has(x[0]))
       if (extra.length) p = { ...p, props: [...p.props, ...extra] }
+    }
+    // Weniger Bewegung (0.16.0): flackernde Gegenstände zeigen ihr ruhiges Bild (Lagerfeuer)
+    if (S.reduced && p.props.some((x) => props[x[0]]?.still)) {
+      p = { ...p, props: p.props.map((x): PropRef => { const s = props[x[0]]?.still; return s ? (x[3] ? [s, x[1], x[2], x[3]] : [s, x[1], x[2]]) : x }) }
     }
     return p
   }
@@ -847,7 +875,24 @@ export function createEngine(opts: EngineOpts) {
     if (S.sleepStage === 0) return []
     const wasLying = S.landing === 'lie'
     S.sleepStage = 0
+    // Hängematte, Lagerfeuer (0.16.0): ihr Ausklang ist das Aufschrecken, danach nur noch Augen reiben
+    if (ownWake()) return ['rub_eyes']
     return wasLying ? ['startled', 'rub_eyes'] : ['rub_eyes']
+  }
+  /** Schläft er gerade in einer Variante, die ihr Aufwachen selbst mitbringt (Hängematte, Lagerfeuer)? */
+  const ownWake = (): boolean => !!S.play && !isDyn(S.play.clip) && OWN_WAKE.has(S.play.clip.name) && S.play.phase !== 'outro' && S.play.phase !== 'end'
+  /**
+   * Aufwachen auslösen: aus Hängematte und Lagerfeuer über deren Ausklang (sonst spränge er aus der Hängematte in den Stand, während das
+   * Gestell als Carry stehen bleibt, und der nachgeholte Ausklang legte ihn noch einmal hinein); sonst sofort wie bisher.
+   */
+  function wakeChain(list: string[]) {
+    if (ownWake()) {
+      S.queue = []
+      leaveClip(list[0]!)
+      S.queue.push(...list.slice(1))
+      return
+    }
+    chainNow(list)
   }
 
   /**
@@ -868,7 +913,7 @@ export function createEngine(opts: EngineOpts) {
       return
     }
     S.queue = []
-    chainNow([...(w.length ? w : ['rub_eyes']), mc])
+    wakeChain([...(w.length ? w : ['rub_eyes']), mc])
   }
 
   function chainNow(list: string[]) {
@@ -881,7 +926,7 @@ export function createEngine(opts: EngineOpts) {
     const w = wake()
     if (w.length) {
       S.queue = []
-      return chainNow(w)
+      return wakeChain(w)
     }
     S.annoy = Math.min(8, S.annoy + 1)
     let r: string
@@ -963,7 +1008,7 @@ export function createEngine(opts: EngineOpts) {
     if (!silent) {
       S.gallery = null
       const w = m !== 'idle' ? wake() : []
-      if (w.length) chainNow(w)
+      if (w.length) wakeChain(w)
       else requestChange()
       log(`Stimmung: ${was} → <b>${m}</b>`)
     }
@@ -1145,10 +1190,23 @@ export function createEngine(opts: EngineOpts) {
     },
     wakeUp() {
       const w = wake()
-      if (w.length) chainNow(w)
+      if (w.length) wakeChain(w)
     },
     welcome,
     start() {
+      nextFromQueue()
+    },
+    /**
+     * Erste Stimmung vor dem ersten Bild (0.16.0): Ist es die Begrüßung, beginnt er gleich mit ihr, ganz hinter der Linie (ohne Glättung aus
+     * dem Stand, sonst duckte er sich erst sichtbar weg). Nur `hello`: andere Stimmungen kommen wie bisher über setMood (gleiche Zufallsfolge).
+     */
+    begin(m: string) {
+      if (m !== 'hello' || S.ticks > 0 || !clips.some((c) => c.cat === 'hello')) return setMood(m)
+      S.play = null
+      S.queue = []
+      S.lastPose = null
+      applyMood(m, true)
+      S.oneShotWait = true
       nextFromQueue()
     },
   }

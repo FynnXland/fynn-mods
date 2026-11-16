@@ -8,7 +8,7 @@
     {
       "name": "clawd-buddy",
       "source": "./mods/clawd-buddy",
-      "description": "Clawd, an animated pixel mascot above the prompt. He reacts to what Claude is doing and keeps you company while you wait."
+      "description": "Clawd, an animated pixel mascot above the prompt. He reacts to what Claude is doing, rings a bell when a tool needs your approval, greets you in a new chat and keeps you company while you wait."
     },
     {
       "name": "limit-bars",

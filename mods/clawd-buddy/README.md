@@ -4,7 +4,7 @@ An animated pixel mascot ("Clawd") sits to the right above the prompt. It reacts
 
 > Texts are English by default; set `language` to `de` for German.
 
-Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** in the terminal and in the desktop app · Plugin version **0.15.2**
+Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** in the terminal and in the desktop app · Plugin version **0.16.1**
 
 ## What it does
 
@@ -12,21 +12,23 @@ Clawd runs on his own. What he does depends on what is happening:
 
 | Situation | What he does (examples) |
 |---|---|
-| Claude reads, writes, uses the shell (own animations for commit/push and tests/checks), the web, or subagents. Each running subagent (background ones too) gets a small helper in a lighter Claude color standing next to him (from 7 on, in a second row). They mostly work quietly side by side, think, report and talk things over; a wave or fist bump is rare. When a subagent finishes, its helper hands over the result (a note, a stack, a folder, an envelope, or a present) or they high-five | magnifying glass, laptop (types slowly to fast), terminal and log windows, floppy disk, upload cloud, clipboard, test tube, globe |
+| Claude reads, writes, uses the shell (own animations for commit/push and tests/checks), the web, or subagents. Each running subagent (background ones too) gets a small helper in a lighter Claude color standing next to him (from 7 on, in a second row). They mostly work quietly side by side, think, report and talk things over; a wave or fist bump is rare. When a subagent finishes, its helper hands over the result (a note, a stack, a folder, an envelope, or a present) or they high-five | magnifying glass, laptop (types slowly to fast), terminal and log windows, forging at a small anvil, floppy disk, upload cloud, clipboard, test tube, globe; while thinking, two small gears turn next to his head |
 | A tool runs longer than 10 s or 60 s | taps his foot, clock, hourglass, sits or lies down |
 | Claude compacts the conversation (`/compact` or automatically) | squashes a paper stack into a tied package or crumples sheets into a box |
 | A skill starts | briefly opens a book or grabs a wrench from a toolbox |
 | With **sidekick** installed: it checks your message, holds it back with a question, or starts a new chat with a handoff | holds the magnifying glass to the input; holds up a stop sign; writes a letter and sends it off, then opens it in the new chat and waves |
 | With **sidekick 0.20.0 or later**: the question has a reason, or sidekick sets a hint or an upkeep note | cold cache: shivers with chattering teeth or stomps and blows into his hands; wrong chat: turns a map around, puzzled; model tip: weighs it up on a small scale; shorter version offered: holds up two notes (scribbled, ticked) and compares; new topic: turns the page and points at a blank sheet; hint line: a light bulb goes on and he points up at it; upkeep: oils the input from a small oil can or sweeps it with a little broom. Questions without a known reason keep the stop sign |
 | **Cold cache or a new chat, now and then** (about every third time, at most once per chat): a new chat (also after `/clear`), a resumed or forked chat whose prompt cache has expired (since 0.13.1; resuming a chat with a warm cache is not a cold moment), sidekick reports the cache as cold, or, without sidekick, 60 minutes after Claude's last turn | frost creeps up from the line, he shivers and rubs his arms, and a block of ice closes around him. He stands frozen (a glint wanders over the edge; at night he falls asleep in the ice). Typing cracks the ice, one stage per burst of typing (up to three). Sending breaks it: shards fall behind the line, he shakes himself like a dog, sneezes and rubs himself warm; about one time in four it melts instead, into a puddle that seeps away. Never while Claude works, and no new freezing while music plays. A question from Claude, a usage limit and compacting come first. With reduced motion the ice forms and melts calmly |
-| Claude is waiting for you (question, permission) | waves with a question mark, holds up a sign, points at the input, asks with a speech bubble; if the question is open for more than 45 s, he knocks on the input |
-| Turn finished or aborted | jumps for joy or shrugs; every 5 successes in a row a trophy or medal; after a long turn (5 min or more) a big "phew" or a finish flag |
+| Claude asks you a question | waves with a question mark, holds up a sign, points at the input, asks with a speech bubble; if the question is open for more than 45 s, he knocks on the input |
+| Claude needs your approval for a tool (since 0.16.0, told apart from a question) | rings a hand bell, waves two signal flags, looks or points at the input; after 45 s he rings two bells at once |
+| Turn finished or aborted | jumps for joy or shrugs; every 5 successes in a row a trophy or medal; after a long turn (5 min or more) a big "phew", a finish flag, a party hat with a balloon, or he lifts a silver trophy |
 | The context window is getting full (70 % and again at 85 %, shown once at the end of the turn) | a box of paper that won't close, or a wobbly paper stack: time for `/compact` or a new chat |
 | You are typing | reads along, takes notes, rubs his hands |
 | Idle | pastimes by time of day: whistling and a little dance in the morning, juggling, soap bubbles, a flower at midday, calmer in the evening; at night a tea light, counting sheep, stargazing, then sleep |
 | Birthday (setting) or New Year's Eve | cake with candles, party hat; fireworks, sparkler |
 | Usage limit reached (5-hour or weekly) | 5 h: turns the hourglass, dozes with an alarm clock, spins a top, is annoyed or sad (can't keep working); weekly: sits on a suitcase, goes fishing, tends a potted plant, paints, knits a scarf, builds a sandcastle. After the reset: a jump for joy or a confetti cannon (always plays to the end) |
-| Night (default 23:00 to 6:00) | yawns, nods off, sleeps with a nightcap |
+| Night (default 23:00 to 6:00) | yawns, nods off, sleeps with a nightcap, in a hammock or by a campfire with a tent (waking up from the hammock or the campfire, he startles and climbs out) |
+| A new chat starts (also after `/clear`; not after `/resume` or `/branch`) | peeks over the line and waves, or tips a straw hat (since 0.16.0). If you were away for 2 h or more, the morning greeting comes instead |
 | Music is playing in Spotify (needs the [tune-strip](../tune-strip/README.md) mod, Windows only) and he has time (idle, while you type, long waits) | bobs to the beat with little notes, puts on headphones from his bag (takes them off again when the music stops), and, with tune-strip 0.6.0, moves **in time with the song**: he nods on the actual beat and picks his moves by the kind of song, from the sound only. Calm songs: more swaying and bobbing. Groove and hip-hop: a laid-back nod with a finger snap. Hard songs: air guitar and a short headbang (only then, and not when he is grumpy). Sad songs (tune-strip 0.7.0): he waves a lighter, rests his chin on his hand (with a small tear now and then) or sways with his arms crossed. At night he only nods quietly, on every second beat, and does not fall asleep while the music plays. Without a sure beat (older tune-strip, ballads, the first seconds of a song) he bobs at his own fixed tempo |
 | You come back after at least 2 h (first input, or the desktop session becomes visible again), at any time of day | gets up or rubs his eyes, then stretches, has a coffee, brushes his teeth, does jumping jacks or waters a flower |
 | Claude switches between tools within seconds | at most two animations in a row are cut short; the third one stays at least about 8 s, so he does not flip back and forth; a question for you ("waiting for you") is exempt and usually shows within about 2–4 s; only if two questions come within about 8 s while he is switching quickly can the second take up to about 8 s |
@@ -34,7 +36,7 @@ Clawd runs on his own. What he does depends on what is happening:
 
 | Input | Effect |
 |---|---|
-| `/clawd` or `/clawd status` | on/off, mood, tiredness, annoyance, the beat from tune-strip (tempo, group, sure or not), one line about the ice (source of the last cold moment, whether the dice were rolled, the result or the planned time, and whether he froze in this chat already); in the desktop app also measurements since the last call (draws per minute, animation length and frame changes, size, compute and drawing time, how often it redrew because the band layout changed or the session was shown again, and how many events needed no redraw) |
+| `/clawd` or `/clawd status` | on/off, mood, tiredness, annoyance, what he is waiting for (your approval, an answer, or nothing), the beat from tune-strip (tempo, group, sure or not), one line about the ice (source of the last cold moment, whether the dice were rolled, the result or the planned time, and whether he froze in this chat already); in the desktop app also measurements since the last call (draws per minute, animation length and frame changes, size, compute and drawing time, how often it redrew because the band layout changed or the session was shown again, and how many events needed no redraw) |
 | `/clawd on` / `/clawd off` | show or hide him (setting `enabled`) |
 | `/clawd list` | all animations by group |
 | `/clawd demo <name>` | play one animation, e.g. `/clawd demo type_laptop` (shows him for this session if he was off) |
@@ -81,7 +83,7 @@ Texts are English by default; set `language` to `de` for German (settings page o
 ```text
 hooks: classic.SessionStart{source=clear|resume|fork}, session.start, session.measure, turn.start, turn.complete, tool.call, tool.check, session.compact, skill.prompt, prompt.edit, ui.message, command.run{command=clawd}, ui.render{component=CommandOutput, props has {command=clawd}}, ui.render{component=AbovePrompt}, ui.render{component=AbovePromptList}
 calls: $.clock.every, $.clock.now, $.command.register, $.config.list, $.config.set, $.process.run, $.state.get, $.state.set, $.store.get, $.store.set, $.ui.invalidate, $.ui.log, $.ui.resolve
-state reads: limit-bars.band, sidekick.buddy, sidekick.status, tune-strip.beat, tune-strip.playing
+state reads: clawd-buddy.mood, limit-bars.band, sidekick.buddy, sidekick.status, tune-strip.beat, tune-strip.playing
 state writes: clawd-buddy.band, clawd-buddy.mood
 ```
 
@@ -105,6 +107,7 @@ In plain language:
 - `$.state.get` (`sidekick.status`, since 0.13.0): reads only `level` (off, cache, guide) and `cold` (true while sidekick's own cache estimate has run out), for the ice. Nothing else from this value. Without sidekick, or with `level` off, Clawd estimates on his own.
 - `$.state.get` (`tune-strip.playing`): reads only whether the tune-strip mod is playing music right now (true/false), no title or artist. Without tune-strip he never bobs along. Since 0.13.0 also read once at session start, so that he does not freeze while music is already playing.
 - `$.state.get` (`tune-strip.beat`, since 0.11.0): reads the tempo, the time of a beat, whether the beat is sure, and the group of the song (calm, groove, hard, sad) from tune-strip; no title or artist. Anything malformed counts as no beat.
+- `$.state.get` (`clawd-buddy.mood`, since 0.16.1): reads only his own published value, once at start, to tell a reload of the mod from a new chat (no second greeting after a reload).
 - `$.state.get` (`limit-bars.band`, since 0.15.0): reads only how wide the bars of limit-bars are, in terminal cells. In the terminal Clawd takes the width that is left next to them; otherwise the line would be too wide and the terminal would leave him out. Without limit-bars he takes the full width.
 - `$.state.set` (`clawd-buddy.band`): publishes only the width of his place in the band, in terminal cells (since 0.15.0; before, pixels in the desktop app): 52 for his 400 px stage in the desktop app, in the terminal the width he drew last, null when he is off. So tune-strip can make room. No other data. Written at session start, on `/clawd on|off`, right after `/clear`, `/resume` or `/branch` (which reset it), and in the terminal at the next turn, keystroke or measurement after his width changed; never while drawing.
 - `$.state.set` (`clawd-buddy.mood`, since 0.15.1): publishes only how tired he is, one number from 0 to 1 in steps of 0.05 (it grows with long stretches of work and drops after a break), or null when he is off. It is there for theme mods that want to react to Clawd, for example by changing the light of a scene when he is tired. Written at most every 5 s and only when it changed by a step, on turns, tool calls, typing and measurements; never while drawing.
@@ -142,6 +145,10 @@ To just hide him without uninstalling, use `/clawd off`.
 
 ## Changelog
 
+- **0.16.1**: no second greeting after the mod reloads (`/clawd on|off`, `/clawd language`, `/reload-plugins`, an update). To tell a reload from a new chat, Clawd reads his own published value `clawd-buddy.mood` once at start (new right `state reads: clawd-buddy.mood`).
+
+- **0.16.0**: new scenes: gears while thinking, forging at an anvil, a party hat with a balloon or a silver trophy after a long turn, sleeping in a hammock or by a campfire. A tool approval is now told apart from a question: he rings a bell or waves signal flags (two bells after 45 s), and `/clawd status` says which one is open. A new chat (or `/clear`) starts with a greeting: he peeks over the line and waves, or tips a straw hat. With reduced motion he does not use the hammock and the campfire does not flicker.
+
 - **0.15.2**: language switch also covers tint. `/clawd language` now switches clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tint and tune-strip.
 
 - **0.15.1**: publishes how tired he is (`clawd-buddy.mood`, a number from 0 to 1) for theme mods that want to react to Clawd (new right `state writes: clawd-buddy.mood`). The shared language list of the fynn-mods was updated.
@@ -160,8 +167,12 @@ To just hide him without uninstalling, use `/clawd off`.
 - **After the mod reloads** (settings changed, for example with `/clawd language`, or `/reload-plugins`), his mood, the helpers of running subagents, an open question and the counters in `/clawd status` start over; in the desktop app the current animation starts anew. On/off, the annoyance counter and when you were last around are stored and stay.
 - **Mood** is per Claude Code process and is not saved. "Working on the same feature for a long time" is approximated by the time spent working in one stretch (the mod cannot see what the work is about).
 - **Ice (since 0.13.0):** No mod event tells whether the prompt cache is cold before you send. With sidekick 0.20.0 or later Clawd uses sidekick's estimate; without it he assumes the cache is cold 60 minutes after Claude's last turn in this process. After a restart or a reload of the mod he does not know that time, so only a new chat counts then. Whether he freezes is decided once per cold moment and kept in memory only: after a reload of the mod (settings changed, `/reload-plugins`) he may roll again in the same chat. In the desktop app typing arrives at most every 3 seconds, so the cracks come in coarser steps. The reasons for sidekick's questions, the hint and the upkeep moments, and sidekick's cold report need sidekick 0.20.0; with an older sidekick he shows the stop sign as before and estimates the cache on his own. Since 0.13.1 a resumed or forked chat (`claude --resume`, `/resume`, `/branch`) uses Claude Code's own estimate whether its prompt cache has expired; if Claude Code does not report it (an older version, or the resumed chat has no answer from Claude yet), the chat counts as a new chat on start and an in-session `/resume` changes nothing, as in 0.13.0.
+- **Approval (since 0.16.0):** the mod learns that a tool needs approval before Claude Code decides how to ask (dialog, auto-mode classifier, bypass permissions). In auto mode or with bypass permissions he may ring the bell and `/clawd status` may say "your approval" while the call is approved silently; it ends when the tool finishes.
+- **Greeting (since 0.16.0):** a reload of the mod (settings changed, `/reload-plugins`, a plugin update) is told apart from a new chat by his own published value in `$.state`, which survives a reload but not `/clear`, `/resume` or `/branch` (since 0.16.1). `/resume` and `/branch` cancel a greeting that has just been set. If the band is drawn more than 15 s after the chat starts, the greeting is skipped. A new chat after 2 h or more away shows the morning greeting on your first input instead.
 - **Voice input:** There is no mod event for "recording in progress", and `prompt.edit` only reports a person as the source. Dictated text counts like typing ("reads along"). Dedicated recording animations will follow once Claude Code offers a signal for it.
 
 ## Credits
 
 The figure is a fan homage to Clawd, the Claude Code mascot. The pixels are drawn by hand. Laptop typing motion after a reference GIF by Fynn Hansen. This is an unofficial project and is not affiliated with Anthropic.
+
+Some scene ideas (gears, bell, party, forge, hammock, campfire, peek-in greeting) were inspired by workordie/clawd-companion (MIT); all frames are drawn from scratch.

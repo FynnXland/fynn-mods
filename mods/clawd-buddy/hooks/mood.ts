@@ -21,6 +21,9 @@ export function shellKind(command: unknown): ToolKind {
   return 'shell'
 }
 
+/** Art der offenen Rückfrage (0.16.0). */
+export type AskKind = '' | 'question' | 'permission'
+
 export type Facts = {
   /** Läuft ein Turn des Hauptagenten? */
   turnActive: boolean
@@ -28,8 +31,11 @@ export type Facts = {
   tool: { kind: ToolKind; since: number } | null
   /** Zuletzt beendetes Tool des Hauptagenten in diesem Turn und wann es endete (ms): Nachlauf, siehe TOOL_LINGER_MS. */
   lastTool?: { kind: ToolKind; endedAt: number }
-  /** Eine Frage an den Nutzer ist offen (AskUserQuestion bzw. Berechtigung `ask`). */
-  ask: boolean
+  /**
+   * Offene Rückfrage (0.16.0, SPEC „Ausbau 0.16.0“ Teil B): `question` = AskUserQuestion, `permission` = Freigabe (tool.check meldet `ask`),
+   * '' = keine. Sind beide offen, gilt `permission`.
+   */
+  ask: AskKind
   /** Zeitpunkt der letzten Eingabe im Prompt (ms, 0 = nie). */
   typingAt: number
   /** Ende des letzten Turns (ms) und wie er endete. */
@@ -80,6 +86,8 @@ export type Facts = {
   ctxAt?: number
   /** Dauer des zuletzt beendeten Turns (ms): ab LONG_TURN_MS heißt „fertig“ `done_long` (Puh, geschafft). */
   turnMs?: number
+  /** Beginn eines neuen Chats (0.16.0 Teil C: session.start bzw. /clear, nicht /resume oder /branch): kurz `hello`. */
+  helloAt?: number
 }
 
 /** Ab so viel Prozent gilt ein Fenster als ausgeschöpft. */
@@ -111,7 +119,7 @@ export const ENDED_MS = 4_000
  */
 export const TOOL_LINGER_MS = 8_000
 
-export const NO_FACTS: Facts = { turnActive: false, tool: null, ask: false, typingAt: 0, endedAt: 0, endedKind: '' }
+export const NO_FACTS: Facts = { turnActive: false, tool: null, ask: '', typingAt: 0, endedAt: 0, endedKind: '' }
 
 /** Tool-Name → Art (SPEC → Stimmungen). Unbekannte Tools (z. B. MCP) zählen als "denkt". */
 export function toolKind(tool: string): ToolKind {
@@ -399,6 +407,11 @@ export const AGENT_DONE_MS = 4_000
 export const AWAY_MS = 2 * 3_600_000
 /** Eine Rückkehr wird nur so lange nach ihrem Zeitpunkt noch begrüßt (z. B. wenn das Band erst kurz danach gezeichnet wird). */
 export const WELCOME_WINDOW_MS = 60_000
+/**
+ * So lange nach dem Beginn eines neuen Chats gilt `hello` (ms). Beginnt die Begrüßung in diesem Fenster, spielt sie ganz durch (einmalig);
+ * zeichnet das Band erst später, entfällt sie.
+ */
+export const HELLO_MS = 15_000
 
 /** Zahl der laufenden Subagenten zur Zeit `now`. */
 export function activeAgents(f: Facts, now: number): number {
@@ -407,7 +420,12 @@ export function activeAgents(f: Facts, now: number): number {
 
 /** Engine-Stimmung zu den Fakten zur Zeit `now` (ms). */
 export function deriveMood(f: Facts, now: number): string {
-  if (f.ask) return f.askSince && now - f.askSince >= WAIT_ASK_LONG_MS ? 'waitUserLong' : 'waitUser'
+  if (f.ask) {
+    // Freigabe (Glocke, Flaggen) und Frage (Fragezeichen) getrennt, beide mit derselben Steigerung (0.16.0 Teil B)
+    const long = !!f.askSince && now - f.askSince >= WAIT_ASK_LONG_MS
+    if (f.ask === 'permission') return long ? 'waitPermissionLong' : 'waitPermission'
+    return long ? 'waitUserLong' : 'waitUser'
+  }
   // Eis (0.13.0): nach dem Senden zuerst der Auftau-Clip (vor sidekicks Prüfung oder Rückfrage und vor der Arbeit)
   const frost = frostMood(f, now)
   if (frost && f.frost?.sentAt !== undefined) return frost
@@ -449,6 +467,8 @@ export function deriveMood(f: Facts, now: number): string {
   if (!f.turnActive && f.ctxAt && now - f.ctxAt < ENDED_MS) return 'ctx_full'
   if (!f.turnActive && f.streakAt && now - f.streakAt < ENDED_MS) return 'streak'
   if (!f.turnActive && f.endedKind && now - f.endedAt < ENDED_MS) return f.endedKind === 'done' && (f.turnMs ?? 0) >= LONG_TURN_MS ? 'done_long' : f.endedKind
+  // Begrüßung bei neuem Chat (0.16.0 Teil C): alles davor (Rückfrage, Eis, Limit, Komprimieren, Arbeit) verdrängt sie ersatzlos
+  if (!f.turnActive && f.helloAt !== undefined && now - f.helloAt < HELLO_MS) return 'hello'
   if (agents > 0) return 'work_agent'
   if (f.turnActive) return WORK[f.tool?.kind ?? 'think']
   if (f.typingAt && now - f.typingAt < TYPING_MS) return 'watching'

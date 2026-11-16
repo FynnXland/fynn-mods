@@ -24,7 +24,7 @@ import { storeOffDefaults } from './offdefaults.js'
 import { SETTINGS } from './fields.js'
 import { H, W } from './stage.js'
 import type { Desk } from './desk.js'
-import type { Facts, ToolKind } from './mood.js'
+import type { AskKind, Facts, ToolKind } from './mood.js'
 
 // `enabledMigrated`: der Wert von `enabled`, der zuletzt nach userConfig umgezogen ist (0.14.2)
 type Stored = { enabled?: boolean; enabledMigrated?: boolean; annoy?: number; seenAt?: number }
@@ -101,7 +101,9 @@ let facts: Facts = { ...NO_FACTS }
 let strain: Strain = { ...NO_STRAIN } // Laune: Rückschläge, Erfolge, Arbeitszeit am Stück (mood.ts)
 let turnHadError = false
 const agentSeen = new Map<string, number>() // laufende Subagenten: agentId → letzte Aktivität (ms)
-let askTool = ''
+let askTool = '' // offene Freigabe (tool.check meldet ask): tool_use_id
+let questionTool = '' // offene Frage (AskUserQuestion, 0.16.0): tool_use_id
+let resumedChat = false // 0.16.0: /resume oder /branch, kein neuer Chat (keine Begrüßung)
 let ctxWarned = 0 // zuletzt gemeldete Stufe des Kontextfensters (mood.ts → CTX_WARN)
 let ctxPending = false // neue Stufe erreicht, wird am Turn-Ende gezeigt
 let typingPerf = 0 // performance.now() des letzten Tastendrucks (synchron lesbar, ohne `$`-Aufruf pro Taste)
@@ -131,6 +133,36 @@ function newChat() {
     facts = { ...facts }
     delete facts.frost
   }
+}
+
+/**
+ * Art der offenen Rückfrage aus den offenen Aufrufen (0.16.0 Teil B): eine Freigabe geht vor einer Frage. Wechselt die Art, beginnt die
+ * Wartezeit neu (die Steigerung nach WAIT_ASK_LONG_MS gilt je Art). Ohne Zeitpunkt (Uhr nicht gelesen) gibt es dann keine Steigerung, statt
+ * die Wartezeit einer früheren Rückfrage zu erben (Review 0.16.0 K1).
+ */
+function syncAsk(now?: number) {
+  const kind: AskKind = askTool ? 'permission' : questionTool ? 'question' : ''
+  if (kind === facts.ask) return
+  facts = { ...facts, ask: kind, askSince: kind ? now : facts.askSince }
+}
+
+/**
+ * Begrüßung bei einem neuen Chat (0.16.0 Teil C). Nicht, wenn Clawd aus ist, und nicht, wenn Fynn länger als AWAY_MS weg war: Dann kommt die
+ * Begrüßung mit dem Morgen-Clip (noteSeen → backAt), zwei hintereinander wären zu viel.
+ */
+async function greet($: EngineInterface) {
+  if (!enabled || resumedChat) return
+  let now: number
+  try {
+    now = await $.clock.now()
+  } catch (err) {
+    $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+    return
+  }
+  // Kam resume/branch während des Wartens auf die Uhr (Reihenfolge zu session.start nicht dokumentiert): keine Begrüßung
+  if (resumedChat || (lastSeen > 0 && now - lastSeen >= AWAY_MS)) return
+  facts = { ...facts, helloAt: now }
+  factsChanged($, now)
 }
 
 /** Ein begonnenes Eis (nicht /clawd freeze) zählt für „einmal pro Chat“. */
@@ -398,11 +430,21 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     // /clear ist ein neuer Chat (0.13.0): kalter Moment, „einmal pro Chat“ beginnt neu.
     if (e.source === 'clear') {
       newChat()
+      resumedChat = false
       try {
         const now = await $.clock.now()
         if (coldMoment('new', now)) factsChanged($, now)
       } catch (err) {
         $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
+      }
+      await greet($)
+    }
+    // /resume und /branch (0.16.0 Teil C): ein vorhandener Chat, keine Begrüßung; eine eben gesetzte nimmt er zurück
+    if (e.source === 'resume' || e.source === 'fork') {
+      resumedChat = true
+      if (facts.helloAt !== undefined) {
+        facts = { ...facts, helloAt: undefined }
+        factsChanged($)
       }
     }
     // resume/fork (0.13.1, Nachtrag): ein anderer Chat. Abgelaufener Cache (types 2.1.318:12596-12598) ist ein kalter Moment mit dem
@@ -432,6 +474,17 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
   })
 
   on('session.start', async ($, e, next) => {
+    // Neuladen oder neuer Chat? (0.16.1, Fynn 2026-11-16: „Recht freigeben, 0.16.1“) session.start feuert auch nach einem Neuladen des Mods
+    // (docs/raw/en/reference.md:153). $.state übersteht ein Neuladen, /clear, /resume und /branch setzen es zurück (docs/raw/en/interface.md:942, :949,
+    // :1021); ein nie geschriebener Wert ist `undefined` mit Version 0 (types@2.1.325:3638-3639). Der eigene Wert `clawd-buddy.mood` wird bei
+    // jedem session.start geschrieben (auch `null`, wenn Clawd aus ist): steht er schon da, wurde der Mod nur neu geladen. Vor publishMood lesen.
+    let reloaded = false
+    try {
+      const own = await $.state.get({ plugin: 'clawd-buddy', key: 'mood' })
+      reloaded = own.value !== undefined || own.version > 0
+    } catch (err) {
+      $.ui.log(`clawd-buddy: own state not read: ${String(err)}`, { to: 'debug' })
+    }
     isDesktop = e.surface === 'desktop'
     publishedCols = undefined
     sessionStarted = true
@@ -459,6 +512,8 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         $.ui.log(`clawd-buddy: clock not read: ${String(err)}`, { to: 'debug' })
       }
     }
+    // Begrüßung (0.16.0 Teil C), nicht nach einem Neuladen des Mods (0.16.1, siehe oben)
+    if (!reloaded) await greet($)
     try {
       await $.command.register({ name: 'clawd', description: tx.description, argumentHint: 'on | off | list | demo <animation> | nap | boop | freeze | status | flicker | language | help' })
     } catch (err) {
@@ -554,8 +609,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       }
       running.clear()
       askTool = ''
+      questionTool = ''
       const turnMs = strain.turnSince ? Math.max(0, now - strain.turnSince) : 0
-      facts = { ...facts, turnActive: false, tool: null, ask: false, endedAt: now, endedKind: e.reason === 'answer' ? 'done' : 'oops', turnMs }
+      facts = { ...facts, turnActive: false, tool: null, ask: '', endedAt: now, endedKind: e.reason === 'answer' ? 'done' : 'oops', turnMs }
       if (ctxPending) {
         ctxPending = false
         facts = { ...facts, ctxAt: now }
@@ -591,8 +647,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       } finally {
         if (askTool === id) {
           askTool = ''
-          facts = { ...facts, ask: false }
-          factsChanged($)
+          const at = await $.clock.now().catch(() => undefined)
+          syncAsk(at)
+          factsChanged($, at)
         }
       }
     }
@@ -609,7 +666,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const base = toolKind(e.tool)
     const kind = base === 'shell' ? shellKind((e as { command?: unknown }).command) : base
     running.set(id, { kind, since: now })
-    facts = { ...facts, tool: latestTool(), ask: isQuestion || facts.ask, askSince: isQuestion && !facts.ask ? now : facts.askSince }
+    if (isQuestion) questionTool = id
+    facts = { ...facts, tool: latestTool() }
+    syncAsk(now)
     factsChanged($, now)
     let res: Awaited<ReturnType<typeof next>> | undefined
     try {
@@ -625,10 +684,9 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
         turnHadError = true
       }
       running.delete(id)
-      if (isQuestion || askTool === id) {
-        askTool = ''
-        facts = { ...facts, ask: false }
-      }
+      // Das Ende des Tools löscht genau seine Rückfrage (0.16.0): eine noch offene der anderen Art bleibt
+      if (questionTool === id) questionTool = ''
+      if (askTool === id) askTool = ''
       // Nachlauf (mood.ts TOOL_LINGER_MS): seine Arbeit bleibt kurz die Stimmung, auch wenn das Tool schon fertig ist
       let endedAt = now
       try {
@@ -636,6 +694,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       } catch {
         // ohne Uhr zählt der Beginn als Ende: der Nachlauf wird nur kürzer
       }
+      syncAsk(endedAt)
       facts = { ...facts, tool: latestTool(), lastTool: isQuestion ? facts.lastTool : { kind, endedAt } }
       factsChanged($, endedAt)
     }
@@ -645,16 +704,16 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
     const decision = await next(e)
     // Eine Rückfrage ist gemeint, wenn die Kette bei einem echten Aufruf (`tool_use_id`) `ask` meldet. Ob der Modus sie danach selbst
     // bewilligt (z. B. "Berechtigungen umgehen"), sieht dieses Modul nicht; die Frage gilt bis das Tool endet.
-    if (decision.decision === 'ask' && e.tool_use_id) {
+    // AskUserQuestion ist eine Frage, keine Freigabe, auch wenn die Kette dafür `ask` meldet (0.16.0 Teil B; tool.call setzt die Frage)
+    if (decision.decision === 'ask' && e.tool_use_id && e.tool !== 'AskUserQuestion') {
       askTool = e.tool_use_id
       let now: number | undefined
       try {
         now = await $.clock.now()
-        if (!facts.ask) facts = { ...facts, askSince: now }
       } catch {
         // ohne Uhr keine Steigerung, die Rückfrage gilt trotzdem
       }
-      facts = { ...facts, ask: true }
+      syncAsk(now)
       factsChanged($, now)
     }
     return decision
@@ -875,7 +934,7 @@ export function register(on: On, options: Readonly<Record<string, string | numbe
       const pending = fr && fr.sentAt === undefined && now < fr.at ? new Date(fr.at) : null
       const at = pending ? `${String(pending.getHours()).padStart(2, '0')}:${String(pending.getMinutes()).padStart(2, '0')}` : ''
       const ice = tx.frost({ ...frostInfo, at: frostInfo.result === 'frozen' ? at : '', chat: chatFrozen })
-      return { text: `${text} ${ice} ${tx.help}` }
+      return { text: `${text} ${tx.ask(facts.ask)} ${ice} ${tx.help}` }
     }
     // Nicht erreichbar, solange jeder Eintrag von SUBCOMMANDS oben einen Zweig hat; Schutz, falls beide auseinanderlaufen
     return { text: `${tx.unknown(sub)} ${tx.help} ${tx.seeHelp}` }

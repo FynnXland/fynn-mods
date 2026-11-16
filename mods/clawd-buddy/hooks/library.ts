@@ -17,8 +17,10 @@ import * as extra from './clips/extra.js'
 import * as hints from './clips/hints.js'
 import * as music from './clips/music.js'
 import * as frost from './clips/frost.js'
+import * as scenes from './clips/scenes.js'
 
-const groups = [idle, fun, work, agent, wait, done, night, mouse, transitions, sidekick, extra, hints, music, frost]
+// scenes (0.16.0) zuletzt: der erste Clip jeder vorhandenen Gruppe bleibt der ruhigste (weniger Bewegung nimmt den ersten)
+const groups = [idle, fun, work, agent, wait, done, night, mouse, transitions, sidekick, extra, hints, music, frost, scenes]
 
 export const ALL_CLIPS: readonly ClipDef[] = groups.flatMap((g) => g.CLIPS)
 /**
@@ -40,5 +42,6 @@ export const CAT_LABEL: Readonly<Record<string, string>> = {
   sk_stop_cold: 'sidekick fragt: Cache ist kalt', sk_stop_wrong: 'sidekick fragt: falscher Chat?', sk_stop_model: 'sidekick fragt: anderes Modell?', sk_stop_rewrite: 'sidekick bietet eine kürzere Fassung an', sk_stop_topic: 'sidekick fragt: neues Thema, neuer Chat?', sk_hint: 'sidekick setzt einen Hinweis', sk_upkeep: 'sidekick meldet Wartung',
   frost_in: 'Friert ein', frozen: 'Eingefroren', frost_crack: 'Eis bekommt Risse', frost_break: 'Eis zerbricht', frost_melt: 'Eis schmilzt',
   compact: 'Komprimiert den Verlauf', skill: 'Skill startet', ctx_full: 'Kontext fast voll', done_long: 'Langer Turn geschafft',
+  waitPermission: 'Wartet auf deine Freigabe', waitPermissionLong: 'Wartet lange auf deine Freigabe', hello: 'Begrüßung (neuer Chat)',
   music: 'Musik (tune-strip spielt)', done: 'Fertig', oops: 'Fehler', night: 'Nacht', morning: 'Morgen', mouse: 'Maus', transition: 'Übergänge',
 }
