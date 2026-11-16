@@ -30,6 +30,7 @@ declare module 'claude-code' {
       // Nachtrag 0.21.0: Namen der gespeicherten Prompts mit Knopf (höchstens 4, Reihenfolge des Speicherns). Nur sidekick liest ihn;
       // der Knopf-Baum wird so nur neu gezeichnet, wenn sich die Liste ändert, ohne $.ui.invalidate. Keine Prompt-Texte.
       // Ausbau 0.24.0: `later` = Knopf „Danach“ während einer Runde (`on`), nach einem Klick `armed`; fehlt sonst. Keine Texte
+      // Ausbau 0.27.0: nur, was die Fußzeile zeigt: `buttons` leer bei userConfig `promptButtons` aus, ohne `later` bei `laterButton` aus
       prompts: { buttons: string[]; later?: 'on' | 'armed' } | null
     }
     'quick-replies': {

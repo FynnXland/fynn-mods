@@ -8,7 +8,7 @@ import type { EngineInterface, On, RenderElement, RenderNode, Timer, UiPressArgu
 import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.js'
 import { lang, setLang, shortDate, spanText, t, tokensText, usdText } from './i18n.js'
 import { isLanguage, languageCommand } from './language.js'
-import { NOTES_WORDS, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, nonNeg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.js'
+import { NOTES_WORDS, addTopic, afterOwnMessage, cleanNote, cleanTopics, nonNeg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.js'
 import type { Note } from './notes.js'
 import { CATALOG as CATALOG_SPEC, CHECK, HANDOFF, QUEUE, RATE, TIP_TARGETS, modelLabel, modelName } from './models.js'
 import {
@@ -24,8 +24,10 @@ import {
   findCandidates,
   gapOk,
   isInstalled,
+  loopSkill,
   parseCatalog,
   skillContext,
+  yieldedTo,
 } from './catalog.js'
 import type { CatalogEntry, CatalogVerdict } from './catalog.js'
 import { QUEUE_TAIL, isHostNote, laterByVerdict, laterPrefix, parseQueue, queuePrompt, queueRule, queueSystem, stripLeadReminders } from './queue.js'
@@ -35,6 +37,8 @@ import { changed, migrateSettings, readSettings, writeNote, writeSettings } from
 import { storeOffDefaults } from './offdefaults.js'
 import type { Values, WriteResult } from './settings.js'
 import { SETTINGS } from './fields.js'
+import { FOOTER_BUTTONS, buttonRows, buttonTarget, buttonsArg, buttonsMarkdown, kindTitle, laterAllowed, shownPrompts, switchOn } from './buttons.js'
+import type { ButtonFacts, ButtonKind } from './buttons.js'
 import {
   DEFAULT_RUNTIME,
   MIN_OF,
@@ -709,6 +713,8 @@ async function bindNow($: EngineInterface): Promise<void> {
   statusLast = undefined
   mem = emptyMem()
   ses = emptySitzung()
+  // „An Claude geben“ (Ausbau 0.27.1): ein offenes `pass` gehört zur alten Session und verfällt still
+  pass = null
   pending = null
   askedCold = false
   chain = Promise.resolve()
@@ -1818,17 +1824,27 @@ async function updateLoop($: EngineInterface, fn: (l: Loop) => Loop) {
  * Frage der Korrektur-Schleife (Ausbau 0.19.0, Verhalten 2) vor dem Senden. Gibt zurück, was mit der Nachricht geschieht: `send`
  * unverändert, `nudge` mit Denkanstoß als `context`, `new` neuer Chat mit Übergabe (der Aufrufer startet ihn). Geschlossen: `send`.
  */
-async function askLoop($: EngineInterface, c: Check, resendable: boolean, base: number, now: number): Promise<LoopChoice> {
+async function askLoop($: EngineInterface, c: Check, resendable: boolean, base: number, now: number, skill: CatalogEntry | null = null): Promise<LoopChoice> {
   const x = t()
   ses.korrAsked = true
+  // Ausbau 0.28.0 (E4): mit Skill gilt der Eintrag danach in diesem Chat als angeboten, egal wie die Antwort ausfällt. Die Frage zählt
+  // als Katalog-Rückfrage: Bilanz „angeboten“ (sonst fehlt die Zeile in /savings detail, Review S2) und Abstand `CATALOG_GAP` (Review K2)
+  if (skill) {
+    ses.catOffered = [...ses.catOffered, skill.id]
+    ses.catAsk = ses.own
+    bookDay($, now, (d) => countCatalog(d, 'angeboten'))
+  }
   saveSes($, now)
   const big = c.ctx >= settings.threshold || c.cold
   const list = loopChoices({ big, resendable })
-  const lbl = (ch: LoopChoice) => (ch === 'new' ? x.newChat : ch === 'nudge' ? x.loopNudge : x.loopSend)
+  const nudgeLbl = skill ? x.cat.optWith(skill.name) : x.loopNudge
+  const lbl = (ch: LoopChoice) => (ch === 'new' ? x.newChat : ch === 'nudge' ? nudgeLbl : x.loopSend)
   const options = list.map((ch, i) => lbl(ch) + (i === 0 ? x.recommended : ''))
   const parts = [x.loopQuestion]
   // Im großen Chat mit Kosten wie bei der Neuer-Chat-Frage
   if (big && resendable) parts.push(x.optNew(x.newChat, usdText(handoffEstimate(c.ctx * 4, base, c.model, c.ttl))))
+  // Mit Skill: die Kontextkosten wie in der Katalog-Rückfrage (E4)
+  if (skill) parts.push(x.cat.loopCost(skill.name, tokensText(skill.ctxTokens ?? 0)))
   // /rewind öffnet eine Auswahl und hat keinen Knopf (logic.ts NO_BUTTON): nur als Hinweis
   parts.push(x.loopRewind, x.howNext)
   bookDay($, now, (d) => countHint(d, 'schleife', 'gezeigt'))
@@ -2295,7 +2311,7 @@ async function runNote($: EngineInterface, e: StepFacts) {
   })
   if (!p || p.kind !== 'note' || stale) return
   const now = await $.clock.now()
-  ses.note = { thema: p.thema, art: p.art, titel: p.titel, text: p.text, shownAt: now, turnId: e.turnId, survived: 0, open: false }
+  ses.note = { thema: p.thema, art: p.art, titel: p.titel, text: p.text, shownAt: now, turnId: e.turnId, survived: 0 }
   noteTurn = e.turnId
   saveSes($, now)
   // Frisch gelesen: eine andere Session kann inzwischen geschrieben haben
@@ -2321,60 +2337,84 @@ async function noteAfterOwn($: EngineInterface, text: string, kind: string) {
   $.ui.invalidate('ui.render')
 }
 
-type NoteAction = 'explain' | 'known' | 'later' | 'gotit' | 'close' | 'chat'
+type NoteAction = 'claude' | 'known' | 'ignore'
 
 /**
- * „Im Chat fragen“: senden, ohne zu warten. Der Aufruf löst sich erst, wenn die neue Runde beginnt, also nach Claudes laufender Arbeit
- * (docs/raw/en/api.md:138); der Knopf soll sofort fertig sein (Review 0.13.0 S1). Als Nachricht von sidekick, nicht `asUser`:
- * ein anderes Plugin kann `asUser` als Antwort des Nutzers werten (Review 0.13.0 S2). Fehler als Toast.
+ * „An Claude geben“ während eines Zugs (Ausbau 0.27.1, E1): höchstens einer offen. Der nächste `tool.call` des Hauptagenten, dessen
+ * Ergebnis kein `deny` ist, bekommt `text` als `context` (types@2.1.325:14699-14707). Endet der Zug ohne Werkzeug, geht `idle` per
+ * `$.prompt.submit`. Nur im Speicher: Sessionwechsel (`/clear`, `/resume`, `/branch`), `session.start` und ein Abbruch verwerfen ihn.
  */
-function askInChat($: EngineInterface, n: Note) {
+type Pass = { sid: string; turnId: string; text: string; idle: string; at: number }
+let pass: Pass | null = null
+
+/**
+ * Den Hinweis als Nachricht an Claude senden, ohne zu warten: Der Aufruf löst sich erst, wenn die neue Runde beginnt (docs/raw/en/api.md:138),
+ * der Knopf soll sofort fertig sein (Review 0.13.0 S1). Als Nachricht von sidekick, nicht `asUser` (Review 0.13.0 S2). Fehler als Toast.
+ */
+function sendNote($: EngineInterface, text: string) {
+  void $.prompt.submit({ text }).catch((err) => $.ui.toast(t().noteAskFailed(msg(err)), { timeoutMs: 15000 }))
+}
+
+/** „An Claude geben“: im Zug als `pass` merken, sonst sofort senden. `false`: nichts geschehen, der Hinweis bleibt. */
+function passNote($: EngineInterface, n: Note, now: number): boolean {
   const x = t()
-  void $.prompt.submit({ text: x.noteAskText(n.titel, n.thema) }).catch((err) => $.ui.toast(x.noteAskFailed(msg(err)), { timeoutMs: 15000 }))
+  if (pass) {
+    $.ui.toast(x.notePassAlready, { timeoutMs: 8000 })
+    return false
+  }
+  const idle = x.notePassText(n.titel, n.thema, n.text, false)
+  if (turnRunning && curTurn) {
+    pass = { sid: sessionId, turnId: curTurn, text: x.notePassText(n.titel, n.thema, n.text, true), idle, at: now }
+    $.ui.toast(x.notePassed, { timeoutMs: 5000 })
+  } else sendNote($, idle)
+  return true
 }
 
 /**
- * „Im Chat besprechen“: ins leere Eingabefeld schreiben, nie selbst senden. Der Desktop zeichnet ein eigenes Eingabefeld, dort
- * verweigert `fill` mit `no_composer` (types:8440-8450): dann senden wie das Vorbild, der Knopf heißt dort „Im Chat fragen“.
+ * Am Ergebnis eines Werkzeugs: ein offenes `pass` als `context` anhängen, nur beim Hauptagenten (`agentId` fehlt) und nicht an einem `deny`.
+ * Sonst `r` selbst zurück (dasselbe Objekt: Core übernimmt dann seine Nachrichten unverändert, types@2.1.325 `ref`). Von fremden Werkzeugen
+ * liest sidekick nur `agentId` und `deny`, nie Eingabe oder Ergebnis (SPEC „Ausbau 0.27.1“, Rechte).
+ * Grenze (Review 0.27.1 K3): Ruft ein anderer Mod `$.tool.call` aus der Hauptschleife, läuft diese Kette ohne `agentId` mit und verbraucht
+ * `pass`; Core reicht den `context` eines Plugin-Aufrufs aber nicht an Claude (types@2.1.325:14704). Heute ruft kein fynn-mod `$.tool.call`.
  */
-async function noteToChat($: EngineInterface, n: Note, surface: string): Promise<boolean> {
-  const x = t()
-  if (surface === 'desktop') {
-    askInChat($, n)
-    return true
-  }
-  const box = await readBox($).catch(() => null)
-  if (box && box.text.trim()) {
-    $.ui.toast(x.noteBoxFull, { timeoutMs: 8000 })
-    return false
-  }
-  // `append`: tippt der Nutzer zwischen read und fill, bleibt sein Text stehen; bei leerem Feld dasselbe wie `replace` (Review K2)
-  const next = afterFill(await fillBox($, `${x.noteChatText(n.titel, n.thema)}\n\n`, 'append'))
-  if (next === 'filled') return true
-  if (next === 'submit') {
-    askInChat($, n)
-    return true
-  }
-  $.ui.toast(next === 'dialog' ? x.noteDialog : x.noteNotTaken, { timeoutMs: 8000 })
-  return false
+function withPass<R extends { deny?: unknown; context?: readonly string[] }>(agentId: unknown, r: R): R {
+  if (!pass || agentId || typeof r.deny === 'string' || pass.sid !== sessionId) return r
+  const text = pass.text
+  pass = null
+  return { ...r, context: [...(r.context ?? []), text] }
+}
+
+/**
+ * Zugende des Hauptagenten: ein Abbruch verwirft `pass` still; sonst geht es als Nachricht raus, sobald die Sitzung frei ist. Nicht im Hook
+ * selbst: Die Runde endet gerade, `$.prompt.submit` griffe dort nicht (wie `/handoff`, limit-bars 0.14 captureHandoff); 300 ms später.
+ */
+function passAtEnd($: EngineInterface, turnId: string, aborted: boolean) {
+  const p = pass
+  if (!p) return
+  pass = null
+  if (aborted || p.turnId !== turnId || p.sid !== sessionId) return
+  // Ein /clear in diesen 300 ms: nicht in den neuen Chat senden (Review 0.27.1 K1)
+  later($, 300, () => {
+    if (p.sid === sessionId) sendNote($, p.idle)
+  })
 }
 
 /** Ein Knopf am Hinweis. `shownAt` bindet den Druck an den Hinweis, der gezeichnet war; jede Wahl beendet die Zurückhaltung. */
-async function pressNote($: EngineInterface, shownAt: number, action: NoteAction, surface: string) {
+async function pressNote($: EngineInterface, shownAt: number, action: NoteAction) {
   if (notePressing) return
   notePressing = true
   try {
     await bindSession($)
     const n = ses.note
     if (!n || n.shownAt !== shownAt) return
-    if (action === 'chat' && !(await noteToChat($, n, surface))) return
     const now = await $.clock.now()
-    ses.note = action === 'explain' ? { ...n, open: true } : null
+    if (action === 'claude' && !passNote($, n, now)) return
+    ses.note = null
     saveSes($, now)
-    // „Weiß ich schon“ und „Verstanden“: das Thema nie wieder anbieten
-    if (action === 'known' || action === 'gotit') await $.store.set('notes:known', addTopic(cleanTopics(await $.store.get('notes:known')), n.thema))
-    const field: NoteField | null = action === 'explain' ? 'erklaert' : action === 'known' ? 'bekannt' : action === 'later' ? 'spaeter' : action === 'chat' ? 'chat' : null
-    if (field) bookDay($, now, (d) => countNote(d, field))
+    // „Weiß ich schon“: das Thema nie wieder anbieten; „Ignorieren“ (früher „Später“): es darf wiederkommen
+    if (action === 'known') await $.store.set('notes:known', addTopic(cleanTopics(await $.store.get('notes:known')), n.thema))
+    const field: NoteField = action === 'claude' ? 'weiter' : action === 'known' ? 'bekannt' : 'spaeter'
+    bookDay($, now, (d) => countNote(d, field))
     await $.store.set('notes:ignored', 0)
     await $.store.set('notes:skip', 0)
   } catch {
@@ -2388,30 +2428,19 @@ async function pressNote($: EngineInterface, shownAt: number, action: NoteAction
 type NoteButton = (p: { key: string; label: string; hotkey?: string; plain?: true; onPress: () => void }) => RenderNode
 
 /**
- * Der Hinweis über dem Prompt: `✦ Achtung · <thema>` mit 1 Erklären, 2 Weiß ich schon, 0 Später; aufgeklappt Titel und Erklärung mit
- * 1 Verstanden, 2 Im Chat besprechen, 0 Schließen. `digits`: Ziffern als hotkey; nicht, solange quick-replies 1 … n belegt (types:9073).
+ * Der Hinweis über dem Prompt in einer Zeile (Ausbau 0.27.1, E2): `✦ Achtung · <thema>` mit 1 An Claude geben, 2 Weiß ich schon,
+ * 0 Ignorieren. `flexWrap`: Ist die Zeile zu schmal, brechen die Knöpfe um. Keine Leerzeile darunter, auch im Terminal nicht.
+ * `digits`: Ziffern als hotkey; nicht, solange quick-replies 1 … n belegt (types:9073).
  */
-function noteView(n: Note, cols: number, surface: string, digits: boolean, button: NoteButton, press: (a: NoteAction) => void): RenderElement {
+function noteView(n: Note, cols: number, digits: boolean, button: NoteButton, press: (a: NoteAction) => void): RenderElement {
   const x = t()
   const b = (key: string, label: string, hotkey: string, a: NoteAction) => button({ key, label, plain: true, ...(digits ? { hotkey } : {}), onPress: () => press(a) })
-  const head = (label: string, rest: string) =>
-    el('Text', {}, [el('Text', { color: ACCENT }, ['✦ ']), el('Text', { color: ACCENT, bold: true }, [label]), ...(rest ? [el('Text', { dimColor: true }, [' · ']), el('Text', {}, [rest])] : [])])
-  const buttons = (kids: RenderNode[]) => el('Box', { key: 'sidekick-note-buttons', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3 }, kids)
-  // Leerzeile darunter nur im Terminal; im Desktop gibt der blaue Streifen den Abstand (Nachtrag 0.15.2, Sicht-Check)
-  const frame = { key: 'sidekick-note', flexDirection: 'column', width: Math.max(20, cols), ...(surface === 'desktop' ? {} : { marginBottom: 1 }) }
-  if (!n.open)
-    return el('Box', frame, [
-      head(x.noteTag[n.art], n.thema),
-      buttons([b('sidekick-note-explain', x.noteExplain, '1', 'explain'), b('sidekick-note-known', x.noteKnown, '2', 'known'), b('sidekick-note-later', x.noteLater, '0', 'later')]),
-    ])
-  return el('Box', frame, [
-    head(n.titel || x.noteTag[n.art], ''),
-    el('Text', {}, [n.text || n.thema]),
-    buttons([
-      b('sidekick-note-gotit', x.noteGotIt, '1', 'gotit'),
-      b('sidekick-note-chat', surface === 'desktop' ? x.noteAsk : x.noteChat, '2', 'chat'),
-      b('sidekick-note-close', x.noteClose, '0', 'close'),
-    ]),
+  const head = el('Text', {}, [el('Text', { color: ACCENT }, ['✦ ']), el('Text', { color: ACCENT, bold: true }, [x.noteTag[n.art]]), el('Text', { dimColor: true }, [' · ']), el('Text', {}, [n.thema])])
+  return el('Box', { key: 'sidekick-note', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3, width: Math.max(20, cols) }, [
+    head,
+    b('sidekick-note-claude', x.noteClaude, '1', 'claude'),
+    b('sidekick-note-known', x.noteKnown, '2', 'known'),
+    b('sidekick-note-ignore', x.noteIgnore, '0', 'ignore'),
   ])
 }
 
@@ -2641,13 +2670,18 @@ function updateSaved<R>($: EngineInterface, fn: (list: Saved[]) => { list: Saved
   return run
 }
 
+/** Was die Fußzeilen-Knöpfe brauchen (Ausbau 0.27.0, hooks/buttons.ts): userConfig, Stufe, gespeicherte Prompts. */
+const btnFacts = (): ButtonFacts => ({ cfg, level: settings.level, saved })
+
 /**
  * Knopfliste nach `$.state` (nur bei Änderung): der Knopf-Baum liest sie und zeichnet nur dann neu (kein $.ui.invalidate). `later`
  * ist seit 0.25.1 nur noch Anlass zum Neuzeichnen über das Abo; den Zustand nimmt die Zeichnung aus dem Speicher (`laterNow`).
+ * Seit 0.27.0 nur die sichtbaren Knöpfe: `promptButtons` aus → `buttons: []`, `laterButton` aus → ohne `later`. Ein Schalter ändert
+ * den Wert also nur, wenn sich in der Fußzeile etwas ändert, und nur dann zeichnet sie neu.
  */
 function pushBtns($: EngineInterface) {
   const laterBtn = laterNow()
-  const value = { buttons: buttonNames(saved), ...(laterBtn ? { later: laterBtn } : {}) }
+  const value = { buttons: shownPrompts(btnFacts()), ...(laterBtn ? { later: laterBtn } : {}) }
   const key = JSON.stringify(value)
   if (key === promptsLast) return
   promptsLast = key
@@ -2824,7 +2858,9 @@ async function promptsCommand($: EngineInterface, args: string, messages?: () =>
   const sw = (rest[0] ?? '').toLowerCase()
   if (sw === 'on' || sw === 'off') {
     await setButton($, n, sw === 'on')
-    return x.buttonSet(n, sw === 'on', buttonNames(saved).includes(n))
+    const out = x.buttonSet(n, sw === 'on', buttonNames(saved).includes(n))
+    // Review 0.27.0 K4: wie `/sidekick buttons <name> on`, wenn alle Prompt-Knöpfe aus sind
+    return sw === 'on' && !switchOn(btnFacts(), 'promptButtons') ? `${out} ${t().bt.promptsOffNote}` : out
   }
   return [x.detail(p.name, p.button, p.from), '', '```text', p.text, '```'].join('\n')
 }
@@ -3012,13 +3048,15 @@ async function pressPrompt($: EngineInterface, name: string) {
  */
 async function promptButtons($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0]): Promise<RenderNode[]> {
   if (settings.level === 'off') return []
-  let names = buttonNames(saved)
+  let names = shownPrompts(btnFacts())
   try {
     const { value } = await $.state.get({ plugin: 'sidekick', key: 'prompts' })
     if (value && Array.isArray(value.buttons)) names = value.buttons
   } catch {
     // ohne Abo: die Liste im Speicher
   }
+  // Ausbau 0.27.0: Schalter `promptButtons` aus → keine, auch wenn ein älterer Wert noch Namen trägt
+  if (!switchOn(btnFacts(), 'promptButtons')) names = []
   // Patch 0.25.1: Zustand von „Danach“ aus dem Speicher, `get` oben nur fürs Abo. Im Desktop verschwand der Knopf nach dem zweiten
   // Klick (Fynns Sicht-Check 2026-11-09): las die Zeichnung nach `$.ui.invalidate` einen Stand ohne `later` (oder warf `get`), kam
   // er nicht zurück, weil danach nichts mehr geschrieben wurde
@@ -3074,6 +3112,105 @@ function promptsTree($: EngineInterface, e: Parameters<EngineInterface['ui']['re
 async function setButton($: EngineInterface, name: string, on: boolean) {
   await updateSaved($, (list) => ({ list: list.map((s) => (s.name === name ? { ...s, button: on } : s)), r: null }))
   pushBtns($)
+}
+
+// ---- Fußzeilen-Knöpfe (Ausbau 0.27.0): `/sidekick buttons` listet die Knopfarten aus hooks/buttons.ts und jeden gespeicherten Prompt,
+// mit An/Aus je Zeile. Knopfarten schreiben ihr userConfig-Feld (`writeCfg`), Prompts ihren Schalter `button` (`setButton`).
+
+// Kennungen der letzten `/sidekick buttons`-Ausgaben (höchstens 10): nur sie zeichnet diese Instanz als Baum
+const btnLists = new Set<string>()
+let btnListNo = 0
+
+type BtnTarget = { kind: 'switch'; k: ButtonKind } | { kind: 'prompt'; name: string }
+
+/** Titel einer Knopfart wie auf der Einstellungsseite („Danach-Knopf“), sonst der Titel aus der Liste. */
+const switchTitle = (k: ButtonKind) => (t().help.settings as Readonly<Record<string, string>>)[k.field] ?? kindTitle(k)
+
+/** Einen Schalter umlegen; zurück kommt der Text für Befehl bzw. Toast. */
+async function applyButton($: EngineInterface, tg: BtnTarget, want: boolean): Promise<string> {
+  const x = t().bt
+  if (tg.kind === 'prompt') {
+    await setButton($, tg.name, want)
+    const out = t().pr.buttonSet(tg.name, want, buttonNames(saved).includes(tg.name))
+    return want && !switchOn(btnFacts(), 'promptButtons') ? `${out} ${x.promptsOffNote}` : out
+  }
+  const title = switchTitle(tg.k)
+  if (switchOn(btnFacts(), tg.k.field) === want) return x.already(title, want)
+  const w = await writeCfg($, { [tg.k.field]: want })
+  if (!w.ok) return writeNote(w, lang())
+  // Ohne Knopf verfällt auch eine Markierung dieser Runde (sie wäre sonst unsichtbar noch scharf)
+  if (tg.k.id === 'later' && !want) laterArmed = false
+  pushBtns($)
+  const hint = tg.k.id === 'later' ? (want && !laterAllowed(btnFacts()) ? x.laterHint : '') : tg.k.id === 'prompts' ? x.promptsHint(want) : ''
+  return [[x.set(title, want), hint].filter(Boolean).join(' '), writeNote(w, lang())].filter(Boolean).join('\n')
+}
+
+/** `/sidekick buttons [later|prompts|<name> on|off]`. */
+async function buttonsCommand($: EngineInterface, rest: string): Promise<string> {
+  const x = t().bt
+  await loadSettings($)
+  await loadSaved($)
+  const a = buttonsArg(rest)
+  if (a.kind === 'usage') return x.usage
+  if (a.kind === 'set') {
+    const tg = buttonTarget(a.target, saved)
+    if (!tg) return x.unknown(a.target, FOOTER_BUTTONS.map((k) => `\`${k.id}\``).join(', '))
+    return applyButton($, tg, a.on)
+  }
+  pushBtns($)
+  const now = await $.clock.now()
+  const tag = `#${(++btnListNo).toString(36)}${now.toString(36).slice(-5)}`
+  btnLists.add(tag)
+  while (btnLists.size > 10) btnLists.delete(btnLists.values().next().value as string)
+  return buttonsMarkdown(btnFacts(), tag)
+}
+
+/** Klick auf An/Aus in der Tabelle; Knopfarten sagen per Toast, ob und wo es gilt. Danach einmal neu zeichnen (Klick, kein Takt). */
+async function pressButtonRow($: EngineInterface, tg: BtnTarget, want: boolean) {
+  try {
+    const out = await applyButton($, tg, want)
+    if (tg.kind === 'switch') $.ui.toast(out.replace(/`/g, ''), { timeoutMs: 8000 })
+  } catch (err) {
+    // Nach einem Neuladen (Weg 1) kann auch der Toast der alten Instanz scheitern (Review 0.27.0 K1)
+    try {
+      $.ui.toast(msg(err), { timeoutMs: 8000 })
+    } catch {
+      // nichts mehr anzuzeigen
+    }
+  }
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {
+    // nach einem Neuladen (Weg 1 im Terminal) zeichnet die neue Instanz
+  }
+}
+
+/**
+ * `/sidekick buttons` gezeichnet (Terminal und Desktop): je Zeile Titel, Knopf An/Aus und der Zustand. Die Zeilen folgen dem
+ * aktuellen Stand (`cfg`, `saved`), ein neu gespeicherter Prompt steht also gleich darin.
+ */
+function buttonsTree($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0]): RenderElement {
+  const x = t().bt
+  const ui = $.ui.resolve(e)
+  const f = btnFacts()
+  const width = Math.max(10, Math.min(26, Math.floor(viewportCols(e) / 3)))
+  const rows: RenderNode[] = buttonRows(f).map((r) => {
+    const key = r.kind === 'switch' ? `sidekick-bt-${r.id}` : `sidekick-bt-p-${r.id}`
+    const k = FOOTER_BUTTONS.find((y) => y.id === r.id)
+    const tg: BtnTarget = r.kind === 'switch' && k ? { kind: 'switch', k } : { kind: 'prompt', name: r.id }
+    return el('Box', { key: `${key}-row`, flexDirection: 'row', columnGap: 1, flexWrap: 'wrap' }, [
+      el('Box', { width, flexShrink: 0 }, [el('Text', r.kind === 'prompt' ? { color: ACCENT } : {}, [r.title])]),
+      ui.Button({ key, label: r.on ? x.btnOff : x.btnOn, onPress: () => void pressButtonRow($, tg, !r.on) }) as RenderNode,
+      el('Text', { dimColor: true }, [r.state]),
+    ])
+  })
+  return el('Box', { key: 'sidekick-buttons', flexDirection: 'column' }, [
+    el('Text', { bold: true }, [x.head.replace(/\*\*/g, '')]),
+    ...(f.level === 'off' ? [el('Text', { dimColor: true }, [x.levelOff.replace(/`/g, '')])] : []),
+    ...rows,
+    ...(f.saved.length ? [] : [el('Text', { dimColor: true }, [x.noPrompts.replace(/`/g, '')])]),
+    el('Box', { marginTop: 1 }, [el('Text', { dimColor: true }, [x.footTree])]),
+  ])
 }
 
 // ---- Warteschlange (Ausbau 0.24.0; Entscheidung Fynn 2026-11-08: Variante B „durchlassen mit Hinweis“). Schreibt der Nutzer, während
@@ -3171,20 +3308,27 @@ const copyLine = (c: CatalogEntry) => c.install?.line ?? (c.invoke ? `/${c.invok
 
 function catalogState(c: CatalogEntry, cmds: readonly { name: string; plugin?: string }[], muted: readonly string[]): string {
   const x = t().cat
-  if (c.way === 'reference' && isInstalled(c, cmds)) return x.installed
+  // Seit 0.28.0 auch mitgelieferte: Ist z. B. das Plugin superpowers installiert, bietet sidekick seine Kopien nicht an (E6)
+  if (isInstalled(c, cmds)) return x.installed
   return muted.includes(c.id) ? x.mutedState : x.active
 }
-/** Weg mit Risiko (Review 0.25.0 S3): mitgeliefert; Verweis mit der Notiz; schwer zusätzlich „nur Hinweis“. */
-function catalogWay(c: CatalogEntry): string {
+/**
+ * Weg mit Risiko (Review 0.25.0 S3): mitgeliefert; Verweis mit der Notiz; schwer zusätzlich „nur Hinweis“. Seit 0.28.0 (E5) bei
+ * mitgelieferten mit Vorrang eines Projekt-Befehls „zurückgestellt: /mod-debug“.
+ */
+function catalogWay(c: CatalogEntry, cmds: readonly { name: string; plugin?: string }[] = []): string {
   const x = t().cat
-  if (c.way === 'bundled') return x.bundled
+  if (c.way === 'bundled') {
+    const y = yieldedTo(c, cmds)
+    return y ? `${x.bundled}, ${x.yielded(y)}` : x.bundled
+  }
   const note = c.risk.note?.[lang()]
   return [x.reference, ...(c.risk.heavy ? [x.heavy] : []), ...(note ? [note] : [])].join(', ')
 }
 
 function catalogMarkdown(snap: { on: boolean; guide: boolean; cmds: readonly { name: string; plugin?: string }[]; muted: string[] }, tag: string): string {
   const x = t().cat
-  const rows = CATALOG.map((c) => `| \`${c.id}\` ${mdCell(c.name)} | ${mdCell(c.author)} | ${c.license} | ${catalogWay(c)} | ${catalogState(c, snap.cmds, snap.muted)} |`)
+  const rows = CATALOG.map((c) => `| \`${c.id}\` ${mdCell(c.name)} | ${mdCell(c.author)} | ${c.license} | ${catalogWay(c, snap.cmds)} | ${catalogState(c, snap.cmds, snap.muted)} |`)
   const lines = CATALOG.filter((c) => copyLine(c)).map((c) => `- \`${c.id}\`: \`${copyLine(c)}\` · ${c.url}`)
   return [`${x.listHead(snap.on, snap.guide)}${tag ? ` · ${tag}` : ''}`, '', x.listIntro, '', x.cols, '|---|---|---|---|---|', ...rows, '', ...lines, '', x.listFoot].join('\n')
 }
@@ -3230,7 +3374,7 @@ function catalogTree($: EngineInterface, e: Parameters<EngineInterface['ui']['re
     const line = copyLine(c)
     const kids: RenderNode[] = [
       el('Box', { width: Math.max(12, Math.min(24, Math.floor(cols / 4))), flexShrink: 0 }, [el('Text', { color: ACCENT }, [c.name])]),
-      el('Text', { dimColor: true }, [`${c.author} · ${c.license} · ${catalogWay(c)} · ${catalogState(c, snap.cmds, snap.muted)}`]),
+      el('Text', { dimColor: true }, [`${c.author} · ${c.license} · ${catalogWay(c, snap.cmds)} · ${catalogState(c, snap.cmds, snap.muted)}`]),
     ]
     if (line)
       kids.push(
@@ -3270,9 +3414,9 @@ function catalogTree($: EngineInterface, e: Parameters<EngineInterface['ui']['re
 /** Knopf „Danach“ geklickt (Fynn 2026-11-08): die nächste eigene Nachricht dieser Runde gilt als „danach“; verfällt mit der Runde. */
 let laterArmed = false
 
-/** Knopf „Danach“ (Ausbau 0.24.0): nur während einer Runde, auf Begleiter, mit `queue` an; `armed` nach einem Klick. */
+/** Knopf „Danach“ (Ausbau 0.24.0): nur während einer Runde, auf Begleiter, mit `queue` und (0.27.0) `laterButton` an; `armed` nach einem Klick. */
 function laterNow(): 'on' | 'armed' | null {
-  return turnRunning && settings.level === 'guide' && cfg.queue !== false ? (laterArmed ? 'armed' : 'on') : null
+  return turnRunning && laterAllowed(btnFacts()) ? (laterArmed ? 'armed' : 'on') : null
 }
 
 /** Klick auf „Danach“: an oder zurück; nur während einer Runde (der Knopf steht nur dann da). */
@@ -3392,6 +3536,8 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     // (Nachtrag 0.10.0); buddy() schreibt sie mit
     statusLast = undefined
     buddyKind = undefined
+    // /clear, /resume, /branch, Neustart (Ausbau 0.27.1): nichts von selbst an Claude schicken
+    pass = null
     // Cache kalt (Ausbau 0.20.0): nach /reload-plugins oder einem Neustart aus dem Store (`cache:<session>`) neu rechnen, dann der Takt
     try {
       coldNow = coldOf(await $.clock.now())
@@ -3519,6 +3665,12 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   on('turn.complete', async ($, e, next) => {
     if (!e.agentId) {
       turnRunning = false
+      // „An Claude geben“ (Ausbau 0.27.1): Zug ohne weiteres Werkzeug beendet → als Nachricht; abgebrochen → still verwerfen
+      try {
+        passAtEnd($, e.turnId, e.isAborted)
+      } catch {
+        // Beiwerk
+      }
       // Warteschlange (Ausbau 0.24.0): eine Markierung per Knopf verfällt mit der Runde, der Knopf verschwindet
       laterArmed = false
       try {
@@ -3596,7 +3748,10 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
 
   // Commits merken (Kurzfassung, Wiederholungsregel). `gitOperation` steht im Ergebnis von Bash und PowerShell (tools:4251, :4728)
   // Seit 0.18.0 auch `start_session` der Desktop-App (Modell-Tipp, Verhalten 4): ein `on` je Event und Matcher (CLAUDE.md)
-  on('tool.call', { tool: ['Bash', 'PowerShell', START_TOOL] }, async ($, e, next) => {
+  // Seit 0.27.1 ohne Filter (Fynn 2026-11-16, „Sofort in die Runde“): ein offenes „An Claude geben“ hängt am nächsten Ergebnis des
+  // Hauptagenten. Bei fremden Werkzeugen nur `agentId` und `deny`; ohne `pass` geht `r` unverändert zurück (withPass)
+  on('tool.call', async ($, e, next) => {
+    if (e.tool !== 'Bash' && e.tool !== 'PowerShell' && e.tool !== START_TOOL) return withPass(e.agentId, await next(e))
     if (e.tool === START_TOOL) {
       const a = e as unknown as Record<string, unknown>
       let plan: Awaited<ReturnType<typeof planStart>> = null
@@ -3614,7 +3769,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
           // Beiwerk
         }
       // `effort` bleibt (E3); ein höheres Modell als das eigene ignoriert die App (Werkzeugbeschreibung)
-      return next(plan && !plan.selbst ? ({ ...a, model: plan.to } as unknown as typeof e) : e)
+      return withPass(e.agentId, await next(plan && !plan.selbst ? ({ ...a, model: plan.to } as unknown as typeof e) : e))
     }
     const r = await next(e)
     try {
@@ -3630,7 +3785,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     } catch {
       // Beiwerk
     }
-    return r
+    return withPass(e.agentId, r)
   })
 
   // Der Torwächter. Fail-open: Fehler, Timeout, ungültiges JSON, abgelehntes ask lassen die Nachricht durch.
@@ -3806,9 +3961,19 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
         saveSes($, now)
       } else {
         keepWartung($, g.w, now)
+        // Ausbau 0.28.0 (E4): systematic-debugging statt Denkanstoß, wenn die Korrektur sein Stichwort trifft. Fehler → ohne Skill
+        let loopCat: CatalogEntry | null = null
+        try {
+          if (cfg.catalog !== false && settings.level === 'guide') {
+            const cmds = await loadBase($, now).then((b) => b.cmds, () => [])
+            loopCat = loopSkill(typed, { cmds, muted: await loadMuted($), offered: ses.catOffered })
+          }
+        } catch {
+          loopCat = null
+        }
         let ch: LoopChoice = 'send'
         try {
-          ch = await askLoop($, c, resendable, base, now)
+          ch = await askLoop($, c, resendable, base, now, loopCat)
         } catch {
           ch = 'send'
         }
@@ -3824,7 +3989,33 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
           // Der Nutzer sieht den Denkanstoß nicht, Claude liest ihn (types:9771-9775); die Gegenprobe zählt die nächste Nachricht
           ses.nudged = true
           saveSes($, now)
-          return go({ ...e, context: [...(e.context ?? []), t().nudge] })
+          const extra: string[] = [t().nudge]
+          let withSkill = false
+          if (loopCat?.invoke) {
+            // E4: dazu der Skill-Text wie „Mit … senden“ im Katalog (Weg B, Bau 0.25.0). Datei aus der festen Liste in catalog.ts,
+            // nie aus Nutzertext; lässt sie sich nicht lesen, bleibt es beim Denkanstoß
+            const dir = `${$.plugin.root}/skills/${loopCat.invoke.split(':').pop()}`
+            try {
+              const body = String(await $.fs.read(`${dir}/SKILL.md`))
+              extra.push(skillContext(body, dir, loopCat, typed))
+              bookDay($, now, (d) => countCatalog(d, 'mitSkill'))
+              pending = { text: typed, line: t().cat.sentWith(loopCat.name, loopCat.author, loopCat.license) }
+              withSkill = true
+            } catch (err) {
+              $.ui.toast(t().cat.loopReadFailed(loopCat.name, msg(err)), { timeoutMs: 15000 })
+            }
+          }
+          const r = await go({ ...e, context: [...(e.context ?? []), ...extra] })
+          // Zeile „mit … gesendet“ wie im Katalog (viaCatalog, redraw)
+          if (withSkill)
+            later($, 100, () => {
+              try {
+                $.ui.invalidate('ui.render')
+              } catch {
+                // ohne Neuzeichnen
+              }
+            })
+          return r
         }
         return go(e)
       }
@@ -4125,7 +4316,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
           // (docs/raw/en/reference.md:320), etwa die Antwort „2“ auf „Variante 1 oder 2?“ (Review 0.13.0 K1). Und nur ohne Pille von
           // quick-replies (BAND-SPEC-2 §5): gleiche Ziffern in zwei Zeilen lösen nichts aus (Probe §5)
           const digits = e.props.isWorking && !(await qrShown($))
-          views.push(noteView(n, e.props.bodyColumns, e.surface, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a, e.surface)))
+          views.push(noteView(n, e.props.bodyColumns, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a)))
         }
         if (s) views.push(suggestView(s, e.props.bodyColumns, e.surface, (p) => ui.Button(p) as RenderNode, (a) => void pressSuggest($, a)))
         if (btnRow) views.push(btnRow)
@@ -4170,6 +4361,8 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (/^queue(\s|$)/i.test(args)) return { text: await queueCommand($, args.slice(5)) }
     // Skill-Katalog (Ausbau 0.25.0)
     if (/^catalog(\s|$)/i.test(args)) return { text: await catalogCommand($, args.slice(7)) }
+    // Fußzeilen-Knöpfe (Ausbau 0.27.0)
+    if (/^buttons(\s|$)/i.test(args)) return { text: await buttonsCommand($, args.slice(7)) }
     // Laufzeitwerte frisch laden: eine andere Session kann sie geändert haben
     await loadSettings($)
     let note = ''
@@ -4347,6 +4540,16 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       if (!snap) return next(e)
       try {
         return catalogTree($, e, snap)
+      } catch {
+        return next(e)
+      }
+    }
+    // `/sidekick buttons` (Ausbau 0.27.0): Tabelle mit An/Aus je Zeile; die Markdown-Fassung nennt dieselben Befehle
+    if (/^buttons(\s+status)?$/i.test(String(e.props.args ?? '').trim())) {
+      const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
+      if (!tag || !btnLists.has(tag)) return next(e)
+      try {
+        return buttonsTree($, e)
       } catch {
         return next(e)
       }

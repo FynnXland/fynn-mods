@@ -27,6 +27,7 @@ import {
   keywordHit,
   parseCatalog,
   skillContext,
+  yieldedTo,
 } from '../hooks/catalog.js'
 import { cliStubs, written } from './cli.js'
 
@@ -70,11 +71,106 @@ test('Daten: Lizenz aus der Liste, invoke nur bundled, install nur reference, su
   }
   // Schwer laut E3: earshot, superpowers, hyperframes
   expect(CATALOG.filter((c) => c.risk.heavy).map((c) => c.id).sort()).toEqual(['earshot', 'hyperframes', 'superpowers'])
-  expect(CATALOG.filter((c) => c.way === 'bundled').map((c) => c.name)).toEqual(['apple-design', 'emil-design-eng', 'break-ui'])
+  expect(CATALOG.filter((c) => c.way === 'bundled').map((c) => c.name)).toEqual([
+    'apple-design',
+    'emil-design-eng',
+    'break-ui',
+    // Ausbau 0.28.0 (E7): vor den Verweisen, sp-debug vor sp-verify, mp-grill danach
+    'systematic-debugging',
+    'verification-before-completion',
+    'receiving-code-review',
+    'fixing-metadata',
+    'grilling',
+  ])
   expect(SPEC).toEqual({ model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000, timeoutMs: 4000 })
   expect(CATALOG_MIN).toBe(0.7)
   expect(CATALOG_MIN_HEAVY).toBe(0.9)
   expect(CATALOG_GAP).toBe(10)
+})
+
+test('0.28.0 Daten: fünf neue Einträge, sha je Quelle, ctxTokens, yieldTo und ctxNote nur bei bundled, Reihenfolge', () => {
+  const order = CATALOG.map((c) => c.id)
+  const firstRef = CATALOG.findIndex((c) => c.way === 'reference')
+  for (const id of ['sp-debug', 'sp-verify', 'sp-review', 'ib-meta', 'mp-grill']) expect(order.indexOf(id)).toBeLessThan(firstRef)
+  expect(order.indexOf('sp-debug')).toBeLessThan(order.indexOf('sp-verify'))
+  expect(order.indexOf('mp-grill')).toBeGreaterThan(order.indexOf('ib-meta'))
+  for (const id of ['sp-debug', 'sp-verify', 'sp-review']) {
+    expect(byId(id)).toMatchObject({ repo: 'obra/superpowers', license: 'MIT', pinnedSha: '22f0b463e7a5e579904dd6211a520321035526f7', way: 'bundled' })
+    expect(byId(id)!.installedAs).toContain('superpowers')
+  }
+  expect(byId('ib-meta')).toMatchObject({ repo: 'ibelick/ui-skills', pinnedSha: '65cc0edb4f64fe8bfe7e9c59466074de25bece76', invoke: 'sidekick:fixing-metadata', yieldTo: ['*seo*', '*metadata*'] })
+  expect(byId('mp-grill')).toMatchObject({ repo: 'mattpocock/skills', pinnedSha: '5863806dd4e15c63174bee4e7515a4256792ecfa', invoke: 'sidekick:grilling', installedAs: ['grilling', 'grill-me', 'mattpocock-skills'], yieldTo: ['*grill*'] })
+  expect(byId('sp-debug')!.yieldTo).toEqual(['*debug*'])
+  expect(byId('sp-verify')!.yieldTo).toBeUndefined()
+  expect(byId('sp-review')!.yieldTo).toBeUndefined()
+  expect(Object.fromEntries(['sp-debug', 'sp-verify', 'sp-review', 'ib-meta', 'mp-grill'].map((id) => [id, byId(id)!.ctxTokens]))).toEqual({ 'sp-debug': 2400, 'sp-verify': 900, 'sp-review': 1600, 'ib-meta': 1100, 'mp-grill': 500 })
+  // E3: nur systematic-debugging verweist auf fremde Skills
+  expect(CATALOG.filter((c) => c.ctxNote).map((c) => c.id)).toEqual(['sp-debug'])
+  for (const c of CATALOG) {
+    if (c.way === 'reference') {
+      expect(c.yieldTo).toBeUndefined()
+      expect(c.ctxNote).toBeUndefined()
+    }
+    if (c.ctxNote) for (const l of ['de', 'en'] as const) expect(c.ctxNote[l].length <= 240).toBe(true)
+  }
+})
+
+// ---------- Ausbau 0.28.0: Vorfilter der neuen Einträge ----------
+
+deTest('0.28.0 Vorfilter: Treffer de/en je neuem Eintrag', () => {
+  // Sicht-Check 1 und 3 der SPEC
+  expect(ids(findCandidates('Der Build geht nicht, warum?', none))).toEqual(['sp-debug'])
+  expect(ids(findCandidates('Der Build geht nicht mehr, kannst du schauen?', none))).toEqual(['sp-debug'])
+  expect(ids(findCandidates('The export still fails with a stack trace', none))).toEqual(['sp-debug'])
+  expect(ids(findCandidates('Finde bitte heraus, woran es liegt, dass der Export hängt', none))).toEqual(['sp-debug'])
+  expect(ids(findCandidates('Ist es fertig, und läuft der Export jetzt wirklich?', none))).toEqual(['sp-verify'])
+  expect(ids(findCandidates('Did you test the export with real data?', none))).toEqual(['sp-verify'])
+  expect(ids(findCandidates('Setz bitte die Review-Kommentare zum Export um', none))).toEqual(['sp-review'])
+  expect(ids(findCandidates('Please address the review on the export branch', none))).toEqual(['sp-review'])
+  expect(ids(findCandidates('Mach Meta-Tags und OG-Bild für die Startseite', none))).toEqual(['ib-meta'])
+  expect(ids(findCandidates('Setz ein og:image für die Startseite', none))).toEqual(['ib-meta'])
+  expect(ids(findCandidates('Add Open Graph tags and a favicon to the landing page', none))).toEqual(['ib-meta'])
+  expect(ids(findCandidates('Ich habe eine Idee für ein neues Feature', none))).toEqual(['mp-grill'])
+  expect(ids(findCandidates('Grill me about the plan for the sync feature', none))).toEqual(['mp-grill'])
+  expect(ids(findCandidates('Das müssen wir klären, bevor Code entsteht', none))).toEqual(['mp-grill'])
+})
+
+deTest('0.28.0 Vorfilter: yieldTo, superpowers installiert, Verweise superpowers und mattpocock entschärft', () => {
+  const BUG = 'Der Export geht nicht mehr, kannst du schauen?'
+  // E5: /mod-debug hat Vorrang; sidekicks eigene Kopie zählt nicht
+  expect(findCandidates(BUG, { cmds: [{ name: 'mod-debug' }], muted: [], offered: [] })).toEqual([])
+  expect(ids(findCandidates(BUG, { cmds: [{ name: 'sidekick:systematic-debugging', plugin: 'sidekick' }], muted: [], offered: [] }))).toEqual(['sp-debug'])
+  expect(yieldedTo(byId('sp-debug')!, [{ name: 'mod-debug' }])).toBe('/mod-debug')
+  expect(yieldedTo(byId('sp-debug')!, [{ name: 'MOD-Debug' }])).toBe('/MOD-Debug')
+  expect(yieldedTo(byId('sp-debug')!, [{ name: 'sidekick:systematic-debugging', plugin: 'sidekick' }])).toBe('')
+  expect(yieldedTo(byId('ib-meta')!, [{ name: 'seo-audit' }])).toBe('/seo-audit')
+  expect(yieldedTo(byId('sp-verify')!, [{ name: 'mod-debug' }])).toBe('')
+  // E6: Plugin superpowers installiert → keine der drei Kopien
+  const sp = [{ name: 'superpowers:brainstorming', plugin: 'superpowers' }]
+  for (const id of ['sp-debug', 'sp-verify', 'sp-review']) expect(isInstalled(byId(id)!, sp)).toBe(true)
+  expect(findCandidates(BUG, { cmds: sp, muted: [], offered: [] })).toEqual([])
+  // E6: der Verweis superpowers trifft „tdd“ und „systematisch debuggen“ nicht mehr, „brainstorm“ weiter
+  expect(findCandidates('Lass uns das mit TDD und testgetrieben angehen', none)).toEqual([])
+  expect(ids(findCandidates('Lass uns zuerst ein Brainstorming zum Menü machen', none))).toEqual(['superpowers'])
+  // E9: Grill-Stichwörter bei mp-grill, Tickets weiter beim Verweis; mattpocock installiert → kein mp-grill
+  expect(ids(findCandidates('Löchere mich zu dem Plan für den Export', none))).toEqual(['mp-grill'])
+  expect(ids(findCandidates('Mach daraus Tickets für das nächste Release', none))).toEqual(['mattpocock'])
+  expect(findCandidates('Löchere mich zu dem Plan für den Export', { cmds: [{ name: 'mattpocock-skills:to-prd', plugin: 'mattpocock-skills' }], muted: [], offered: [] })).toEqual([])
+  expect(findCandidates('Grill me about the plan for the sync feature', { cmds: [{ name: 'grill-me' }], muted: [], offered: [] })).toEqual([])
+})
+
+deTest('0.28.0 skillContext: mit ctxNote (de/en) hinter dem Kopf, ohne ctxNote unverändert', () => {
+  const body = '---\n# From obra/superpowers@x\nname: systematic-debugging\ndisable-model-invocation: true\n---\n\nUse `superpowers:test-driven-development`.'
+  const de = skillContext(body, '/r/skills/systematic-debugging', byId('sp-debug')!, 'Text')
+  const lines = de.split('\n')
+  expect(lines[0]).toContain('sidekick:systematic-debugging')
+  expect(lines[2]).toBe('Skills mit dem Namen `superpowers:*` in diesem Text sind nicht installiert. Versuch nicht, sie zu laden; wende den Schritt, für den sie stehen, an Ort und Stelle an.')
+  expect(lines[4]).toBe('Base directory for this skill: /r/skills/systematic-debugging')
+  setLang('en')
+  expect(skillContext(body, '/r', byId('sp-debug')!, 'Text')).toContain('Skills named `superpowers:*` in this text are not installed.')
+  setLang('de')
+  const plain = skillContext('---\nname: grilling\n---\nInterview $ARGUMENTS', '/r/skills/grilling', byId('mp-grill')!, 'mich')
+  expect(plain.split('\n')).toEqual([expect.stringContaining('sidekick:grilling'), '', 'Base directory for this skill: /r/skills/grilling', '', 'Interview mich'])
 })
 
 // Die Dateien der mitgelieferten Skills (LICENSE, Kopfzeile, Flag, Begleitdateien, Gleichheit mit der Quelle) prüft
@@ -622,5 +718,110 @@ deTest('/sidekick catalog im Terminal (Review S5): gleiche Knöpfe; Shell-Zeile 
   await ui.press({ key: 'sidekick-cat-mute-emil-break' })
   await flush()
   expect(w.store.get('catalog:muted')).toEqual(['emil-break'])
+  await ui.unmount()
+})
+
+// ---------- Ausbau 0.28.0: Hooks ----------
+
+deTest('0.28.0 /sidekick catalog: neue Einträge; Spalte Weg „zurückgestellt: /mod-debug“; Plugin superpowers → installiert', async ($, on) => {
+  const w = world(on, { cmds: [{ name: 'mod-debug', source: 'projectSettings' }, { name: 'superpowers:brainstorming', plugin: 'superpowers' }] })
+  await start($)
+  const md = await run($, 'catalog')
+  expect(md).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | mitgeliefert, zurückgestellt: /mod-debug | installiert |')
+  expect(md).toContain('| `ib-meta` fixing-metadata | Julien Thibeaut | MIT | mitgeliefert | aktiv |')
+  expect(md).toContain('| `mp-grill` grilling | Matt Pocock | MIT | mitgeliefert | aktiv |')
+  expect(md).toContain('- `sp-verify`: `/sidekick:verification-before-completion`')
+  const ui = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', surface: 'desktop', props: { command: 'sidekick', args: 'catalog', text: md, isErrored: false } } as never)
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-cat-sp-debug' }))).toContain('zurückgestellt: /mod-debug')
+  await ui.unmount()
+  expect(w.copies).toEqual([])
+})
+
+deTest('0.28.0 /sidekick catalog: zurückgestellt bleibt aktiv (nicht installiert), englisch „deferred to“', async ($, on) => {
+  world(on, { cmds: [{ name: 'mod-debug' }] })
+  await start($)
+  expect(await run($, 'catalog')).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | mitgeliefert, zurückgestellt: /mod-debug | aktiv |')
+})
+test('0.28.0 /sidekick catalog englisch: „deferred to /mod-debug“', { options: { language: 'en' } }, async ($, on) => {
+  setLang('en')
+  world(on, { cmds: [{ name: 'mod-debug' }] })
+  await start($)
+  expect(await run($, 'catalog')).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | bundled, deferred to /mod-debug | active |')
+  setLang('de')
+})
+
+deTest('0.28.0 Sicht-Check 4 (Idee): „Ich habe eine Idee für ein neues Feature“ → Rückfrage mit grilling, Skill-Text ohne Hinweis', async ($, on) => {
+  const w = world(on)
+  await start($)
+  w.setReply('{"id":"mp-grill","sicher":0.8,"grund":"Plan Schritt für Schritt klären"}')
+  w.setAnswer(X.optWith('grilling') + rec)
+  const r = await send($, 'Ich habe eine Idee für ein neues Feature im Menü')
+  expect(w.asks[0]!.question).toContain('Dafür gibt es *grilling* von Matt Pocock (MIT, liegt in sidekick): Plan Schritt für Schritt klären.')
+  expect(w.asks[0]!.question).toMatch(/≈ 500 Tokens Kontext/)
+  expect(w.reads[0]!.replace(/\\/g, '/')).toMatch(/\/skills\/grilling\/SKILL\.md$/)
+  const ctx = skillCtx(r)!
+  expect(ctx).toContain('sidekick:grilling')
+  expect(ctx).not.toContain('superpowers:*')
+})
+
+deTest('0.28.0: mitgeliefertes systematic-debugging über den Katalog trägt den Hinweis zu superpowers:*', async ($, on) => {
+  const w = world(on)
+  await start($)
+  w.setReply('{"id":"sp-debug","sicher":0.8,"grund":"Ursache vor dem Fix"}')
+  w.setAnswer(X.optWith('systematic-debugging') + rec)
+  const r = await send($, 'Der Build geht nicht, warum?')
+  expect(w.asks[0]!.question).toMatch(/≈ 2[.,]4k Tokens Kontext/)
+  expect(skillCtx(r)).toContain('Skills mit dem Namen `superpowers:*` in diesem Text sind nicht installiert.')
+})
+
+deTest('0.28.0: „Mach daraus Tickets“ → weiter der Verweis mattpocock (Befehl kopieren); /mod-debug in der Liste → kein sp-debug, kein Haiku', async ($, on) => {
+  const w = world(on, { cmds: [{ name: 'mod-debug' }] })
+  await start($)
+  w.setReply('{"id":"mattpocock","sicher":0.8,"grund":"Plan in Tickets"}')
+  w.setAnswer(X.optCopy + rec)
+  const r = await send($, 'Mach daraus Tickets für das nächste Release')
+  expect(w.asks[0]!.question).toContain('*mattpocock-skills*')
+  expect(w.copies).toEqual(['claude plugin install mattpocock-skills@claude-plugins-official'])
+  expect(r.drop).toContain('In einem Terminal ausführen')
+  const calls = w.catCalls.length
+  await send($, 'Der Mod geht nicht, ich weiß nicht warum')
+  expect(w.catCalls.length).toBe(calls)
+})
+
+deTest('0.28.0 Schwelle je Eintrag: sp-debug ab 0,6 (Probe P2\', Entscheidung (b)), die anderen weiter ab 0,7', () => {
+  const dbg = [byId('sp-debug')!, byId('sp-verify')!]
+  expect(byId('sp-debug')!.minSure).toBe(0.6)
+  expect(CATALOG.filter((c) => c.minSure !== undefined).map((c) => c.id)).toEqual(['sp-debug'])
+  expect(catalogPick({ id: 'sp-debug', sicher: 0.6, grund: '' }, dbg)?.id).toBe('sp-debug')
+  expect(catalogPick({ id: 'sp-debug', sicher: 0.59, grund: '' }, dbg)).toBe(null)
+  expect(catalogPick({ id: 'sp-verify', sicher: 0.65, grund: '' }, dbg)).toBe(null)
+  expect(catalogPick({ id: 'sp-verify', sicher: 0.7, grund: '' }, dbg)?.id).toBe('sp-verify')
+})
+
+// ---------- Review 0.28.0 ----------
+
+deTest('Review 0.28.0 S1/K1: eingebautes /debug stellt sp-debug nicht zurück; eigene Kopie ohne plugin-Feld zählt nicht als installiert', () => {
+  const BUG = 'Der Export geht nicht mehr, kannst du schauen?'
+  const builtin = [{ name: 'debug', source: 'builtin' }]
+  expect(yieldedTo(byId('sp-debug')!, builtin)).toBe('')
+  expect(ids(findCandidates(BUG, { cmds: builtin, muted: [], offered: [] }))).toEqual(['sp-debug'])
+  // ein Benutzer- oder Projekt-Befehl gleichen Namens zählt weiter
+  expect(yieldedTo(byId('sp-debug')!, [{ name: 'debug', source: 'projectSettings' }])).toBe('/debug')
+  expect(isInstalled(byId('sp-debug')!, [{ name: 'sidekick:systematic-debugging' }])).toBe(false)
+  expect(yieldedTo(byId('sp-debug')!, [{ name: 'sidekick:systematic-debugging' }])).toBe('')
+})
+
+deTest('Review 0.28.0 S1/K5: /sidekick catalog mit eingebautem /debug → sp-debug aktiv; im Terminal „zurückgestellt“ bei /mod-debug', async ($, on) => {
+  world(on, { cmds: [{ name: 'debug', source: 'builtin' }], surfaces: ['terminal'] })
+  await start($)
+  const md = await run($, 'catalog')
+  expect(md).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | mitgeliefert | aktiv |')
+})
+deTest('Review 0.28.0 K5: Terminal zeigt „zurückgestellt: /mod-debug“', async ($, on) => {
+  world(on, { cmds: [{ name: 'mod-debug' }], surfaces: ['terminal'] })
+  await start($)
+  const md = await run($, 'catalog')
+  const ui = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', surface: 'terminal', props: { command: 'sidekick', args: 'catalog', text: md, isErrored: false } } as never)
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-cat-sp-debug' }))).toContain('zurückgestellt: /mod-debug')
   await ui.unmount()
 })

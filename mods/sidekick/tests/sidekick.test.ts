@@ -51,7 +51,7 @@ import type { Measure, Wartung } from '../hooks/wartung.js'
 import { T, dec, setLang, shortDate, spanText, tokensText, usdText } from '../hooks/i18n.js'
 import { CHECK, CHECK_NAME, HANDOFF as HANDOFF_ROLE, genitiveDe, modelLabel, modelName } from '../hooks/models.js'
 import { savingsTree } from '../hooks/view.js'
-import { IGNORE_AFTER, NOTE_MAX, NOTES_EVERY, NOTES_KEEP, addTopic, afterFill, afterOwnMessage, cleanNote, cleanTopics, normTopic, notesPrompt, parseNote, shouldCheck, skipAfter } from '../hooks/notes.js'
+import { IGNORE_AFTER, NOTE_MAX, NOTES_EVERY, NOTES_KEEP, addTopic, afterOwnMessage, cleanNote, cleanTopics, normTopic, notesPrompt, parseNote, shouldCheck, skipAfter } from '../hooks/notes.js'
 import type { Note } from '../hooks/notes.js'
 import { NOTES_WORDS } from '../hooks/notes.js'
 import { HELP_WORDS, SAVINGS_WORDS, SETTING_WORDS, TIPS_FORMS, TTL_WORDS } from '../hooks/logic.js'
@@ -430,9 +430,14 @@ function world(on: On, o: W = {}) {
     if (e.command === 'clear') id = 'sess-2'
     return { text: '' }
   })
+  // Ausbau 0.27.1: Zugende des Hauptagenten (endTurn); die Kette braucht eine Antwort darunter
+  on('turn.complete', () => ({ text: '' }) as never)
   on('tool.call', async ($, e) => {
     if (e.tool === 'PowerShell') return { result: { stdout: '', stderr: '', interrupted: false, gitOperation: { commit: { sha: 'ps99999', kind: 'committed' } } } }
     if (e.tool === 'Bash') return { result: { stdout: '[main abc1234] x', stderr: '', interrupted: false, isImage: false, gitOperation: { commit: { sha: 'abc1234', kind: 'committed', branch: 'main' } } } }
+    // Ausbau 0.27.1: ein Werkzeug, dessen Ergebnis schon context trägt (Durchreichen, byte-gleich)
+    if (e.tool === 'Glob') return { result: { filenames: ['a.ts'] }, context: ['vom Stub'] }
+    if (e.tool === 'Grep') return { result: 'kaputt', isError: true }
     if (e.tool !== 'AskUserQuestion') return { result: '' }
     const q = (e as unknown as { questions: { question: string; options: { label: string }[] }[] }).questions[0]!
     asks.push({ question: q.question, options: q.options.map((x) => x.label) })
@@ -1349,7 +1354,8 @@ test('0.26.0 / 0.15.2: Gut zu wissen als eigene Zeile, Streifen nur im Desktop; 
   expect(bkey(tree)).toBe('layer:50:sidekick')
   expect(bkeys(tree)).toContain('sidekick-note')
   expect(bkeys(tree)).not.toContain('sidekick-stripe')
-  expect(JSON.stringify(tree)).toContain('"marginBottom":1')
+  // Ausbau 0.27.1 (E2): keine Leerzeile unter dem Hinweis, auch im Terminal
+  expect(JSON.stringify(tree)).not.toContain('"marginBottom"')
   expect(types(tree)).not.toContain('Svg')
   await ui.unmount()
   // Eingeklappt: die Zeile wird weiter gezeichnet (nichts davon ist zu sehen, types@2.1.325:11393)
@@ -3377,7 +3383,7 @@ deTest('0.12.0 Review K6: Übergabe mit werfendem $.session.root() → „Projek
 
 const THEMA = 'Unter der neuen Adresse fehlt der gespeicherte Plan, er liegt weiter unter der alten.'
 const noteJson = (o: Record<string, unknown> = {}) => '```json\n' + JSON.stringify({ thema: THEMA, art: 'achtung', titel: 'Plan unter alter Adresse', erklaerung: 'Der Planer speichert je Adresse.', ...o }) + '\n```'
-const NOTE: Note = { thema: THEMA, art: 'achtung', titel: 'Plan unter alter Adresse', text: 'Der Planer speichert je Adresse.', shownAt: NOW, turnId: 't0', survived: 0, open: false }
+const NOTE: Note = { thema: THEMA, art: 'achtung', titel: 'Plan unter alter Adresse', text: 'Der Planer speichert je Adresse.', shownAt: NOW, turnId: 't0', survived: 0 }
 const bandNote = (surface = 'terminal', o: Record<string, unknown> = {}) =>
   ({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'above-prompt', surface, props: { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 20, bodyColumns: 100, scroll: { offset: 0, bodyRows: 20 }, view: {}, ...o } }) as never
 
@@ -3436,8 +3442,8 @@ deTest('0.13.0: Zurückhaltung, Altern, Prüf-Bedingung, Themen-Listen, Hinweis 
   const one = afterOwnMessage(NOTE)
   expect(one).toEqual({ note: { ...NOTE, survived: 1 }, ignored: false })
   expect(afterOwnMessage(one.note)).toEqual({ note: null, ignored: true })
-  const open = { ...NOTE, open: true, survived: 5 }
-  expect(afterOwnMessage(open)).toEqual({ note: open, ignored: false })
+  // Seit 0.27.1 gibt es keine aufgeklappte Ansicht: auch ein altes open: true altert
+  expect(afterOwnMessage({ ...NOTE, survived: 1 })).toEqual({ note: null, ignored: true })
   const base = { on: true, off: false, index: NOTES_EVERY, hasNote: false, shownThisTurn: false, running: false, busy: false }
   expect(NOTES_EVERY).toBe(6)
   expect(shouldCheck(base)).toBe(true)
@@ -3449,7 +3455,7 @@ deTest('0.13.0: Zurückhaltung, Altern, Prüf-Bedingung, Themen-Listen, Hinweis 
   expect(addTopic(Array.from({ length: NOTES_KEEP }, (_, i) => `T${i}`), 'neu').length).toBe(NOTES_KEEP)
   expect(cleanTopics(['a', 3, '', '  ', 'b'])).toEqual(['a', 'b'])
   expect(cleanTopics('kaputt')).toEqual([])
-  expect(cleanNote({ ...NOTE, art: 'egal', survived: -1, open: 'ja' })).toEqual({ ...NOTE, art: 'wissen', survived: 0, open: false })
+  expect(cleanNote({ ...NOTE, art: 'egal', survived: -1, open: true })).toEqual({ ...NOTE, art: 'wissen', survived: 0 })
   expect(cleanNote({ thema: '', shownAt: 1 })).toBe(null)
   expect(cleanNote('kaputt')).toBe(null)
 })
@@ -3474,7 +3480,7 @@ deTest('0.13.0: Schritt 6 forkt im Hintergrund, Hinweis gespeichert, gebucht als
   expect(w.forks[0]).toContain('- Älteres Thema.')
   await until(() => (w.saved.get('notes:seen') as unknown[] | undefined)?.length === 2)
   const n = savedNote(w)
-  expect(n).toMatchObject({ thema: THEMA, art: 'achtung', turnId: 'tn1', open: false, survived: 0 })
+  expect(n).toMatchObject({ thema: THEMA, art: 'achtung', turnId: 'tn1', survived: 0 })
   expect(w.saved.get('notes:seen')).toEqual(['Älteres Thema.', THEMA])
   const d = today(w.ledger())
   const usd = completeCost(FORK_USAGE, 'claude-opus-5-5')
@@ -3547,7 +3553,7 @@ deTest('0.13.0: veraltet: neue Runde, während der Fork lief → verworfen, kein
   expect(today(w.ledger()).notizen).toMatchObject({ n: 1, verworfen: 1, gezeigt: 0 })
 })
 
-deTest('0.13.0: Band zeigt den Hinweis mit 1/2/0 (Terminal und Desktop); mit quick-replies ohne Ziffern; Umfrage, aus, VS Code nicht', async ($, on) => {
+deTest('0.13.0/0.27.1: Band zeigt den Hinweis mit 1/2/0 (Terminal und Desktop); mit quick-replies ohne Ziffern; Umfrage, aus, VS Code nicht', async ($, on) => {
   const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
   // Ohne Schalter nichts, auch wenn ein Hinweis gespeichert ist
   let ui = await $.ui.mount(bandNote())
@@ -3559,33 +3565,33 @@ deTest('0.13.0: Band zeigt den Hinweis mit 1/2/0 (Terminal und Desktop); mit qui
     const box = JSON.stringify(await ui.find({ key: 'sidekick-note' }))
     expect(box).toContain('Achtung')
     expect(box).toContain(THEMA)
-    expect((await ui.find({ key: 'sidekick-note-explain' }))?.props).toMatchObject({ label: 'Erklären', hotkey: '1' })
+    expect((await ui.find({ key: 'sidekick-note-claude' }))?.props).toMatchObject({ label: 'An Claude geben', hotkey: '1' })
     expect((await ui.find({ key: 'sidekick-note-known' }))?.props).toMatchObject({ label: 'Weiß ich schon', hotkey: '2' })
-    expect((await ui.find({ key: 'sidekick-note-later' }))?.props).toMatchObject({ label: 'Später', hotkey: '0' })
+    expect((await ui.find({ key: 'sidekick-note-ignore' }))?.props).toMatchObject({ label: 'Ignorieren', hotkey: '0' })
     expect(box).toContain('"width":100')
     await ui.unmount()
   }
   // Pille von quick-replies steht (Band 2: `quick-replies.band`, BAND-SPEC-2 §5): keine Ziffern, Knöpfe bleiben
   w.setQr({ shown: true })
   ui = await $.ui.mount(bandNote())
-  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.hotkey).toBeUndefined()
-  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.label).toBe('Erklären')
+  expect((await ui.find({ key: 'sidekick-note-claude' }))?.props.hotkey).toBeUndefined()
+  expect((await ui.find({ key: 'sidekick-note-claude' }))?.props.label).toBe('An Claude geben')
   await ui.unmount()
   w.setQr(null)
   ui = await $.ui.mount(bandNote())
-  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.hotkey).toBe('1')
+  expect((await ui.find({ key: 'sidekick-note-claude' }))?.props.hotkey).toBe('1')
   await ui.unmount()
   // Scheitert das Lesen von quick-replies.band, gilt die Pille als nicht stehend: Ziffern bleiben
   w.setQr({ shown: true })
   w.setStateGetFails(true)
   ui = await $.ui.mount(bandNote())
-  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.hotkey).toBe('1')
+  expect((await ui.find({ key: 'sidekick-note-claude' }))?.props.hotkey).toBe('1')
   await ui.unmount()
   w.setStateGetFails(false)
   w.setQr(null)
   // Nach der Runde (isWorking false) nie Ziffern, auch ohne Pille
   ui = await $.ui.mount(bandNote('terminal', { isWorking: false }))
-  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.hotkey).toBeUndefined()
+  expect((await ui.find({ key: 'sidekick-note-claude' }))?.props.hotkey).toBeUndefined()
   await ui.unmount()
   ui = await $.ui.mount(bandNote('terminal', { hasSurvey: true }))
   expect(await ui.find({ key: 'sidekick-note' })).toBeUndefined()
@@ -3599,136 +3605,12 @@ deTest('0.13.0: Band zeigt den Hinweis mit 1/2/0 (Terminal und Desktop); mit qui
   await ui.unmount()
 })
 
-deTest('0.13.0: Erklären klappt auf (gezählt), Verstanden merkt das Thema; Später und Weiß ich schon räumen ab', async ($, on) => {
-  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }], ['notes:ignored', 4], ['notes:skip', 2]]) })
-  await notesOn($)
-  let ui = await $.ui.mount(bandNote())
-  await ui.press({ key: 'sidekick-note-explain' })
-  await flush(120)
-  await ui.unmount()
-  expect(savedNote(w)?.open).toBe(true)
-  expect(w.saved.get('notes:ignored')).toBe(0)
-  expect(w.saved.get('notes:skip')).toBe(0)
-  ui = await $.ui.mount(bandNote())
-  const box = JSON.stringify(await ui.find({ key: 'sidekick-note' }))
-  expect(box).toContain('Plan unter alter Adresse')
-  expect(box).toContain('Der Planer speichert je Adresse.')
-  expect((await ui.find({ key: 'sidekick-note-chat' }))?.props.label).toBe('Im Chat besprechen')
-  await ui.press({ key: 'sidekick-note-gotit' })
-  await flush(120)
-  await ui.unmount()
-  expect(savedNote(w)).toBe(null)
-  expect(w.saved.get('notes:known')).toEqual([THEMA])
-  expect(today(w.ledger()).notizen).toMatchObject({ erklaert: 1 })
-  // Später und Weiß ich schon
-  for (const [key, field] of [['sidekick-note-later', 'spaeter'], ['sidekick-note-known', 'bekannt']] as const) {
-    w.saved.set('sitzung:sess-1', { note: { ...NOTE, shownAt: NOW + 1 }, savedAt: NOW })
-    w.setId(`sess-${key}`)
-    w.saved.set(`sitzung:sess-${key}`, { note: { ...NOTE, shownAt: NOW + 1 }, savedAt: NOW })
-    ui = await $.ui.mount(bandNote())
-    await ui.press({ key })
-    await flush(120)
-    await ui.unmount()
-    expect(savedNote(w, `sess-${key}`)).toBe(null)
-    expect(today(w.ledger(`sess-${key}`)).notizen[field]).toBe(1)
-  }
-})
-
-deTest('0.13.0: Im Chat besprechen: leeres Feld → fill (nie senden); volles Feld → Toast, Hinweis bleibt', async ($, on) => {
-  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: { ...NOTE, open: true }, savedAt: NOW }]]) })
-  await notesOn($)
-  w.setPromptText('halb getippt')
-  let ui = await $.ui.mount(bandNote())
-  await ui.press({ key: 'sidekick-note-chat' })
-  await flush(120)
-  await ui.unmount()
-  expect(w.fills).toEqual([])
-  expect(w.toasts.at(-1)).toContain('Im Eingabefeld steht schon Text')
-  expect(savedNote(w)).not.toBe(null)
-  w.setPromptText('')
-  ui = await $.ui.mount(bandNote())
-  await ui.press({ key: 'sidekick-note-chat' })
-  await flush(120)
-  await ui.unmount()
-  expect(w.fills).toEqual([{ text: `Zum Hinweis von sidekick („Plan unter alter Adresse“): ${THEMA}\n\n`, mode: 'append' }])
-  expect(w.sent).toEqual([])
-  expect(savedNote(w)).toBe(null)
-  expect(today(w.ledger()).notizen.chat).toBe(1)
-})
-
-deTest('0.13.0: afterFill: übernommen, no_composer → senden, Dialog, ohne Grund wie Ablehnung (types:8440-8450)', async () => {
-  expect(afterFill({ isFilled: true })).toBe('filled')
-  expect(afterFill({ isFilled: false, refusal: 'no_composer' })).toBe('submit')
-  expect(afterFill({ isFilled: false, refusal: 'dialog' })).toBe('dialog')
-  expect(afterFill({ isFilled: false })).toBe('failed')
-})
-
-deTest('0.13.0: Im Chat abgelehnt (Grund unbekannt) → Toast, Hinweis bleibt; Desktop fragt direkt als Nutzer', async ($, on) => {
-  // Ein Stub kann keinen Grund liefern (die Engine streicht ihn, types:8444); der Weg ohne Grund ist der Ablehnungs-Arm
-  const w = world(on, { fillFails: true, saved: new Map<string, unknown>([['sitzung:sess-1', { note: { ...NOTE, open: true }, savedAt: NOW }]]) })
-  await notesOn($)
-  let ui = await $.ui.mount(bandNote())
-  await ui.press({ key: 'sidekick-note-chat' })
-  await flush(120)
-  await ui.unmount()
-  expect(w.toasts.at(-1)).toBe('Das Eingabefeld hat den Hinweis nicht übernommen.')
-  expect(w.sent).toEqual([])
-  expect(savedNote(w)?.open).toBe(true)
-  // Desktop: der Knopf heißt „Im Chat fragen“ und sendet ohne fill
-  w.setId('sess-d')
-  w.saved.set('sitzung:sess-d', { note: { ...NOTE, open: true }, savedAt: NOW })
-  ui = await $.ui.mount(bandNote('desktop'))
-  expect((await ui.find({ key: 'sidekick-note-chat' }))?.props.label).toBe('Im Chat fragen')
-  await ui.press({ key: 'sidekick-note-chat' })
-  await flush(120)
-  await ui.unmount()
-  expect(w.sent).toEqual([`Der Nutzer hat bei einem Hinweis von sidekick auf „Im Chat fragen“ gedrückt. Hinweis („Plan unter alter Adresse“): ${THEMA} Erklär ihm kurz, was das hier konkret heißt, und was du empfiehlst.`])
-  // Als Nachricht von sidekick, nicht in Fynns Namen: worklist wertete `asUser` als seine Antwort (Review 0.13.0 S2)
-  expect(w.submitOrigins.at(-1)).toMatchObject({ kind: 'plugin', name: 'sidekick' })
-  expect((w.submitOrigins.at(-1) as { asUser?: boolean }).asUser).toBeUndefined()
-  expect(savedNote(w, 'sess-d')).toBe(null)
-  expect(today(w.ledger('sess-d')).notizen.chat).toBe(1)
-})
-
-deTest('0.13.0 Review S1: „Im Chat fragen“ wartet nicht auf die neue Runde; der Hinweis ist sofort weg, Knöpfe bleiben bedienbar', async ($, on) => {
-  const w = world(on, { surfaces: ['desktop'], submitDelayMs: 60000, saved: new Map<string, unknown>([['sitzung:sess-1', { note: { ...NOTE, open: true }, savedAt: NOW }]]) })
-  await notesOn($)
-  let ui = await $.ui.mount(bandNote('desktop'))
-  await ui.press({ key: 'sidekick-note-chat' })
-  await flush(120)
-  await ui.unmount()
-  // submit hängt noch (Claude arbeitet), der Hinweis ist trotzdem abgeräumt und gezählt
-  expect(w.sent.length).toBe(1)
-  expect(savedNote(w)).toBe(null)
-  expect(today(w.ledger()).notizen.chat).toBe(1)
-  // Ein neuer Hinweis lässt sich sofort bedienen (kein hängendes notePressing)
-  w.setId('sess-2')
-  w.saved.set('sitzung:sess-2', { note: { ...NOTE, shownAt: NOW + 5 }, savedAt: NOW })
-  ui = await $.ui.mount(bandNote('desktop'))
-  await ui.press({ key: 'sidekick-note-later' })
-  await flush(120)
-  await ui.unmount()
-  expect(savedNote(w, 'sess-2')).toBe(null)
-  await w.clock.advance(60000)
-  await flush()
-})
-
-deTest('0.13.0 Review S1: scheitert das Senden, kommt ein Toast', async ($, on) => {
-  const w = world(on, { surfaces: ['desktop'], submitFails: true, saved: new Map<string, unknown>([['sitzung:sess-1', { note: { ...NOTE, open: true }, savedAt: NOW }]]) })
-  await notesOn($)
-  const ui = await $.ui.mount(bandNote('desktop'))
-  await ui.press({ key: 'sidekick-note-chat' })
-  await flush(120)
-  await ui.unmount()
-  expect(w.toasts.at(-1)).toContain('Die Frage zum Hinweis ließ sich nicht senden')
-})
-
 deTest('0.13.0 Review K1: nach der Runde (isWorking false) keine Ziffern an den Knöpfen', async ($, on) => {
   world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
   await notesOn($)
   const ui = await $.ui.mount(bandNote('terminal', { isWorking: false }))
   expect(await ui.find({ key: 'sidekick-note' })).toBeDefined()
-  for (const key of ['sidekick-note-explain', 'sidekick-note-known', 'sidekick-note-later']) expect((await ui.find({ key }))?.props.hotkey).toBeUndefined()
+  for (const key of ['sidekick-note-claude', 'sidekick-note-known', 'sidekick-note-ignore']) expect((await ui.find({ key }))?.props.hotkey).toBeUndefined()
   await ui.unmount()
 })
 
@@ -3776,7 +3658,7 @@ deTest('0.13.0 Review K3: Fork-Tokens nicht in den Ø-Tokens der Prüfung, Tage 
   expect(dayModels(only)).toBe('')
 })
 
-deTest('0.13.0: ignoriert: nach 2 eigenen Nachrichten weg, Zurückhaltung zählt hoch; Befehle zählen nicht, erklärte bleiben', async ($, on) => {
+deTest('0.13.0: ignoriert: nach 2 eigenen Nachrichten weg, Zurückhaltung zählt hoch; Befehle zählen nicht', async ($, on) => {
   const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }], ['notes:ignored', 2]]) })
   await notesOn($)
   await $.prompt.submit(userPrompt('/savings'))
@@ -3791,13 +3673,6 @@ deTest('0.13.0: ignoriert: nach 2 eigenen Nachrichten weg, Zurückhaltung zählt
   expect(w.saved.get('notes:ignored')).toBe(3)
   expect(w.saved.get('notes:skip')).toBe(1)
   expect(today(w.ledger()).notizen.ignoriert).toBe(1)
-  // Erklärt: bleibt beliebig lange
-  w.saved.set('sitzung:sess-1', { note: { ...NOTE, open: true }, savedAt: NOW })
-  w.setId('sess-x')
-  w.saved.set('sitzung:sess-x', { note: { ...NOTE, open: true }, savedAt: NOW })
-  for (const m of ['a', 'b', 'c']) await $.prompt.submit(userPrompt(m))
-  await flush()
-  expect(savedNote(w, 'sess-x')?.open).toBe(true)
 })
 
 deTest('0.13.0: /sidekick notes on|off|forget|status; off räumt den Hinweis ab; Status-Zeile', async ($, on) => {
@@ -3829,7 +3704,7 @@ deTest('0.13.0: /sidekick notes on|off|forget|status; off räumt den Hinweis ab;
 })
 
 deTest('0.13.0: Übergabe-Box hat Vorrang vor dem Hinweis', async ($, on) => {
-  const w = world(on, { handoffDelayMs: 5000, saved: new Map<string, unknown>([['sitzung:sess-1', { note: { ...NOTE, open: true }, savedAt: NOW }]]) })
+  const w = world(on, { handoffDelayMs: 5000, saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
   await notesOn($)
   w.setCtx(90000)
   w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
@@ -3855,7 +3730,7 @@ deTest('0.13.0: /savings: knappe Zeile und Tabelle; Kosten, Verhältnis und „f
   expect(short).toContain('**Kosten** ≈ 0,50 $')
   const full = savingsReport(d, 'all', NOW, '', { [dayKey(NOW)]: d })
   expect(full).toContain('**Gut zu wissen** (getrennt, nicht in Kosten und Verhältnis)')
-  expect(full).toContain('| 4 | ≈ 0,17 $ | 5,0 s | 1 | 1 | 0 | 0 | 0 | 0 | 3 | 0 | 0 |')
+  expect(full).toContain('| 4 | ≈ 0,17 $ | 5,0 s | 1 | 1 | 3 |')
   expect(full).toContain('| Opus 5.5 | Gut zu wissen | 1 |')
   const sum = addDay(d, d)
   expect(sum.notizen).toMatchObject({ n: 8, gezeigt: 2, keins: 6 })
@@ -3875,8 +3750,289 @@ test('0.13.0 en: tags, buttons and status in English', async ($, on) => {
   const box = JSON.stringify(await ui.find({ key: 'sidekick-note' }))
   expect(box).toContain('Good to know')
   expect((await ui.find({ key: 'sidekick-note-known' }))?.props.label).toBe('Know this')
+  expect((await ui.find({ key: 'sidekick-note-claude' }))?.props.label).toBe('Hand to Claude')
+  expect((await ui.find({ key: 'sidekick-note-ignore' }))?.props.label).toBe('Ignore')
   await ui.unmount()
   expect(w.forks.length).toBe(0)
+})
+
+// ---------- 0.27.1: Hinweis in einer Zeile, „An Claude geben“, „Ignorieren“ ----------
+
+const PASS_DE = `sidekick-Hinweis, vom Nutzer an dich weitergegeben: Plan unter alter Adresse: ${THEMA} Der Planer speichert je Adresse. Prüf das jetzt. Ist es ein Problem, behebe es oder sag, was du vorschlägst, wenn es größer ist. Ist es keins, erklär in einem Satz, warum nicht.`
+const PASS_DE_TURN = `${PASS_DE} Mach danach mit deiner Aufgabe weiter.`
+const endTurn = ($: Engine, turnId: string, aborted = false) =>
+  $.turn.complete({ turnId, answer: 'fertig', reason: aborted ? 'aborted' : 'answer', durationMs: 10, isAborted: aborted, usage: null } as never)
+const pressKey = async ($: Engine, key: string, surface = 'terminal') => {
+  const ui = await $.ui.mount(bandNote(surface))
+  await ui.press({ key })
+  await flush(120)
+  await ui.unmount()
+}
+const ctxOf = (r: unknown) => (r as { context?: readonly string[] }).context
+const ASK = { tool: 'AskUserQuestion', questions: [{ question: 'Q?', header: 'Q', multiSelect: false, options: [{ label: 'a', description: '' }, { label: 'b', description: '' }] }] }
+
+for (const surface of ['terminal', 'desktop'] as const)
+  deTest(`0.27.1 Ansicht ${surface}: eine Zeile mit drei Knöpfen, umbrechend, ohne Leerzeile, Ziffern 1/2/0`, async ($, on) => {
+    world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+    await notesOn($)
+    let ui = await $.ui.mount(bandNote(surface))
+    const box = (await ui.find({ key: 'sidekick-note' })) as { props: Record<string, unknown> }
+    expect(box.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap', width: 100 })
+    expect(box.props.marginBottom).toBeUndefined()
+    const s = JSON.stringify(box)
+    expect(s).toContain('Achtung')
+    expect(s).toContain(THEMA)
+    expect((await ui.find({ key: 'sidekick-note-claude' }))?.props).toMatchObject({ label: 'An Claude geben', hotkey: '1' })
+    expect((await ui.find({ key: 'sidekick-note-known' }))?.props).toMatchObject({ label: 'Weiß ich schon', hotkey: '2' })
+    expect((await ui.find({ key: 'sidekick-note-ignore' }))?.props).toMatchObject({ label: 'Ignorieren', hotkey: '0' })
+    for (const gone of ['Erklären', 'Später', 'Im Chat', 'Verstanden', 'Schließen']) expect(s).not.toContain(gone)
+    await ui.unmount()
+    // Schmal (40 Spalten): Breite folgt bodyColumns, die Knöpfe brechen über flexWrap um
+    ui = await $.ui.mount(bandNote(surface, { bodyColumns: 40 }))
+    expect((await ui.find({ key: 'sidekick-note' }))?.props).toMatchObject({ width: 40, flexWrap: 'wrap' })
+    await ui.unmount()
+  })
+
+deTest('0.27.1: ein alter aufgeklappter Hinweis (open: true aus 0.27.0) erscheint als eine Zeile und altert normal', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: { ...NOTE, open: true }, savedAt: NOW }]]) })
+  await notesOn($)
+  const ui = await $.ui.mount(bandNote())
+  expect(await ui.find({ key: 'sidekick-note-claude' })).toBeDefined()
+  await ui.unmount()
+  await $.prompt.submit(userPrompt('erste'))
+  await $.prompt.submit(userPrompt('zweite'))
+  await flush(120)
+  expect(savedNote(w)).toBe(null)
+})
+
+deTest('0.27.1: Weiß ich schon merkt das Thema, Ignorieren nicht; beide räumen ab, zählen und setzen die Zurückhaltung zurück', async ($, on) => {
+  const w = world(on)
+  await notesOn($)
+  for (const [key, field] of [['sidekick-note-ignore', 'spaeter'], ['sidekick-note-known', 'bekannt']] as const) {
+    w.setId(`sess-${key}`)
+    w.saved.set(`sitzung:sess-${key}`, { note: NOTE, savedAt: NOW })
+    w.saved.set('notes:ignored', 4)
+    w.saved.set('notes:skip', 2)
+    await pressKey($, key)
+    expect(savedNote(w, `sess-${key}`)).toBe(null)
+    expect(today(w.ledger(`sess-${key}`)).notizen[field]).toBe(1)
+    expect(w.saved.get('notes:ignored')).toBe(0)
+    expect(w.saved.get('notes:skip')).toBe(0)
+    expect(w.saved.get('notes:known') ?? []).toEqual(key === 'sidekick-note-known' ? [THEMA] : [])
+  }
+  expect(w.sent).toEqual([])
+})
+
+for (const surface of ['terminal', 'desktop'] as const)
+  deTest(`0.27.1 Leerlauf ${surface}: An Claude geben sendet sofort als Nachricht von sidekick (ohne Schlusssatz), zählt „weiter“`, async ($, on) => {
+    const w = world(on, { surfaces: [surface], saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+    await notesOn($)
+    await pressKey($, 'sidekick-note-claude', surface)
+    expect(w.sent).toEqual([PASS_DE])
+    expect(w.submitOrigins.at(-1)).toMatchObject({ kind: 'plugin', name: 'sidekick' })
+    expect((w.submitOrigins.at(-1) as { asUser?: boolean }).asUser).toBeUndefined()
+    expect(w.fills).toEqual([])
+    expect(savedNote(w)).toBe(null)
+    expect(today(w.ledger()).notizen).toMatchObject({ weiter: 1, erklaert: 0, chat: 0 })
+  })
+
+deTest('0.27.1 Leerlauf: Senden wartet nicht auf die neue Runde, die Knöpfe bleiben bedienbar', async ($, on) => {
+  const w = world(on, { submitDelayMs: 60000, saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+  await notesOn($)
+  await pressKey($, 'sidekick-note-claude')
+  expect(w.sent.length).toBe(1)
+  expect(savedNote(w)).toBe(null)
+  w.setId('sess-2')
+  w.saved.set('sitzung:sess-2', { note: { ...NOTE, shownAt: NOW + 5 }, savedAt: NOW })
+  await pressKey($, 'sidekick-note-ignore')
+  expect(savedNote(w, 'sess-2')).toBe(null)
+  await w.clock.advance(60000)
+  await flush()
+})
+
+deTest('0.27.1 Leerlauf: scheitert das Senden, kommt ein Toast', async ($, on) => {
+  const w = world(on, { submitFails: true, saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+  await notesOn($)
+  await pressKey($, 'sidekick-note-claude')
+  await flush(120)
+  expect(w.toasts.at(-1)).toContain('Der Hinweis ließ sich nicht an Claude senden')
+})
+
+deTest('0.27.1 im Zug: der nächste Werkzeug-Aufruf des Hauptagenten trägt den Hinweis genau einmal; deny nicht, Subagent nicht', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+  await notesOn($)
+  await stepAt($, 1, 'z')
+  await pressKey($, 'sidekick-note-claude')
+  expect(w.toasts.at(-1)).toBe('An Claude übergeben, kommt mit dem nächsten Schritt.')
+  expect(w.sent).toEqual([])
+  expect(savedNote(w)).toBe(null)
+  expect(today(w.ledger()).notizen.weiter).toBe(1)
+  // Ein Subagent bekommt ihn nicht
+  const sub = await $.tool.call({ tool: 'Glob', pattern: '*', agentId: 'sub-1' } as never)
+  expect(ctxOf(sub)).toEqual(['vom Stub'])
+  // Ein deny trägt ihn nicht (der Hinweis bliebe sonst ungelesen)
+  w.setAnswer(null)
+  const denied = await $.tool.call(ASK as never)
+  expect((denied as { deny?: string }).deny).toBe('Dialog geschlossen')
+  expect(ctxOf(denied)).toBeUndefined()
+  // Der nächste des Hauptagenten trägt ihn, hinter dem context der Kette
+  const r = await $.tool.call({ tool: 'Glob', pattern: '*' } as never)
+  expect(ctxOf(r)).toEqual(['vom Stub', PASS_DE_TURN])
+  expect((r as { result?: unknown }).result).toEqual({ filenames: ['a.ts'] })
+  // Genau einmal
+  expect(ctxOf(await $.tool.call({ tool: 'Glob', pattern: '*' } as never))).toEqual(['vom Stub'])
+  await endTurn($, 'z')
+  await w.clock.advance(300)
+  await flush()
+  expect(w.sent).toEqual([])
+})
+
+deTest('0.27.1 im Zug: Bash trägt den Hinweis und merkt den Commit wie bisher', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+  await notesOn($)
+  await stepAt($, 1, 'z')
+  await pressKey($, 'sidekick-note-claude')
+  const r = await $.tool.call({ tool: 'Bash', command: 'git commit -m x' } as never)
+  await flush()
+  expect(ctxOf(r)).toEqual([PASS_DE_TURN])
+  expect((w.saved.get('sitzung:sess-1') as { commit?: { sha?: string } }).commit?.sha).toBe('abc1234')
+})
+
+deTest('0.27.1 im Zug: ein zweiter Druck meldet „schon übergeben“, der zweite Hinweis bleibt stehen', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+  await notesOn($)
+  await stepAt($, 1, 'z')
+  await pressKey($, 'sidekick-note-claude')
+  // Ein neuer Hinweis in derselben Runde (der erste kam aus dem Store, nicht aus diesem Zug)
+  w.setFork({ isAnswered: true, text: noteJson({ thema: 'Zweites Thema ist wichtig.' }), usage: FORK_USAGE })
+  await stepAt($, 6, 'z')
+  await until(() => savedNote(w)?.thema === 'Zweites Thema ist wichtig.')
+  await pressKey($, 'sidekick-note-claude')
+  expect(w.toasts.at(-1)).toBe('Schon an Claude übergeben, kommt mit dem nächsten Schritt.')
+  expect(savedNote(w)?.thema).toBe('Zweites Thema ist wichtig.')
+  expect(today(w.ledger()).notizen.weiter).toBe(1)
+  // Der erste Text kommt mit dem nächsten Werkzeug
+  expect(ctxOf(await $.tool.call({ tool: 'Glob', pattern: '*' } as never))).toEqual(['vom Stub', PASS_DE_TURN])
+})
+
+deTest('0.27.1 Zugende ohne Werkzeug → einmal $.prompt.submit (ohne Schlusssatz); Abbruch und /clear → nichts', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }], ['sitzung:sess-2', { note: NOTE, savedAt: NOW }], ['sitzung:sess-3', { note: NOTE, savedAt: NOW }]]) })
+  on('session.start', () => ({ cwd: '/work' }))
+  await notesOn($)
+  await stepAt($, 1, 'z')
+  await pressKey($, 'sidekick-note-claude')
+  await endTurn($, 'z')
+  await flush()
+  // Nicht im Hook selbst (die Runde endet gerade), 300 ms später
+  expect(w.sent).toEqual([])
+  await w.clock.advance(300)
+  await flush()
+  expect(w.sent).toEqual([PASS_DE])
+  expect(w.submitOrigins.at(-1)).toMatchObject({ kind: 'plugin', name: 'sidekick' })
+  // Danach nichts mehr am Werkzeug
+  expect(ctxOf(await $.tool.call({ tool: 'Glob', pattern: '*' } as never))).toEqual(['vom Stub'])
+  // Abbruch: still verworfen
+  w.setId('sess-2')
+  await stepAt($, 1, 'y')
+  await pressKey($, 'sidekick-note-claude')
+  await endTurn($, 'y', true)
+  await w.clock.advance(300)
+  await flush()
+  expect(w.sent.length).toBe(1)
+  expect(ctxOf(await $.tool.call({ tool: 'Glob', pattern: '*' } as never))).toEqual(['vom Stub'])
+  // /clear (neue Session): verworfen, kein Senden am Zugende des neuen Chats
+  w.setId('sess-3')
+  await stepAt($, 1, 'x')
+  await pressKey($, 'sidekick-note-claude')
+  w.setId('sess-4')
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await stepAt($, 1, 'w')
+  expect(ctxOf(await $.tool.call({ tool: 'Glob', pattern: '*' } as never))).toEqual(['vom Stub'])
+  await endTurn($, 'w')
+  await w.clock.advance(300)
+  await flush()
+  expect(w.sent.length).toBe(1)
+})
+
+deTest('0.27.1: fremde Werkzeuge ohne offenen Hinweis: Ergebnis byte-gleich, auch deny', async ($, on) => {
+  const w = world(on)
+  await notesOn($)
+  await stepAt($, 1, 'z')
+  const r = await $.tool.call({ tool: 'Glob', pattern: '*' } as never)
+  expect(JSON.stringify(r)).toBe(JSON.stringify({ result: { filenames: ['a.ts'] }, context: ['vom Stub'] }))
+  const plain = await $.tool.call({ tool: 'Read', file_path: 'x' } as never)
+  expect(JSON.stringify(plain)).toBe(JSON.stringify({ result: '' }))
+  w.setAnswer(null)
+  const denied = await $.tool.call(ASK as never)
+  expect(JSON.stringify(denied)).toBe(JSON.stringify({ deny: 'Dialog geschlossen' }))
+})
+
+deTest('0.27.1 Review K5: PowerShell, start_session und ein Fehler-Ergebnis tragen den Hinweis; zwei Aufrufe zugleich nur einer', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }], ['sitzung:sess-2', { note: NOTE, savedAt: NOW }], ['sitzung:sess-3', { note: NOTE, savedAt: NOW }], ['sitzung:sess-4', { note: NOTE, savedAt: NOW }]]) })
+  await notesOn($)
+  for (const [sid, call] of [
+    ['sess-1', { tool: 'PowerShell', command: 'git commit -m x' }],
+    ['sess-2', { tool: 'mcp__ccd_session__start_session', title: 'Neu', prompt: 'Schreib eine README.' }],
+    ['sess-3', { tool: 'Grep', pattern: 'x' }],
+  ] as const) {
+    w.setId(sid)
+    await stepAt($, 1, `t-${sid}`)
+    await pressKey($, 'sidekick-note-claude')
+    const r = await $.tool.call(call as never)
+    expect(ctxOf(r), sid).toEqual([PASS_DE_TURN])
+    if (sid === 'sess-3') expect((r as { isError?: boolean }).isError).toBe(true)
+  }
+  // Zwei Aufrufe zugleich: genau einer trägt ihn
+  w.setId('sess-4')
+  await stepAt($, 1, 't-4')
+  await pressKey($, 'sidekick-note-claude')
+  const both = await Promise.all([$.tool.call({ tool: 'Glob', pattern: '*' } as never), $.tool.call({ tool: 'Glob', pattern: '*' } as never)])
+  expect(both.filter((r) => ctxOf(r)?.includes(PASS_DE_TURN)).length).toBe(1)
+})
+
+deTest('0.27.1 Review K5: ein Sessionwechsel ohne session.start (nur beim Binden) verwirft den offenen Hinweis', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+  await notesOn($)
+  await stepAt($, 1, 'z')
+  await pressKey($, 'sidekick-note-claude')
+  w.setId('sess-2')
+  await stepAt($, 1, 'y')
+  expect(ctxOf(await $.tool.call({ tool: 'Glob', pattern: '*' } as never))).toEqual(['vom Stub'])
+  await endTurn($, 'y')
+  await w.clock.advance(300)
+  await flush()
+  expect(w.sent).toEqual([])
+})
+
+test('0.27.1 en: Hand to Claude sends the English text, without the last sentence when idle', async ($, on) => {
+  setLang('en')
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+  await notesOn($)
+  await pressKey($, 'sidekick-note-claude')
+  expect(w.sent).toEqual([
+    `sidekick note, passed on to you by the user: Plan unter alter Adresse: ${THEMA} Der Planer speichert je Adresse. Check this now. If it is a problem, fix it, or say what you suggest if it is bigger. If it is not, explain in one sentence why not.`,
+  ])
+})
+
+deTest('0.27.1 /savings detail: Spalten nur mit Werten; alter Tag zeigt erklärt, neuer an Claude', async () => {
+  const old = emptyDay()
+  old.notizen = { ...old.notizen, n: 4, usd: 0.17, ms: 20000, gezeigt: 1, erklaert: 1, keins: 3 }
+  const neu = emptyDay()
+  neu.notizen = { ...neu.notizen, n: 2, usd: 0.08, ms: 8000, gezeigt: 2, weiter: 1, spaeter: 1 }
+  const a = savingsReport(old, 'all', NOW, '', { [dayKey(NOW)]: old })
+  expect(a).toContain('| Prüfungen | ≈ $ | Ø Dauer | gezeigt | erklärt | keins |')
+  expect(a).toContain('| 4 | ≈ 0,17 $ | 5,0 s | 1 | 1 | 3 |')
+  const b = savingsReport(neu, 'all', NOW, '', { [dayKey(NOW)]: neu })
+  expect(b).toContain('| Prüfungen | ≈ $ | Ø Dauer | gezeigt | an Claude | ignoriert (Knopf) |')
+  expect(b).toContain('| 2 | ≈ 0,08 $ | 4,0 s | 2 | 1 | 1 |')
+  expect(b).not.toContain('erklärt')
+  const sum = addDay(old, neu)
+  expect(sum.notizen).toMatchObject({ n: 6, gezeigt: 3, erklaert: 1, weiter: 1, spaeter: 1, keins: 3 })
+  expect(cleanLedger({ tage: { [dayKey(NOW)]: { notizen: { n: 1, erklaert: 2, chat: 1 } } } }).tage[dayKey(NOW)]?.notizen).toMatchObject({ erklaert: 2, chat: 1, weiter: 0 })
+  const tree = JSON.stringify(savingsTree(neu, 'all', NOW, 100, 'terminal'))
+  expect(tree).toContain('gezeigt 2 · an Claude 1 · ignoriert (Knopf) 1')
+  expect(tree).not.toContain('erklärt')
+  expect(JSON.stringify(savingsTree(old, 'all', NOW, 100, 'terminal'))).toContain('gezeigt 1 · erklärt 1')
 })
 
 // ---------- 0.14.0: /sidekick help (docs/HELP-SPEC.md §6) ----------
@@ -3926,11 +4082,11 @@ deTest('0.14.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstel
   expect(text).not.toContain('worklist')
   expect(lines).toContain('Regeln für <rule>: skills-cut · audit · memory · skills-heavy · init')
   expect(lines).toContain('**BEDIENUNG**')
-  expect(lines).toContain('- `1 Erklären`: Hinweis aufklappen (Ziffern nur, solange Claude arbeitet)')
+  expect(lines).toContain('- `1 An Claude geben`: Hinweis an Claude: während der Arbeit mit dem nächsten Werkzeug-Ergebnis, sonst als Nachricht von sidekick (Ziffern nur, solange Claude arbeitet)')
   expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Stufe Begleiter \(Standard\) \(\/sidekick off\|cache\|guide\) · Schwelle 80k \(Standard\)/m)
   expect(text).toContain('Gut zu wissen ○ aus (Standard) (/sidekick notes on)')
   // Seit 0.23.0 alle userConfig-Felder in der Reihenfolge von plugin.json, Sprache zuletzt
-  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Stufe guide \(Standard\) · Prüfung ab \(Tokens\) 80k \(Standard\) · .* · Korrektur-Schleife an \(Standard\) · Warteschlange an \(Standard\) · Skill-Katalog an \(Standard\) · Sprache de$/m)
+  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Stufe guide \(Standard\) · Prüfung ab \(Tokens\) 80k \(Standard\) · .* · Korrektur-Schleife an \(Standard\) · Warteschlange an \(Standard\) · Skill-Katalog an \(Standard\) · Danach-Knopf an \(Standard\) · Prompt-Knöpfe an \(Standard\) · Sprache de$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure sidekick · Mod abschalten: /plugin disable sidekick')
 })
 
@@ -3943,7 +4099,7 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect((await ui.find({ type: 'Text', text: 'sidekick · Hilfe' }))?.props).toMatchObject({ color: BLUE, bold: true })
     for (const h of ['BEFEHLE', 'BEDIENUNG', 'FUNKTIONEN', 'STATUS', 'UMSCHALTEN', 'EINSTELLUNGEN (/plugin)', 'WERT'])
       expect((await ui.find({ type: 'Text', text: h }))?.props.color, h).toBe(BLUE)
-    for (const cmd of ['/sidekick [status]', '/sidekick cache', '/sidekick hints <rule> on|off', '/sidekick notes forget', '/savings detail [today|week|all]', '1 Erklären'])
+    for (const cmd of ['/sidekick [status]', '/sidekick cache', '/sidekick hints <rule> on|off', '/sidekick notes forget', '/savings detail [today|week|all]', '1 An Claude geben'])
       expect((await ui.find({ type: 'Text', text: cmd }))?.props.color, cmd).toBe(BLUE)
     // Akzent nie für Fließtext
     expect((await ui.find({ type: 'Text', text: /^Prüft deine Nachricht/ }))?.props.color).toBeUndefined()
@@ -4098,7 +4254,7 @@ test('0.14.0 Hilfe (en): Funktionen und Einstellungen in Englisch, Desktop-Fußz
   const text = await helpRun($)
   expect(text).toContain('Level Guide (default) (/sidekick off|cache|guide)')
   expect(text).toContain('Good to know ○ off (default) (/sidekick notes on)')
-  expect(text).toMatch(/^\*\*SETTINGS \(\/plugin\):\*\* Level guide \(default\) · .* · Retry loop on \(default\) · Queue on \(default\) · Skill catalog on \(default\) · Language en \(default\)$/m)
+  expect(text).toMatch(/^\*\*SETTINGS \(\/plugin\):\*\* Level guide \(default\) · .* · Retry loop on \(default\) · Queue on \(default\) · Skill catalog on \(default\) · Later button on \(default\) · Prompt buttons on \(default\) · Language en \(default\)$/m)
   const ui = await mountHelp($, text, 'desktop')
   expect(await ui.find({ type: 'Text', text: 'Change settings: Settings → Plugins → sidekick → Settings · Turn the mod off: + → Plugins → Manage plugins' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'CONTROLS' })).toBeDefined()

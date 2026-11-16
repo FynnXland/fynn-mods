@@ -1,6 +1,6 @@
 {
   "name": "sidekick",
-  "version": "0.26.1",
+  "version": "0.28.0",
   "description": "Checks your message before it is sent and offers a better way where there is one: a new chat with a handoff, a skill, a clearer version or a cheaper model. It never changes your words or sends anything without asking.",
   "author": {
     "name": "Fynn Hansen"
@@ -103,6 +103,18 @@
       "type": "boolean",
       "title": "Skill catalog",
       "description": "When a message fits a skill from sidekick's small list of third-party skills, suggests it once per chat before sending. Installs nothing. Also /sidekick catalog on|off.",
+      "default": true
+    },
+    "laterButton": {
+      "type": "boolean",
+      "title": "Later button",
+      "description": "Desktop footer, while Claude works: the Later button. Works only with Queue on. Also /sidekick buttons later on|off.",
+      "default": true
+    },
+    "promptButtons": {
+      "type": "boolean",
+      "title": "Prompt buttons",
+      "description": "Desktop footer: up to 4 buttons of saved prompts. Off hides all, each prompt keeps its own setting. Also /sidekick buttons prompts on|off.",
       "default": true
     },
     "language": {

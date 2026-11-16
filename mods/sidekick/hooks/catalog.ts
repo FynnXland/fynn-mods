@@ -24,6 +24,15 @@ export type CatalogEntry = {
   install?: { line: string }
   /** Namen für den Abgleich mit `$.command.list()` (Befehlsname, Plugin oder Präfix `name:`). */
   installedAs: string[]
+  /**
+   * Nur bundled (Ausbau 0.28.0, E5): Muster auf Befehlsnamen aus `$.command.list()`, `*` als Platzhalter. Trifft eins, hat ein
+   * Projekt-Befehl Vorrang (z. B. `/mod-debug`), und der Eintrag gilt wie installiert.
+   */
+  yieldTo?: string[]
+  /** Nur bundled (E3): Satz, den `skillContext` vor den Skill-Text stellt, z. B. zu Verweisen auf nicht installierte Skills. ≤ 240 Zeichen. */
+  ctxNote?: { de: string; en: string }
+  /** Eigene Schwelle statt `CATALOG_MIN` (Ausbau 0.28.0, Probe P2', Entscheidung Fynn (b) 2026-11-16: sp-debug 0,6). */
+  minSure?: number
   /** ≤ 160 Zeichen, englisch, für Haiku. */
   summary: string
   /** Vorfilter: Wortanfänge bzw. Phrasen; `*` am Ende = Wortanfang, sonst ganzes Wort. */
@@ -37,6 +46,15 @@ const EMIL = { author: 'Emil Kowalski', repo: 'emilkowalski/skills', url: 'https
 const EMIL_INSTALL = { line: 'npx skills@latest add emilkowalski/skills' }
 const MARKDOWN = { runsCode: false, network: false, heavy: false } as const
 const NPX = { de: 'npx, ungepinnt', en: 'npx, unpinned' }
+
+// Ausbau 0.28.0: Kopien vom gepinnten sha (Lizenzen über die GitHub-API geprüft am 2026-11-16, SPDX MIT)
+const SUPERPOWERS_SHA = '22f0b463e7a5e579904dd6211a520321035526f7'
+const SP = { author: 'Jesse Vincent', repo: 'obra/superpowers', url: 'https://github.com/obra/superpowers', license: 'MIT', pinnedSha: SUPERPOWERS_SHA, checkedAt: '2026-11-16' } as const
+/** E3: systematic-debugging nennt `superpowers:test-driven-development` und `superpowers:verification-before-completion`. */
+const SP_NOTE = {
+  de: 'Skills mit dem Namen `superpowers:*` in diesem Text sind nicht installiert. Versuch nicht, sie zu laden; wende den Schritt, für den sie stehen, an Ort und Stelle an.',
+  en: 'Skills named `superpowers:*` in this text are not installed. Do not try to load them; apply the step they stand for in place.',
+}
 
 /** Der Katalog. Reihenfolge = Vorrang bei mehr als `CATALOG_MAX` Treffern. */
 export const CATALOG: readonly CatalogEntry[] = [
@@ -83,6 +101,105 @@ export const CATALOG: readonly CatalogEntry[] = [
     keywords: {
       de: ['worst case', 'worst-case', 'stresstest*', 'stress-test*', 'lange namen', 'langer name', 'langen namen', 'extremwerte', 'kaputt kriegen', 'zum absturz', 'randfälle der ui', 'randfälle im layout'],
       en: ['worst case', 'worst-case', 'stress test*', 'stress-test*', 'long names', 'break the ui', 'break this component', 'break this ui', 'extreme data'],
+    },
+    risk: MARKDOWN,
+  },
+  // Ausbau 0.28.0 (E7): die neuen Einträge vor den Verweisen, sp-debug vor sp-verify
+  {
+    id: 'sp-debug',
+    name: 'systematic-debugging',
+    ...SP,
+    way: 'bundled',
+    invoke: 'sidekick:systematic-debugging',
+    // SKILL.md 9 530 B / 4; die drei Begleitdateien (≈ 3,1k) liest Claude nur bei Bedarf
+    ctxTokens: 2400,
+    installedAs: ['systematic-debugging', 'superpowers'],
+    yieldTo: ['*debug*'],
+    ctxNote: SP_NOTE,
+    // Probe P2': bei 0,6 ≈ 50 % getroffen (45–55 %) bei ≤ 0,5 unnötigen Rückfragen je 200; bei 0,7 24–48 %. Ziel 2 (60 %) bleibt
+    // verfehlt, Known limitation (Entscheidung Fynn (b), 2026-11-16)
+    minSure: 0.6,
+    // Probe P2': vom Anlass her formuliert (mit „Root cause before fixes: …“ traf Haiku 5–7 von 28, so 16 von 33)
+    summary: 'For a reported bug, crash or error whose cause is unclear: find the root cause before fixing (read errors, reproduce, one hypothesis at a time).',
+    keywords: {
+      // Probe P2': „herausfinden“, „woran es liegt“ und „Fehlerprotokoll“ ergänzt (passende Nachrichten ohne Stichwort)
+      de: ['fehlermeldung*', 'fehlerprotokoll', 'geht nicht', 'funktioniert nicht', 'klappt nicht', 'kaputt', 'bug', 'bugs', 'absturz', 'stürzt ab', 'immer noch nicht', 'warum geht', 'herausfinden', 'woran es liegt', 'woran das liegt', 'woran es lag'],
+      en: ['bug', 'bugs', "doesn't work", 'not working', 'still broken', 'still failing', 'crash*', 'stack trace', 'error message', 'find out why', 'figure out why'],
+    },
+    risk: MARKDOWN,
+  },
+  {
+    id: 'sp-verify',
+    name: 'verification-before-completion',
+    ...SP,
+    way: 'bundled',
+    invoke: 'sidekick:verification-before-completion',
+    ctxTokens: 900,
+    installedAs: ['verification-before-completion', 'superpowers'],
+    summary: 'Evidence before claims: run the command that proves a fix or passing tests, read the output, only then report it done.',
+    keywords: {
+      de: ['ist es fertig', 'ist das fertig', 'geht es jetzt', 'läuft es jetzt', 'prüf mal ob', 'prüf ob', 'hast du das getestet', 'stimmt das wirklich'],
+      en: ['is it done', 'does it work now', 'did you test', 'did you verify', 'make sure it works'],
+    },
+    risk: MARKDOWN,
+  },
+  {
+    id: 'sp-review',
+    name: 'receiving-code-review',
+    ...SP,
+    way: 'bundled',
+    invoke: 'sidekick:receiving-code-review',
+    ctxTokens: 1600,
+    installedAs: ['receiving-code-review', 'superpowers'],
+    summary: 'Handling review feedback: check each point against the code, ask about unclear items, push back with reasons, fix one at a time.',
+    keywords: {
+      de: ['review-kommentar*', 'reviewer sagt', 'der reviewer', 'review-auflage*', 'auflagen aus dem review', 'pr-kommentar*', 'feedback aus dem review'],
+      en: ['review comments', 'review feedback', 'the reviewer says', 'address the review', 'pr comments'],
+    },
+    risk: MARKDOWN,
+  },
+  {
+    id: 'ib-meta',
+    name: 'fixing-metadata',
+    author: 'Julien Thibeaut',
+    repo: 'ibelick/ui-skills',
+    url: 'https://github.com/ibelick/ui-skills',
+    license: 'MIT',
+    pinnedSha: '65cc0edb4f64fe8bfe7e9c59466074de25bece76',
+    checkedAt: '2026-11-16',
+    way: 'bundled',
+    invoke: 'sidekick:fixing-metadata',
+    ctxTokens: 1100,
+    installedAs: ['fixing-metadata', 'ui-skills'],
+    yieldTo: ['*seo*', '*metadata*'],
+    summary: 'Audits and fixes page metadata: titles, descriptions, canonical URLs, Open Graph and Twitter cards, favicons, JSON-LD, robots.',
+    keywords: {
+      // Probe P2': „social preview“ gestrichen (10 Treffer, alle die Vorschau eines GitHub-Repos)
+      de: ['seo', 'meta-tag*', 'metatag*', 'meta description', 'open graph', 'og-image', 'og:image', 'link-vorschau', 'vorschaubild beim teilen', 'favicon*', 'json-ld', 'strukturierte daten', 'sitemap'],
+      en: ['seo', 'meta tag*', 'meta description', 'open graph', 'og image', 'og:image', 'link preview', 'favicon*', 'json-ld', 'structured data', 'canonical url'],
+    },
+    risk: MARKDOWN,
+  },
+  {
+    id: 'mp-grill',
+    name: 'grilling',
+    author: 'Matt Pocock',
+    repo: 'mattpocock/skills',
+    url: 'https://github.com/mattpocock/skills',
+    license: 'MIT',
+    pinnedSha: '5863806dd4e15c63174bee4e7515a4256792ecfa',
+    checkedAt: '2026-11-16',
+    way: 'bundled',
+    invoke: 'sidekick:grilling',
+    // SKILL.md 2 077 B / 4; verweist auf keine fremden Skills (kein ctxNote, E3)
+    ctxTokens: 500,
+    installedAs: ['grilling', 'grill-me', 'mattpocock-skills'],
+    yieldTo: ['*grill*'],
+    summary: 'Interviews you about a plan, one decision at a time along the decision tree, before any code is written.',
+    keywords: {
+      // E9: die Grill-Stichwörter von `mattpocock`; E10 und Probe P2': Planung („klären, bevor“ traf den einen passenden Auftrag)
+      de: ['löcher mich', 'löchere mich', 'grill mich', 'frag mich aus', 'neues feature', 'ich habe eine idee', 'lass uns planen', 'klären, bevor'],
+      en: ['grill me', 'interview me', 'new feature', 'i have an idea', "let's plan"],
     },
     risk: MARKDOWN,
   },
@@ -191,8 +308,9 @@ export const CATALOG: readonly CatalogEntry[] = [
     installedAs: ['superpowers'],
     summary: 'Working method for coding agents: brainstorming first, written plans, test-driven development, systematic debugging.',
     keywords: {
-      de: ['brainstorm*', 'testgetrieben*', 'test-driven', 'tdd', 'erst planen, dann', 'systematisch debuggen'],
-      en: ['brainstorm*', 'test-driven', 'tdd', 'plan first', 'systematic debugging'],
+      // Ausbau 0.28.0 (E6): TDD und Debugging entfallen, dafür gibt es die mitgelieferten Kopien
+      de: ['brainstorm*', 'erst planen, dann'],
+      en: ['brainstorm*', 'plan first'],
     },
     risk: { runsCode: true, network: false, heavy: true, note: { de: 'Hooks, ändert das Verhalten überall', en: 'hooks, changes behaviour everywhere' } },
   },
@@ -211,8 +329,9 @@ export const CATALOG: readonly CatalogEntry[] = [
     installedAs: ['mattpocock-skills', 'grill-me'],
     summary: 'Engineering skills: grill me (interview the user about a plan), turn a plan into a spec or tickets, TDD flows.',
     keywords: {
-      de: ['löcher mich', 'löchere mich', 'grill mich', 'frag mich aus', 'in tickets', 'mach daraus tickets', 'user stories'],
-      en: ['grill me', 'interview me', 'into tickets', 'turn this into tickets', 'user stories'],
+      // Ausbau 0.28.0 (E9): die Grill-Stichwörter hat jetzt `mp-grill`
+      de: ['in tickets', 'mach daraus tickets', 'user stories'],
+      en: ['into tickets', 'turn this into tickets', 'user stories'],
     },
     risk: { runsCode: true, network: false, heavy: false, note: { de: 'einige Skripte', en: 'a few scripts' } },
   },
@@ -300,18 +419,35 @@ export function keywordHit(entry: CatalogEntry, text: string): string {
   return ''
 }
 
-type Cmd = { name: string; plugin?: string }
+type Cmd = { name: string; plugin?: string; source?: string }
+/** sidekicks eigene Befehle und Kopien (`plugin` ist laut Typen nur gesetzt, „when the engine knows“; Review 0.28.0 K1). */
+const isOwnCmd = (c: Cmd) => c.plugin === 'sidekick' || c.name.toLowerCase().startsWith('sidekick:')
 
 /** Hat der Nutzer den Skill schon (als Befehl, Plugin oder Plugin-Skill `name:…`)? Die eigene Kopie in sidekick zählt nicht. */
 export function isInstalled(entry: CatalogEntry, cmds: readonly Cmd[]): boolean {
   return cmds.some((c) => {
-    if (c.plugin === 'sidekick') return false
+    if (isOwnCmd(c)) return false
     const n = c.name.toLowerCase()
     return entry.installedAs.some((a) => {
       const x = a.toLowerCase()
       return n === x || c.plugin?.toLowerCase() === x || n.startsWith(`${x}:`) || n.endsWith(`:${x}`)
     })
   })
+}
+
+/** Ein `yieldTo`-Muster als Regex über den ganzen Befehlsnamen: `*` = beliebig viele Zeichen, sonst wörtlich, ohne Groß/klein. */
+const globRe = (p: string) => new RegExp(`^${p.split('*').map(esc).join('.*')}$`, 'i')
+
+/**
+ * Ausbau 0.28.0 (E5): der Projekt-Befehl, dem der Eintrag den Vortritt lässt (`/mod-debug`), sonst ''. sidekicks eigene Befehle und
+ * Kopien zählen nicht (`sidekick:systematic-debugging` passt sonst auf `*debug*`), eingebaute auch nicht: `/debug` von Claude Code
+ * (`source: 'builtin'`, docs/raw/related/skills.md:21) stellte sp-debug sonst in jedem Projekt zurück (Review 0.28.0 S1).
+ */
+export function yieldedTo(entry: CatalogEntry, cmds: readonly Cmd[]): string {
+  if (!entry.yieldTo?.length) return ''
+  const res = entry.yieldTo.map(globRe)
+  const hit = cmds.find((c) => !isOwnCmd(c) && c.source !== 'builtin' && res.some((r) => r.test(c.name)))
+  return hit ? `/${hit.name}` : ''
 }
 
 const wordCount = (s: string) => s.trim().split(/\s+/).filter(Boolean).length
@@ -333,11 +469,29 @@ export function findCandidates(text: string, o: { cmds: readonly Cmd[]; muted: r
   for (const c of CATALOG) {
     if (o.muted.includes(c.id) || o.offered.includes(c.id)) continue
     if (!keywordHit(c, s)) continue
-    if (isInstalled(c, o.cmds)) continue
+    if (isInstalled(c, o.cmds) || yieldedTo(c, o.cmds)) continue
     out.push(c)
     if (out.length >= CATALOG_MAX) break
   }
   return out
+}
+
+/** Der Eintrag, den die Korrektur-Schleife anbietet (Ausbau 0.28.0, E4). */
+export const LOOP_SKILL = 'sp-debug'
+
+/**
+ * Korrektur-Schleife (E4): Trifft die dritte Korrektur das Stichwort von `LOOP_SKILL`, heißt „Mit Denkanstoß senden“ stattdessen
+ * „Mit systematic-debugging senden“. Nicht, wenn der Eintrag stumm, installiert, zurückgestellt oder in diesem Chat schon angeboten
+ * ist (der Aufrufer prüft `catalog` und die Stufe). Ohne Modell; Übergaben und Slash-Befehle wie beim Vorfilter nicht.
+ */
+export function loopSkill(text: string, o: { cmds: readonly Cmd[]; muted: readonly string[]; offered: readonly string[] }): CatalogEntry | null {
+  const c = byId(LOOP_SKILL)
+  if (!c?.invoke) return null
+  const s = String(text ?? '').replace(/<\/?pasted_content[^>]*>/g, ' ').trim()
+  if (!s || s.startsWith('/') || BRIEF.test(s)) return null
+  if (o.muted.includes(c.id) || o.offered.includes(c.id)) return null
+  if (!keywordHit(c, s) || isInstalled(c, o.cmds) || yieldedTo(c, o.cmds)) return null
+  return c
 }
 
 /** Höchstens eine Katalog-Rückfrage je `CATALOG_GAP` eigene Nachrichten; `lastAsk` = Stand des Zählers bei der letzten (0 = nie). */
@@ -452,8 +606,9 @@ export function catalogFromCheck(raw: string, ids: readonly string[]): CatalogVe
 
 /** Greift das Urteil (Verhalten 2)? Dann der Eintrag, sonst null. */
 export function catalogPick(v: CatalogVerdict | null, cands: readonly CatalogEntry[]): CatalogEntry | null {
-  if (!v || v.id === 'none' || v.sicher < CATALOG_MIN) return null
+  if (!v || v.id === 'none') return null
   const c = cands.find((x) => x.id === v.id) ?? null
+  if (!c || v.sicher < (c.minSure ?? CATALOG_MIN)) return null
   if (c && c.risk.heavy && v.sicher < CATALOG_MIN_HEAVY) return null
   return c
 }
@@ -477,5 +632,7 @@ export function skillContext(body: string, dir: string, c: CatalogEntry, text: s
   const head = de
     ? `Der Nutzer hat diese Nachricht über sidekick mit dem Skill ${c.invoke} gesendet (${c.name} von ${c.author}, ${c.license}, ${c.repo}). Folge dem Skill für diese Nachricht.`
     : `The user sent this message through sidekick with the skill ${c.invoke} (${c.name} by ${c.author}, ${c.license}, ${c.repo}). Follow the skill for this message.`
-  return [head, '', `Base directory for this skill: ${dir}`, '', rest.split('$ARGUMENTS').join(text).trim()].join('\n')
+  // Ausbau 0.28.0 (E3): der Hinweis hinter dem Kopf, vor dem Skill-Text
+  const note = c.ctxNote ? ['', c.ctxNote[de ? 'de' : 'en']] : []
+  return [head, ...note, '', `Base directory for this skill: ${dir}`, '', rest.split('$ARGUMENTS').join(text).trim()].join('\n')
 }

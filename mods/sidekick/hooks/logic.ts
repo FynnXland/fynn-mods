@@ -1467,14 +1467,17 @@ export type Notizen = {
   bekannt: number
   spaeter: number
   chat: number
+  weiter: number // „An Claude geben“ (Ausbau 0.27.1); `erklaert` und `chat` zählen seitdem nicht mehr, alte Tage behalten sie
   ignoriert: number
   keins: number
   verworfen: number
   fehler: number
 }
-export const NOTE_FIELDS = ['gezeigt', 'erklaert', 'bekannt', 'spaeter', 'chat', 'ignoriert', 'keins', 'verworfen', 'fehler'] as const
+export const NOTE_FIELDS = ['gezeigt', 'erklaert', 'bekannt', 'spaeter', 'chat', 'weiter', 'ignoriert', 'keins', 'verworfen', 'fehler'] as const
 export type NoteField = (typeof NOTE_FIELDS)[number]
-const emptyNotizen = (): Notizen => ({ n: 0, usd: 0, ms: 0, gezeigt: 0, erklaert: 0, bekannt: 0, spaeter: 0, chat: 0, ignoriert: 0, keins: 0, verworfen: 0, fehler: 0 })
+/** Reihenfolge der Zähl-Spalten in `/savings detail` und der Zeile in der Ansicht (Ausbau 0.27.1). */
+export const NOTE_COLS: readonly NoteField[] = ['gezeigt', 'weiter', 'bekannt', 'spaeter', 'ignoriert', 'erklaert', 'chat', 'keins', 'verworfen', 'fehler']
+const emptyNotizen = (): Notizen => ({ n: 0, usd: 0, ms: 0, gezeigt: 0, erklaert: 0, bekannt: 0, spaeter: 0, chat: 0, weiter: 0, ignoriert: 0, keins: 0, verworfen: 0, fehler: 0 })
 
 export type Day = {
   kosten: number // eigene Modellaufrufe, $
@@ -2112,8 +2115,10 @@ export function savingsReport(d: Day, p: Period, now: number, tag = '', days?: R
   // „Gut zu wissen“ (Nachtrag 0.13.0): eigene Tabelle, nicht in Kosten und Verhältnis
   const nz = d.notizen
   if (nz.n) {
-    out.push('', x.notesHead, '', x.notesCols, '|---|---|---|---|---|---|---|---|---|---|---|---|')
-    out.push(`| ${nz.n} | ${usdText(nz.usd)} | ${secsText(nz.ms, nz.n)} | ${nz.gezeigt} | ${nz.erklaert} | ${nz.bekannt} | ${nz.spaeter} | ${nz.chat} | ${nz.ignoriert} | ${nz.keins} | ${nz.verworfen} | ${nz.fehler} |`, '')
+    // Ausbau 0.27.1: Spalten mit lauter Nullen im Zeitraum fallen weg (so bleiben `erklaert`/`chat` alter Tage sichtbar, neue nicht)
+    const cols = NOTE_COLS.filter((f) => nz[f] > 0)
+    out.push('', x.notesHead, '', `| ${[...x.notesCols, ...cols.map((f) => x.noteCol[f])].join(' | ')} |`, `|${'---|'.repeat(3 + cols.length)}`)
+    out.push(`| ${[String(nz.n), usdText(nz.usd), secsText(nz.ms, nz.n), ...cols.map((f) => String(nz[f]))].join(' | ')} |`, '')
   }
   out.push(x.handoffs(d.uebergaben, d.hinweise.modell?.gezeigt ?? 0))
   // Übergaben nach Weg und der Vorschlag vor Cache-Ablauf (Ausbau 0.22.0)

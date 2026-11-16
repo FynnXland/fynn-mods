@@ -208,8 +208,9 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
 - **Savings you can check:** `/savings` shows what sidekick cost and what it measurably saved; `/savings detail` adds
   the calculation, a model comparison and a day-by-day history.
 - **Good to know (optional, off by default):** with `/sidekick notes on`, sidekick asks during a longer task whether
-  you very likely missed something with consequences, and shows it above the prompt with *Explain*, *Know this* and
-  *Later*. Most of the time nothing appears.
+  you very likely missed something with consequences, and shows it in one line above the prompt with *Hand to Claude*,
+  *Know this* and *Ignore*. *Hand to Claude* passes it to the working chat, still in the same turn, so Claude fixes it
+  or says why it is no problem. Most of the time nothing appears.
 - **Model tip:** on the first message of a chat on Opus or Fable, sidekick asks whether a simple task should run on
   Sonnet 5.5 or Haiku 5.5. With `/sidekick tips auto on` (off by default) it also switches built-in subagents and
   chats Claude starts when Haiku rates their task simple. `/savings` shows the savings as a marked estimate.
@@ -226,8 +227,12 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
   note for Claude to finish the running task first. To decide yourself, click **Later** in the desktop footer or start
   the message with `later:`.
 - **Skill catalog:** when a message clearly asks for what a hand-picked third-party skill does, sidekick asks once per
-  chat before sending. Three plain-Markdown skills by Emil Kowalski ship with sidekick (MIT, with their license); for
-  the rest it only copies the install command, it never installs anything.
+  chat before sending. Eight plain-Markdown skills ship with sidekick, all MIT with their license: three by Emil
+  Kowalski (design), systematic-debugging, verification-before-completion and receiving-code-review by Jesse Vincent,
+  fixing-metadata by Julien Thibeaut and grilling by Matt Pocock. For the rest it only copies the install command, it
+  never installs anything.
+- **Footer buttons:** `/sidekick buttons` lists the desktop footer buttons (Later, saved prompts) and switches each on
+  or off.
 - **Shared reasons:** with clawd-buddy installed, Clawd shows why sidekick holds a message back.
 
 If a check fails or times out, your message goes through unchanged.

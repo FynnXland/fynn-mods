@@ -225,8 +225,9 @@ Nachricht oder fragt nach.
 - **Nachprüfbare Ersparnis:** `/savings` zeigt, was sidekick gekostet und was er messbar gespart hat;
   `/savings detail` ergänzt Rechenweg, Modellvergleich und Verlauf je Tag.
 - **Gut zu wissen (optional, standardmäßig aus):** Mit `/sidekick notes on` fragt sidekick bei einer längeren Aufgabe,
-  ob du sehr wahrscheinlich etwas mit Folgen übersehen hast, und zeigt es über dem Prompt mit *Erklären*, *Weiß ich schon*
-  und *Später*. Meist erscheint nichts.
+  ob du sehr wahrscheinlich etwas mit Folgen übersehen hast, und zeigt es in einer Zeile über dem Prompt mit *An Claude
+  geben*, *Weiß ich schon* und *Ignorieren*. *An Claude geben* reicht den Hinweis noch in derselben Runde an den
+  arbeitenden Chat weiter: Claude behebt es oder sagt, warum es kein Problem ist. Meist erscheint nichts.
 - **Modell-Tipp:** Bei der ersten Nachricht eines Chats auf Opus oder Fable fragt sidekick, ob eine einfache Aufgabe auf
   Sonnet 5.5 oder Haiku 5.5 laufen soll. Mit `/sidekick tips auto on` (standardmäßig aus) stellt er auch eingebaute
   Subagenten und Chats, die Claude startet, um, wenn Haiku ihren Auftrag als einfach einstuft. `/savings` zeigt die
@@ -245,8 +246,12 @@ Nachricht oder fragt nach.
   rein, mit einem Hinweis an Claude, erst die laufende Aufgabe fertig zu machen. Selbst entscheiden: in der
   Desktop-Fußzeile auf **Danach** klicken oder die Nachricht mit `later:` beginnen.
 - **Skill-Katalog:** Verlangt eine Nachricht klar das, was ein handverlesener Skill von Dritten tut, fragt sidekick vor
-  dem Senden einmal pro Chat nach. Drei reine Markdown-Skills von Emil Kowalski liegen sidekick bei (MIT, mit ihrer
-  Lizenz); bei den übrigen kopiert er nur den Installationsbefehl und installiert nie etwas.
+  dem Senden einmal pro Chat nach. Acht reine Markdown-Skills liegen sidekick bei, alle MIT mit ihrer Lizenz: drei von
+  Emil Kowalski (Design), systematic-debugging, verification-before-completion und receiving-code-review von Jesse
+  Vincent, fixing-metadata von Julien Thibeaut und grilling von Matt Pocock. Bei den übrigen kopiert er nur den
+  Installationsbefehl und installiert nie etwas.
+- **Fußzeilen-Knöpfe:** `/sidekick buttons` listet die Knöpfe der Desktop-Fußzeile (Danach, gespeicherte Prompts) und
+  schaltet jeden an oder aus.
 - **Gemeinsame Gründe:** Ist clawd-buddy installiert, zeigt Clawd, warum sidekick eine Nachricht anhält.
 
 Scheitert eine Prüfung oder dauert sie zu lange, geht deine Nachricht unverändert raus.

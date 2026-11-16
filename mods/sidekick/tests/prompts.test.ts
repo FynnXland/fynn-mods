@@ -3,7 +3,10 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import { MIN, dayKey } from '../hooks/cache.js'
-import { cliStubs } from './cli.js'
+import { cliStubs, written } from './cli.js'
+import { FOOTER_BUTTONS, buttonRows, buttonsArg, buttonsMarkdown, shownPrompts } from '../hooks/buttons.js'
+import { SETTINGS } from '../hooks/fields.js'
+import { readSettings } from '../hooks/settings.js'
 import { DEFAULT_SETTINGS, addDay, bookPrompts, cleanLedger, countPrompt, emptyDay, savingsReport } from '../hooks/logic.js'
 import type { Ledger } from '../hooks/logic.js'
 import { setLang } from '../hooks/i18n.js'
@@ -214,7 +217,7 @@ deTest('Hilfe: Befehle und Funktion „Gespeicherte Prompts“', () => {
 function world(on: On, o: { submitDrop?: string; cmds?: { name: string; source: string; plugin?: string }[]; surfaces?: string[] } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const store = new Map<string, unknown>()
-  cliStubs(on)
+  const cli = cliStubs(on)
   const toasts: string[] = []
   const submitted: { text: string; asUser?: boolean; origin?: unknown }[] = []
   const registered: string[] = []
@@ -320,6 +323,7 @@ function world(on: On, o: { submitDrop?: string; cmds?: { name: string; source: 
     setIntent: (f: (text: string) => string) => (intentOf = f),
     setProposal: (x: string) => (proposal = x),
     saved: () => cleanSaved(store.get('prompts:saved')),
+    cli,
   }
 }
 
@@ -825,6 +829,246 @@ deTest('Hilfe: kein Text nennt noch einen eigenen Befehl /<name> (Review 0.21.0 
     const all = JSON.stringify(h)
     expect(all.replace(/\/p <name>/g, '').includes('/<name>'), lang).toBe(false)
     expect(all).toContain('/p <name>')
+  }
+  setLang('de')
+})
+
+// ---------- Ausbau 0.27.0: Fußzeilen-Knöpfe einstellbar ----------
+
+const sv = (name: string, button = true): Saved => ({ name, text: `Text für ${name}, lang genug zum Senden.`, button, at: 1, from: 'manual' })
+const facts = (saved: Saved[], cfg: Record<string, unknown> = {}, level: 'off' | 'cache' | 'guide' = 'guide') => ({ cfg, level, saved })
+
+deTest('0.27.0 Felder: laterButton und promptButtons, boolean, Standard an; aus wird gelesen, Unsinn gibt den Standard', () => {
+  expect(SETTINGS.laterButton).toEqual({ type: 'boolean', default: true })
+  expect(SETTINGS.promptButtons).toEqual({ type: 'boolean', default: true })
+  const d = readSettings(SETTINGS, undefined)
+  expect([d.laterButton, d.promptButtons]).toEqual([true, true])
+  const o = readSettings(SETTINGS, { laterButton: false, promptButtons: 'nein' })
+  expect([o.laterButton, o.promptButtons]).toEqual([false, true])
+  // die gemeinsame Liste kennt genau diese zwei Felder, jedes mit Titel en/de
+  expect(FOOTER_BUTTONS.map((k) => [k.id, k.field])).toEqual([
+    ['later', 'laterButton'],
+    ['prompts', 'promptButtons'],
+  ])
+  for (const k of FOOTER_BUTTONS) expect(SETTINGS[k.field]?.type).toBe('boolean')
+  for (const k of FOOTER_BUTTONS) expect(k.title.en && k.title.de).toBeTruthy()
+})
+
+deTest('0.27.0 Liste: 0, 1 und 5 Prompts; bei 5 ist einer „nicht sichtbar (nur 4 Plätze)“', () => {
+  const zero = buttonsMarkdown(facts([]), '#abcdefg')
+  expect(zero).toContain('**Fußzeilen-Knöpfe** · Desktop, links vor „● sidekick“ · #abcdefg')
+  expect(zero).toContain('| Danach | an | an · nur während Claude arbeitet |')
+  expect(zero).toContain('| Prompt-Knöpfe | an | an · 0 von 4 Plätzen belegt |')
+  expect(zero).toContain('`/sidekick save <name>` legt einen an')
+  const one = buttonsMarkdown(facts([sv('tidy')]), '')
+  expect(one).toContain('| `/p tidy` | an | sichtbar |')
+  expect(one).not.toContain('Noch keine gespeicherten Prompts')
+  const five = buttonRows(facts(['a', 'b', 'c', 'd', 'e'].map((n) => sv(n))))
+  expect(five.length).toBe(7)
+  expect(five.filter((r) => r.state === 'sichtbar').map((r) => r.id)).toEqual(['a', 'b', 'c', 'd'])
+  expect(five.find((r) => r.id === 'e')?.state).toBe('nicht sichtbar (nur 4 Plätze)')
+  expect(five.find((r) => r.id === 'prompts')?.state).toBe('an · 4 von 4 Plätzen belegt')
+  // jede Tabellenzeile hat 3 Spalten
+  for (const l of buttonsMarkdown(facts(['a', 'b'].map((n) => sv(n))), '').split('\n').filter((x) => x.startsWith('|'))) expect(l.split('|').length - 2).toBe(3)
+})
+
+deTest('0.27.0 Zustand: Danach bei queue aus und außerhalb von Begleiter; Prompt-Knöpfe aus; Prompt aus; Stufe Aus', () => {
+  const r = (cfg: Record<string, unknown>, level: 'off' | 'cache' | 'guide' = 'guide', saved: Saved[] = []) => buttonRows(facts(saved, cfg, level))
+  expect(r({ queue: false })[0]).toMatchObject({ id: 'later', on: true, state: 'aus (Warteschlange aus)' })
+  expect(r({}, 'cache')[0]!.state).toBe('aus (nur auf der Stufe Begleiter)')
+  expect(r({ laterButton: false })[0]).toMatchObject({ on: false, state: 'aus' })
+  const hidden = r({ promptButtons: false }, 'guide', [sv('a'), sv('b', false)])
+  expect(hidden[1]).toMatchObject({ id: 'prompts', on: false, state: 'aus' })
+  expect(hidden[2]).toMatchObject({ id: 'a', kind: 'prompt', on: true, state: 'nicht sichtbar (Prompt-Knöpfe aus)' })
+  expect(hidden[3]).toMatchObject({ id: 'b', on: false, state: 'aus' })
+  expect(shownPrompts(facts([sv('a')], { promptButtons: false }))).toEqual([])
+  // die Stufe zählt hier nicht (Review S1), die Zeichnung blendet bei Stufe Aus selbst aus
+  expect(shownPrompts(facts([sv('a')], {}, 'off'))).toEqual(['a'])
+  expect(shownPrompts(facts([sv('a'), sv('b', false), sv('c')]))).toEqual(['a', 'c'])
+  expect(buttonsMarkdown(facts([], {}, 'off'), '')).toContain('sidekick ist aus: die Fußzeile zeigt keine Knöpfe')
+})
+
+deTest('0.27.0 Textbefehle: Parser', () => {
+  expect(buttonsArg('')).toEqual({ kind: 'list' })
+  expect(buttonsArg(' status ')).toEqual({ kind: 'list' })
+  expect(buttonsArg('later OFF')).toEqual({ kind: 'set', target: 'later', on: false })
+  expect(buttonsArg('tidy on')).toEqual({ kind: 'set', target: 'tidy', on: true })
+  for (const a of ['later', 'later an', 'a b on', 'on']) expect(buttonsArg(a)).toEqual({ kind: 'usage' })
+})
+
+deTest('0.27.0 /sidekick buttons: Liste; neu gespeicherter Prompt steht sofort darin; Textbefehle ändern genau ein Feld bzw. einen Prompt', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const empty = await run($, 'sidekick', 'buttons')
+  expect(empty).toMatch(/^\*\*Fußzeilen-Knöpfe\*\* · Desktop, links vor „● sidekick“ · #[0-9a-z]{5,}/)
+  expect(empty).toContain('| Danach | an |')
+  expect(empty).toContain('`/sidekick save <name>` legt einen an')
+  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
+  await run($, 'sidekick', 'save zwei Noch ein Prompt mit genug Text.')
+  const list = await run($, 'sidekick', 'buttons')
+  expect(list).toContain('| `/p tidy-chats` | an | sichtbar |')
+  expect(list).toContain('| `/p zwei` | an | sichtbar |')
+  // ein Prompt: nur sein `button`, keine Einstellung
+  expect(await run($, 'sidekick', 'buttons tidy-chats off')).toContain('✓ /p tidy-chats ohne Knopf, nur als Befehl.')
+  expect(w.saved().map((s) => [s.name, s.button])).toEqual([
+    ['tidy-chats', false],
+    ['zwei', true],
+  ])
+  expect(w.cli.writes).toEqual([])
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['zwei'] })
+  // `/sidekick prompts <name> on|off` bleibt
+  expect(await run($, 'sidekick', 'prompts tidy-chats on')).toContain('hat jetzt einen Knopf')
+  // eine Knopfart: genau ihr Feld
+  const off = await run($, 'sidekick', 'buttons prompts off')
+  expect(off).toContain('✓ Prompt-Knöpfe aus. Die Einstellung je Prompt bleibt erhalten.')
+  expect(w.cli.writes).toEqual([{ promptButtons: 'false' }])
+  expect(w.saved().map((s) => s.button)).toEqual([true, true])
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
+  expect(await run($, 'sidekick', 'buttons prompts off')).toBe('Prompt-Knöpfe ist schon aus.')
+  expect(await run($, 'sidekick', 'buttons zwei on')).toContain('Sichtbar erst mit `/sidekick buttons prompts on`.')
+  expect(await run($, 'sidekick', 'buttons prompts on')).toContain('Die Knöpfe je Prompt gelten wieder wie vorher.')
+  expect(written(w.cli)).toEqual({ promptButtons: 'true' })
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['tidy-chats', 'zwei'] })
+  // Fehlerpfade
+  expect(await run($, 'sidekick', 'buttons gibtsnicht on')).toBe('Keinen Fußzeilen-Knopf „gibtsnicht“. Vorhanden: `later`, `prompts` und die Namen gespeicherter Prompts. Alle: `/sidekick buttons`')
+  expect(await run($, 'sidekick', 'buttons later')).toBe('Aufruf: `/sidekick buttons` · `later on|off` · `prompts on|off` · `<name> on|off`')
+  expect(w.cli.writes.length).toBe(2)
+})
+
+deTest('0.27.0 Schreiben scheitert: Grund, nichts geändert, Fußzeile unverändert', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
+  w.cli.fail = 'gesperrt'
+  expect(await run($, 'sidekick', 'buttons prompts off')).toContain('Nicht gespeichert')
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['tidy-chats'] })
+  expect(await run($, 'sidekick', 'buttons')).toContain('| Prompt-Knöpfe | an |')
+})
+
+deTest('0.27.0 promptButtons aus: keine Prompt-Knöpfe in der Fußzeile; wieder an: dieselben wie vorher', { promptButtons: false }, async ($, on) => {
+  const w = world(on)
+  w.store.set('prompts:saved', [sv('a'), sv('b', false), sv('c')])
+  await start($)
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
+  const off = await footer($, 'desktop')
+  expect(await off.find({ key: 'sidekick-prompts' })).toBeUndefined()
+  await off.unmount()
+  await run($, 'sidekick', 'buttons prompts on')
+  const back = await footer($, 'desktop')
+  const json = JSON.stringify(await back.find({ key: 'sidekick-prompts' }))
+  expect(json).toContain('sidekick-p-a')
+  expect(json).toContain('sidekick-p-c')
+  expect(json).not.toContain('sidekick-p-b')
+  await back.unmount()
+  expect(w.saved().map((s) => s.button)).toEqual([true, false, true])
+})
+
+deTest('0.27.0 Review S1: Start auf Stufe Aus, dann /sidekick guide → die Prompt-Knöpfe sind sofort da', { level: 'off' }, async ($, on) => {
+  const w = world(on)
+  w.store.set('prompts:saved', [sv('a'), sv('b', false), sv('c')])
+  await start($)
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['a', 'c'] })
+  const off = await footer($, 'desktop')
+  expect(await off.find({ key: 'sidekick-prompts' })).toBeUndefined()
+  await off.unmount()
+  await run($, 'sidekick', 'guide')
+  const ui = await footer($, 'desktop')
+  const json = JSON.stringify(await ui.find({ key: 'sidekick-prompts' }))
+  expect(json).toContain('sidekick-p-a')
+  expect(json).toContain('sidekick-p-c')
+  await ui.unmount()
+})
+
+deTest('0.27.0 Klick bei scheiterndem Schreiben: Toast mit Grund, Feld und Fußzeile unverändert; /sidekick prompts <name> on nennt den Hauptschalter', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
+  const text = await run($, 'sidekick', 'buttons status')
+  const ui = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', requestId: 'bt-fail', surface: 'desktop', props: { command: 'sidekick', args: 'buttons status', text, isErrored: false } } as never)
+  w.cli.fail = 'gesperrt'
+  await ui.press({ key: 'sidekick-bt-prompts' })
+  await flush()
+  expect(w.toasts.some((x) => x.includes('Nicht gespeichert'))).toBe(true)
+  expect(w.cli.writes).toEqual([])
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['tidy-chats'] })
+  await ui.unmount()
+  w.cli.fail = ''
+  await run($, 'sidekick', 'buttons prompts off')
+  await run($, 'sidekick', 'prompts tidy-chats off')
+  expect(await run($, 'sidekick', 'prompts tidy-chats on')).toContain('Sichtbar erst mit `/sidekick buttons prompts on`.')
+})
+
+deTest('0.27.0 sidekick.prompts nur bei Änderung: Schalter ohne sichtbare Wirkung schreibt nichts', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const n = w.stateSets.filter((x) => x.key === 'prompts').length
+  // keine Prompts: Prompt-Knöpfe aus und an ändern die Fußzeile nicht
+  await run($, 'sidekick', 'buttons prompts off')
+  await run($, 'sidekick', 'buttons prompts on')
+  // keine Runde: der Danach-Knopf steht ohnehin nicht
+  await run($, 'sidekick', 'buttons later off')
+  await run($, 'sidekick', 'buttons')
+  expect(w.stateSets.filter((x) => x.key === 'prompts').length).toBe(n)
+})
+
+deTest('0.27.0 /sidekick buttons gezeichnet: An/Aus je Zeile im Terminal und Desktop, Klick schaltet; VS Code Markdown', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
+  const text = await run($, 'sidekick', 'buttons')
+  const mount = (surface: string) =>
+    $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', requestId: `bt-${surface}`, surface, viewport: { columns: 80, rows: 30 }, props: { command: 'sidekick', args: 'buttons', text, isErrored: false } } as never)
+  const ui = await mount('desktop')
+  for (const k of ['sidekick-bt-later', 'sidekick-bt-prompts', 'sidekick-bt-p-tidy-chats']) expect(await ui.find({ key: k })).toBeDefined()
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-bt-later' }))).toContain('"Aus"')
+  await ui.press({ key: 'sidekick-bt-p-tidy-chats' })
+  await flush()
+  expect(w.saved()[0]!.button).toBe(false)
+  await ui.press({ key: 'sidekick-bt-later' })
+  await flush()
+  expect(w.cli.writes).toEqual([{ laterButton: 'false' }])
+  expect(w.toasts.some((x) => x.includes('✓ Danach-Knopf aus.'))).toBe(true)
+  await ui.unmount()
+  // neu gezeichnet: der aktuelle Stand
+  const again = await mount('terminal')
+  expect(JSON.stringify(await again.find({ key: 'sidekick-bt-later' }))).toContain('"An"')
+  expect(JSON.stringify(await again.find({ key: 'sidekick-bt-p-tidy-chats' }))).toContain('"An"')
+  await again.unmount()
+  const plain = await mount('vscode')
+  expect(JSON.stringify(await plain.find({ type: 'Text' }))).toContain('Fußzeilen-Knöpfe')
+  expect(await plain.find({ key: 'sidekick-bt-later' })).toBeUndefined()
+  await plain.unmount()
+  // fremde Kennung (andere Instanz): Markdown der Engine
+  const stale = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', requestId: 'bt-old', surface: 'desktop', props: { command: 'sidekick', args: 'buttons', text: '**Fußzeilen-Knöpfe** · #zzzzzz', isErrored: false } } as never)
+  expect(await stale.find({ key: 'sidekick-bt-later' })).toBeUndefined()
+  await stale.unmount()
+})
+
+test('0.27.0 English: /sidekick buttons and the text commands', { options: { language: 'en' } }, async ($, on) => {
+  setLang('en')
+  world(on)
+  await start($)
+  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
+  const list = await run($, 'sidekick', 'buttons')
+  expect(list).toContain('**Footer buttons** · desktop, left of "● sidekick"')
+  expect(list).toContain('| Later | on | on · only while Claude works |')
+  expect(list).toContain('| `/p tidy-chats` | on | shown |')
+  expect(await run($, 'sidekick', 'buttons later off')).toContain('✓ Later button off.')
+  expect(await run($, 'sidekick', 'buttons nope off')).toContain('No footer button "nope"')
+})
+
+deTest('0.27.0 Hilfe: Befehle, Zeile „Fußzeilen-Knöpfe“, Funktionen je Knopfart aus der Liste, beide Felder in EINSTELLUNGEN', () => {
+  for (const l of ['de', 'en'] as const) {
+    setLang(l)
+    const h = sidekickHelp({ settings: { ...DEFAULT_SETTINGS }, ttl: { min: 60, source: 'default' }, hints: { on: true, off: [] }, known: 0, now: NOW, cfg: { laterButton: false } })
+    for (const c of ['/sidekick buttons', '/sidekick buttons later|prompts|<name> on|off']) expect(h.commands.some((x) => x.cmd === c), c).toBe(true)
+    expect(h.controls?.some((x) => x.does.includes('/sidekick buttons'))).toBe(true)
+    const later = l === 'de' ? 'Danach-Knopf' : 'Later button'
+    const prompts = l === 'de' ? 'Prompt-Knöpfe' : 'Prompt buttons'
+    expect(h.features.find((f) => f.name === later)).toEqual({ name: later, state: { kind: 'off' }, toggle: '/sidekick buttons later on' })
+    expect(h.features.find((f) => f.name === prompts)).toEqual({ name: prompts, state: { kind: 'on' }, toggle: '/sidekick buttons prompts off' })
+    expect(h.settings?.find((s) => s.title === later)?.isDefault).toBe(false)
+    expect(h.settings?.find((s) => s.title === prompts)?.isDefault).toBe(true)
   }
   setLang('de')
 })

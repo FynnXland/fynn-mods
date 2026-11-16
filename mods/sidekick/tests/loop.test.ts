@@ -44,7 +44,8 @@ const HANDOFF = '# Übergabe: Test\n\n> **Stand:** drei Versuche\n> **Weiter mit
 const SUMMARY = [{ role: 'user', text: 'Zusammenfassung des bisherigen Chats', toolUses: [] }]
 const K1 = 'Das flackert immer noch, der Balken springt'
 const K2 = 'Geht immer noch nicht, gleiche Stelle'
-const K3 = 'Funktioniert nicht, der Balken ist wieder weg'
+// Seit 0.28.0 ohne Stichwort von systematic-debugging: sonst heißt der Denkanstoß „Mit systematic-debugging senden“ (E4, tests/catalog.test.ts)
+const K3 = 'Hat nichts gebracht, der Balken ist wieder weg'
 
 // ---------- reine Logik ----------
 
@@ -159,7 +160,7 @@ type StepU = { input_tokens: number; output_tokens: number; cache_read_input_tok
 const stepUsage = (read: number, written: number): StepU => ({ input_tokens: 2, output_tokens: 10, cache_read_input_tokens: read, cache_creation_input_tokens: written, model: 'claude-opus-5-5' })
 
 // Schalter kommen seit 0.23.0 als userConfig (Test-Optionen); Befehle schreiben über den CLI-Stub (tests/cli.ts)
-function world(on: On, o: { compactAfter?: number; handoffFails?: boolean } = {}) {
+function world(on: On, o: { compactAfter?: number; handoffFails?: boolean; cmds?: { name: string; plugin?: string }[]; readFails?: boolean } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = new Map<string, unknown>()
   const cli = cliStubs(on)
@@ -180,8 +181,15 @@ function world(on: On, o: { compactAfter?: number; handoffFails?: boolean } = {}
   on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: ctx, window: 1000000 }, rateLimits: [] } as never }))
   on('session.root', () => ({ value: 'C:\\Proj' }))
   on('session.messages', () => ({ value: [{ role: 'assistant', text: 'vorher', toolUses: [] }] as never }))
-  on('command.list', () => ({ value: [] }))
+  on('command.list', () => ({ value: (o.cmds ?? []).map((c) => ({ description: '', source: 'plugin', ...c })) as never }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  // Ausbau 0.28.0 (E4): SKILL.md von systematic-debugging für „Mit systematic-debugging senden“
+  const reads: string[] = []
+  on('fs.read', (_$, e) => {
+    reads.push(e.path)
+    if (o.readFails) throw new Error('ENOENT')
+    return { value: '---\n# From obra/superpowers@x\nname: systematic-debugging\ndisable-model-invocation: true\n---\n\n# Systematic Debugging\nUse `superpowers:test-driven-development` for $ARGUMENTS\nDEBUG-BODY' }
+  })
   on('store.get', ($, e) => ({ value: saved.get(e.key) }))
   on('store.set', ($, e) => {
     saved.set(e.key, e.value)
@@ -245,6 +253,7 @@ function world(on: On, o: { compactAfter?: number; handoffFails?: boolean } = {}
     checks,
     handoffSystems,
     commands,
+    reads,
     step,
     setAnswer: (a: string | null) => (answer = a),
     setReply: (r: unknown) => (reply = r),
@@ -313,6 +322,107 @@ test('Schleife: Denkanstoß englisch mit language en', { options: { language: 'e
   expect(w.sent.at(-1)!.context?.[0]).toBe(
     'sidekick: The user reports the third failed attempt in a row. Before editing again, step back: restate the goal, list what was tried and why it failed, check the root cause, then choose an approach.',
   )
+})
+
+// ---------- Ausbau 0.28.0 (E4): systematic-debugging statt Denkanstoß ----------
+
+/** Wie `threeCorrections`, die dritte Korrektur mit eigenem Text. */
+async function threeWith($: Engine, third: string, extra: Record<string, unknown> = {}) {
+  await $.prompt.submit(userPrompt('Baue den Balken unten rechts ein'))
+  await $.prompt.submit(userPrompt(K1))
+  await $.prompt.submit(userPrompt(K2))
+  return $.prompt.submit(userPrompt(third, extra))
+}
+const DEBUG3 = 'Funktioniert nicht, der Balken ist wieder weg'
+const WITH_DEBUG = 'Mit systematic-debugging senden'
+
+deTest('0.28.0 Schleife: Debug-Stichwort → „Mit systematic-debugging senden“ mit Tokenzahl; Klick → Denkanstoß + Hinweis + Skill-Text, Nachricht unverändert', async ($, on) => {
+  const w = world(on)
+  w.setAnswer(`${WITH_DEBUG} (empfohlen)`)
+  const r = await threeWith($, DEBUG3)
+  expect(w.asks.length).toBe(1)
+  // Reihenfolge und Empfehlung wie 0.19.0, nur der Name der Antwort ist anders
+  expect(w.asks[0]!.options).toEqual([`${WITH_DEBUG} (empfohlen)`, 'Neuer Chat mit Übergabe', 'Unverändert senden'])
+  expect(w.asks[0]!.question).toMatch(/Mit systematic-debugging kommen ≈ 2[.,]4k Tokens Kontext zu dieser Nachricht\./)
+  expect(r).toMatchObject({ text: DEBUG3 })
+  const ctx = w.sent.at(-1)!.context ?? []
+  expect(ctx.length).toBe(2)
+  expect(ctx[0]).toContain('sidekick: Der Nutzer meldet den dritten gescheiterten Versuch in Folge.')
+  expect(ctx[1]).toContain('sidekick:systematic-debugging')
+  expect(ctx[1]).toContain('Skills mit dem Namen `superpowers:*` in diesem Text sind nicht installiert.')
+  // Hinweis hinter dem Kopf, vor dem Skill-Text
+  expect(ctx[1]!.indexOf('superpowers:*')).toBeLessThan(ctx[1]!.indexOf('Base directory for this skill:'))
+  expect(ctx[1]).toContain(`for ${DEBUG3}\nDEBUG-BODY`)
+  expect(ctx[1]).not.toContain('disable-model-invocation')
+  expect(w.reads.map((p) => p.replace(/\\/g, '/'))).toEqual([expect.stringMatching(/\/skills\/systematic-debugging\/SKILL\.md$/)])
+  await flush()
+  const d = today(w.ledger())
+  expect(d.schleife.denkanstoss).toBe(1)
+  expect(d.hinweise.schleife?.angenommen).toBe(1)
+  expect(d.katalog.mitSkill).toBe(1)
+  // Danach gilt der Eintrag als angeboten: die nächste Serie bekommt wieder den Denkanstoß
+  w.setAnswer('Unverändert senden')
+  await $.prompt.submit(userPrompt('Danke, jetzt bitte das Menü'))
+  await $.prompt.submit(userPrompt(K1))
+  await $.prompt.submit(userPrompt(K2))
+  await $.prompt.submit(userPrompt(DEBUG3))
+  expect(w.asks.length).toBe(2)
+  expect(w.asks[1]!.options[0]).toBe('Mit Denkanstoß senden (empfohlen)')
+  expect(w.asks[1]!.question).not.toContain('systematic-debugging')
+})
+
+deTest('0.28.0 Schleife: ohne Stichwort, stumm, installiert, zurückgestellt (/mod-debug) → Denkanstoß wie bisher, kein Lesen', async ($, on) => {
+  const w = world(on)
+  await threeWith($, 'Hat nichts gebracht, der Balken ist wieder weg')
+  expect(w.asks[0]!.options[0]).toBe('Mit Denkanstoß senden (empfohlen)')
+  expect(w.reads).toEqual([])
+})
+deTest('0.28.0 Schleife: stumm → Denkanstoß', async ($, on) => {
+  const w = world(on)
+  w.saved.set('catalog:muted', ['sp-debug'])
+  await threeWith($, DEBUG3)
+  expect(w.asks[0]!.options[0]).toBe('Mit Denkanstoß senden (empfohlen)')
+})
+for (const [what, cmds] of [
+  ['Plugin superpowers installiert', [{ name: 'superpowers:brainstorming', plugin: 'superpowers' }]],
+  ['Original-Skill installiert', [{ name: 'systematic-debugging' }]],
+  ['Projekt-Befehl /mod-debug', [{ name: 'mod-debug', plugin: undefined }]],
+] as const) {
+  deTest(`0.28.0 Schleife: ${what} → Denkanstoß`, async ($, on) => {
+    const w = world(on, { cmds: cmds.map((c) => ({ ...c })) as { name: string; plugin?: string }[] })
+    await threeWith($, DEBUG3)
+    expect(w.asks[0]!.options[0]).toBe('Mit Denkanstoß senden (empfohlen)')
+  })
+}
+deTest('0.28.0 Schleife: sidekicks eigene Kopie in der Befehlsliste zählt nicht als Vorrang', async ($, on) => {
+  const w = world(on, { cmds: [{ name: 'sidekick:systematic-debugging', plugin: 'sidekick' }] })
+  await threeWith($, DEBUG3)
+  expect(w.asks[0]!.options[0]).toBe(`${WITH_DEBUG} (empfohlen)`)
+})
+deTest('0.28.0 Schleife: catalog aus → Denkanstoß', { catalog: false }, async ($, on) => {
+  const w = world(on)
+  await threeWith($, DEBUG3)
+  expect(w.asks[0]!.options[0]).toBe('Mit Denkanstoß senden (empfohlen)')
+})
+deTest('0.28.0 Schleife: Skill-Datei nicht lesbar → Denkanstoß allein, Toast', async ($, on) => {
+  const w = world(on, { readFails: true })
+  w.setAnswer(WITH_DEBUG + ' (empfohlen)')
+  await threeWith($, DEBUG3)
+  const ctx = w.sent.at(-1)!.context ?? []
+  expect(ctx.length).toBe(1)
+  expect(ctx[0]).toContain('sidekick: Der Nutzer meldet den dritten gescheiterten Versuch in Folge.')
+  expect(w.toasts.some((t) => t.includes('systematic-debugging ließ sich nicht laden') && t.includes('Denkanstoß allein'))).toBe(true)
+  await flush()
+  expect(today(w.ledger()).katalog.mitSkill).toBe(0)
+})
+test('0.28.0 Schleife: englisch', { options: { language: 'en' } }, async ($, on) => {
+  setLang('en')
+  const w = world(on)
+  w.setAnswer('Send with systematic-debugging (recommended)')
+  await threeWith($, 'Still broken, the bar is gone again')
+  expect(w.asks[0]!.question).toMatch(/With systematic-debugging, ≈ 2[.,]4k tokens of context come with this message\./)
+  const ctx = w.sent.at(-1)!.context ?? []
+  expect(ctx[1]).toContain('Skills named `superpowers:*` in this text are not installed.')
 })
 
 deTest('Schleife: großer Chat → neuer Chat empfohlen, mit Kosten; Übergabe mit „Was nicht funktioniert hat“, Buchung mit Grund', async ($, on) => {
@@ -673,3 +783,24 @@ for (const lang of ['de', 'en'] as const) {
     expect(await run('')).toContain(lang === 'de' ? '| **Korrektur-Schleife** |' : '| **Retry loop** |')
   })
 }
+
+// ---------- Review 0.28.0 ----------
+
+deTest('Review 0.28.0 S1: eingebautes /debug in der Befehlsliste → Schleife bietet systematic-debugging trotzdem an', async ($, on) => {
+  const w = world(on, { cmds: [{ name: 'debug', source: 'builtin' } as { name: string; plugin?: string }] })
+  await threeWith($, DEBUG3)
+  expect(w.asks[0]!.options[0]).toBe(`${WITH_DEBUG} (empfohlen)`)
+})
+
+deTest('Review 0.28.0 S2/K2: Schleifen-Klick steht in /savings detail (angeboten + mit Skill), Abstand zur nächsten Katalog-Frage', async ($, on) => {
+  const w = world(on)
+  w.setAnswer(`${WITH_DEBUG} (empfohlen)`)
+  await threeWith($, DEBUG3)
+  await flush()
+  const d = today(w.ledger())
+  expect(d.katalog).toMatchObject({ angeboten: 1, mitSkill: 1 })
+  const md = savingsReport(d, 'all', NOW, '', { [dayKey(NOW)]: d })
+  expect(md).toContain('1× angeboten, 1× mit Skill gesendet')
+  // K2: die Schleifen-Frage zählt als Katalog-Rückfrage (Abstand CATALOG_GAP)
+  expect(((w.saved.get('sitzung:sess-1') as { catAsk?: number } | undefined)?.catAsk ?? 0) > 0).toBe(true)
+})

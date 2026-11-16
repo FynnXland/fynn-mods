@@ -1,6 +1,7 @@
 // sidekick: Inhalt von `/sidekick help` (SPEC Nachtrag 0.14.0, docs/HELP-SPEC.md §5 „sidekick 0.14.0“). Aus Einstellungen und
 // Zustand beim Aufruf ein Schnappschuss `HelpData`; gezeichnet wird er von help.ts (Kopie von templates/help/help.ts). Rein, ohne `$`.
 import type { HelpCommand, HelpData, HelpFeature, HelpSetting } from './help.js'
+import { FOOTER_BUTTONS, kindTitle } from './buttons.js'
 import { SETTINGS } from './fields.js'
 import { lang, shortDate, t, tokensText } from './i18n.js'
 import { languageHelp } from './language.js'
@@ -80,6 +81,9 @@ function commands(): HelpCommand[] {
     { cmd: '/sidekick catalog', does: h.catList },
     { cmd: '/sidekick catalog on|off', does: h.catOnOff },
     { cmd: '/sidekick catalog mute|unmute <id>', does: h.catMute },
+    // Ausbau 0.27.0
+    { cmd: '/sidekick buttons', does: h.bList },
+    { cmd: '/sidekick buttons later|prompts|<name> on|off', does: h.bSet },
     // Ausbau 0.22.0 (von limit-bars übernommen)
     { cmd: '/handoff', does: h.handoff },
     { cmd: '/handoff fork|text', does: h.handoffForce },
@@ -94,19 +98,16 @@ function commands(): HelpCommand[] {
 }
 
 /**
- * BEDIENUNG: die Knöpfe der „Gut zu wissen“-Karte (Nachtrag 0.13.0, Ziffern nur während der Arbeit) und der Knopf neben einer
+ * BEDIENUNG: die Knöpfe der „Gut zu wissen“-Zeile (Nachtrag 0.13.0, seit 0.27.1 drei in einer Zeile, Ziffern nur während der Arbeit) und der Knopf neben einer
  * blauen Zeile (Nachtrag 0.7.0/0.8.1), an der Wartungszeile Einfügen und „?“ (Ausbau 0.16.0). Beschriftungen wie auf den Knöpfen.
  */
 function controls(): HelpCommand[] {
   const x = t()
   const h = x.help
   return [
-    { cmd: `1 ${x.noteExplain}`, does: h.cExplain },
+    { cmd: `1 ${x.noteClaude}`, does: h.cClaude },
     { cmd: `2 ${x.noteKnown}`, does: h.cKnown },
-    { cmd: `0 ${x.noteLater}`, does: h.cLater },
-    { cmd: `1 ${x.noteGotIt}`, does: h.cGotIt },
-    { cmd: `2 ${x.noteChat}`, does: h.cChat },
-    { cmd: `0 ${x.noteClose}`, does: h.cClose },
+    { cmd: `0 ${x.noteIgnore}`, does: h.cIgnore },
     { cmd: h.cLine, does: h.cLineDoes },
     { cmd: h.cInsert, does: h.cInsertDoes },
     { cmd: h.cWhy, does: h.cWhyDoes },
@@ -114,6 +115,7 @@ function controls(): HelpCommand[] {
     { cmd: h.cPromptBtn, does: h.cPromptBtnDoes },
     { cmd: x.q.btn(false), does: h.cLaterDoes },
     { cmd: h.cSug, does: h.cSugDoes },
+    { cmd: h.cButtons, does: h.cButtonsDoes },
   ]
 }
 
@@ -152,6 +154,13 @@ function features(f: HelpFacts): HelpFeature[] {
     { name: h.fPrompts, state: { kind: 'value', text: h.promptsState(f.prompts?.n ?? 0, f.prompts?.buttons ?? 0), isDefault: !f.prompts?.n }, toggle: '/sidekick prompts' },
     f.cfg?.queue === false ? { name: h.settings.queue, state: { kind: 'off' }, toggle: '/sidekick queue on' } : { name: h.settings.queue, state: { kind: 'on' }, toggle: '/sidekick queue off' },
     f.cfg?.catalog === false ? { name: h.settings.catalog, state: { kind: 'off' }, toggle: '/sidekick catalog on' } : { name: h.settings.catalog, state: { kind: 'on' }, toggle: '/sidekick catalog off' },
+    // Fußzeilen-Knöpfe (Ausbau 0.27.0): je Knopfart aus hooks/buttons.ts eine Zeile, neue Knopfarten erscheinen von selbst
+    ...FOOTER_BUTTONS.map((k): HelpFeature => {
+      const name = (h.settings as Readonly<Record<string, string>>)[k.field] ?? kindTitle(k)
+      return f.cfg?.[k.field] === false
+        ? { name, state: { kind: 'off' }, toggle: `/sidekick buttons ${k.id} on` }
+        : { name, state: { kind: 'on' }, toggle: `/sidekick buttons ${k.id} off` }
+    }),
   ]
 }
 

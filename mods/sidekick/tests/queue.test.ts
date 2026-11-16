@@ -640,3 +640,52 @@ deTest('K4: Präfix hinter dem Vorspann der App im Hook-Pfad: Präfix weg, Vorsp
   expect(w.queueCalls.length).toBe(0)
   expect(await lineUnder($, REMINDER + 'danach: README im Ordner docs anpassen', 'k4')).toContain('mit „danach:“')
 })
+
+// ---------- Ausbau 0.27.0: Schalter `laterButton` ----------
+
+deTest('0.27.0 laterButton aus: kein Knopf „Danach“ während der Runde, `danach:` wirkt weiter; sidekick.prompts ohne later', { laterButton: false }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await stepOn($)
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
+  const ui = await footer($, 'desktop')
+  expect(await ui.find({ key: 'sidekick-later' })).toBeUndefined()
+  await ui.unmount()
+  const r = await during($, 'danach: README im Ordner docs anpassen')
+  expect(r.text).toBe('README im Ordner docs anpassen')
+  expect(hasNote(r)).toBe(true)
+})
+
+deTest('0.27.0 queue aus: kein Knopf „Danach“, auch mit laterButton an', { queue: false, laterButton: true }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await stepOn($)
+  const ui = await footer($, 'desktop')
+  expect(await ui.find({ key: 'sidekick-later' })).toBeUndefined()
+  await ui.unmount()
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
+})
+
+deTest('0.27.0 /sidekick buttons later off während der Runde: Knopf weg, eine Markierung verfällt; on: wieder da', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await stepOn($)
+  const ui = await footer($, 'desktop')
+  await ui.press({ key: 'sidekick-later' })
+  await flush()
+  await ui.unmount()
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'armed' })
+  const off = await run($, 'buttons later off')
+  expect(off).toContain('✓ Danach-Knopf aus.')
+  expect(written(w.cli)).toEqual({ laterButton: 'false' })
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
+  // die Markierung gilt nicht mehr: Haiku urteilt („jetzt“)
+  expect(hasNote(await during($, MID))).toBe(false)
+  expect(await run($, 'buttons later off')).toBe('Danach-Knopf ist schon aus.')
+  expect(await run($, 'buttons later on')).toContain('✓ Danach-Knopf an.')
+  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'on' })
+  // queue aus: an, aber der Befehl sagt, dass er so nicht wirkt
+  await run($, 'queue off')
+  await run($, 'buttons later off')
+  expect(await run($, 'buttons later on')).toContain('Wirkt nur mit der Warteschlange an')
+})

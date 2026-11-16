@@ -16,15 +16,18 @@ export const NOTE_MAX = 240
 /** Längster Titel und längste Erklärung in Zeichen (der Prompt verlangt 2–6 Wörter bzw. höchstens 100 Wörter). */
 export const TITLE_MAX = 60
 export const TEXT_MAX = 1200
-/** Ein nicht erklärter Hinweis verschwindet mit der so-vielten eigenen Nachricht als „ignoriert“. */
+/** Ein Hinweis verschwindet mit der so-vielten eigenen Nachricht als „ignoriert“. */
 export const IGNORE_AFTER = 2
 /** Höchstens so viele Prüfungen fallen nach ignorierten Hinweisen aus. */
 export const SKIP_MAX = 16
 
 export type NoteArt = 'achtung' | 'wissen'
 
-/** Der Hinweis einer Session (`sitzung:<id>.note`). `open`: Erklärung aufgeklappt. `survived`: eigene Nachrichten seit dem Zeigen. */
-export type Note = { thema: string; art: NoteArt; titel: string; text: string; shownAt: number; turnId: string; survived: number; open: boolean }
+/**
+ * Der Hinweis einer Session (`sitzung:<id>.note`). `survived`: eigene Nachrichten seit dem Zeigen. Seit 0.27.1 ohne `open`: Es gibt
+ * keine aufgeklappte Ansicht mehr; ein altes `open: true` wird beim Lesen übergangen.
+ */
+export type Note = { thema: string; art: NoteArt; titel: string; text: string; shownAt: number; turnId: string; survived: number }
 
 /** Nach n ignorierten Hinweisen in Folge: so viele Prüfungen auslassen (0, 0, 1, 2, 4, 8, 16, 16 …). */
 export function skipAfter(ignored: number): number {
@@ -60,18 +63,7 @@ export function cleanNote(v: unknown): Note | null {
     shownAt: o.shownAt,
     turnId: typeof o.turnId === 'string' ? o.turnId : '',
     survived: nonNeg(o.survived),
-    open: o.open === true,
   }
-}
-
-/**
- * Was nach `$.prompt.fill` geschieht (types:8440-8450): übernommen; kein Eingabefeld (`no_composer`: Desktop zeichnet sein eigenes,
- * headless) → senden; ein Dialog hält die Tasten; ohne Grund unbekannt → wie eine Ablehnung behandeln.
- */
-export function afterFill(r: { isFilled: boolean; refusal?: string }): 'filled' | 'submit' | 'dialog' | 'failed' {
-  if (r.isFilled) return 'filled'
-  if (r.refusal === 'no_composer') return 'submit'
-  return r.refusal === 'dialog' ? 'dialog' : 'failed'
 }
 
 /** Ob an diesem Schritt geprüft wird; die Zurückhaltung (`notes:skip`) kommt danach aus dem Store. */
@@ -82,11 +74,10 @@ export function shouldCheck(f: { on: boolean; off: boolean; index: number; hasNo
 }
 
 /**
- * Eine eigene Nachricht des Nutzers: Ein nicht erklärter Hinweis überlebt eine, mit der `IGNORE_AFTER`-ten ist er weg und zählt als
- * ignoriert. Ein erklärter bleibt, bis er geschlossen wird.
+ * Eine eigene Nachricht des Nutzers: Ein Hinweis überlebt eine, mit der `IGNORE_AFTER`-ten ist er weg und zählt als ignoriert.
  */
 export function afterOwnMessage(note: Note | null): { note: Note | null; ignored: boolean } {
-  if (!note || note.open) return { note, ignored: false }
+  if (!note) return { note, ignored: false }
   const survived = note.survived + 1
   if (survived >= IGNORE_AFTER) return { note: null, ignored: true }
   return { note: { ...note, survived }, ignored: false }

@@ -4,7 +4,7 @@
 // ganzzahliger Prozentbreite (Kommaprozente verwirft er, cost-ledger-Befund), im Terminal dünne `▄`.
 import type { RenderElement, RenderNode } from 'claude-code'
 import { tokensText, t, usdFine, usdText } from './i18n.js'
-import { ARTS, ROLES, active, compareNote, dayModels, dayRows, factorText, hasTipp, keyDate, missShare, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf, stufenSpread, tipRuns, tipSaved, tipsRows } from './logic.js'
+import { ARTS, NOTE_COLS, ROLES, active, compareNote, dayModels, dayRows, factorText, hasTipp, keyDate, missShare, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf, stufenSpread, tipRuns, tipSaved, tipsRows } from './logic.js'
 import type { Day, Period, Span } from './logic.js'
 import { modelLabel } from './models.js'
 import { RULE_IDS } from './wartung.js'
@@ -163,12 +163,22 @@ function tipsBlock(d: Day): RenderElement | null {
   ])
 }
 
+/**
+ * Was aus den gezeigten Hinweisen wurde, nur Felder über 0 (Ausbau 0.27.1: neue Tage haben kein „erklärt“/„im Chat“ mehr). Ohne Thema,
+ * verworfen und Fehler stehen in der eigenen Zeile darunter.
+ */
+function noteCounts(nz: Day['notizen']): string {
+  const x = t()
+  const parts = NOTE_COLS.filter((f) => f !== 'keins' && f !== 'verworfen' && f !== 'fehler' && (f === 'gezeigt' || nz[f] > 0)).map((f) => `${x.noteCol[f]} ${nz[f]}`)
+  return parts.join(' · ')
+}
+
 /** „Gut zu wissen“ (Nachtrag 0.13.0): Prüfungen, Kosten, Dauer, was daraus wurde; getrennt von Kosten und Verhältnis. */
 function notesBlock(d: Day, full: boolean): RenderElement | null {
   const x = t()
   const nz = d.notizen
   if (!nz.n) return null
-  const lines = [x.vNotesLine(nz.n, usdText(nz.usd), secsText(nz.ms, nz.n)), x.vNotesCounts(nz.gezeigt, nz.erklaert, nz.bekannt, nz.spaeter, nz.chat, nz.ignoriert)]
+  const lines = [x.vNotesLine(nz.n, usdText(nz.usd), secsText(nz.ms, nz.n)), noteCounts(nz)]
   if (full) lines.push(x.vNotesRest(nz.keins, nz.verworfen, nz.fehler))
   return col({ marginTop: full ? 0 : 1 }, [heading(x.vNotesHead), ...lines.map((l) => dim(l))])
 }
