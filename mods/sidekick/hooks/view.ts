@@ -197,6 +197,8 @@ function countsBlock(d: Day): RenderElement {
     ...(d.warteschlange.n || d.warteschlange.markiert ? [x.q.savingsRow(d.warteschlange.n, usdText(d.warteschlange.usd), d.warteschlange.markiert)] : []),
     // Ausbau 0.25.0: Skill-Katalog
     ...(d.katalog.n || d.katalog.angeboten ? [x.cat.savingsRow(d.katalog.n, usdText(d.katalog.usd), d.katalog.angeboten, d.katalog.mitSkill, d.katalog.kopiert, d.katalog.trotzdem, d.katalog.stumm)] : []),
+    // Ausbau 0.30.0: sidekick-Chat
+    ...(d.chat.n || d.chat.fehler ? [x.chat.savingsRow(d.chat.n, usdText(d.chat.usd), d.chat.fehler, d.chat.skill, d.chat.kopiert + d.chat.url, d.chat.befehl, d.chat.entwurf)] : []),
     x.coldWithout(d.kaltOhne.n, usdText(d.kaltOhne.usd)),
     x.skillsUsed(sk.slice(0, 8).map(([k, v]) => `${k} ${v}×`).join(', ')),
   ]

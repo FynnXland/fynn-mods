@@ -4118,8 +4118,8 @@ deTest('0.14.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstel
   expect(lines).toContain('- `1 An Claude geben`: Hinweis an Claude: während der Arbeit mit dem nächsten Werkzeug-Ergebnis, sonst als Nachricht von sidekick (Ziffern nur, solange Claude arbeitet)')
   expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Stufe Begleiter \(Standard\) \(\/sidekick off\|cache\|guide\) · Schwelle 80k \(Standard\)/m)
   expect(text).toContain('Gut zu wissen ○ aus (Standard) (/sidekick notes on)')
-  // Seit 0.23.0 alle userConfig-Felder in der Reihenfolge von plugin.json, Sprache zuletzt
-  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Stufe guide \(Standard\) · Prüfung ab \(Tokens\) 80k \(Standard\) · .* · Korrektur-Schleife an \(Standard\) · Warteschlange an \(Standard\) · Skill-Katalog an \(Standard\) · Sprache de$/m)
+  // Seit 0.23.0 alle userConfig-Felder in der Reihenfolge von plugin.json, Sprache zuletzt; seit 0.31.0 wie die Ansicht /sidekick settings
+  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Stufe guide \(Standard\) · Skills vorschlagen an \(Standard\) · Skill-Katalog an \(Standard\) · Modell-Tipp an \(Standard\) · Modell-Tipp: Haiku erlauben an \(Standard\) · .* · Warteschlange an \(Standard\) · Prüfung ab \(Tokens\) 80k \(Standard\) · .* · Sprache de$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure sidekick · Mod abschalten: /plugin disable sidekick')
 })
 
@@ -4287,7 +4287,7 @@ test('0.14.0 Hilfe (en): Funktionen und Einstellungen in Englisch, Desktop-Fußz
   const text = await helpRun($)
   expect(text).toContain('Level Guide (default) (/sidekick off|cache|guide)')
   expect(text).toContain('Good to know ○ off (default) (/sidekick notes on)')
-  expect(text).toMatch(/^\*\*SETTINGS \(\/plugin\):\*\* Level guide \(default\) · .* · Retry loop on \(default\) · Queue on \(default\) · Skill catalog on \(default\) · Language en \(default\)$/m)
+  expect(text).toMatch(/^\*\*SETTINGS \(\/plugin\):\*\* Level guide \(default\) · Suggest skills on \(default\) · Skill catalog on \(default\) · Model tip on \(default\) · Model tip: allow Haiku on \(default\) · .* · Queue on \(default\) · Check from \(tokens\) 80k \(default\) · .* · Language en \(default\)$/m)
   const ui = await mountHelp($, text, 'desktop')
   expect(await ui.find({ type: 'Text', text: 'Change settings: Settings → Plugins → sidekick → Settings · Turn the mod off: + → Plugins → Manage plugins' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'CONTROLS' })).toBeDefined()
@@ -4544,7 +4544,7 @@ test('0.17.0 language: Wort im argumentHint von /sidekick, nicht in /savings', a
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await flush(200)
   const hint = (name: string) => w.registered.find((c) => c.name === name)?.argumentHint ?? ''
-  expect(hint('sidekick')).toBe('[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|queue on|off|catalog …|language|help]')
+  expect(hint('sidekick')).toBe('[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|queue on|off|catalog …|chat [question]|settings|language|help]')
   expect(hint('savings')).not.toContain('language')
 })
 

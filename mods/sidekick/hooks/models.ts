@@ -32,6 +32,12 @@ export const QUEUE = { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000
  */
 export const CATALOG = { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000, timeoutMs: 4000 } as const
 
+/**
+ * sidekick-Chat im Seitenfenster (Ausbau 0.30.0, E3, Verhalten 3): Sonnet 5.5, effort `low`, 1500 Tokens, 60 s, abbrechbar über `signal`.
+ * Eine einzelne Anfrage ohne Werkzeuge (E8).
+ */
+export const CHAT = { model: 'claude-sonnet-5-5', effort: 'low', maxTokens: 1500, timeoutMs: 60000 } as const
+
 /** Zielmodelle des Modell-Tipps (E3): Alias für `agent.spawn` (types:299-312), volle ID für `start_session`. */
 export const TIP_TARGETS = {
   haiku: { alias: 'haiku', id: 'claude-haiku-5-5' },

@@ -1386,7 +1386,7 @@ export type Use = { n: number; usd: number; ms: number }
  * `aufteilung`: seit 0.15.0 wird nichts mehr gebucht; die Rolle bleibt, damit die Kosten früherer Aufteilungen (0.9 bis 0.14) in
  * `/savings detail` bei ihrem Modell stehen und nicht als „früher“ erscheinen.
  */
-export const ROLES = ['pruefung', 'uebergabe', 'aufteilung', 'hinweis', 'tipp', 'prompts', 'queue', 'katalog'] as const
+export const ROLES = ['pruefung', 'uebergabe', 'aufteilung', 'hinweis', 'tipp', 'prompts', 'queue', 'katalog', 'chat'] as const
 export type Role = (typeof ROLES)[number]
 export type ModelUse = Record<Role, Use> & { in: number; out: number }
 
@@ -1515,6 +1515,8 @@ export type Day = {
   // Skill-Katalog (Ausbau 0.25.0): Haiku-Urteile mit Kosten (in `kosten`, Rolle `katalog`), dann was daraus wurde. Keine Ersparnis in $.
   // Alte Tage ohne das Feld: 0
   katalog: Katalog
+  // sidekick-Chat im Seitenfenster (Ausbau 0.30.0): Fragen mit Kosten (in `kosten`, Rolle `chat`), Klicks je Knopfart. Alte Tage: 0
+  chat: ChatDay
   // Übergaben nach Weg (Ausbau 0.22.0): Fork und Text mit Kosten (auch in `kosten`, Rolle `uebergabe`), Skill nur gezählt (läuft im
   // Turn des Chats), `ohneCache` = Fork, der unter 50 % des Kontexts aus dem Cache las, obwohl warm geschätzt. Alte Tage: 0
   wege: Wege
@@ -1545,6 +1547,19 @@ const cleanKatalog = (v: unknown): Katalog => {
   return { n: n0(o.n), usd: n0(o.usd), ms: n0(o.ms), ...(Object.fromEntries(CATALOG_FIELDS.map((f) => [f, n0(o[f])])) as Record<CatalogField, number>) }
 }
 
+/**
+ * Ausbau 0.30.0, Verhalten 5: `n` Fragen an Sonnet mit Kosten und Dauer, `fehler` ohne Antwort (Fehler, Timeout, Abbruch); Klicks:
+ * `skill` mit Skill gesendet, `kopiert` Befehl kopiert, `url` URL kopiert, `befehl` installierten Befehl genutzt, `entwurf` in den Chat übernommen.
+ */
+export type ChatDay = { n: number; usd: number; ms: number; fehler: number; skill: number; kopiert: number; url: number; befehl: number; entwurf: number }
+export const CHAT_FIELDS = ['fehler', 'skill', 'kopiert', 'url', 'befehl', 'entwurf'] as const
+export type ChatField = (typeof CHAT_FIELDS)[number]
+const emptyChatDay = (): ChatDay => ({ n: 0, usd: 0, ms: 0, fehler: 0, skill: 0, kopiert: 0, url: 0, befehl: 0, entwurf: 0 })
+const cleanChatDay = (v: unknown): ChatDay => {
+  const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+  return { n: n0(o.n), usd: n0(o.usd), ms: n0(o.ms), ...(Object.fromEntries(CHAT_FIELDS.map((f) => [f, n0(o[f])])) as Record<ChatField, number>) }
+}
+
 export function emptyDay(): Day {
   return {
     kosten: 0,
@@ -1564,6 +1579,7 @@ export function emptyDay(): Day {
     prompts: emptyPrompts(),
     warteschlange: emptyQueueDay(),
     katalog: emptyKatalog(),
+    chat: emptyChatDay(),
     wege: emptyWege(),
     vorschlag: { gezeigt: 0, geklickt: 0, ignoriert: 0 },
   }
@@ -1607,6 +1623,7 @@ function cleanDay(v: unknown): Day {
   const ws = o.warteschlange && typeof o.warteschlange === 'object' ? o.warteschlange : {}
   d.warteschlange = { n: n0(ws.n), usd: n0(ws.usd), ms: n0(ws.ms), ...(Object.fromEntries(QUEUE_FIELDS.map((f) => [f, n0(ws[f])])) as Record<QueueField, number>) }
   d.katalog = cleanKatalog(o.katalog)
+  d.chat = cleanChatDay(o.chat)
   const w = o.wege && typeof o.wege === 'object' ? o.wege : {}
   d.wege = { fork: { n: n0(w.fork?.n), usd: n0(w.fork?.usd) }, text: { n: n0(w.text?.n), usd: n0(w.text?.usd) }, skill: n0(w.skill), ohneCache: n0(w.ohneCache) }
   const vs = o.vorschlag && typeof o.vorschlag === 'object' ? o.vorschlag : {}
@@ -1658,6 +1675,9 @@ export function addDay(a: Day, b: Day): Day {
   const bk = cleanDay(b).katalog
   const ok = out.katalog
   out.katalog = { n: ok.n + bk.n, usd: ok.usd + bk.usd, ms: ok.ms + bk.ms, ...(Object.fromEntries(CATALOG_FIELDS.map((f) => [f, ok[f] + bk[f]])) as Record<CatalogField, number>) }
+  const bc = cleanDay(b).chat
+  const oc = out.chat
+  out.chat = { n: oc.n + bc.n, usd: oc.usd + bc.usd, ms: oc.ms + bc.ms, ...(Object.fromEntries(CHAT_FIELDS.map((f) => [f, oc[f] + bc[f]])) as Record<ChatField, number>) }
   const bw = cleanDay(b)
   const ow = out.wege
   out.wege = {
@@ -1726,6 +1746,19 @@ export function bookCatalog(d: Day, model: string, usd: number, ms: number, u?: 
 
 export function countCatalog(d: Day, field: CatalogField) {
   d.katalog[field] += 1
+}
+
+/** Eine Frage im sidekick-Chat (Ausbau 0.30.0): in `kosten` und je Modell unter der Rolle `chat`. */
+export function bookChat(d: Day, model: string, usd: number, ms: number, u?: CompleteUsage) {
+  d.kosten += usd
+  bookModel(d, model, 'chat', usd, ms, u)
+  d.chat.n += 1
+  d.chat.usd += usd
+  d.chat.ms += Math.max(0, ms)
+}
+
+export function countChat(d: Day, field: ChatField) {
+  d.chat[field] += 1
 }
 
 /** Einen eigenen Modellaufruf je Modell buchen; `kosten` bucht der Aufrufer wie bisher (Summe aller Modelle und älterer Tage). */
@@ -2146,6 +2179,9 @@ export function savingsReport(d: Day, p: Period, now: number, tag = '', days?: R
   // Skill-Katalog (Ausbau 0.25.0)
   const kt = d.katalog
   if (kt.n || kt.angeboten) out.push(x.cat.savingsRow(kt.n, usdText(kt.usd), kt.angeboten, kt.mitSkill, kt.kopiert, kt.trotzdem, kt.stumm))
+  // sidekick-Chat (Ausbau 0.30.0)
+  const ch = d.chat
+  if (ch.n || ch.fehler) out.push(x.chat.savingsRow(ch.n, usdText(ch.usd), ch.fehler, ch.skill, ch.kopiert + ch.url, ch.befehl, ch.entwurf))
   out.push(x.coldWithout(d.kaltOhne.n, usdText(d.kaltOhne.usd)))
   const sk = Object.entries(d.skills).sort((a, b) => b[1] - a[1])
   out.push(x.skillsUsed(sk.slice(0, 8).map(([k, v]) => `\`${k}\` ${v}×`).join(', ')))

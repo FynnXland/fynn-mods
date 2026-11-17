@@ -24,6 +24,7 @@ import {
   findCandidates,
   gapOk,
   isInstalled,
+  launchOf,
   keywordHit,
   parseCatalog,
   skillContext,
@@ -53,11 +54,18 @@ const ids = (list: { id: string }[]) => list.map((c) => c.id)
 test('Daten: Lizenz aus der Liste, invoke nur bundled, install nur reference, summary ≤ 160, ids eindeutig, sha und Datum', () => {
   expect(new Set(CATALOG.map((c) => c.id)).size).toBe(CATALOG.length)
   for (const c of CATALOG) {
-    expect(['MIT', 'Apache-2.0', 'CC0-1.0']).toContain(c.license)
+    expect(['MIT', 'Apache-2.0', 'CC0-1.0', 'service']).toContain(c.license)
     expect(c.summary.length <= 160).toBe(true)
-    expect(/^[0-9a-f]{40}$/.test(c.pinnedSha)).toBe(true)
+    // Ausbau 0.30.0 (E6): `service` nur ohne Repo und sha, die Adresse ist die Seite des Herstellers; sonst Repo mit gepinntem sha
+    if (c.license === 'service') {
+      expect(c.repo).toBe('')
+      expect(c.pinnedSha).toBe('')
+      expect(c.url.startsWith('https://')).toBe(true)
+    } else {
+      expect(/^[0-9a-f]{40}$/.test(c.pinnedSha)).toBe(true)
+      expect(c.url.startsWith('https://github.com/')).toBe(true)
+    }
     expect(/^\d{4}-\d{2}-\d{2}$/.test(c.checkedAt)).toBe(true)
-    expect(c.url.startsWith('https://github.com/')).toBe(true)
     expect(c.keywords.de.length + c.keywords.en.length > 0).toBe(true)
     expect(c.installedAs.length > 0).toBe(true)
     if (c.way === 'bundled') {
@@ -70,54 +78,68 @@ test('Daten: Lizenz aus der Liste, invoke nur bundled, install nur reference, su
     }
   }
   // Schwer laut E3: earshot, superpowers, hyperframes
-  expect(CATALOG.filter((c) => c.risk.heavy).map((c) => c.id).sort()).toEqual(['earshot', 'hyperframes', 'superpowers'])
-  expect(CATALOG.filter((c) => c.way === 'bundled').map((c) => c.name)).toEqual([
-    'apple-design',
-    'emil-design-eng',
-    'break-ui',
-    // Ausbau 0.28.0 (E7): vor den Verweisen, sp-debug vor sp-verify, mp-grill danach
-    'systematic-debugging',
-    'verification-before-completion',
-    'receiving-code-review',
-    'fixing-metadata',
-    'grilling',
-  ])
+  expect(CATALOG.filter((c) => c.risk.heavy).map((c) => c.id).sort()).toEqual(['earshot', 'hyperframes', 'superpowers', 'video-use'])
+  // Ausbau 0.31.0 (E2, E3): nur Emils drei bleiben Kopien (seine README belegt keine Zeile für einzelne Skills)
+  expect(CATALOG.filter((c) => c.way === 'bundled').map((c) => c.name)).toEqual(['apple-design', 'emil-design-eng', 'break-ui'])
   expect(SPEC).toEqual({ model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000, timeoutMs: 4000 })
   expect(CATALOG_MIN).toBe(0.7)
   expect(CATALOG_MIN_HEAVY).toBe(0.9)
   expect(CATALOG_GAP).toBe(10)
 })
 
-test('0.28.0 Daten: fünf neue Einträge, sha je Quelle, ctxTokens, yieldTo und ctxNote nur bei bundled, Reihenfolge', () => {
+test('0.31.0 Daten: die Kopien aus 0.28.0 sind Verweise mit Installationszeile und launchAs, ib-meta gestrichen, Reihenfolge', () => {
   const order = CATALOG.map((c) => c.id)
-  const firstRef = CATALOG.findIndex((c) => c.way === 'reference')
-  for (const id of ['sp-debug', 'sp-verify', 'sp-review', 'ib-meta', 'mp-grill']) expect(order.indexOf(id)).toBeLessThan(firstRef)
-  expect(order.indexOf('sp-debug')).toBeLessThan(order.indexOf('sp-verify'))
-  expect(order.indexOf('mp-grill')).toBeGreaterThan(order.indexOf('ib-meta'))
+  // E7 aus 0.28.0 bleibt: sp-debug vor sp-verify, mp-grill danach, alle vor den übrigen Verweisen
+  expect(order.slice(3, 7)).toEqual(['sp-debug', 'sp-verify', 'sp-review', 'mp-grill'])
+  expect(byId('ib-meta')).toBeUndefined()
   for (const id of ['sp-debug', 'sp-verify', 'sp-review']) {
-    expect(byId(id)).toMatchObject({ repo: 'obra/superpowers', license: 'MIT', pinnedSha: '22f0b463e7a5e579904dd6211a520321035526f7', way: 'bundled' })
+    expect(byId(id)).toMatchObject({ repo: 'obra/superpowers', license: 'MIT', pinnedSha: '22f0b463e7a5e579904dd6211a520321035526f7', way: 'reference', kind: 'skill' })
+    expect(byId(id)!.install).toEqual({ line: '/plugin install superpowers@claude-plugins-official' })
     expect(byId(id)!.installedAs).toContain('superpowers')
+    expect(byId(id)!.launchAs).toEqual([byId(id)!.name])
   }
-  expect(byId('ib-meta')).toMatchObject({ repo: 'ibelick/ui-skills', pinnedSha: '65cc0edb4f64fe8bfe7e9c59466074de25bece76', invoke: 'sidekick:fixing-metadata', yieldTo: ['*seo*', '*metadata*'] })
-  expect(byId('mp-grill')).toMatchObject({ repo: 'mattpocock/skills', pinnedSha: '5863806dd4e15c63174bee4e7515a4256792ecfa', invoke: 'sidekick:grilling', installedAs: ['grilling', 'grill-me', 'mattpocock-skills'], yieldTo: ['*grill*'] })
+  expect(byId('mp-grill')).toMatchObject({ repo: 'mattpocock/skills', way: 'reference', install: { line: 'claude plugin install mattpocock-skills@claude-plugins-official' }, launchAs: ['grilling', 'grill-me'], installedAs: ['grilling', 'grill-me', 'mattpocock-skills'], yieldTo: ['*grill*'] })
   expect(byId('sp-debug')!.yieldTo).toEqual(['*debug*'])
-  expect(byId('sp-verify')!.yieldTo).toBeUndefined()
-  expect(byId('sp-review')!.yieldTo).toBeUndefined()
-  expect(Object.fromEntries(['sp-debug', 'sp-verify', 'sp-review', 'ib-meta', 'mp-grill'].map((id) => [id, byId(id)!.ctxTokens]))).toEqual({ 'sp-debug': 2400, 'sp-verify': 900, 'sp-review': 1600, 'ib-meta': 1100, 'mp-grill': 500 })
-  // E3: nur systematic-debugging verweist auf fremde Skills
-  expect(CATALOG.filter((c) => c.ctxNote).map((c) => c.id)).toEqual(['sp-debug'])
+  expect(byId('sp-debug')!.minSure).toBe(0.6)
   for (const c of CATALOG) {
+    // Kein Verweis trägt Daten einer Kopie; launchAs nur bei Verweisen
     if (c.way === 'reference') {
-      expect(c.yieldTo).toBeUndefined()
-      expect(c.ctxNote).toBeUndefined()
-    }
-    if (c.ctxNote) for (const l of ['de', 'en'] as const) expect(c.ctxNote[l].length <= 240).toBe(true)
+      expect(c.invoke).toBeUndefined()
+      expect(c.ctxTokens).toBeUndefined()
+    } else expect(c.launchAs).toBeUndefined()
+    expect('ctxNote' in c).toBe(false)
   }
+  expect(CATALOG.filter((c) => c.launchAs).map((c) => c.id)).toEqual(['sp-debug', 'sp-verify', 'sp-review', 'mp-grill'])
+})
+
+test('0.31.0 launchOf und catalogKind: Original installiert → run mit vollem Namen, sonst nur Zeile; eigene und eingebaute zählen nicht', () => {
+  const sp = byId('sp-debug')!
+  const plug = [{ name: 'superpowers:systematic-debugging', source: 'plugin', plugin: 'superpowers' }]
+  expect(launchOf(sp, plug)).toBe('superpowers:systematic-debugging')
+  expect(launchOf(sp, [{ name: 'systematic-debugging', source: 'user' }])).toBe('systematic-debugging')
+  // Nur das Plugin bekannt, ohne den Skill als Befehl: installiert, aber nicht startbar
+  expect(launchOf(sp, [{ name: 'superpowers:brainstorming', source: 'plugin', plugin: 'superpowers' }])).toBe('')
+  expect(launchOf(sp, [{ name: 'sidekick:systematic-debugging', source: 'plugin', plugin: 'sidekick' }])).toBe('')
+  expect(launchOf(sp, [{ name: 'systematic-debugging', source: 'builtin' }])).toBe('')
+  expect(launchOf(byId('mp-grill')!, [{ name: 'mattpocock-skills:grill-me', source: 'plugin', plugin: 'mattpocock-skills' }])).toBe('mattpocock-skills:grill-me')
+  expect(launchOf(byId('gsap')!, plug)).toBe('')
+  expect(catalogKind(sp, 'superpowers:systematic-debugging')).toBe('run')
+  expect(catalogKind(sp)).toBe('line')
+  expect(catalogKind(byId('emil-apple')!)).toBe('skill')
+  expect(catalogKind(byId('gsap')!)).toBe('copy')
+  // Vorfilter: installiertes Original bleibt Kandidat; das Original selbst stellt den Eintrag nicht zurück (*debug*, *grill*)
+  expect(ids(findCandidates('Der Build geht nicht, warum?', { ...none, cmds: plug }))).toEqual(['sp-debug'])
+  expect(yieldedTo(sp, plug)).toBe('')
+  expect(yieldedTo(byId('mp-grill')!, [{ name: 'mattpocock-skills:grilling', source: 'plugin' }])).toBe('')
+  // Nur das Plugin ohne startbaren Skill: wie installiert, kein Kandidat
+  expect(ids(findCandidates('Der Build geht nicht, warum?', { ...none, cmds: [{ name: 'superpowers:brainstorming', source: 'plugin', plugin: 'superpowers' }] }))).toEqual([])
+  // Projekt-Befehl hat weiter Vorrang
+  expect(ids(findCandidates('Der Build geht nicht, warum?', { ...none, cmds: [...plug, { name: 'mod-debug', source: 'user' }] }))).toEqual([])
 })
 
 // ---------- Ausbau 0.28.0: Vorfilter der neuen Einträge ----------
 
-deTest('0.28.0 Vorfilter: Treffer de/en je neuem Eintrag', () => {
+deTest('0.28.0/0.31.0 Vorfilter: Treffer de/en je Eintrag aus 0.28.0', () => {
   // Sicht-Check 1 und 3 der SPEC
   expect(ids(findCandidates('Der Build geht nicht, warum?', none))).toEqual(['sp-debug'])
   expect(ids(findCandidates('Der Build geht nicht mehr, kannst du schauen?', none))).toEqual(['sp-debug'])
@@ -127,9 +149,8 @@ deTest('0.28.0 Vorfilter: Treffer de/en je neuem Eintrag', () => {
   expect(ids(findCandidates('Did you test the export with real data?', none))).toEqual(['sp-verify'])
   expect(ids(findCandidates('Setz bitte die Review-Kommentare zum Export um', none))).toEqual(['sp-review'])
   expect(ids(findCandidates('Please address the review on the export branch', none))).toEqual(['sp-review'])
-  expect(ids(findCandidates('Mach Meta-Tags und OG-Bild für die Startseite', none))).toEqual(['ib-meta'])
-  expect(ids(findCandidates('Setz ein og:image für die Startseite', none))).toEqual(['ib-meta'])
-  expect(ids(findCandidates('Add Open Graph tags and a favicon to the landing page', none))).toEqual(['ib-meta'])
+  // 0.31.0: ib-meta gestrichen (keine Installationszeile im README des Originals)
+  expect(ids(findCandidates('Mach Meta-Tags und OG-Bild für die Startseite', none))).toEqual([])
   expect(ids(findCandidates('Ich habe eine Idee für ein neues Feature', none))).toEqual(['mp-grill'])
   expect(ids(findCandidates('Grill me about the plan for the sync feature', none))).toEqual(['mp-grill'])
   expect(ids(findCandidates('Das müssen wir klären, bevor Code entsteht', none))).toEqual(['mp-grill'])
@@ -143,9 +164,8 @@ deTest('0.28.0 Vorfilter: yieldTo, superpowers installiert, Verweise superpowers
   expect(yieldedTo(byId('sp-debug')!, [{ name: 'mod-debug' }])).toBe('/mod-debug')
   expect(yieldedTo(byId('sp-debug')!, [{ name: 'MOD-Debug' }])).toBe('/MOD-Debug')
   expect(yieldedTo(byId('sp-debug')!, [{ name: 'sidekick:systematic-debugging', plugin: 'sidekick' }])).toBe('')
-  expect(yieldedTo(byId('ib-meta')!, [{ name: 'seo-audit' }])).toBe('/seo-audit')
   expect(yieldedTo(byId('sp-verify')!, [{ name: 'mod-debug' }])).toBe('')
-  // E6: Plugin superpowers installiert → keine der drei Kopien
+  // E6: Plugin superpowers installiert, aber ohne den Skill als Befehl → keiner der drei (0.31.0: mit Skill → startbar, eigener Test)
   const sp = [{ name: 'superpowers:brainstorming', plugin: 'superpowers' }]
   for (const id of ['sp-debug', 'sp-verify', 'sp-review']) expect(isInstalled(byId(id)!, sp)).toBe(true)
   expect(findCandidates(BUG, { cmds: sp, muted: [], offered: [] })).toEqual([])
@@ -156,21 +176,14 @@ deTest('0.28.0 Vorfilter: yieldTo, superpowers installiert, Verweise superpowers
   expect(ids(findCandidates('Löchere mich zu dem Plan für den Export', none))).toEqual(['mp-grill'])
   expect(ids(findCandidates('Mach daraus Tickets für das nächste Release', none))).toEqual(['mattpocock'])
   expect(findCandidates('Löchere mich zu dem Plan für den Export', { cmds: [{ name: 'mattpocock-skills:to-prd', plugin: 'mattpocock-skills' }], muted: [], offered: [] })).toEqual([])
-  expect(findCandidates('Grill me about the plan for the sync feature', { cmds: [{ name: 'grill-me' }], muted: [], offered: [] })).toEqual([])
+  // 0.31.0 (E2): ein loser Skill grill-me ist das startbare Original, der Eintrag bleibt Kandidat
+  expect(ids(findCandidates('Grill me about the plan for the sync feature', { cmds: [{ name: 'grill-me' }], muted: [], offered: [] }))).toEqual(['mp-grill'])
 })
 
-deTest('0.28.0 skillContext: mit ctxNote (de/en) hinter dem Kopf, ohne ctxNote unverändert', () => {
-  const body = '---\n# From obra/superpowers@x\nname: systematic-debugging\ndisable-model-invocation: true\n---\n\nUse `superpowers:test-driven-development`.'
-  const de = skillContext(body, '/r/skills/systematic-debugging', byId('sp-debug')!, 'Text')
-  const lines = de.split('\n')
-  expect(lines[0]).toContain('sidekick:systematic-debugging')
-  expect(lines[2]).toBe('Skills mit dem Namen `superpowers:*` in diesem Text sind nicht installiert. Versuch nicht, sie zu laden; wende den Schritt, für den sie stehen, an Ort und Stelle an.')
-  expect(lines[4]).toBe('Base directory for this skill: /r/skills/systematic-debugging')
-  setLang('en')
-  expect(skillContext(body, '/r', byId('sp-debug')!, 'Text')).toContain('Skills named `superpowers:*` in this text are not installed.')
-  setLang('de')
-  const plain = skillContext('---\nname: grilling\n---\nInterview $ARGUMENTS', '/r/skills/grilling', byId('mp-grill')!, 'mich')
-  expect(plain.split('\n')).toEqual([expect.stringContaining('sidekick:grilling'), '', 'Base directory for this skill: /r/skills/grilling', '', 'Interview mich'])
+deTest('0.31.0 skillContext: Kopf, Verzeichnis, $ARGUMENTS; ohne Hinweis (ctxNote entfällt)', () => {
+  const body = '---\n# From emilkowalski/skills@x\nname: break-ui\ndisable-model-invocation: true\n---\nBreak $ARGUMENTS'
+  const de = skillContext(body, '/r/skills/break-ui', byId('emil-break')!, 'die Liste')
+  expect(de.split('\n')).toEqual([expect.stringContaining('sidekick:break-ui'), '', 'Base directory for this skill: /r/skills/break-ui', '', 'Break die Liste'])
 })
 
 // Die Dateien der mitgelieferten Skills (LICENSE, Kopfzeile, Flag, Begleitdateien, Gleichheit mit der Quelle) prüft
@@ -297,7 +310,7 @@ deTest('Hilfe: /sidekick catalog, on|off, mute; Funktion und Einstellung Skill-K
 
 type Reply = string | Error | 'timeout'
 
-function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?: string; source?: string; description?: string }[]; copyFails?: boolean; readFails?: boolean; trigger?: boolean } = {}) {
+function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?: string; source?: string; description?: string }[]; copyFails?: boolean; readFails?: boolean; trigger?: boolean; runFails?: boolean; muteFails?: boolean } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const store = new Map<string, unknown>()
   const toasts: string[] = []
@@ -305,6 +318,7 @@ function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?:
   let answer: string | null = null
   const copies: string[] = []
   const reads: string[] = []
+  const runs: { command: string; args?: string }[] = []
   const catCalls: string[] = []
   const checks: { system: string; prompt: string }[] = []
   let reply: Reply = '{"id":"emil-apple","sicher":0.85,"grund":"Apple-Gefühl für die Einstellungen"}'
@@ -324,6 +338,7 @@ function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?:
   on('command.register', ($, e) => ({ value: { command: e.name } as never }))
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
   on('store.set', ($, e) => {
+    if (o.muteFails && e.key === 'catalog:muted') throw new Error('voll')
     store.set(e.key, e.value)
     return { value: undefined }
   })
@@ -342,11 +357,18 @@ function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?:
     return { value: o.copyFails ? { isCopied: false, reason: 'no-clipboard' } : { isCopied: true } } as never
   })
   on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
-  on('prompt.fill', () => ({ value: { isFilled: true } }) as never)
+  // Desktop zeichnet ein eigenes Eingabefeld (no_composer), wie chat.test.ts
+  on('prompt.fill', () => ({ isFilled: false, refusal: 'no_composer' }) as never)
   on('fs.read', ($, e) => {
     reads.push(e.path)
     if (o.readFails) throw new Error('ENOENT')
     return { value: '---\n# From emilkowalski/skills@x\nname: apple-design\ndisable-model-invocation: true\n---\n\n# Apple Design\nSKILL-BODY' }
+  })
+  // Ausbau 0.31.0: Start des installierten Originals (Probe P1, Weg A)
+  on('command.run', ($, e) => {
+    runs.push({ command: e.command, args: e.args })
+    if (o.runFails) throw new Error('no session')
+    return {} as never
   })
   on('state.get', () => ({ value: { value: undefined, version: 1 } }))
   on('state.set', () => ({ value: { isSet: true, version: 1 } }))
@@ -378,6 +400,7 @@ function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?:
     asks,
     copies,
     reads,
+    runs,
     catCalls,
     checks,
     cli,
@@ -679,8 +702,8 @@ deTest('/sidekick catalog: Liste mit Herkunft, Lizenz, Weg, Stand; Knöpfe kopie
   const md = await run($, 'catalog')
   expect(md).toContain('**Skill-Katalog** · an')
   expect(md).toContain('| `emil-apple` apple-design | Emil Kowalski | MIT | mitgeliefert | aktiv |')
-  expect(md).toContain('| `earshot` earshot | Leon Lin | MIT | Verweis, nur Hinweis, Python, ≈ 1 GB Modelle | installiert |')
-  expect(md).toContain('| `emil-animate` animate, review-animations | Emil Kowalski | MIT | Verweis, npx, ungepinnt | aktiv |')
+  expect(md).toContain('| `earshot` earshot | Leon Lin | MIT | MCP, Verweis, nur Hinweis, Python, ≈ 1 GB Modelle | installiert |')
+  expect(md).toContain('| `emil-animate` animate, review-animations | Emil Kowalski | MIT | Skill, Verweis, npx, ungepinnt | aktiv |')
   expect(md).toContain('- `gsap`: `/plugin marketplace add greensock/gsap-skills` · https://github.com/greensock/gsap-skills')
   expect(md).toContain('- `emil-apple`: `/sidekick:apple-design`')
   const tag = /#[0-9a-z]{5,}/.exec(md)![0]
@@ -723,55 +746,152 @@ deTest('/sidekick catalog im Terminal (Review S5): gleiche Knöpfe; Shell-Zeile 
 
 // ---------- Ausbau 0.28.0: Hooks ----------
 
-deTest('0.28.0 /sidekick catalog: neue Einträge; Spalte Weg „zurückgestellt: /mod-debug“; Plugin superpowers → installiert', async ($, on) => {
-  const w = world(on, { cmds: [{ name: 'mod-debug', source: 'projectSettings' }, { name: 'superpowers:brainstorming', plugin: 'superpowers' }] })
+deTest('0.31.0 /sidekick catalog: Verweise aus 0.28.0; Spalte Weg „zurückgestellt: /mod-debug“ bzw. „startet /…“; ohne Skill-Befehl → installiert', async ($, on) => {
+  const w = world(on, { cmds: [{ name: 'mod-debug', source: 'projectSettings' }, { name: 'superpowers:brainstorming', plugin: 'superpowers' }, { name: 'mattpocock-skills:grilling', plugin: 'mattpocock-skills' }] })
   await start($)
   const md = await run($, 'catalog')
-  expect(md).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | mitgeliefert, zurückgestellt: /mod-debug | installiert |')
-  expect(md).toContain('| `ib-meta` fixing-metadata | Julien Thibeaut | MIT | mitgeliefert | aktiv |')
-  expect(md).toContain('| `mp-grill` grilling | Matt Pocock | MIT | mitgeliefert | aktiv |')
-  expect(md).toContain('- `sp-verify`: `/sidekick:verification-before-completion`')
+  expect(md).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | Skill, Verweis, zurückgestellt: /mod-debug, ganzes Plugin superpowers mit Hooks | installiert |')
+  expect(md).toContain('| `mp-grill` grilling | Matt Pocock | MIT | Skill, Verweis, startet /mattpocock-skills:grilling, ganzes Plugin, einige Skripte | installiert |')
+  expect(md).not.toContain('ib-meta')
+  expect(md).not.toContain('/sidekick:verification-before-completion')
+  expect(md).toContain('- `sp-verify`: `/plugin install superpowers@claude-plugins-official`')
   const ui = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', surface: 'desktop', props: { command: 'sidekick', args: 'catalog', text: md, isErrored: false } } as never)
   expect(JSON.stringify(await ui.find({ key: 'sidekick-cat-sp-debug' }))).toContain('zurückgestellt: /mod-debug')
   await ui.unmount()
   expect(w.copies).toEqual([])
 })
 
-deTest('0.28.0 /sidekick catalog: zurückgestellt bleibt aktiv (nicht installiert), englisch „deferred to“', async ($, on) => {
+deTest('0.31.0 /sidekick catalog: zurückgestellt bleibt aktiv (nicht installiert)', async ($, on) => {
   world(on, { cmds: [{ name: 'mod-debug' }] })
   await start($)
-  expect(await run($, 'catalog')).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | mitgeliefert, zurückgestellt: /mod-debug | aktiv |')
+  expect(await run($, 'catalog')).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | Skill, Verweis, zurückgestellt: /mod-debug, ganzes Plugin superpowers mit Hooks | aktiv |')
 })
-test('0.28.0 /sidekick catalog englisch: „deferred to /mod-debug“', { options: { language: 'en' } }, async ($, on) => {
+test('0.31.0 /sidekick catalog englisch: „deferred to /mod-debug“', { options: { language: 'en' } }, async ($, on) => {
   setLang('en')
   world(on, { cmds: [{ name: 'mod-debug' }] })
   await start($)
-  expect(await run($, 'catalog')).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | bundled, deferred to /mod-debug | active |')
+  expect(await run($, 'catalog')).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | skill, reference, deferred to /mod-debug, whole superpowers plugin, with hooks | active |')
   setLang('de')
 })
 
-deTest('0.28.0 Sicht-Check 4 (Idee): „Ich habe eine Idee für ein neues Feature“ → Rückfrage mit grilling, Skill-Text ohne Hinweis', async ($, on) => {
-  const w = world(on)
-  await start($)
-  w.setReply('{"id":"mp-grill","sicher":0.8,"grund":"Plan Schritt für Schritt klären"}')
-  w.setAnswer(X.optWith('grilling') + rec)
-  const r = await send($, 'Ich habe eine Idee für ein neues Feature im Menü')
-  expect(w.asks[0]!.question).toContain('Dafür gibt es *grilling* von Matt Pocock (MIT, liegt in sidekick): Plan Schritt für Schritt klären.')
-  expect(w.asks[0]!.question).toMatch(/≈ 500 Tokens Kontext/)
-  expect(w.reads[0]!.replace(/\\/g, '/')).toMatch(/\/skills\/grilling\/SKILL\.md$/)
-  const ctx = skillCtx(r)!
-  expect(ctx).toContain('sidekick:grilling')
-  expect(ctx).not.toContain('superpowers:*')
-})
+const SP_CMD = { name: 'superpowers:systematic-debugging', source: 'plugin', plugin: 'superpowers' }
 
-deTest('0.28.0: mitgeliefertes systematic-debugging über den Katalog trägt den Hinweis zu superpowers:*', async ($, on) => {
-  const w = world(on)
+deTest('0.31.0: Original installiert → Rückfrage nennt den Befehl; „Mit … senden“ hält an und startet das Original mit der Nachricht', async ($, on) => {
+  const w = world(on, { cmds: [SP_CMD] })
   await start($)
   w.setReply('{"id":"sp-debug","sicher":0.8,"grund":"Ursache vor dem Fix"}')
   w.setAnswer(X.optWith('systematic-debugging') + rec)
   const r = await send($, 'Der Build geht nicht, warum?')
-  expect(w.asks[0]!.question).toMatch(/≈ 2[.,]4k Tokens Kontext/)
-  expect(skillCtx(r)).toContain('Skills mit dem Namen `superpowers:*` in diesem Text sind nicht installiert.')
+  expect(w.asks[0]!.question).toBe(X.askRun('systematic-debugging', 'Jesse Vincent', 'MIT', 'Ursache vor dem Fix', 'superpowers:systematic-debugging'))
+  expect(w.asks[0]!.options).toEqual([X.optWith('systematic-debugging') + rec, X.optSend, X.optMute])
+  expect(r.drop).toBe(X.dropRun('superpowers:systematic-debugging'))
+  // Kein Einlesen einer Kopie, Start erst im Timer (aus prompt.submit lehnt der Host ab)
+  expect(w.reads).toEqual([])
+  expect(w.runs).toEqual([])
+  await w.clock.advance(100)
+  await flush()
+  expect(w.runs).toEqual([{ command: 'superpowers:systematic-debugging', args: 'Der Build geht nicht, warum?' }])
+  expect(today(w.ledger()).katalog.mitSkill).toBe(1)
+})
+
+deTest('0.31.0: Start scheitert → Befehl samt Nachricht in der Zwischenablage, Toast; ohne Zwischenablage Toast zum Abtippen', async ($, on) => {
+  const w = world(on, { cmds: [SP_CMD], runFails: true })
+  await start($)
+  w.setReply('{"id":"sp-debug","sicher":0.8,"grund":"Ursache"}')
+  w.setAnswer(X.optWith('systematic-debugging') + rec)
+  await send($, 'Der Build geht nicht, warum?')
+  await w.clock.advance(100)
+  await flush()
+  expect(w.copies).toEqual(['/superpowers:systematic-debugging Der Build geht nicht, warum?'])
+  expect(w.toasts.at(-1)).toContain('ließ sich nicht starten')
+  expect(w.toasts.at(-1)).toContain('Zwischenablage')
+})
+
+deTest('0.31.0: Original installiert, aber Anhang oder @datei → keine Rückfrage, Zeile „ist installiert, starte ihn mit /…“ mit Knopf', async ($, on) => {
+  const w = world(on, { cmds: [SP_CMD], surfaces: ['terminal'] })
+  await start($)
+  w.setReply('{"id":"sp-debug","sicher":0.8,"grund":"Ursache"}')
+  w.setAnswer(X.optWith('systematic-debugging') + rec)
+  const text = 'Der Build geht nicht, schau dir @src/build.ts an'
+  const r = await send($, text)
+  expect(w.asks).toEqual([])
+  expect(r.drop).toBeUndefined()
+  expect(r.text).toBe(text)
+  const { line, btn, ui } = await lineUnder($, text, 'req-att', 'terminal')
+  expect(line).toContain('Dafür gibt es systematic-debugging; ist installiert, starte ihn mit /superpowers:systematic-debugging')
+  expect(btn).toBeTruthy()
+  await ui.unmount()
+  expect(w.runs).toEqual([])
+})
+
+deTest('0.31.0: nicht installiert → keine Rückfrage, Hinweiszeile mit Installationszeile; „Stumm“ schaltet den Eintrag stumm', async ($, on) => {
+  const w = world(on)
+  await start($)
+  w.setReply('{"id":"sp-debug","sicher":0.8,"grund":"Ursache"}')
+  const text = 'Der Build geht nicht, warum?'
+  const r = await send($, text)
+  expect(w.asks).toEqual([])
+  expect(r.drop).toBeUndefined()
+  const { line, ui } = await lineUnder($, text, 'req-line')
+  expect(line).toContain('Dafür gibt es systematic-debugging von Jesse Vincent (MIT, ganzes Plugin superpowers mit Hooks): Ursache')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-use' }))).toContain(T.de.btnCopy)
+  await ui.press({ key: 'sidekick-use' })
+  await flush()
+  expect(w.copies).toEqual(['/plugin install superpowers@claude-plugins-official'])
+  await ui.press({ key: 'sidekick-mute' })
+  await flush()
+  expect(w.store.get('catalog:muted')).toEqual(['sp-debug'])
+  expect(w.toasts.at(-1)).toBe(X.muted('systematic-debugging'))
+  await ui.unmount()
+  const again = await $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId: 'req-line', surface: 'desktop', props: { text, origin: { kind: 'composer' }, isExpanded: true } } as never)
+  expect(await again.find({ key: 'sidekick-mute' })).toBeFalsy()
+  expect(JSON.stringify(await again.find({ key: 'sidekick-line' }))).toContain(X.btnMuted)
+  await again.unmount()
+  expect(today(w.ledger()).katalog.stumm).toBe(1)
+})
+
+deTest('Review 0.31.0 S2: „Stumm“ an der Zeile scheitert → Toast mit Grund, Knopf bleibt', async ($, on) => {
+  const w = world(on, { muteFails: true })
+  await start($)
+  w.setReply('{"id":"sp-debug","sicher":0.8,"grund":"Ursache"}')
+  const text = 'Der Build geht nicht, warum?'
+  await send($, text)
+  const { ui } = await lineUnder($, text, 'req-mutefail')
+  await ui.press({ key: 'sidekick-mute' })
+  await flush()
+  expect(w.toasts.at(-1)).toContain('Stumm schalten ging nicht')
+  expect(await ui.find({ key: 'sidekick-mute' })).toBeTruthy()
+  await ui.unmount()
+})
+
+deTest('0.31.0 Sicht-Check (Idee): grilling installiert über mattpocock → Rückfrage und Start von /mattpocock-skills:grilling', async ($, on) => {
+  const w = world(on, { cmds: [{ name: 'mattpocock-skills:grilling', plugin: 'mattpocock-skills' }] })
+  await start($)
+  w.setReply('{"id":"mp-grill","sicher":0.8,"grund":"Plan Schritt für Schritt klären"}')
+  w.setAnswer(X.optWith('grilling') + rec)
+  const r = await send($, 'Ich habe eine Idee für ein neues Feature im Menü')
+  expect(w.asks[0]!.question).toContain('installiert als /mattpocock-skills:grilling')
+  expect(r.drop).toBe(X.dropRun('mattpocock-skills:grilling'))
+  await w.clock.advance(100)
+  await flush()
+  expect(w.runs).toEqual([{ command: 'mattpocock-skills:grilling', args: 'Ich habe eine Idee für ein neues Feature im Menü' }])
+})
+
+deTest('0.31.0: „Trotzdem senden“ und „Nicht mehr vorschlagen“ bei installiertem Original wie bisher; Englisch', async ($, on) => {
+  const w = world(on, { cmds: [SP_CMD] })
+  await start($)
+  w.setReply('{"id":"sp-debug","sicher":0.8,"grund":"Ursache"}')
+  w.setAnswer(X.optMute)
+  const r = await send($, 'Der Build geht nicht, warum?')
+  expect(r.text).toBe('Der Build geht nicht, warum?')
+  expect(w.store.get('catalog:muted')).toEqual(['sp-debug'])
+  await w.clock.advance(100)
+  await flush()
+  expect(w.runs).toEqual([])
+  setLang('en')
+  expect(T.en.cat.askRun('grilling', 'Matt Pocock', 'MIT', 'x', 'mattpocock-skills:grilling')).toContain('installed as /mattpocock-skills:grilling')
+  expect(T.en.cat.dropRun('a:b')).toBe('sidekick: starting /a:b with your message.')
+  setLang('de')
 })
 
 deTest('0.28.0: „Mach daraus Tickets“ → weiter der Verweis mattpocock (Befehl kopieren); /mod-debug in der Liste → kein sp-debug, kein Haiku', async ($, on) => {
@@ -815,7 +935,7 @@ deTest('Review 0.28.0 S1/K5: /sidekick catalog mit eingebautem /debug → sp-deb
   world(on, { cmds: [{ name: 'debug', source: 'builtin' }], surfaces: ['terminal'] })
   await start($)
   const md = await run($, 'catalog')
-  expect(md).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | mitgeliefert | aktiv |')
+  expect(md).toContain('| `sp-debug` systematic-debugging | Jesse Vincent | MIT | Skill, Verweis, ganzes Plugin superpowers mit Hooks | aktiv |')
 })
 deTest('Review 0.28.0 K5: Terminal zeigt „zurückgestellt: /mod-debug“', async ($, on) => {
   world(on, { cmds: [{ name: 'mod-debug' }], surfaces: ['terminal'] })

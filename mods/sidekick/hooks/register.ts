@@ -10,7 +10,9 @@ import { lang, setLang, shortDate, spanText, t, tokensText, usdText } from './i1
 import { isLanguage, languageCommand } from './language.js'
 import { NOTES_KEEP, NOTES_WORDS, addTopic, afterOwnMessage, cleanNote, cleanTopics, nonNeg, normTopic, noteBg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.js'
 import type { Note } from './notes.js'
-import { CATALOG as CATALOG_SPEC, CHECK, HANDOFF, QUEUE, RATE, TIP_TARGETS, modelLabel, modelName } from './models.js'
+import { CATALOG as CATALOG_SPEC, CHAT, CHECK, HANDOFF, QUEUE, RATE, TIP_TARGETS, modelLabel, modelName } from './models.js'
+import { CHAT_NARROW, CHAT_QUESTION_MAX, addTurn, cardMeta, chatCard, chatPerQuestion, chatPrompt, chatSystem, chatText, cleanChat, emptyChat, offeredIds, parseChat, rawAnswer, skillText } from './chat.js'
+import type { ChatAnswer, ChatState, ChatTurn } from './chat.js'
 import {
   CATALOG,
   byId,
@@ -24,8 +26,11 @@ import {
   findCandidates,
   gapOk,
   isInstalled,
+  launchOf,
   loopSkill,
+  mcpServers,
   parseCatalog,
+  serverState,
   skillContext,
   yieldedTo,
 } from './catalog.js'
@@ -35,7 +40,9 @@ import type { CacheMem, CompleteUsage, StepUsage } from './cache.js'
 import { LEVEL, arrange, layer } from './band.js'
 import { changed, migrateSettings, readSettings, writeNote, writeSettings } from './settings.js'
 import { storeOffDefaults } from './offdefaults.js'
-import type { Values, WriteResult } from './settings.js'
+import type { SettingValue, Values, WriteResult } from './settings.js'
+import { DOT_COLOR, choicesOf, kindOf, restText, svMarkdown, svRows, valueOf, valueText } from './settingsview.js'
+import type { SvKey } from './settingsview.js'
 import { SETTINGS } from './fields.js'
 import {
   DEFAULT_RUNTIME,
@@ -110,6 +117,8 @@ import {
   bookPrompts,
   bookQueue,
   bookCatalog,
+  bookChat,
+  countChat,
   countPrompt,
   countQueue,
   countCatalog,
@@ -208,7 +217,7 @@ const MODE_RED = '#F85149'
  * Wartungszeile (Ausbau 0.16.0): `wid` die Regel, `why` die Erklärung hinter „?“, `filled`: der Befehl steht schon im Eingabefeld.
  */
 // `cat` (Ausbau 0.25.0): Hinweiszeile des Skill-Katalogs; `cmd` ist dann die Installationszeile (auch ohne `/`, z. B. `uv tool install …`)
-type HintRow = { id: string; line: string; sent?: string; cmd?: string; ran?: boolean; wid?: RuleId; why?: string; filled?: boolean; offer?: Offer; offerDone?: 'saved' | 'no'; cat?: string }
+type HintRow = { id: string; line: string; sent?: string; cmd?: string; ran?: boolean; wid?: RuleId; why?: string; filled?: boolean; offer?: Offer; offerDone?: 'saved' | 'no'; cat?: string; muted?: boolean }
 /** Angebot „Als Befehl speichern“ (Nachtrag 0.21.0): Haikus Name und Fassung, dazu die Einträge der Gruppe (`prompts:seen`). */
 type Offer = { name: string; text: string; ids: string[] }
 function cleanOffer(v: unknown): Offer | null {
@@ -299,6 +308,7 @@ function cleanSitzung(v: unknown): Sitzung {
         ...((RULE_IDS as readonly unknown[]).includes(h.wid) ? { wid: h.wid as RuleId } : {}),
         ...(typeof h.why === 'string' && h.why ? { why: h.why } : {}),
         ...(h.filled === true ? { filled: true } : {}),
+        ...(h.muted === true ? { muted: true } : {}),
         ...(cleanOffer(h.offer) ? { offer: cleanOffer(h.offer)! } : {}),
         ...(h.offerDone === 'saved' || h.offerDone === 'no' ? { offerDone: h.offerDone } : {}),
       }))
@@ -728,6 +738,14 @@ async function bindNow($: EngineInterface): Promise<void> {
   ses = emptySitzung()
   // „An Claude geben“ (Ausbau 0.27.1): ein offenes `pass` gehört zur alten Session und verfällt still
   pass = null
+  // sidekick-Chat (Ausbau 0.30.0, Review S3): eine laufende Antwort gehört zum alten Chat
+  try {
+    chatAbort?.abort()
+  } catch {
+    // schon beendet
+  }
+  chatAbort = null
+  chatCtx = { cmds: [], servers: [], known: false }
   pending = null
   askedCold = false
   chain = Promise.resolve()
@@ -871,6 +889,13 @@ async function insertHint($: EngineInterface, id: string, surface: Surface | und
   const x = t()
   pressing.add(id)
   try {
+    // Ausbau 0.30.0 (E5): ein gehosteter Server im Desktop → die URL für „Eigenen Connector hinzufügen“ statt der Zeile
+    const url = h.cat && surface === 'desktop' ? byId(h.cat)?.install?.connectorUrl : undefined
+    if (url) {
+      const c = await $.ui.copy({ text: url, surface }).catch(() => null)
+      $.ui.toast(c?.isCopied ? x.cat.urlCopied(url) : x.cat.urlFailed(url), { timeoutMs: 15000 })
+      return
+    }
     // Skill-Katalog (0.25.0): eine Zeile ohne `/` ist ein Shell-Befehl, im Eingabefeld wäre sie eine Nachricht an Claude: nur kopieren
     if (!h.cat || cmd.startsWith('/')) {
       const box = await readBox($).catch(() => null)
@@ -901,6 +926,25 @@ async function insertHint($: EngineInterface, id: string, surface: Surface | und
     $.ui.toast(x.insFailed(cmd), { timeoutMs: 15000 })
   } finally {
     pressing.delete(id)
+    $.ui.invalidate('ui.render')
+  }
+}
+
+/** „Stumm“ an einer Katalog-Zeile (Ausbau 0.31.0): Eintrag für alle Chats stumm, Zeile zeigt „stumm ✓“, Bilanz wie die Rückfrage. */
+async function muteHint($: EngineInterface, id: string) {
+  const h = ses.hints.find((x) => x.id === id)
+  const c = h?.cat ? byId(h.cat) : undefined
+  if (!h || !c || h.muted) return
+  try {
+    await setMuted($, c.id, true)
+    h.muted = true
+    const now = await $.clock.now().catch(() => 0)
+    saveSes($, now)
+    bookDay($, now, (d) => countCatalog(d, 'stumm'))
+    $.ui.toast(t().cat.muted(c.name), { timeoutMs: 8000 })
+  } catch (err) {
+    $.ui.toast(t().cat.muteFailed(msg(err)), { timeoutMs: 8000 })
+  } finally {
     $.ui.invalidate('ui.render')
   }
 }
@@ -1837,7 +1881,8 @@ async function updateLoop($: EngineInterface, fn: (l: Loop) => Loop) {
  * Frage der Korrektur-Schleife (Ausbau 0.19.0, Verhalten 2) vor dem Senden. Gibt zurück, was mit der Nachricht geschieht: `send`
  * unverändert, `nudge` mit Denkanstoß als `context`, `new` neuer Chat mit Übergabe (der Aufrufer startet ihn). Geschlossen: `send`.
  */
-async function askLoop($: EngineInterface, c: Check, resendable: boolean, base: number, now: number, skill: CatalogEntry | null = null): Promise<LoopChoice> {
+async function askLoop($: EngineInterface, c: Check, resendable: boolean, base: number, now: number, loopRun: { c: CatalogEntry; cmd: string } | null = null): Promise<LoopChoice> {
+  const skill = loopRun?.c ?? null
   const x = t()
   ses.korrAsked = true
   // Ausbau 0.28.0 (E4): mit Skill gilt der Eintrag danach in diesem Chat als angeboten, egal wie die Antwort ausfällt. Die Frage zählt
@@ -1856,8 +1901,8 @@ async function askLoop($: EngineInterface, c: Check, resendable: boolean, base: 
   const parts = [x.loopQuestion]
   // Im großen Chat mit Kosten wie bei der Neuer-Chat-Frage
   if (big && resendable) parts.push(x.optNew(x.newChat, usdText(handoffEstimate(c.ctx * 4, base, c.model, c.ttl))))
-  // Mit Skill: die Kontextkosten wie in der Katalog-Rückfrage (E4)
-  if (skill) parts.push(x.cat.loopCost(skill.name, tokensText(skill.ctxTokens ?? 0)))
+  // Mit Skill (0.28.0 E4): seit 0.31.0 startet das installierte Original, statt Kontextkosten steht sein Befehl da
+  if (loopRun) parts.push(x.cat.loopRun(loopRun.c.name, loopRun.cmd))
   // /rewind öffnet eine Auswahl und hat keinen Knopf (logic.ts NO_BUTTON): nur als Hinweis
   parts.push(x.loopRewind, x.howNext)
   bookDay($, now, (d) => countHint(d, 'schleife', 'gezeigt'))
@@ -2627,6 +2672,29 @@ async function housekeeping($: EngineInterface) {
   for (const sid of plan.merged) if (check.aus?.includes(sid)) await $.store.delete(`bilanz:${sid}`)
 }
 
+/**
+ * Umzugshinweis 0.31.0 (SPEC Teil 3): einmal als Toast nach dem Start und einmal in `/sidekick status`. Store `notice:moved031`:
+ * fehlt → Toast fällig (nur nach früherer Nutzung, sonst gleich `done`), `toast` → nur noch die Zeile im Status, `done` → nichts. Gemutete Einträge bleiben (gleiche ids). Statt
+ * `$.ui.notice` (hängt an einem Werkzeugaufruf, types:2681) ein Toast. Fehler → beim nächsten Mal.
+ */
+const MOVED_KEY = 'notice:moved031'
+async function movedStart($: EngineInterface) {
+  if ((await $.store.get(MOVED_KEY)) !== undefined) return
+  // Nur, wer sidekick schon vor 0.31.0 nutzte (Bilanz-Tage `bilanz:<session>` im Store); eine neue Installation hatte nie Kopien
+  const used = (await $.store.keys()).some((k) => k.startsWith('bilanz:'))
+  await $.store.set(MOVED_KEY, used ? 'toast' : 'done')
+  if (used) later($, 1500, () => $.ui.toast(`sidekick: ${t().cat.moved}`, { timeoutMs: 15000 }))
+}
+async function movedStatus($: EngineInterface): Promise<string> {
+  try {
+    if ((await $.store.get(MOVED_KEY)) === 'done') return ''
+    await $.store.set(MOVED_KEY, 'done')
+    return t().cat.moved
+  } catch {
+    return ''
+  }
+}
+
 async function statusText($: EngineInterface): Promise<string> {
   await bindSession($)
   const now = await $.clock.now()
@@ -2636,6 +2704,10 @@ async function statusText($: EngineInterface): Promise<string> {
   const x = t()
   const onOff = (b: boolean) => (b ? x.on : x.off)
   const out = [x.statusTitle(x.level[settings.level]), '']
+  // Ausbau 0.31.0: Umzugshinweis einmal, dazu der Weg zur Einstellungs-Ansicht
+  const moved = await movedStatus($)
+  if (moved) out.push(moved, '')
+  out.push(x.settingsHint, '')
   out.push('| | |', '|---|---|')
   out.push(x.rowLevel(x.level[settings.level], x.levelDesc[settings.level]))
   out.push(x.rowThreshold(tokensText(settings.threshold)))
@@ -3022,23 +3094,39 @@ async function catalogCands($: EngineInterface, e: { origin: { kind: string }; t
   if (!(await isOwn($, e.origin.kind))) return []
   await bindSession($)
   const { cmds } = await loadBase($, await $.clock.now())
-  const list = findCandidates(typed, { cmds, muted: await loadMuted($), offered: ses.catOffered })
-  return gapOk(ses.own + 1, ses.catAsk) ? list : list.filter((c) => catalogKind(c) === 'line')
+  // Ausbau 0.30.0 (E7): MCP-Server nur lesen, wenn ein MCP- oder Connector-Eintrag getroffen ist
+  const pre = findCandidates(typed, { cmds, muted: [], offered: [] })
+  const servers = pre.some((c) => c.kind === 'mcp' || c.kind === 'connector') ? await listServers($) : []
+  const list = findCandidates(typed, { cmds, muted: await loadMuted($), offered: ses.catOffered, servers })
+  // Ausbau 0.31.0 (E2): der Befehl des installierten Originals je Kandidat, für `catalogKind` und den Start
+  catLaunch.clear()
+  for (const c of list) {
+    const l = launchOf(c, cmds)
+    if (l) catLaunch.set(c.id, l)
+  }
+  return gapOk(ses.own + 1, ses.catAsk) ? list : list.filter((c) => catalogKind(c, catLaunch.get(c.id)) === 'line')
 }
 
-type CatAct = { act: 'skill' | 'copy' | 'send' | 'mute' | 'line'; c: CatalogEntry; grund: string }
+/** Ausbau 0.31.0 (E2): Katalog-id → Befehl des installierten Originals (ohne `/`), gesetzt vom letzten Vorfilter. */
+const catLaunch = new Map<string, string>()
+
+/** `cmd`: bei `run` und bei der Zeile eines installierten Originals der Befehl, der es startet (ohne `/`). */
+type CatAct = { act: 'skill' | 'run' | 'copy' | 'send' | 'mute' | 'line'; c: CatalogEntry; grund: string; cmd?: string }
 
 /**
  * Urteil und Rückfrage (Verhalten 2 und 3). `kat`: Urteil der Prüfung, wenn sie die Kandidaten mitnahm; sonst ein eigener Haiku-Aufruf
  * (`CATALOG`). Fehler, Timeout, ungültig, unter der Schwelle → null (durch). Geschlossener Dialog → senden.
  */
-async function catalogStep($: EngineInterface, typed: string, cands: readonly CatalogEntry[], kat: CatalogVerdict | null | undefined, signal: AbortSignal): Promise<CatAct | null> {
+async function catalogStep($: EngineInterface, typed: string, cands: readonly CatalogEntry[], kat: CatalogVerdict | null | undefined, signal: AbortSignal, resendable = true): Promise<CatAct | null> {
   if (!cands.length) return null
   const v = kat !== undefined ? kat : parseCatalog(await haiku($, CATALOG_SPEC, catalogSystem(), catalogPrompt({ text: typed, summary: ses.summary, cands }), { signal, book: bookCatalog }), cands.map((c) => c.id))
   const c = catalogPick(v, cands)
   if (!c || !v) return null
   const grund = v.grund
-  const kind = catalogKind(c)
+  const launch = catLaunch.get(c.id) ?? ''
+  // Ausbau 0.31.0 (E2): `$.command.run` nimmt keine Anhänge und kein `@datei` mit (wie Weg A in 0.25.0): dann nur die Zeile
+  const kind0 = catalogKind(c, launch)
+  const kind = kind0 === 'run' && !resendable ? 'line' : kind0
   const now = await $.clock.now()
   // Angeboten: in diesem Chat kein zweites Mal
   ses.catOffered = [...ses.catOffered, c.id]
@@ -3048,15 +3136,20 @@ async function catalogStep($: EngineInterface, typed: string, cands: readonly Ca
   })
   if (kind === 'line') {
     saveSes($, now)
-    return { act: 'line', c, grund }
+    return { act: 'line', c, grund, ...(launch ? { cmd: launch } : {}) }
   }
   ses.catAsk = ses.own
   saveSes($, now)
   const x = t().cat
   const rec = t().recommended
-  const first = kind === 'skill' ? x.optWith(c.name) : x.optCopy
-  // Kontext, den der Skill kostet (Planungs-Chat 2026-11-09); bei Verweisen das Risiko (Review 0.25.0 S3)
-  const question = kind === 'skill' ? x.askBundled(c.name, c.author, c.license, grund, tokensText(c.ctxTokens ?? 0)) : x.askRef(c.name, c.author, c.license, c.risk.note?.[lang()] ?? '', grund)
+  const first = kind === 'skill' || kind === 'run' ? x.optWith(c.name) : x.optCopy
+  // Kontext, den der Skill kostet (Planungs-Chat 2026-11-09); bei Verweisen das Risiko (Review 0.25.0 S3); beim Original sein Befehl (0.31.0)
+  const question =
+    kind === 'skill'
+      ? x.askBundled(c.name, c.author, licText(c), grund, tokensText(c.ctxTokens ?? 0))
+      : kind === 'run'
+        ? x.askRun(c.name, c.author, licText(c), grund, launch)
+        : x.askRef(c.name, c.author, licText(c), c.risk.note?.[lang()] ?? '', grund)
   let answer = ''
   try {
     answer = await $.ui.ask(question, { options: [first + rec, x.optSend, x.optMute], header: x.header })
@@ -3065,7 +3158,7 @@ async function catalogStep($: EngineInterface, typed: string, cands: readonly Ca
     return { act: 'send', c, grund }
   }
   const a = answer.endsWith(rec) ? answer.slice(0, -rec.length) : answer
-  if (a === first) return { act: kind, c, grund }
+  if (a === first) return { act: kind, c, grund, ...(kind === 'run' ? { cmd: launch } : {}) }
   if (a === x.optMute) {
     await setMuted($, c.id, true)
     bookDay($, now, (d) => countCatalog(d, 'stumm'))
@@ -3075,17 +3168,37 @@ async function catalogStep($: EngineInterface, typed: string, cands: readonly Ca
   return { act: 'send', c, grund }
 }
 
-const catLists = new Map<string, { on: boolean; guide: boolean; cmds: readonly { name: string; plugin?: string }[]; muted: string[] }>()
+type CatSnap = { on: boolean; guide: boolean; cmds: readonly { name: string; plugin?: string; source?: string }[]; muted: string[]; servers: string[] }
+const catLists = new Map<string, CatSnap>()
 let catListNo = 0
 
 /** Was der Knopf „Befehl kopieren“ kopiert: die Installationszeile bzw. bei mitgelieferten der Befehl, der den Skill startet. */
 const copyLine = (c: CatalogEntry) => c.install?.line ?? (c.invoke ? `/${c.invoke}` : '')
 
-function catalogState(c: CatalogEntry, cmds: readonly { name: string; plugin?: string }[], muted: readonly string[]): string {
+/** Lizenz für Texte: `service` (Ausbau 0.30.0, E6) als „Dienst“. */
+const licText = (c: CatalogEntry) => (c.license === 'service' ? t().cat.service : c.license)
+
+/**
+ * Die MCP-Server dieser Session (Ausbau 0.30.0, E7, Probe P1), nur die Namen. Der einzige Aufruf von `$.tool.list` (wie `tick`: hält die
+ * `calls:`-Zeile von validate kurz). Fehler → keine.
+ */
+async function listServers($: EngineInterface): Promise<string[]> {
+  try {
+    return mcpServers(await $.tool.list())
+  } catch {
+    return []
+  }
+}
+
+function catalogState(c: CatalogEntry, cmds: readonly { name: string; plugin?: string }[], muted: readonly string[], servers: readonly string[] = []): string {
   const x = t().cat
   // Seit 0.28.0 auch mitgelieferte: Ist z. B. das Plugin superpowers installiert, bietet sidekick seine Kopien nicht an (E6)
   if (isInstalled(c, cmds)) return x.installed
-  return muted.includes(c.id) ? x.mutedState : x.active
+  // Ausbau 0.30.0 (E7): MCP-Server und Connectoren; im Desktop ohne erkennbaren Namen „?“ (Probe P1)
+  const s = serverState(c, servers)
+  if (s === 'yes') return x.installed
+  if (muted.includes(c.id)) return x.mutedState
+  return s === 'unknown' ? x.unknown : x.active
 }
 /**
  * Weg mit Risiko (Review 0.25.0 S3): mitgeliefert; Verweis mit der Notiz; schwer zusätzlich „nur Hinweis“. Seit 0.28.0 (E5) bei
@@ -3098,13 +3211,18 @@ function catalogWay(c: CatalogEntry, cmds: readonly { name: string; plugin?: str
     return y ? `${x.bundled}, ${x.yielded(y)}` : x.bundled
   }
   const note = c.risk.note?.[lang()]
-  return [x.reference, ...(c.risk.heavy ? [x.heavy] : []), ...(note ? [note] : [])].join(', ')
+  // Ausbau 0.31.0 (E2): ein Verweis, dessen Original installiert ist, startet es; einer mit Projekt-Befehl ist zurückgestellt
+  const run = launchOf(c, cmds)
+  const y = yieldedTo(c, cmds)
+  // Ausbau 0.30.0: Art, kostenpflichtig (nur Hinweis, E4), zusammengesetzte Zeile (E5)
+  return [x.kinds[c.kind] ?? c.kind, x.reference, ...(y ? [x.yielded(y)] : run ? [x.launches(run)] : []), ...(c.risk.heavy || c.risk.paid ? [x.heavy] : []), ...(c.risk.paid ? [x.paid] : []), ...(c.install?.composed ? [x.composed] : []), ...(note ? [note] : [])].join(', ')
 }
 
-function catalogMarkdown(snap: { on: boolean; guide: boolean; cmds: readonly { name: string; plugin?: string }[]; muted: string[] }, tag: string): string {
+function catalogMarkdown(snap: CatSnap, tag: string): string {
   const x = t().cat
-  const rows = CATALOG.map((c) => `| \`${c.id}\` ${mdCell(c.name)} | ${mdCell(c.author)} | ${c.license} | ${catalogWay(c, snap.cmds)} | ${catalogState(c, snap.cmds, snap.muted)} |`)
-  const lines = CATALOG.filter((c) => copyLine(c)).map((c) => `- \`${c.id}\`: \`${copyLine(c)}\` · ${c.url}`)
+  const rows = CATALOG.map((c) => `| \`${c.id}\` ${mdCell(c.name)} | ${mdCell(c.author)} | ${licText(c)} | ${mdCell(catalogWay(c, snap.cmds))} | ${catalogState(c, snap.cmds, snap.muted, snap.servers)} |`)
+  // Connectoren (Ausbau 0.30.0, E5): Zeile für Claude Code, URL für Desktop und claude.ai
+  const lines = CATALOG.filter((c) => copyLine(c)).map((c) => `- \`${c.id}\`: \`${copyLine(c)}\`${c.install?.connectorUrl ? ` · ${x.btnUrl}: ${c.install.connectorUrl}` : ''} · ${c.url}`)
   return [`${x.listHead(snap.on, snap.guide)}${tag ? ` · ${tag}` : ''}`, '', x.listIntro, '', x.cols, '|---|---|---|---|---|', ...rows, '', ...lines, '', x.listFoot].join('\n')
 }
 
@@ -3131,7 +3249,7 @@ async function catalogCommand($: EngineInterface, rest: string): Promise<string>
   if (a && a !== 'status') return x.usage
   const now = await $.clock.now()
   const cmds = await loadBase($, now).then((b) => b.cmds, () => [])
-  const snap = { on, guide: settings.level === 'guide', cmds, muted: await loadMuted($) }
+  const snap: CatSnap = { on, guide: settings.level === 'guide', cmds, muted: await loadMuted($), servers: await listServers($) }
   const tag = `#${(++catListNo).toString(36)}${now.toString(36).slice(-5)}`
   catLists.set(tag, snap)
   while (catLists.size > 10) catLists.delete(catLists.keys().next().value as string)
@@ -3139,7 +3257,7 @@ async function catalogCommand($: EngineInterface, rest: string): Promise<string>
 }
 
 /** `/sidekick catalog` gezeichnet: je Eintrag Name, Herkunft, Lizenz, Weg, Stand, dazu die Knöpfe „Befehl kopieren“ und „Stumm“. */
-function catalogTree($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], snap: { on: boolean; guide: boolean; cmds: readonly { name: string; plugin?: string }[]; muted: string[] }): RenderElement {
+function catalogTree($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], snap: CatSnap): RenderElement {
   const x = t().cat
   const ui = $.ui.resolve(e)
   const Button = (p: { key: string; label: string; onPress: (press: UiPressArgument) => void }) => ui.Button(p) as RenderNode
@@ -3149,8 +3267,22 @@ function catalogTree($: EngineInterface, e: Parameters<EngineInterface['ui']['re
     const line = copyLine(c)
     const kids: RenderNode[] = [
       el('Box', { width: Math.max(12, Math.min(24, Math.floor(cols / 4))), flexShrink: 0 }, [el('Text', { color: ACCENT }, [c.name])]),
-      el('Text', { dimColor: true }, [`${c.author} · ${c.license} · ${catalogWay(c, snap.cmds)} · ${catalogState(c, snap.cmds, snap.muted)}`]),
+      el('Text', { dimColor: true }, [`${c.author} · ${licText(c)} · ${catalogWay(c, snap.cmds)} · ${catalogState(c, snap.cmds, snap.muted, snap.servers)}`]),
     ]
+    // Ausbau 0.30.0 (E5): die URL eines gehosteten Servers für Desktop und claude.ai
+    const url = c.install?.connectorUrl
+    if (url)
+      kids.push(
+        Button({
+          key: `sidekick-cat-url-${c.id}`,
+          label: x.btnUrl,
+          onPress: (press) =>
+            void $.ui.copy({ text: url, surface: press.surface }).then(
+              (r) => $.ui.toast(r.isCopied ? x.urlCopied(url) : x.urlFailed(url), { timeoutMs: 12000 }),
+              () => $.ui.toast(x.urlFailed(url), { timeoutMs: 12000 }),
+            ),
+        }),
+      )
     if (line)
       kids.push(
         Button({
@@ -3184,6 +3316,166 @@ function catalogTree($: EngineInterface, e: Parameters<EngineInterface['ui']['re
     ...rows,
     el('Box', { marginTop: 1 }, [el('Text', { dimColor: true }, [x.listFoot.replace(/`/g, '')])]),
   ])
+}
+
+// ---------- Einstellungs-Ansicht `/sidekick settings` (Ausbau 0.31.0, SPEC Teil 1) ----------
+
+/** `/sidekick settings`: Markdown (für `-p`, VS Code und als Rohtext); Terminal und Desktop zeichnen daraus die Ansicht mit Knöpfen. */
+async function settingsCommand($: EngineInterface, rest: string): Promise<string> {
+  const a = rest.trim().toLowerCase()
+  if (a && a !== 'status') return t().sv.usage
+  await loadSettings($)
+  return svMarkdown(cfg, settings.level)
+}
+
+// Feld, das gerade geschrieben wird: kein zweiter Klick, bis das Schreiben fertig ist
+const svBusy = new Set<SvKey>()
+
+/**
+ * Schalter, deren Befehl mehr tut als das Feld zu schreiben (Review 0.31.0 S1): `queue` schreibt `sidekick.status` für prompt-deck,
+ * `notes off` räumt einen stehenden Hinweis weg, `tips on` und `loop on` beenden eine Ruhe. Die Knöpfe gehen deshalb durch dieselben
+ * Befehlsfunktionen; deren Antwort (auch „schon an“) wird der Toast.
+ */
+function svViaCommand($: EngineInterface, key: SvKey, on: boolean): Promise<string> | null {
+  const w = on ? ' on' : ' off'
+  switch (key) {
+    case 'queue':
+      return queueCommand($, w)
+    case 'notes':
+      return notesCommand($, w)
+    case 'modelTip':
+      return tipsCommand($, w)
+    case 'modelTipAuto':
+      return tipsCommand($, ` auto${w}`)
+    case 'modelTipHaiku':
+      return tipsCommand($, ` haiku${w}`)
+    case 'retryLoop':
+      return loopCommand($, w)
+    case 'maintenanceHints':
+      return hintsCommand($, w)
+    case 'catalog':
+      return catalogCommand($, w.trim())
+    default:
+      return null
+  }
+}
+
+/** Antwort eines Befehls als Toast: ohne Fettschrift, höchstens 600 Zeichen. */
+const toastText = (s: string) => cut(s.replace(/\*\*/g, '').trim(), 600)
+
+/**
+ * Ein Knopf der Ansicht: schreibt das Feld wie der Befehl über `writeCfg` (`writeSettings` aus hooks/settings.ts: Weg 1 `$.config.set`,
+ * Weg 2 `claude plugin configure`), die Meldung „gilt jetzt“ bzw. „ab dem nächsten Chat“ als Toast, danach neu zeichnen (in Weg 1 die
+ * neu geladene Instanz mit den neuen `options`). Die Sprache wie `/sidekick language` für alle fynn-mods (hooks/language.ts); Schalter
+ * mit Nebenwirkungen über ihren Befehl (`svViaCommand`).
+ */
+async function svSet($: EngineInterface, key: SvKey, v: SettingValue) {
+  if (svBusy.size) return
+  const x = t().sv
+  const name = x.names[key] ?? key
+  const viaCmd = typeof v === 'boolean' ? svViaCommand($, key, v) : null
+  if (viaCmd) {
+    svBusy.add(key)
+    try {
+      $.ui.toast(toastText(await viaCmd), { timeoutMs: 10000 })
+    } catch (err) {
+      $.ui.toast(x.failed(msg(err)), { timeoutMs: 10000 })
+    } finally {
+      svBusy.delete(key)
+      try {
+        $.ui.invalidate('ui.render')
+      } catch {
+        // nächste Zeichnung
+      }
+    }
+    return
+  }
+  if (valueOf(cfg, key) === v) {
+    $.ui.toast(x.already(name, valueText(key, v)), { timeoutMs: 6000 })
+    return
+  }
+  svBusy.add(key)
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {
+    // ohne „speichert …“
+  }
+  try {
+    if (key === 'language') {
+      const text = await languageCommand($, { mod: 'sidekick', cmd: 'sidekick', lang: lang() }, `language ${String(v)}`)
+      $.ui.toast(text.replace(/\*\*/g, ''), { timeoutMs: 15000 })
+      return
+    }
+    const w = await writeCfg($, { [key]: v })
+    const note = writeNote(w, lang())
+    $.ui.toast(w.ok ? [x.set(name, valueText(key, v)), note].filter(Boolean).join('\n') : note, { timeoutMs: 10000 })
+    if (w.ok && key === 'level') {
+      await loadSettings($)
+      pushStatus($)
+    }
+  } catch (err) {
+    $.ui.toast(x.failed(msg(err)), { timeoutMs: 10000 })
+  } finally {
+    svBusy.delete(key)
+    try {
+      $.ui.invalidate('ui.render')
+    } catch {
+      // nächste Zeichnung
+    }
+  }
+}
+
+/**
+ * `/sidekick settings` gezeichnet (Terminal und Desktop): Gruppen, je Feld Name, Wert, Knöpfe (Schalter an/aus, je Wert der Auswahl
+ * einer, der aktive mit ●; Zahlen nur „Befehl kopieren“), darunter Satz und Befehl. Ruhende Funktionen grau mit „ruht bei Stufe …“,
+ * Unterpunkte des Modell-Tipps eingerückt. Gelesen wird der gültige Stand (`cfg`), nicht der Rohtext. Breite über `viewport.columns`.
+ */
+function settingsTree($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0]): RenderElement {
+  const x = t().sv
+  const ui = $.ui.resolve(e)
+  const Button = (p: { key: string; label: string; onPress: (press: UiPressArgument) => void }) => ui.Button(p) as RenderNode
+  const cols = viewportCols(e)
+  const nameW = Math.max(14, Math.min(32, Math.floor(cols / 3)))
+  const level = settings.level
+  const kids: RenderNode[] = [el('Text', { bold: true }, [x.title(t().level[level]).replace(/\*\*/g, '')]), el('Text', { dimColor: true }, [x.intro])]
+  for (const g of svRows(cfg, level)) {
+    kids.push(el('Box', { marginTop: 1 }, [el('Text', { bold: true, color: ACCENT }, [g.title])]))
+    for (const r of g.rows) {
+      const dim: Record<string, boolean> = r.rests ? { dimColor: true } : {}
+      const line: RenderNode[] = [
+        // Ampel (Fynn 2026-11-17): ● grün an, rot aus, gelb Stufe Cache; ohne Zustand zwei Leerzeichen, damit die Namen fluchten
+        el('Box', { width: nameW, flexShrink: 0, ...(r.sub ? { paddingLeft: 2 } : {}) }, [
+          r.dot ? el('Text', { color: DOT_COLOR[r.dot] }, ['● ']) : el('Text', {}, ['  ']),
+          el('Text', dim, [r.name]),
+        ]),
+        el('Text', r.rests ? { dimColor: true } : { bold: true }, [r.value]),
+      ]
+      if (svBusy.has(r.key)) line.push(el('Text', { dimColor: true }, [x.busy]))
+      else if (kindOf(r.key) === 'number') {
+        const cmd = r.cmd
+        line.push(
+          Button({
+            key: `sidekick-set-${r.key}-copy`,
+            label: x.btnCopy,
+            onPress: (press) =>
+              void $.ui.copy({ text: cmd, surface: press.surface }).then(
+                (c) => $.ui.toast(c.isCopied ? x.copied(cmd) : x.copyFailed(cmd), { timeoutMs: 8000 }),
+                () => $.ui.toast(x.copyFailed(cmd), { timeoutMs: 8000 }),
+              ),
+          }),
+        )
+      } else
+        for (const v of choicesOf(r.key)) {
+          const label = typeof v === 'boolean' ? (v ? x.btnOn : x.btnOff) : valueText(r.key, v)
+          line.push(Button({ key: `sidekick-set-${r.key}-${String(v)}`, label: valueOf(cfg, r.key) === v ? `● ${label}` : label, onPress: () => void svSet($, r.key, v) }))
+        }
+      kids.push(el('Box', { key: `sidekick-set-${r.key}`, flexDirection: 'row', columnGap: 1, flexWrap: 'wrap' }, line))
+      const rest = r.rests ? ` · ${restText(level)}` : ''
+      kids.push(el('Box', { paddingLeft: r.sub ? 4 : 2 }, [el('Text', { dimColor: true }, [`${r.does}${rest} · ${r.cmd}`])]))
+    }
+  }
+  kids.push(el('Box', { marginTop: 1 }, [el('Text', { dimColor: true }, [x.foot])]))
+  return el('Box', { key: 'sidekick-settings', flexDirection: 'column' }, kids)
 }
 
 /** `prompt-deck.later` (Ausbau 0.29.0): Zeitpunkt des Klicks auf „Danach“, null ohne Markierung, ohne prompt-deck oder bei einem Fehler. */
@@ -3277,6 +3569,436 @@ async function queueCommand($: EngineInterface, rest: string): Promise<string> {
   return [x.set(want), writeNote(w, lang())].filter(Boolean).join('\n')
 }
 
+// ---------- sidekick-Chat im Seitenfenster (Ausbau 0.30.0) ----------
+
+const CHAT_PANE = 'sidekick-chat'
+/** Abbrechen der laufenden Antwort (Verhalten 2); null, wenn keine läuft. Nach einem Neuladen ist eine laufende Antwort verloren. */
+let chatAbort: AbortController | null = null
+/** Spiegel von `sidekick.chat` für ein Lesen, das fehlschlägt. */
+let chatMem: ChatState = emptyChat('')
+/** Befehle und Server der letzten Frage, für die Knöpfe beim Zeichnen (dort ohne eigenes Lesen). */
+// `known`: erst nach der ersten Frage dieses Moduls gelesen. Nach einem Neuladen bleibt der Verlauf in `$.state`, die Listen sind leer;
+// dann nennt eine Vorschlagszeile keinen Stand (Review 0.31.1 S1).
+let chatCtx: { cmds: readonly { name: string; plugin?: string; source?: string }[]; servers: string[]; known: boolean } = { cmds: [], servers: [], known: false }
+
+/** Verlauf dieser Sitzung aus `$.state` (E9); eine andere Sitzung (nach /clear, /resume) zählt als leer. */
+async function chatLoad($: EngineInterface): Promise<ChatState> {
+  await bindSession($).catch(() => {})
+  try {
+    chatMem = cleanChat((await $.state.get({ plugin: 'sidekick', key: 'chat' })).value, sessionId)
+  } catch {
+    if (chatMem.sid !== sessionId) chatMem = emptyChat(sessionId)
+  }
+  return chatMem
+}
+
+/** Schreiben zeichnet das Fenster neu (es liest den Wert, types@2.1.325:3627-3633); nie aus einem Zeichen-Hook. */
+async function chatSave($: EngineInterface, s: ChatState) {
+  chatMem = s
+  try {
+    await $.state.set({ plugin: 'sidekick', key: 'chat' }, s)
+  } catch {
+    try {
+      $.ui.invalidate('ui.render')
+    } catch {
+      // beim nächsten Zeichnen
+    }
+  }
+}
+
+const chatErrText = (turn: ChatTurn) => {
+  const x = t().chat
+  return turn.err === 'timeout' ? x.timeout : turn.err === 'aborted' ? x.aborted : x.failed(turn.why ?? '?')
+}
+
+/**
+ * Eine Frage an Sonnet (Verhalten 3, `CHAT`). Kontext: Katalog, Befehle, MCP-Server, Name des Projektordners, Kurzfassung, Verlauf (E8),
+ * keine Dateien. Kosten in der Rolle „Chat“, auch ohne Antwort (`usage` kommt auf jedem Arm). Vorschläge gelten als angeboten.
+ */
+async function chatAsk($: EngineInterface, question: string, ctl: AbortController): Promise<{ turn: ChatTurn; ans: ChatAnswer | null }> {
+  const q = cut(question.trim(), CHAT_QUESTION_MAX)
+  const t0 = await $.clock.now()
+  const cmds = await loadBase($, t0).then((b) => b.cmds, () => [])
+  const servers = await listServers($)
+  chatCtx = { cmds, servers, known: true }
+  const muted = await loadMuted($).catch(() => [] as string[])
+  // Nur der Name des Ordners (E8), über dieselbe Stelle wie die Wartung (`projectOf`, kein weiterer `$.session.root`-Aufruf)
+  const project = await projectOf($, []).then((p) => p.root.split(/[\\/]/).filter(Boolean).pop() ?? '', () => '')
+  const s = await chatLoad($)
+  const prompt = chatPrompt({ question: q, history: s.turns, cmds, servers, muted, project, summary: ses.summary })
+  let r: Awaited<ReturnType<EngineInterface['model']['complete']>>
+  try {
+    r = await $.model.complete({ ...CHAT, system: chatSystem(), prompt }, { signal: ctl.signal })
+  } catch (err) {
+    bookDay($, t0, (d) => countChat(d, 'fehler'))
+    return { turn: { q, a: '', sugg: [], usd: 0, err: ctl.signal.aborted ? 'aborted' : 'failed', why: msg(err) }, ans: null }
+  }
+  const ms = (await $.clock.now()) - t0
+  const usd = completeCost(r.usage as CompleteUsage, CHAT.model)
+  const answered = r.isAnswered
+  bookDay($, t0, (d) => {
+    bookChat(d, CHAT.model, usd, ms, r.usage as CompleteUsage)
+    if (!answered) countChat(d, 'fehler')
+  })
+  if (!r.isAnswered) {
+    // `aborted` heißt auch: `timeoutMs` abgelaufen (types@2.1.325, ModelCompleteResult); unterschieden über das eigene Signal
+    const err = r.reason === 'aborted' ? (ctl.signal.aborted ? 'aborted' : 'timeout') : 'failed'
+    const why = r.reason === 'api-error' ? `HTTP ${r.status ?? '?'}` : r.reason
+    return { turn: { q, a: '', sugg: [], usd, err, ...(err === 'failed' ? { why } : {}) }, ans: null }
+  }
+  const ans = parseChat(r.text, cmds)
+  // Ungültiges JSON: der Text als Antwort, ohne Knöpfe (Verhalten 3)
+  if (!ans) return { turn: { q, a: rawAnswer(r.text), sugg: [], usd, raw: true }, ans: null }
+  // Verhalten 4: ein Vorschlag aus dem Chat gilt im Haupt-Chat als angeboten, der Vorfilter fragt dazu nicht noch einmal
+  const ids = offeredIds(ans.vorschlaege).filter((id) => !ses.catOffered.includes(id))
+  if (ids.length) {
+    ses.catOffered = [...ses.catOffered, ...ids]
+    saveSes($, await $.clock.now())
+  }
+  return { turn: { q, a: ans.antwort, sugg: ans.vorschlaege, ...(ans.anChat ? { draft: ans.anChat } : {}), usd }, ans }
+}
+
+/** Frage aus dem Eingabefeld: „denkt …“ zeigen, fragen, Wechsel anhängen (höchstens 10). Eine zweite Frage wartet nicht, sie wird abgewiesen. */
+async function chatSubmit($: EngineInterface, text: string) {
+  // Review S2: gekürzt auch im Verlauf, sonst sprengt ein großer Einfügetext die Zeichnung (höchstens 100 000 Zeichen, types@2.1.325:6129)
+  const q = cut(String(text ?? '').trim(), CHAT_QUESTION_MAX)
+  if (!q) return
+  if (chatAbort) {
+    $.ui.toast(t().chat.busy, { timeoutMs: 5000 })
+    return
+  }
+  // Die Sperre steht vor dem ersten `await`: eine zweite Frage im selben Moment wird abgewiesen
+  const ctl = new AbortController()
+  chatAbort = ctl
+  try {
+    // Review K3: bei offenem Fenster nach `/sidekick off` keine Frage mehr (Verhalten 1: jede Stufe außer Aus)
+    await loadSettings($)
+    if (settings.level === 'off') {
+      $.ui.toast(t().chat.off, { timeoutMs: 8000 })
+      return
+    }
+    const s0 = await chatLoad($)
+    // Review S3: kommt die Antwort nach /clear, gehört sie zum alten Chat und wird verworfen (E9: Verlauf je Chat)
+    const sid = s0.sid
+    await chatSave($, { ...s0, busy: { q } })
+    const { turn } = await chatAsk($, q, ctl)
+    const s1 = await chatLoad($)
+    if (s1.sid === sid) await chatSave($, addTurn(s1, turn))
+  } catch (err) {
+    await chatSave($, addTurn(await chatLoad($).catch(() => chatMem), { q, a: '', sugg: [], usd: 0, err: 'failed', why: msg(err) }))
+  } finally {
+    if (chatAbort === ctl) chatAbort = null
+  }
+}
+
+/**
+ * `/sidekick chat [frage]` (Verhalten 1): öffnet das Seitenfenster und stellt eine Frage gleich. In `-p` (keine Oberfläche) und wenn das
+ * Fenster nicht aufgeht, kommt die Antwort als Befehlsausgabe, ohne Verlauf. Auf jeder Stufe außer Aus.
+ */
+async function chatCommand($: EngineInterface, question: string): Promise<{ text?: string }> {
+  const x = t().chat
+  await loadSettings($)
+  if (settings.level === 'off') return { text: x.off }
+  const q = question.trim()
+  const asText = async () => {
+    const { turn, ans } = await chatAsk($, q, new AbortController())
+    if (ans) return { text: chatText(ans, { cmds: chatCtx.cmds, servers: chatCtx.servers, head: x.suggestions, draftHead: x.draft, service: t().cat.service }) }
+    return { text: turn.err ? chatErrText(turn) : turn.a }
+  }
+  const surfaces = await $.session.surfaces().catch(() => [] as string[])
+  if (!surfaces.length) return q ? asText() : { text: x.noPane }
+  let why = ''
+  try {
+    // Flags nur als true (CLAUDE.md, UI); types@2.1.325:8012-8060
+    const r = await $.ui.open({ id: CHAT_PANE, title: 'sidekick', focus: true, closeOnEscape: true })
+    if (!r.isPlaced) why = String(r.reason ?? '?')
+  } catch (err) {
+    why = msg(err)
+  }
+  if (why) return q ? asText() : { text: x.notPlaced(why) }
+  // Die Antwort kommt ins Fenster; die Frage geht nicht in den Haupt-Chat (E9), darum keine Ausgabe
+  if (q) void chatSubmit($, q)
+  return {}
+}
+
+/** Kopieren mit Toast; Shell-Zeilen gehören in ein Terminal (Review 0.25.0 S2), URLs in „Eigenen Connector hinzufügen“. */
+async function chatCopy($: EngineInterface, text: string, surface: Surface | undefined, field: 'kopiert' | 'url') {
+  const x = t()
+  const r = await $.ui.copy({ text, ...(surface ? { surface } : {}) }).catch(() => null)
+  if (!r?.isCopied) {
+    $.ui.toast(field === 'url' ? x.cat.urlFailed(text) : x.chat.copyFailed(text), { timeoutMs: 12000 })
+    return
+  }
+  $.ui.toast(field === 'url' ? x.cat.urlCopied(text) : text.startsWith('/') ? x.chat.copiedCmd(text) : x.cat.shellCopied(text), { timeoutMs: 12000 })
+  bookDay($, await $.clock.now().catch(() => 0), (d) => countChat(d, field))
+}
+
+/** Terminal: in ein leeres Eingabefeld schreiben; sonst (Desktop `no_composer`, Feld voll, Dialog) kopieren. true = steht im Feld. */
+async function chatFill($: EngineInterface, text: string, surface: Surface | undefined): Promise<boolean> {
+  if (surface === 'terminal') {
+    const box = await readBox($).catch(() => null)
+    if (box && !box.text.trim() && fillOutcome(await fillBox($, text, 'append').catch(() => null), text) === 'filled') {
+      $.ui.toast(t().chat.filled, { timeoutMs: 5000 })
+      return true
+    }
+  }
+  return false
+}
+
+/** Installierter Befehl (Verhalten 4): `/<befehl> ` ins leere Feld, sonst kopieren. */
+async function chatUseCmd($: EngineInterface, cmd: string, surface: Surface | undefined) {
+  const line = `/${cmd} `
+  if (await chatFill($, line, surface)) bookDay($, await $.clock.now().catch(() => 0), (d) => countChat(d, 'befehl'))
+  else {
+    const r = await $.ui.copy({ text: line.trim(), ...(surface ? { surface } : {}) }).catch(() => null)
+    $.ui.toast(r?.isCopied ? t().chat.copiedCmd(line.trim()) : t().chat.copyFailed(line.trim()), { timeoutMs: 8000 })
+    if (r?.isCopied) bookDay($, await $.clock.now().catch(() => 0), (d) => countChat(d, 'befehl'))
+  }
+}
+
+/** Senden aus einem Klick: über einen Timer wie in 0.25.0 P1 (dort liefen die eigenen Hooks), als Nachricht des Nutzers. */
+function chatSend($: EngineInterface, text: string, done: () => void, failed: (why: string) => void) {
+  later($, 50, () => {
+    asUser($, text).then(done, (err) => failed(msg(err)))
+  })
+}
+
+/**
+ * „Im Chat mit … senden“ (Verhalten 4): startet den mitgelieferten Skill mit dem Entwurf (sonst der Frage) als Argument, über einen Timer
+ * wie Weg A in 0.25.0 P1 (`$.command.run` lehnt aus einem Hook ab). Abweichung von der SPEC (Merker `nextSkill`, Weg B, Fynn 2026-11-17
+ * „Skill direkt starten“): sidekicks eigener `prompt.submit`-Hook sieht sein eigenes `$.prompt.submit` nicht (Probe 2026-11-17 in 2.1.325,
+ * types@2.1.325:3247 „hooks of the calling plugin are skipped … as on every op“). Scheitert der Start, kommt die Zeile in die Zwischenablage.
+ */
+function chatSkill($: EngineInterface, turn: ChatTurn, c: CatalogEntry, cmd: string, surface: Surface | undefined) {
+  const x = t().chat
+  const text = skillText(turn)
+  // Seit 0.31.0 (E2) auch das installierte Original eines Verweises (`cmd` aus `chatButton`)
+  const invoke = cmd
+  if (!invoke) return
+  later($, 50, () => {
+    $.command.run({ command: invoke, args: text }).then(
+      () => {
+        $.ui.toast(x.sentSkill(c.name), { timeoutMs: 6000 })
+        void $.clock.now().then((now) => bookDay($, now, (d) => countChat(d, 'skill')), () => {})
+      },
+      (err) => {
+        const line = `/${invoke} ${text}`
+        void $.ui.copy({ text: line, ...(surface ? { surface } : {}) }).then(
+          (r) => $.ui.toast(r.isCopied ? x.skillCopied(msg(err)) : x.sendFailed(msg(err)), { timeoutMs: 12000 }),
+          () => $.ui.toast(x.sendFailed(msg(err)), { timeoutMs: 12000 }),
+        )
+      },
+    )
+  })
+}
+
+/**
+ * Ausbau 0.31.0 (E2, Probe P1 Weg A): startet das installierte Original eines Katalog-Eintrags mit der Nachricht als Argument. Aus
+ * `prompt.submit` lehnt der Host `$.command.run` ab, darum nach dem `{ drop }` über einen Timer (wie `chatSkill`). P1: im Terminal
+ * belegt, auch für Skills anderer Plugins (`plugin:skill`); in `-p` lehnt der Host ab. Scheitert der Start: Befehl samt Text kopieren.
+ */
+function runOriginal($: EngineInterface, cmd: string, text: string) {
+  const x = t().cat
+  later($, 50, () => {
+    $.command.run({ command: cmd, args: text }).then(
+      () => {},
+      (err) => {
+        void $.ui.copy({ text: `/${cmd} ${text}` }).then(
+          (r) => $.ui.toast(r.isCopied ? x.runCopied(cmd, msg(err)) : x.runFailed(cmd, msg(err)), { timeoutMs: 15000 }),
+          () => $.ui.toast(x.runFailed(cmd, msg(err)), { timeoutMs: 15000 }),
+        )
+      },
+    )
+  })
+}
+
+/** „In den Chat übernehmen“ (Verhalten 4): Terminal ins leere Feld; sonst erst `$.ui.ask` „Jetzt senden?“, dann senden. */
+async function chatDraft($: EngineInterface, text: string, surface: Surface | undefined) {
+  const x = t().chat
+  if (await chatFill($, text, surface)) {
+    bookDay($, await $.clock.now().catch(() => 0), (d) => countChat(d, 'entwurf'))
+    return
+  }
+  let a = ''
+  try {
+    a = await $.ui.ask(x.askSend(text), { options: [x.optSend, x.optNo], header: 'sidekick' })
+  } catch {
+    return
+  }
+  if (a !== x.optSend) return
+  chatSend(
+    $,
+    text,
+    () => {
+      $.ui.toast(x.sent, { timeoutMs: 5000 })
+      void $.clock.now().then((now) => bookDay($, now, (d) => countChat(d, 'entwurf')), () => {})
+    },
+    (why) => $.ui.toast(x.sendFailed(why), { timeoutMs: 10000 }),
+  )
+}
+
+/**
+ * Das Seitenfenster (Verhalten 2; Gestaltung Nachtrag 0.31.1, von Fynn an der Probe freigegeben am 2026-11-17). Von oben nach unten:
+ * - Kopf: eine leise Zeile mit Modell und Kosten. Der Desktop zeigt „sidekick“ schon im Fensterrahmen, das Terminal bei einem Fenster nicht.
+ * - Leer: Überschrift, ein Satz, was sidekick sieht, drei Beispielfragen als Knöpfe.
+ * - Je Wechsel: Frage rechts im Rahmen (die Lage zeigt, wer spricht), Antwort als Markdown, Vorschläge als Liste im Rahmen (Name und
+ *   kurzer Knopf, Art · Lizenz · Stand, Grund), Entwurf in sidekicks blauer Box (wie die Erklärung seit 0.29.1) mit seinem Knopf.
+ * - Hauptknopf (`variant: 'primary'`, types@2.1.326:1433) nur einmal, in der neuesten Antwort: der Entwurf, sonst der erste Vorschlag.
+ * - Fehler: was geschah, was jetzt geht, „Nochmal fragen“ beim neuesten Wechsel. Warten: „denkt …“ mit der üblichen Dauer und Abbrechen.
+ * - Eingabe über die volle Breite. `value` ist immer `''`: so behält das Feld halb getippten Text, wenn eine Antwort ankommt (K8,
+ *   docs/raw/en/interface.md:859, types@2.1.326:6523-6526).
+ * `size` und `tabular` wirken nur im Desktop; Terminal und VS Code zeichnen `semibold` fett und rechnen Schrittnamen in Zellen um
+ * (`'sm'` = 0 Zeilen), VS Code übergeht außerdem `variant` (docs/raw/en/reference.md:339-346, :367-394).
+ */
+async function chatTree($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0] & { surface: string; props: { bodyColumns: number } }): Promise<RenderElement> {
+  const x = t().chat
+  const ui = $.ui.resolve(e)
+  const Button = (p: { key: string; label: string; variant?: 'primary'; dimColor?: boolean; onPress: (press: UiPressArgument) => void }) => ui.Button(p) as RenderNode
+  let s: ChatState
+  try {
+    // Das Lesen abonniert den Wert: `chatSave` zeichnet neu (types@2.1.325:3627-3633)
+    const v = (await $.state.get({ plugin: 'sidekick', key: 'chat' })).value
+    s = cleanChat(v, sessionId || String((v as { sid?: unknown } | null)?.sid ?? ''))
+  } catch {
+    s = chatMem
+  }
+  const cols = Math.max(20, Number(e.props.bodyColumns) || 60)
+  const terminal = e.surface === 'terminal'
+  const narrow = cols < CHAT_NARROW
+  // Schmal (Review 0.31.1 K6): Kopf und Kosten untereinander, sonst bleibt neben den Kosten kaum Platz für den Kopf
+  const head = el('Box', narrow ? { flexDirection: 'column' } : { flexDirection: 'row', justifyContent: 'space-between', columnGap: 2 }, [
+    el('Text', { size: 'footnote', wrap: 'truncate-end' }, [
+      ...(terminal ? [el('Text', { weight: 'semibold' }, ['sidekick '])] : []),
+      el('Text', { dimColor: true }, [`${x.head} · ${modelLabel(CHAT.model)}`]),
+    ]),
+    ...(s.n ? [el('Box', { flexShrink: 0 }, [el('Text', { size: 'footnote', dimColor: true, tabular: true }, [x.cost(usdText(s.usd), s.n)])])] : []),
+  ])
+  const kids: RenderNode[] = [head]
+  // Nach einem Neuladen läuft keine Antwort mehr, auch wenn der Wert noch `busy` trägt
+  const busy = chatAbort && s.busy ? s.busy : null
+  // Review K2: die kleine Form im Desktop (`widget`) liest man auf einen Blick, Klicks kommen dort evtl. nicht an (types@2.1.325:11531-11542):
+  // nur Kopf und die letzte Antwort, ohne Knöpfe und Eingabefeld
+  const placement = (e.props as { placement?: string }).placement
+  if (placement === 'widget') {
+    const last = s.turns.at(-1)
+    if (busy) kids.push(el('Text', { dimColor: true }, [x.thinking]))
+    else if (last) kids.push(el('Text', { wrap: 'truncate-end' }, [last.err ? chatErrText(last) : last.a.replace(/\s+/g, ' ')]))
+    return el('Box', { key: 'sidekick-chat', flexDirection: 'column', width: cols }, kids)
+  }
+
+  // Abstand zwischen gestapelten Knöpfen und in der Fehler-Box: klein im Desktop (Schrittname), eine Zeile in VS Code (dort kleben
+  // native Knöpfe sonst aneinander, Fynn 2026-11-17), keiner im Terminal (`[ … ]` je Zeile trennt selbst). Zwischen Frage, Antwort,
+  // Vorschlägen und Entwurf eines Wechsels: klein im Desktop, sonst keiner (Rahmen und Überschrift trennen dort).
+  const tight = terminal ? 0 : e.surface === 'vscode' ? 1 : 'sm'
+  const question = (q: string) =>
+    el('Box', { flexDirection: 'row', justifyContent: 'flex-end' }, [
+      el('Box', { borderStyle: 'round', borderDimColor: true, paddingX: 1, marginLeft: narrow ? 0 : 6, flexShrink: 1 }, [el('Text', { wrap: 'wrap' }, [q])]),
+    ])
+  const wechsel = (q: string, body: RenderNode[]) => el('Box', { flexDirection: 'column', rowGap: terminal ? 0 : 'sm' }, [question(q), ...body])
+
+  if (!s.turns.length && !busy) {
+    kids.push(
+      el('Box', { flexDirection: 'column', rowGap: 1 }, [
+        el('Text', { size: 'heading', weight: 'semibold', wrap: 'wrap' }, [x.emptyHead]),
+        el('Text', { wrap: 'wrap' }, [x.empty]),
+        el('Box', { flexDirection: 'column', alignItems: 'flex-start', rowGap: tight }, [
+          el('Text', { size: 'footnote', dimColor: true }, [x.exHead]),
+          ...x.examples.map((ex, i) => Button({ key: `sidekick-chat-ex-${i}`, label: ex.label, onPress: () => void chatSubmit($, ex.q) })),
+        ]),
+      ]),
+    )
+  }
+
+  // Hintergrund der Entwurf-Box wie bei der Erklärung (0.29.1): im Terminal nur bei bekanntem Theme, sonst bleibt der Rahmen
+  // VS Code: achtstelliges Hex ist dort nicht belegt (types@2.1.326:1996-2003), also nur der Rahmen
+  const draftBg = e.surface !== 'vscode' && s.turns.some((turn) => turn.draft) ? noteBg(e.surface, terminal ? await termTheme($) : undefined) : undefined
+  const texts = { ...x, service: t().cat.service }
+  s.turns.forEach((turn, i) => {
+    const latest = i === s.turns.length - 1 && !busy
+    const body: RenderNode[] = []
+    if (turn.err) {
+      body.push(
+        el('Box', { flexDirection: 'column', rowGap: tight }, [
+          el('Text', { color: 'warning', weight: 'semibold', wrap: 'wrap' }, [chatErrText(turn)]),
+          ...(latest ? [el('Text', { wrap: 'wrap' }, [x.errNext]), el('Box', { flexDirection: 'row' }, [Button({ key: 'sidekick-chat-retry', label: x.btnRetry, onPress: () => void chatSubmit($, turn.q) })])] : []),
+        ]),
+      )
+    } else {
+      body.push(ui.Markdown({ key: `sidekick-chat-a-${i}`, text: turn.a }) as RenderNode)
+    }
+    const draft = turn.draft
+    const cards = turn.sugg.map((sg) => chatCard(sg, { ...chatCtx, surface: e.surface }))
+    // Hauptknopf: der Entwurf, sonst der erste Vorschlag mit Knopf; nur in der neuesten Antwort
+    const primaryAt = latest && !draft ? cards.findIndex((c) => c.button) : -1
+    if (cards.length) {
+      const rows = cards.map((card, j) => {
+        const b = card.button
+        const key = `sidekick-chat-${i}-${j}`
+        const variant = j === primaryAt ? { variant: 'primary' as const } : {}
+        const btn =
+          b?.art === 'skill'
+            ? Button({ key, label: x.btnSkill, ...variant, onPress: (p) => chatSkill($, turn, b.c, b.cmd, p.surface) })
+            : b?.art === 'copy'
+              ? Button({ key, label: x.btnCopy, ...variant, onPress: (p) => void chatCopy($, b.line, p.surface, 'kopiert') })
+              : b?.art === 'url'
+                ? Button({ key, label: x.btnUrl, ...variant, onPress: (p) => void chatCopy($, b.url, p.surface, 'url') })
+                : b?.art === 'cmd'
+                  ? Button({ key, label: x.btnCmd, ...variant, onPress: (p) => void chatUseCmd($, b.cmd, p.surface) })
+                  : null
+        const name = el('Box', { flexGrow: 1, flexShrink: 1 }, [el('Text', { weight: 'semibold', wrap: 'wrap' }, [card.name])])
+        const hold = btn ? [el('Box', { flexShrink: 0 }, [btn])] : []
+        const rest: RenderNode[] = [
+          // „kostenpflichtig“ steht als Wort da, die Warnfarbe kommt nur dazu
+          el('Text', { size: 'footnote', wrap: 'wrap' }, [
+            el('Text', { dimColor: true }, [cardMeta(card, texts, tokensText)]),
+            ...(card.paid ? [el('Text', { dimColor: true }, [' · ']), el('Text', { color: 'warning' }, [x.paid])] : []),
+          ]),
+          ...(card.why ? [el('Text', { wrap: 'wrap' }, [card.why])] : []),
+          // Review 0.31.1 K1: ein Eintrag ohne Zeile zum Kopieren nennt wenigstens seine Quelle
+          ...(card.url ? [el('Text', { size: 'footnote', dimColor: true, wrap: 'wrap' }, [card.url])] : []),
+        ]
+        // Breit: Name links, Knopf rechts in einer Zeile. Schmal: Knopf unter dem Text.
+        return narrow
+          ? el('Box', { flexDirection: 'column' }, [name, ...rest, ...(btn ? [el('Box', { flexDirection: 'row' }, hold)] : [])])
+          : el('Box', { flexDirection: 'column' }, [el('Box', { flexDirection: 'row', columnGap: 2, alignItems: 'center', justifyContent: 'space-between' }, [name, ...hold]), ...rest])
+      })
+      body.push(el('Box', { flexDirection: 'column', borderStyle: 'round', borderDimColor: true, paddingX: 1, rowGap: 1 }, rows))
+    }
+    // Review S1: der Entwurf, den „Mit Skill senden“ und „In den Chat übernehmen“ senden, steht vor dem Klick lesbar da
+    if (draft) {
+      body.push(
+        el('Box', { flexDirection: 'column' }, [
+          el('Text', { size: 'footnote', dimColor: true }, [x.draft]),
+          el('Box', { borderStyle: 'round', borderColor: ACCENT, paddingX: 1, ...(draftBg ? { backgroundColor: draftBg } : {}) }, [el('Text', { wrap: 'wrap' }, [draft])]),
+          el('Box', { flexDirection: 'row' }, [Button({ key: `sidekick-chat-${i}-draft`, label: x.btnDraft, ...(latest ? { variant: 'primary' as const } : {}), onPress: (p) => void chatDraft($, draft, p.surface) })]),
+        ]),
+      )
+    }
+    kids.push(wechsel(turn.q, body))
+  })
+  if (busy) {
+    kids.push(
+      wechsel(busy.q, [
+        el('Box', { flexDirection: 'row', flexWrap: 'wrap', columnGap: 2, alignItems: 'center' }, [
+          el('Text', {}, [el('Text', {}, [x.thinking]), el('Text', { dimColor: true }, [` ${x.usual}`])]),
+          Button({ key: 'sidekick-chat-cancel', label: x.cancel, dimColor: true, onPress: () => chatAbort?.abort() }),
+        ]),
+      ]),
+    )
+  }
+  // Kosten je Frage: der Schnitt der beantworteten Fragen im Verlauf, vorher der übliche Wert aus Probe P3 (Review 0.31.1 S2:
+  // Fehler ohne Kosten zählen nicht mit, sonst stünde hier „≈ 0 $“)
+  const perQuestion = x.perQuestion(usdText(chatPerQuestion(s.turns)))
+  kids.push(
+    el('Box', { flexDirection: 'column' }, [
+      ui.Input({ key: 'ask', rows: 2, placeholder: x.placeholder, submitLabel: x.submit, autoFocus: true, value: '', onSubmit: (v: string) => void chatSubmit($, v) }) as RenderNode,
+      // Das Terminal zeigt „⏎ fragen“ selbst neben dem Feld
+      el('Text', { size: 'caption', dimColor: true, wrap: 'wrap' }, [terminal ? perQuestion : `${x.enterSends} · ${perQuestion}`]),
+    ]),
+  )
+  return el('Box', { key: 'sidekick-chat', flexDirection: 'column', width: cols, rowGap: 1 }, kids)
+}
+
 export function register(on: On, options?: Readonly<Record<string, string | number | boolean | readonly string[]>>) {
   // userConfig `language` (en/de, Standard en); /config lädt das Modul neu (release/I18N.md §1)
   setLang(options?.language)
@@ -3326,6 +4048,8 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       // ohne Takt kippt `cold` erst mit dem nächsten Schreiben der Anzeige
     }
     housekeeping($).catch(() => {})
+    // Ausbau 0.31.0: Umzugshinweis zu den entfernten Kopien, einmal
+    movedStart($).catch(() => {})
     // Umzug der gespeicherten Prompts nach prompt-deck (Ausbau 0.29.0, Verhalten 6): nie im Hook, auf den der Start wartet
     // (`$.command.run` lehnt dort ab, types@2.1.325:3313-3325), sondern danach über einen einmaligen Timer
     try {
@@ -3337,7 +4061,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     }
     // Befehle zuletzt, jeder für sich (CLAUDE.md, Registrieren in session.start); englisch
     for (const c of [
-      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|queue on|off|catalog …|language|help]' },
+      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|queue on|off|catalog …|chat [question]|settings|language|help]' },
       { name: 'savings', description: t().cmdSavings, argumentHint: '[detail] [today|week|all|help]' },
       // Ausbau 0.22.0 (von limit-bars übernommen). Hat noch ein anderes Plugin `/handoff`, lehnt die Engine das zweite ab (Probe 2026-11-07)
       { name: 'handoff', description: t().ho.cmd, argumentHint: '[show|continue|fork|text|help]' },
@@ -3640,7 +4364,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     const viaCatalog = async (): Promise<Awaited<ReturnType<typeof go>> | { drop: string } | null> => {
       let k: CatAct | null = null
       try {
-        k = await catalogStep($, typed, cands, g.kat, next.signal)
+        k = await catalogStep($, typed, cands, g.kat, next.signal, resendable)
       } catch {
         k = null
       }
@@ -3663,7 +4387,10 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       if (k.act === 'line') {
         // Schwerer Verweis (E3): nur die Zeile mit Knopf „Befehl kopieren“; ein Wartungs-Hinweis wartet auf die nächste Nachricht
         const note = cat.risk.note ? cat.risk.note[lang()] : ''
-        pending = { text: typed, line: x.line(cat.name, cat.author, cat.license, note, k.grund), cat: cat.id, ...(cat.install ? { cmd: cat.install.line } : {}) }
+        // Ausbau 0.31.0 (E2): installiertes Original, aber Anhang oder @datei: Zeile mit seinem Befehl statt der Installationszeile
+        pending = k.cmd
+          ? { text: typed, line: x.lineRun(cat.name, k.cmd, k.grund), cat: cat.id, cmd: `/${k.cmd}` }
+          : { text: typed, line: x.line(cat.name, cat.author, licText(cat), note, k.grund), cat: cat.id, ...(cat.install?.line ? { cmd: cat.install.line } : {}) }
         keepWartung($, g.w, now)
         const r = await go(e)
         redraw()
@@ -3687,7 +4414,14 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
         redraw()
         return r
       }
-      if (k.act === 'copy' && cat.install) {
+      if (k.act === 'run' && k.cmd) {
+        // Ausbau 0.31.0 (E2, Probe P1 Weg A): die Nachricht anhalten und das installierte Original mit ihr starten
+        bookDay($, now, (d) => countCatalog(d, 'mitSkill'))
+        keepWartung($, g.w, now)
+        runOriginal($, k.cmd, typed)
+        return { drop: x.dropRun(k.cmd) }
+      }
+      if (k.act === 'copy' && cat.install?.line) {
         // E4: sidekick installiert nichts, er kopiert nur die Zeile aus der README; die Nachricht wartet (Text im Grund)
         const line = cat.install.line
         const r = await $.ui.copy({ text: line }).catch(() => null)
@@ -3728,9 +4462,10 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       } else {
         keepWartung($, g.w, now)
         // Ausbau 0.28.0 (E4): systematic-debugging statt Denkanstoß, wenn die Korrektur sein Stichwort trifft. Fehler → ohne Skill
-        let loopCat: CatalogEntry | null = null
+        let loopCat: { c: CatalogEntry; cmd: string } | null = null
         try {
-          if (cfg.catalog !== false && settings.level === 'guide') {
+          // Ausbau 0.31.0 (E2): nur mit installiertem Original, das dann mit der Nachricht startet; mit Anhang oder @datei nicht (Weg A)
+          if (cfg.catalog !== false && settings.level === 'guide' && resendable) {
             const cmds = await loadBase($, now).then((b) => b.cmds, () => [])
             loopCat = loopSkill(typed, { cmds, muted: await loadMuted($), offered: ses.catOffered })
           }
@@ -3755,33 +4490,14 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
           // Der Nutzer sieht den Denkanstoß nicht, Claude liest ihn (types:9771-9775); die Gegenprobe zählt die nächste Nachricht
           ses.nudged = true
           saveSes($, now)
-          const extra: string[] = [t().nudge]
-          let withSkill = false
-          if (loopCat?.invoke) {
-            // E4: dazu der Skill-Text wie „Mit … senden“ im Katalog (Weg B, Bau 0.25.0). Datei aus der festen Liste in catalog.ts,
-            // nie aus Nutzertext; lässt sie sich nicht lesen, bleibt es beim Denkanstoß
-            const dir = `${$.plugin.root}/skills/${loopCat.invoke.split(':').pop()}`
-            try {
-              const body = String(await $.fs.read(`${dir}/SKILL.md`))
-              extra.push(skillContext(body, dir, loopCat, typed))
-              bookDay($, now, (d) => countCatalog(d, 'mitSkill'))
-              pending = { text: typed, line: t().cat.sentWith(loopCat.name, loopCat.author, loopCat.license) }
-              withSkill = true
-            } catch (err) {
-              $.ui.toast(t().cat.loopReadFailed(loopCat.name, msg(err)), { timeoutMs: 15000 })
-            }
+          if (loopCat) {
+            // Ausbau 0.31.0 (E2): die Nachricht anhalten und das Original mit ihr starten (`$.command.run` nimmt keinen `context` mit,
+            // der Denkanstoß entfällt; der Skill ist der stärkere). Weg A wie im Katalog (`runOriginal`)
+            bookDay($, now, (d) => countCatalog(d, 'mitSkill'))
+            runOriginal($, loopCat.cmd, typed)
+            return { drop: t().cat.dropRun(loopCat.cmd) }
           }
-          const r = await go({ ...e, context: [...(e.context ?? []), ...extra] })
-          // Zeile „mit … gesendet“ wie im Katalog (viaCatalog, redraw)
-          if (withSkill)
-            later($, 100, () => {
-              try {
-                $.ui.invalidate('ui.render')
-              } catch {
-                // ohne Neuzeichnen
-              }
-            })
-          return r
+          return go({ ...e, context: [...(e.context ?? []), t().nudge] })
         }
         return go(e)
       }
@@ -3996,8 +4712,14 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
         if (cmd && hit.filled) line.push(el('Text', { dimColor: true }, [`  ${x.btnFilled}`]))
         else if (cmd && pressing.has(id)) line.push(el('Text', { dimColor: true }, [`  ${x.btnBusy}`]))
         else if (cmd) {
-          const label = e.surface === 'desktop' || (hit.cat && !cmd.startsWith('/')) ? x.btnCopy : x.btnInsert
+          const connector = hit.cat && e.surface === 'desktop' && !!byId(hit.cat)?.install?.connectorUrl
+          const label = connector ? x.cat.btnUrl : e.surface === 'desktop' || (hit.cat && !cmd.startsWith('/')) ? x.btnCopy : x.btnInsert
           line.push(Button({ key: 'sidekick-use', label, onPress: (press) => void insertHint($, id, press.surface) }))
+        }
+        // Ausbau 0.31.0 (Teil 3): Katalog-Zeile mit „Stumm“ (Store `catalog:muted`, gleiche id wie die Rückfrage)
+        if (hit.cat) {
+          if (hit.muted) line.push(el('Text', { dimColor: true }, [`  ${x.cat.btnMuted}`]))
+          else line.push(Button({ key: 'sidekick-mute', label: x.cat.btnMute, onPress: () => void muteHint($, id) }))
         }
         // Im Terminal steht die Erklärung immer da (ob ein Button im Verlauf erreichbar ist, ist seit 0.7.0 [UNKLAR]); dort kein „?“
         if (hit.why && e.surface === 'desktop') {
@@ -4103,6 +4825,16 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   // andere Band-Mod weiter außen, ordnet sie, und dieser Hook reicht die schon geordneten Teilmengen unverändert weiter.
   on('ui.render', { component: 'AbovePromptList' }, async (_$, e, next) => arrange(e, next))
 
+  // sidekick-Chat (Ausbau 0.30.0): nur das eigene Fenster `sidekick-chat`, jede Oberfläche, die ein Pane zeichnet
+  on('ui.render', { component: 'Pane' }, async ($, e, next) => {
+    if (e.requestId !== CHAT_PANE) return next(e)
+    try {
+      return await chatTree($, e)
+    } catch {
+      return next(e)
+    }
+  })
+
   on('command.run', { command: 'sidekick' }, async ($, e) => {
     // Sprache aller fynn-mods (docs/LANGUAGE-SPEC.md §6 Punkt 2) vor allem, was Store, Uhr oder Zustand liest; fängt Fehler selbst ab
     if (isLanguage(e.args)) return { text: await languageCommand($, { mod: 'sidekick', cmd: 'sidekick', lang: lang() }, e.args) }
@@ -4120,6 +4852,10 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (/^queue(\s|$)/i.test(args)) return { text: await queueCommand($, args.slice(5)) }
     // Skill-Katalog (Ausbau 0.25.0)
     if (/^catalog(\s|$)/i.test(args)) return { text: await catalogCommand($, args.slice(7)) }
+    // sidekick-Chat im Seitenfenster (Ausbau 0.30.0)
+    if (/^chat(\s|$)/i.test(args)) return chatCommand($, args.slice(4))
+    // Einstellungs-Ansicht (Ausbau 0.31.0)
+    if (/^settings(\s|$)/i.test(args)) return { text: await settingsCommand($, args.slice(8)) }
     // Laufzeitwerte frisch laden: eine andere Session kann sie geändert haben
     await loadSettings($)
     let note = ''
@@ -4270,6 +5006,15 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       if (!snap) return next(e)
       try {
         return catalogTree($, e, snap)
+      } catch {
+        return next(e)
+      }
+    }
+    // `/sidekick settings` (Ausbau 0.31.0): Ansicht mit Knöpfen aus dem gültigen Stand, nicht aus dem Rohtext
+    if (/^settings\s*$/i.test(String(e.props.args ?? '').trim())) {
+      try {
+        await loadSettings($)
+        return settingsTree($, e)
       } catch {
         return next(e)
       }

@@ -75,12 +75,16 @@ function commands(): HelpCommand[] {
     { cmd: '/sidekick catalog', does: h.catList },
     { cmd: '/sidekick catalog on|off', does: h.catOnOff },
     { cmd: '/sidekick catalog mute|unmute <id>', does: h.catMute },
+    // Ausbau 0.30.0
+    { cmd: lang() === 'de' ? '/sidekick chat [<frage>]' : '/sidekick chat [<question>]', does: h.chat },
     // Ausbau 0.22.0 (von limit-bars übernommen)
     { cmd: '/handoff', does: h.handoff },
     { cmd: '/handoff fork|text', does: h.handoffForce },
     { cmd: '/handoff show', does: h.handoffShow },
     { cmd: '/handoff continue', does: h.handoffContinue },
     { cmd: h.skillCmd, does: h.skill },
+    // Ausbau 0.31.0: Einstellungs-Ansicht
+    { cmd: '/sidekick settings', does: h.settingsView },
     languageHelp('sidekick', lang()), // docs/LANGUAGE-SPEC.md §6 Punkt 4
     { cmd: '/sidekick help', does: h.help },
     { cmd: '/savings [today|week|all]', does: h.savings },

@@ -170,6 +170,7 @@ function world(on: On, o: { compactAfter?: number; handoffFails?: boolean; cmds?
   const checks: string[] = []
   const handoffSystems: string[] = []
   const commands: string[] = []
+  const runs: { command: string; args?: string }[] = []
   let answer: string | null = 'Unverändert senden'
   let reply: unknown = { isAnswered: true, text: verdict(), usage: USAGE }
   let id = 'sess-1'
@@ -215,6 +216,7 @@ function world(on: On, o: { compactAfter?: number; handoffFails?: boolean; cmds?
   })
   on('command.run', ($, e) => {
     commands.push(e.command)
+    if (e.command !== 'clear' && e.command !== 'sidekick') runs.push({ command: e.command, args: e.args })
     if (e.command === 'clear') id = 'sess-2'
     return { text: '' }
   })
@@ -253,6 +255,7 @@ function world(on: On, o: { compactAfter?: number; handoffFails?: boolean; cmds?
     checks,
     handoffSystems,
     commands,
+    runs,
     reads,
     step,
     setAnswer: (a: string | null) => (answer = a),
@@ -336,26 +339,23 @@ async function threeWith($: Engine, third: string, extra: Record<string, unknown
 const DEBUG3 = 'Funktioniert nicht, der Balken ist wieder weg'
 const WITH_DEBUG = 'Mit systematic-debugging senden'
 
-deTest('0.28.0 Schleife: Debug-Stichwort → „Mit systematic-debugging senden“ mit Tokenzahl; Klick → Denkanstoß + Hinweis + Skill-Text, Nachricht unverändert', async ($, on) => {
-  const w = world(on)
+const SP_CMD = { name: 'superpowers:systematic-debugging', plugin: 'superpowers' }
+
+deTest('0.31.0 Schleife: Original installiert + Debug-Stichwort → „Mit systematic-debugging senden“ mit Befehl; Klick hält an und startet das Original', async ($, on) => {
+  const w = world(on, { cmds: [SP_CMD] })
   w.setAnswer(`${WITH_DEBUG} (empfohlen)`)
   const r = await threeWith($, DEBUG3)
   expect(w.asks.length).toBe(1)
   // Reihenfolge und Empfehlung wie 0.19.0, nur der Name der Antwort ist anders
   expect(w.asks[0]!.options).toEqual([`${WITH_DEBUG} (empfohlen)`, 'Neuer Chat mit Übergabe', 'Unverändert senden'])
-  expect(w.asks[0]!.question).toMatch(/Mit systematic-debugging kommen ≈ 2[.,]4k Tokens Kontext zu dieser Nachricht\./)
-  expect(r).toMatchObject({ text: DEBUG3 })
-  const ctx = w.sent.at(-1)!.context ?? []
-  expect(ctx.length).toBe(2)
-  expect(ctx[0]).toContain('sidekick: Der Nutzer meldet den dritten gescheiterten Versuch in Folge.')
-  expect(ctx[1]).toContain('sidekick:systematic-debugging')
-  expect(ctx[1]).toContain('Skills mit dem Namen `superpowers:*` in diesem Text sind nicht installiert.')
-  // Hinweis hinter dem Kopf, vor dem Skill-Text
-  expect(ctx[1]!.indexOf('superpowers:*')).toBeLessThan(ctx[1]!.indexOf('Base directory for this skill:'))
-  expect(ctx[1]).toContain(`for ${DEBUG3}\nDEBUG-BODY`)
-  expect(ctx[1]).not.toContain('disable-model-invocation')
-  expect(w.reads.map((p) => p.replace(/\\/g, '/'))).toEqual([expect.stringMatching(/\/skills\/systematic-debugging\/SKILL\.md$/)])
+  expect(w.asks[0]!.question).toContain('„Mit systematic-debugging senden“ startet /superpowers:systematic-debugging mit deiner Nachricht (ohne Denkanstoß).')
+  expect(r).toMatchObject({ drop: 'sidekick: startet /superpowers:systematic-debugging mit deiner Nachricht.' })
+  // Keine Kopie mehr: nichts gelesen; Start erst im Timer
+  expect(w.reads).toEqual([])
+  expect(w.runs).toEqual([])
+  await w.clock.advance(100)
   await flush()
+  expect(w.runs).toEqual([{ command: 'superpowers:systematic-debugging', args: DEBUG3 }])
   const d = today(w.ledger())
   expect(d.schleife.denkanstoss).toBe(1)
   expect(d.hinweise.schleife?.angenommen).toBe(1)
@@ -371,58 +371,52 @@ deTest('0.28.0 Schleife: Debug-Stichwort → „Mit systematic-debugging senden�
   expect(w.asks[1]!.question).not.toContain('systematic-debugging')
 })
 
-deTest('0.28.0 Schleife: ohne Stichwort, stumm, installiert, zurückgestellt (/mod-debug) → Denkanstoß wie bisher, kein Lesen', async ($, on) => {
-  const w = world(on)
+deTest('0.31.0 Schleife: ohne Stichwort → Denkanstoß wie bisher, kein Lesen', async ($, on) => {
+  const w = world(on, { cmds: [SP_CMD] })
   await threeWith($, 'Hat nichts gebracht, der Balken ist wieder weg')
   expect(w.asks[0]!.options[0]).toBe('Mit Denkanstoß senden (empfohlen)')
   expect(w.reads).toEqual([])
 })
-deTest('0.28.0 Schleife: stumm → Denkanstoß', async ($, on) => {
-  const w = world(on)
+deTest('0.31.0 Schleife: stumm → Denkanstoß', async ($, on) => {
+  const w = world(on, { cmds: [SP_CMD] })
   w.saved.set('catalog:muted', ['sp-debug'])
   await threeWith($, DEBUG3)
   expect(w.asks[0]!.options[0]).toBe('Mit Denkanstoß senden (empfohlen)')
 })
 for (const [what, cmds] of [
-  ['Plugin superpowers installiert', [{ name: 'superpowers:brainstorming', plugin: 'superpowers' }]],
-  ['Original-Skill installiert', [{ name: 'systematic-debugging' }]],
-  ['Projekt-Befehl /mod-debug', [{ name: 'mod-debug', plugin: undefined }]],
+  ['nichts installiert', []],
+  ['Plugin superpowers ohne den Skill', [{ name: 'superpowers:brainstorming', plugin: 'superpowers' }]],
+  ['nur sidekicks alte Kopie', [{ name: 'sidekick:systematic-debugging', plugin: 'sidekick' }]],
+  ['Projekt-Befehl /mod-debug neben dem Original', [SP_CMD, { name: 'mod-debug', plugin: undefined }]],
 ] as const) {
-  deTest(`0.28.0 Schleife: ${what} → Denkanstoß`, async ($, on) => {
+  deTest(`0.31.0 Schleife: ${what} → Denkanstoß`, async ($, on) => {
     const w = world(on, { cmds: cmds.map((c) => ({ ...c })) as { name: string; plugin?: string }[] })
+    w.setAnswer('Mit Denkanstoß senden (empfohlen)')
     await threeWith($, DEBUG3)
     expect(w.asks[0]!.options[0]).toBe('Mit Denkanstoß senden (empfohlen)')
+    const ctx = w.sent.at(-1)!.context ?? []
+    expect(ctx.length).toBe(1)
+    expect(ctx[0]).toContain('sidekick: Der Nutzer meldet den dritten gescheiterten Versuch in Folge.')
+    expect(w.reads).toEqual([])
   })
 }
-deTest('0.28.0 Schleife: sidekicks eigene Kopie in der Befehlsliste zählt nicht als Vorrang', async ($, on) => {
-  const w = world(on, { cmds: [{ name: 'sidekick:systematic-debugging', plugin: 'sidekick' }] })
-  await threeWith($, DEBUG3)
-  expect(w.asks[0]!.options[0]).toBe(`${WITH_DEBUG} (empfohlen)`)
+deTest('0.31.0 Schleife: Original installiert, aber Nachricht mit @datei → Denkanstoß (Start nimmt keine Anhänge mit)', async ($, on) => {
+  const w = world(on, { cmds: [SP_CMD] })
+  await threeWith($, 'Funktioniert nicht, schau in @src/bar.ts')
+  expect(w.asks[0]!.options.some((o) => o.startsWith(WITH_DEBUG))).toBe(false)
 })
 deTest('0.28.0 Schleife: catalog aus → Denkanstoß', { catalog: false }, async ($, on) => {
-  const w = world(on)
+  const w = world(on, { cmds: [SP_CMD] })
   await threeWith($, DEBUG3)
   expect(w.asks[0]!.options[0]).toBe('Mit Denkanstoß senden (empfohlen)')
 })
-deTest('0.28.0 Schleife: Skill-Datei nicht lesbar → Denkanstoß allein, Toast', async ($, on) => {
-  const w = world(on, { readFails: true })
-  w.setAnswer(WITH_DEBUG + ' (empfohlen)')
-  await threeWith($, DEBUG3)
-  const ctx = w.sent.at(-1)!.context ?? []
-  expect(ctx.length).toBe(1)
-  expect(ctx[0]).toContain('sidekick: Der Nutzer meldet den dritten gescheiterten Versuch in Folge.')
-  expect(w.toasts.some((t) => t.includes('systematic-debugging ließ sich nicht laden') && t.includes('Denkanstoß allein'))).toBe(true)
-  await flush()
-  expect(today(w.ledger()).katalog.mitSkill).toBe(0)
-})
-test('0.28.0 Schleife: englisch', { options: { language: 'en' } }, async ($, on) => {
+test('0.31.0 Schleife: englisch', { options: { language: 'en' } }, async ($, on) => {
   setLang('en')
-  const w = world(on)
+  const w = world(on, { cmds: [SP_CMD] })
   w.setAnswer('Send with systematic-debugging (recommended)')
-  await threeWith($, 'Still broken, the bar is gone again')
-  expect(w.asks[0]!.question).toMatch(/With systematic-debugging, ≈ 2[.,]4k tokens of context come with this message\./)
-  const ctx = w.sent.at(-1)!.context ?? []
-  expect(ctx[1]).toContain('Skills named `superpowers:*` in this text are not installed.')
+  const r = await threeWith($, 'Still broken, the bar is gone again')
+  expect(w.asks[0]!.question).toContain('"Send with systematic-debugging" starts /superpowers:systematic-debugging with your message (without the nudge).')
+  expect(r).toMatchObject({ drop: 'sidekick: starting /superpowers:systematic-debugging with your message.' })
 })
 
 deTest('Schleife: großer Chat → neuer Chat empfohlen, mit Kosten; Übergabe mit „Was nicht funktioniert hat“, Buchung mit Grund', async ($, on) => {
@@ -787,13 +781,13 @@ for (const lang of ['de', 'en'] as const) {
 // ---------- Review 0.28.0 ----------
 
 deTest('Review 0.28.0 S1: eingebautes /debug in der Befehlsliste → Schleife bietet systematic-debugging trotzdem an', async ($, on) => {
-  const w = world(on, { cmds: [{ name: 'debug', source: 'builtin' } as { name: string; plugin?: string }] })
+  const w = world(on, { cmds: [{ name: 'debug', source: 'builtin' } as { name: string; plugin?: string }, SP_CMD] })
   await threeWith($, DEBUG3)
   expect(w.asks[0]!.options[0]).toBe(`${WITH_DEBUG} (empfohlen)`)
 })
 
 deTest('Review 0.28.0 S2/K2: Schleifen-Klick steht in /savings detail (angeboten + mit Skill), Abstand zur nächsten Katalog-Frage', async ($, on) => {
-  const w = world(on)
+  const w = world(on, { cmds: [SP_CMD] })
   w.setAnswer(`${WITH_DEBUG} (empfohlen)`)
   await threeWith($, DEBUG3)
   await flush()

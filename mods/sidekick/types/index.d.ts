@@ -22,6 +22,9 @@
 // `later` (Ausbau 0.29.0, Absprache mit prompt-deck): `true`, solange der Knopf „Danach“ gelten darf (Zug läuft, Stufe Begleiter,
 // `queue` an); fehlt sonst. `laterUsed`: `at` der zuletzt verbrauchten Markierung `prompt-deck.later`; prompt-deck löscht sie dann.
 //
+// `chat` (Ausbau 0.30.0): Verlauf des sidekick-Chats im Seitenfenster, je Sitzung (`sid`), höchstens 10 Wechsel; `busy` solange eine
+// Antwort läuft. Nur sidekick liest ihn (Zeichnung des Fensters); er geht nicht in `$.store` und nicht in den Haupt-Chat (SPEC E9).
+//
 // `quick-replies.band` (Kopie aus mods/quick-replies/types/index.d.ts, muss gleich bleiben): steht die Pille, zeigt „Gut zu wissen“
 // keine Ziffern (BAND-SPEC-2 §5).
 //
@@ -33,6 +36,13 @@ declare module 'claude-code' {
     sidekick: {
       buddy: { kind: 'check' | 'stop' | 'handoff' | 'fresh' | 'hint' | 'upkeep'; at: number; why?: 'cold' | 'wrong' | 'model' | 'rewrite' | 'topic' } | null
       status: { level: 'off' | 'cache' | 'guide'; busy: boolean; tip?: string; cold?: true; handoff?: true; later?: true; laterUsed?: number } | null
+      chat: {
+        sid: string
+        turns: { q: string; a: string; sugg: { id: string; warum: string }[]; draft?: string; usd: number; err?: 'failed' | 'timeout' | 'aborted'; why?: string; raw?: true }[]
+        n: number
+        usd: number
+        busy?: { q: string }
+      } | null
     }
     'quick-replies': {
       band: { shown: true } | null

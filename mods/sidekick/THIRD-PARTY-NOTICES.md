@@ -19,40 +19,17 @@ GitHub API). The only change is in the frontmatter of each `SKILL.md`: a comment
 Each folder carries the original `LICENSE` file (Copyright (c) 2026 Emil Kowalski). sidekick only reads these files; it
 runs no code from them.
 
-## Bundled skills (since 0.28.0)
-
-All copies below follow the same rule as above: the only change is in the frontmatter of each `SKILL.md` (a comment line
-naming the source and `disable-model-invocation: true`). Companion files and each folder's `LICENSE` are byte-identical to
-the source. sidekick only reads these files; it runs no code from them.
-
-### obra/superpowers
-
-`skills/systematic-debugging/` (with `root-cause-tracing.md`, `defense-in-depth.md` and `condition-based-waiting.md`),
-`skills/verification-before-completion/` and `skills/receiving-code-review/` are copies of skills by **Jesse Vincent** from
-[obra/superpowers](https://github.com/obra/superpowers) at commit `22f0b463e7a5e579904dd6211a520321035526f7` (checked
-2026-11-16), licensed under the MIT License (SPDX `MIT`, read from the GitHub API, Copyright (c) 2025 Jesse Vincent).
-Not copied: the script `find-polluter.sh` and the example `condition-based-waiting-example.ts` of `systematic-debugging`.
-Its text still mentions them, because the copy stays identical to the source. It also mentions other superpowers skills
-(`superpowers:test-driven-development`, `superpowers:verification-before-completion`); sidekick adds a sentence to the
-context that these are not installed.
-
-### ibelick/ui-skills
-
-`skills/fixing-metadata/` is a copy of a skill by **Julien Thibeaut** from
-[ibelick/ui-skills](https://github.com/ibelick/ui-skills) at commit `65cc0edb4f64fe8bfe7e9c59466074de25bece76` (checked
-2026-11-16), licensed under the MIT License (SPDX `MIT`, read from the GitHub API, Copyright (c) 2026 Julien Thibeaut).
-
-### mattpocock/skills
-
-`skills/grilling/` is a copy of `skills/productivity/grilling/` by **Matt Pocock** from
-[mattpocock/skills](https://github.com/mattpocock/skills) at commit `5863806dd4e15c63174bee4e7515a4256792ecfa` (checked
-2026-11-16), licensed under the MIT License (SPDX `MIT`, read from the GitHub API, Copyright (c) 2026 Matt Pocock). Its
-`grill-me` skill only points to `grilling` and is not copied.
-
 ## References
 
 The other entries of the skill catalog (`hooks/catalog.ts`) are references only: name, author, license, source URL and
-the install line from the source's README. Nothing of them is copied or installed by sidekick.
+the install line from the source's README. Nothing of them is copied or installed by sidekick. When the original of a
+reference is installed, sidekick can start it with the user's message (`$.command.run`, only after a click).
+
+Until 0.30.0 sidekick also bundled copies of `systematic-debugging`, `verification-before-completion` and
+`receiving-code-review` (obra/superpowers, MIT, Copyright (c) 2025 Jesse Vincent), `fixing-metadata` (ibelick/ui-skills,
+MIT, Copyright (c) 2026 Julien Thibeaut) and `grilling` (mattpocock/skills, MIT, Copyright (c) 2026 Matt Pocock). Since
+0.31.0 the first three and `grilling` are references to the originals; `fixing-metadata` is no longer in the catalog,
+because its README names no install line for Claude Code. Thanks to the authors.
 
 ## Cache Keeper
 

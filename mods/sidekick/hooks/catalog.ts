@@ -6,38 +6,58 @@
 import { cut } from './logic.js'
 import { lang } from './i18n.js'
 
+/** Ausbau 0.30.0 (E5): was der Eintrag ist. `mcp` = ein MCP-Server für Claude Code, `connector` = gehostet, auch für claude.ai/Desktop. */
+export type CatalogKind = 'skill' | 'plugin' | 'mcp' | 'connector'
+
 export type CatalogEntry = {
   id: string
   name: string
   author: string
+  /** Repo mit dem Code; bei `license: 'service'` leer (gehosteter Dienst ohne kopierten Code, E6). */
   repo: string
   url: string
-  license: 'MIT' | 'Apache-2.0' | 'CC0-1.0'
+  /** `service` (Ausbau 0.30.0, E6): gehosteter Dienst, es gelten die Bedingungen des Anbieters; Repos mit Code brauchen MIT/Apache/CC0. */
+  license: 'MIT' | 'Apache-2.0' | 'CC0-1.0' | 'service'
+  /** Stand des Repos bei der Prüfung; bei `service` leer. */
   pinnedSha: string
   checkedAt: string
   way: 'bundled' | 'reference'
+  kind: CatalogKind
   /** Nur bundled: der Skill in sidekick, so wie man ihn tippt (ohne `/`). */
   invoke?: string
   /** Nur bundled: ungefähre Tokens, die der Skill-Text als `context` kostet (Größe der SKILL.md / 4; Planungs-Chat 2026-11-09). */
   ctxTokens?: number
-  /** Nur reference: die Zeile aus der README der Quelle. */
-  install?: { line: string }
-  /** Namen für den Abgleich mit `$.command.list()` (Befehlsname, Plugin oder Präfix `name:`). */
+  /**
+   * Nur reference. `line`: die Zeile aus der README bzw. Anleitung der Quelle. `composed` (Ausbau 0.30.0, E5): nur bei `kind` mcp oder
+   * connector; die Zeile ist aus der Syntax `claude mcp add --transport http --scope user <name> <url>` (fal-Doku, wörtlich) und der
+   * URL des Herstellers zusammengesetzt, die Liste zeigt „zusammengesetzt“. `connectorUrl`: https-Adresse des gehosteten Servers, für
+   * Desktop und claude.ai („Einstellungen → Connectors → Eigenen Connector hinzufügen“).
+   */
+  install?: { line?: string; composed?: true; connectorUrl?: string }
+  /**
+   * Namen für den Abgleich mit `$.command.list()` (Befehlsname, Plugin oder Präfix `name:`). Bei `kind` mcp/connector zusätzlich mit den
+   * MCP-Servern aus `$.tool.list()` (Probe P1, `serverMatches`).
+   */
   installedAs: string[]
   /**
-   * Nur bundled (Ausbau 0.28.0, E5): Muster auf Befehlsnamen aus `$.command.list()`, `*` als Platzhalter. Trifft eins, hat ein
-   * Projekt-Befehl Vorrang (z. B. `/mod-debug`), und der Eintrag gilt wie installiert.
+   * Ausbau 0.28.0 (E5): Muster auf Befehlsnamen aus `$.command.list()`, `*` als Platzhalter. Trifft eins, hat ein Projekt-Befehl Vorrang
+   * (z. B. `/mod-debug`), und der Eintrag gilt wie installiert. Das Original selbst (`launchAs`) zählt nicht.
    */
   yieldTo?: string[]
-  /** Nur bundled (E3): Satz, den `skillContext` vor den Skill-Text stellt, z. B. zu Verweisen auf nicht installierte Skills. ≤ 240 Zeichen. */
-  ctxNote?: { de: string; en: string }
+  /**
+   * Nur reference (Ausbau 0.31.0, E2): Skill-Namen des Originals. Steht einer davon als Befehl in `$.command.list()` (`name` oder
+   * `plugin:name`, Probe P1), startet „Mit … senden“ das Original per `$.command.run` (`launchOf`, `catalogKind` = `run`). Nicht
+   * installiert: nur die Hinweiszeile mit der Installationszeile.
+   */
+  launchAs?: string[]
   /** Eigene Schwelle statt `CATALOG_MIN` (Ausbau 0.28.0, Probe P2', Entscheidung Fynn (b) 2026-11-16: sp-debug 0,6). */
   minSure?: number
   /** ≤ 160 Zeichen, englisch, für Haiku. */
   summary: string
   /** Vorfilter: Wortanfänge bzw. Phrasen; `*` am Ende = Wortanfang, sonst ganzes Wort. */
   keywords: { de: string[]; en: string[] }
-  risk: { runsCode: boolean; network: boolean; heavy: boolean; note?: { de: string; en: string } }
+  /** `paid` (Ausbau 0.30.0, E4): Credits oder Abo; hält nie an, nur Hinweiszeile ab `CATALOG_MIN_HEAVY`. */
+  risk: { runsCode: boolean; network: boolean; heavy: boolean; paid?: true; note?: { de: string; en: string } }
 }
 
 const EMIL_SHA = '5206a950b715e0cabe7043ea0b2304332b91494e'
@@ -47,14 +67,26 @@ const EMIL_INSTALL = { line: 'npx skills@latest add emilkowalski/skills' }
 const MARKDOWN = { runsCode: false, network: false, heavy: false } as const
 const NPX = { de: 'npx, ungepinnt', en: 'npx, unpinned' }
 
-// Ausbau 0.28.0: Kopien vom gepinnten sha (Lizenzen über die GitHub-API geprüft am 2026-11-16, SPDX MIT)
+// Ausbau 0.28.0: Stand der Prüfung (Lizenzen über die GitHub-API geprüft am 2026-11-16, SPDX MIT); seit 0.31.0 nur noch Verweise
 const SUPERPOWERS_SHA = '22f0b463e7a5e579904dd6211a520321035526f7'
 const SP = { author: 'Jesse Vincent', repo: 'obra/superpowers', url: 'https://github.com/obra/superpowers', license: 'MIT', pinnedSha: SUPERPOWERS_SHA, checkedAt: '2026-11-16' } as const
-/** E3: systematic-debugging nennt `superpowers:test-driven-development` und `superpowers:verification-before-completion`. */
-const SP_NOTE = {
-  de: 'Skills mit dem Namen `superpowers:*` in diesem Text sind nicht installiert. Versuch nicht, sie zu laden; wende den Schritt, für den sie stehen, an Ort und Stelle an.',
-  en: 'Skills named `superpowers:*` in this text are not installed. Do not try to load them; apply the step they stand for in place.',
-}
+/**
+ * Ausbau 0.31.0 (E2): Verweis auf das Plugin superpowers (README: `/plugin install superpowers@claude-plugins-official`, im Marketplace
+ * claude-plugins-official gelistet). Nicht `heavy`: Nicht installiert gibt es ohnehin nur die Hinweiszeile (`catalogKind`), installiert
+ * startet sidekick nur den einen Skill; die Schwellen aus Probe P2' (0.28.0) gelten weiter.
+ */
+const SP_REF = {
+  way: 'reference',
+  kind: 'skill',
+  install: { line: '/plugin install superpowers@claude-plugins-official' },
+  risk: { runsCode: true, network: false, heavy: false, note: { de: 'ganzes Plugin superpowers mit Hooks', en: 'whole superpowers plugin, with hooks' } },
+} as const
+
+// Ausbau 0.30.0: gehostete Dienste (E5, E6). Kein Repo, kein sha; `url` ist die Seite des Herstellers, die URL und Weg belegt.
+const service = (author: string, url: string) => ({ author, repo: '', url, license: 'service', pinnedSha: '', checkedAt: '2026-11-17', way: 'reference' }) as const
+/** E5: Zeile aus der Syntax der fal-Doku und der URL des Herstellers, dazu die URL für Desktop und claude.ai. */
+const hosted = (name: string, url: string) => ({ line: `claude mcp add --transport http --scope user ${name} ${url}`, composed: true, connectorUrl: url }) as const
+const HOSTED = { runsCode: false, network: true, heavy: false, paid: true } as const
 
 /** Der Katalog. Reihenfolge = Vorrang bei mehr als `CATALOG_MAX` Treffern. */
 export const CATALOG: readonly CatalogEntry[] = [
@@ -63,6 +95,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     name: 'apple-design',
     ...EMIL,
     way: 'bundled',
+    kind: 'skill',
     invoke: 'sidekick:apple-design',
     ctxTokens: 5800,
     installedAs: ['apple-design'],
@@ -78,6 +111,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     name: 'emil-design-eng',
     ...EMIL,
     way: 'bundled',
+    kind: 'skill',
     invoke: 'sidekick:emil-design-eng',
     ctxTokens: 6900,
     installedAs: ['emil-design-eng'],
@@ -93,6 +127,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     name: 'break-ui',
     ...EMIL,
     way: 'bundled',
+    kind: 'skill',
     invoke: 'sidekick:break-ui',
     // SKILL.md ≈ 3,6k; liest Claude die verlinkte CATALOG.md, kommen ≈ 2k dazu
     ctxTokens: 3600,
@@ -104,18 +139,18 @@ export const CATALOG: readonly CatalogEntry[] = [
     },
     risk: MARKDOWN,
   },
-  // Ausbau 0.28.0 (E7): die neuen Einträge vor den Verweisen, sp-debug vor sp-verify
+  // Ausbau 0.31.0 (E2): die Kopien aus 0.28.0 sind Verweise auf die Originale. Ist das Original installiert (`launchAs`, Probe P1:
+  // `$.command.list()` nennt Plugin-Skills `plugin:skill`), startet „Mit … senden“ es per `$.command.run`; sonst nur die Hinweiszeile.
+  // Reihenfolge wie 0.28.0 (E7), sp-debug vor sp-verify. fixing-metadata (ibelick/ui-skills) ist gestrichen: dessen README nennt keine
+  // Installationszeile, nur `npx ui-skills get <skill>` zum Abrufen und einen MCP-Server (README:11-28 am sha 65cc0ed, geprüft 2026-11-17).
   {
     id: 'sp-debug',
     name: 'systematic-debugging',
     ...SP,
-    way: 'bundled',
-    invoke: 'sidekick:systematic-debugging',
-    // SKILL.md 9 530 B / 4; die drei Begleitdateien (≈ 3,1k) liest Claude nur bei Bedarf
-    ctxTokens: 2400,
+    ...SP_REF,
+    launchAs: ['systematic-debugging'],
     installedAs: ['systematic-debugging', 'superpowers'],
     yieldTo: ['*debug*'],
-    ctxNote: SP_NOTE,
     // Probe P2': bei 0,6 ≈ 50 % getroffen (45–55 %) bei ≤ 0,5 unnötigen Rückfragen je 200; bei 0,7 24–48 %. Ziel 2 (60 %) bleibt
     // verfehlt, Known limitation (Entscheidung Fynn (b), 2026-11-16)
     minSure: 0.6,
@@ -126,59 +161,32 @@ export const CATALOG: readonly CatalogEntry[] = [
       de: ['fehlermeldung*', 'fehlerprotokoll', 'geht nicht', 'funktioniert nicht', 'klappt nicht', 'kaputt', 'bug', 'bugs', 'absturz', 'stürzt ab', 'immer noch nicht', 'warum geht', 'herausfinden', 'woran es liegt', 'woran das liegt', 'woran es lag'],
       en: ['bug', 'bugs', "doesn't work", 'not working', 'still broken', 'still failing', 'crash*', 'stack trace', 'error message', 'find out why', 'figure out why'],
     },
-    risk: MARKDOWN,
   },
   {
     id: 'sp-verify',
     name: 'verification-before-completion',
     ...SP,
-    way: 'bundled',
-    invoke: 'sidekick:verification-before-completion',
-    ctxTokens: 900,
+    ...SP_REF,
+    launchAs: ['verification-before-completion'],
     installedAs: ['verification-before-completion', 'superpowers'],
     summary: 'Evidence before claims: run the command that proves a fix or passing tests, read the output, only then report it done.',
     keywords: {
       de: ['ist es fertig', 'ist das fertig', 'geht es jetzt', 'läuft es jetzt', 'prüf mal ob', 'prüf ob', 'hast du das getestet', 'stimmt das wirklich'],
       en: ['is it done', 'does it work now', 'did you test', 'did you verify', 'make sure it works'],
     },
-    risk: MARKDOWN,
   },
   {
     id: 'sp-review',
     name: 'receiving-code-review',
     ...SP,
-    way: 'bundled',
-    invoke: 'sidekick:receiving-code-review',
-    ctxTokens: 1600,
+    ...SP_REF,
+    launchAs: ['receiving-code-review'],
     installedAs: ['receiving-code-review', 'superpowers'],
     summary: 'Handling review feedback: check each point against the code, ask about unclear items, push back with reasons, fix one at a time.',
     keywords: {
       de: ['review-kommentar*', 'reviewer sagt', 'der reviewer', 'review-auflage*', 'auflagen aus dem review', 'pr-kommentar*', 'feedback aus dem review'],
       en: ['review comments', 'review feedback', 'the reviewer says', 'address the review', 'pr comments'],
     },
-    risk: MARKDOWN,
-  },
-  {
-    id: 'ib-meta',
-    name: 'fixing-metadata',
-    author: 'Julien Thibeaut',
-    repo: 'ibelick/ui-skills',
-    url: 'https://github.com/ibelick/ui-skills',
-    license: 'MIT',
-    pinnedSha: '65cc0edb4f64fe8bfe7e9c59466074de25bece76',
-    checkedAt: '2026-11-16',
-    way: 'bundled',
-    invoke: 'sidekick:fixing-metadata',
-    ctxTokens: 1100,
-    installedAs: ['fixing-metadata', 'ui-skills'],
-    yieldTo: ['*seo*', '*metadata*'],
-    summary: 'Audits and fixes page metadata: titles, descriptions, canonical URLs, Open Graph and Twitter cards, favicons, JSON-LD, robots.',
-    keywords: {
-      // Probe P2': „social preview“ gestrichen (10 Treffer, alle die Vorschau eines GitHub-Repos)
-      de: ['seo', 'meta-tag*', 'metatag*', 'meta description', 'open graph', 'og-image', 'og:image', 'link-vorschau', 'vorschaubild beim teilen', 'favicon*', 'json-ld', 'strukturierte daten', 'sitemap'],
-      en: ['seo', 'meta tag*', 'meta description', 'open graph', 'og image', 'og:image', 'link preview', 'favicon*', 'json-ld', 'structured data', 'canonical url'],
-    },
-    risk: MARKDOWN,
   },
   {
     id: 'mp-grill',
@@ -189,10 +197,13 @@ export const CATALOG: readonly CatalogEntry[] = [
     license: 'MIT',
     pinnedSha: '5863806dd4e15c63174bee4e7515a4256792ecfa',
     checkedAt: '2026-11-16',
-    way: 'bundled',
-    invoke: 'sidekick:grilling',
-    // SKILL.md 2 077 B / 4; verweist auf keine fremden Skills (kein ctxNote, E3)
-    ctxTokens: 500,
+    way: 'reference',
+    kind: 'skill',
+    // Wie der Eintrag `mattpocock` (dessen README): das Plugin bringt grilling mit; Marketplace claude-plugins-official listet es als
+    // `mattpocock-skills` (marketplace.json, geprüft 2026-11-17)
+    install: { line: 'claude plugin install mattpocock-skills@claude-plugins-official' },
+    // `grill-me` ist dort nur „Call the Skill tool with grilling“ (Bau 0.28.0): startbar ist es trotzdem
+    launchAs: ['grilling', 'grill-me'],
     installedAs: ['grilling', 'grill-me', 'mattpocock-skills'],
     yieldTo: ['*grill*'],
     summary: 'Interviews you about a plan, one decision at a time along the decision tree, before any code is written.',
@@ -201,13 +212,14 @@ export const CATALOG: readonly CatalogEntry[] = [
       de: ['löcher mich', 'löchere mich', 'grill mich', 'frag mich aus', 'neues feature', 'ich habe eine idee', 'lass uns planen', 'klären, bevor'],
       en: ['grill me', 'interview me', 'new feature', 'i have an idea', "let's plan"],
     },
-    risk: MARKDOWN,
+    risk: { runsCode: true, network: false, heavy: false, note: { de: 'ganzes Plugin, einige Skripte', en: 'whole plugin, a few scripts' } },
   },
   {
     id: 'emil-animate',
     name: 'animate, review-animations',
     ...EMIL,
     way: 'reference',
+    kind: 'skill',
     install: EMIL_INSTALL,
     installedAs: ['animate', 'review-animations', 'improve-animations'],
     summary: 'Web UI animation from scratch and strict motion review: easing, durations, transitions, stagger, what to animate and what not.',
@@ -223,6 +235,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     name: 'mobile-native',
     ...EMIL,
     way: 'reference',
+    kind: 'skill',
     install: EMIL_INSTALL,
     installedAs: ['mobile-native'],
     summary: 'Makes a web app feel native on phones: safe areas, 100vh, touch targets, scroll and keyboard behaviour, PWA details.',
@@ -242,6 +255,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     pinnedSha: '924bbd194d02e5e15a227e75b5901fb0d7a4ecad',
     checkedAt: '2026-11-09',
     way: 'reference',
+    kind: 'plugin',
     // README: „`/plugin marketplace add pbakaus/impeccable`, then open `/plugin` and install Impeccable“
     install: { line: '/plugin marketplace add pbakaus/impeccable' },
     installedAs: ['impeccable'],
@@ -263,6 +277,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     pinnedSha: 'aed9cfd3277740755f6bfc1155c7aa645403b760',
     checkedAt: '2026-11-09',
     way: 'reference',
+    kind: 'plugin',
     // README: „In Claude Code, use the skill/plugin marketplace: `/plugin marketplace add greensock/gsap-skills`“
     install: { line: '/plugin marketplace add greensock/gsap-skills' },
     installedAs: ['gsap-skills', 'gsap-core', 'gsap-scrolltrigger'],
@@ -283,6 +298,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     pinnedSha: '4ac3d2ac2b151e1c23376f9ce7f3047a17050013',
     checkedAt: '2026-11-09',
     way: 'reference',
+    kind: 'mcp',
     // README: `uv tool install "earshot[mcp] @ git+https://github.com/Leonxlnx/earshot"`
     install: { line: 'uv tool install "earshot[mcp] @ git+https://github.com/Leonxlnx/earshot"' },
     installedAs: ['earshot', 'real-sound'],
@@ -303,6 +319,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     pinnedSha: '22f0b463e7a5e579904dd6211a520321035526f7',
     checkedAt: '2026-11-09',
     way: 'reference',
+    kind: 'plugin',
     // README: `/plugin install superpowers@claude-plugins-official`
     install: { line: '/plugin install superpowers@claude-plugins-official' },
     installedAs: ['superpowers'],
@@ -324,6 +341,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     pinnedSha: '4ae2317ddb22b046e26455e4f9c9b3aaaf62212d',
     checkedAt: '2026-11-09',
     way: 'reference',
+    kind: 'plugin',
     // README: `claude plugin install mattpocock-skills@claude-plugins-official`
     install: { line: 'claude plugin install mattpocock-skills@claude-plugins-official' },
     installedAs: ['mattpocock-skills', 'grill-me'],
@@ -347,6 +365,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     pinnedSha: '404be8eb89abecff77a55152b6d843d140c78372',
     checkedAt: '2026-11-09',
     way: 'reference',
+    kind: 'plugin',
     // README von claude-plugins-official (Stand 0412be7): „/plugin install {plugin-name}@claude-plugins-official“, Eintrag `playwright`
     install: { line: '/plugin install playwright@claude-plugins-official' },
     installedAs: ['playwright', 'playwright-skill'],
@@ -367,6 +386,7 @@ export const CATALOG: readonly CatalogEntry[] = [
     pinnedSha: '91ad7fb6ee3fb4d0098385abdea64a1d5acd0dfd',
     checkedAt: '2026-11-09',
     way: 'reference',
+    kind: 'plugin',
     // README: `claude plugin marketplace add heygen-com/hyperframes`, dann `claude plugin install hyperframes@hyperframes`
     install: { line: 'claude plugin marketplace add heygen-com/hyperframes' },
     installedAs: ['hyperframes'],
@@ -377,6 +397,209 @@ export const CATALOG: readonly CatalogEntry[] = [
     },
     risk: { runsCode: true, network: true, heavy: true, note: { de: 'Telemetrie (npx hyperframes)', en: 'telemetry (npx hyperframes)' } },
   },
+  // ---------- Ausbau 0.30.0: Kreativ-Verweise für Spiele-Werbung (E1, docs/RECHERCHE-KREATIV.md) ----------
+  // Alle `paid` sind nur Hinweiszeilen (E4). Gehostete Dienste mit `license: 'service'` (E6), URLs am 2026-11-17 auf der Seite des
+  // Herstellers geprüft; Repos mit Code über die GitHub-API (SPDX) am 2026-11-17.
+  {
+    id: 'higgsfield',
+    name: 'Higgsfield MCP',
+    ...service('Higgsfield', 'https://higgsfield.ai/mcp'),
+    kind: 'connector',
+    // higgsfield.ai/mcp: Server-URL `https://mcp.higgsfield.ai/mcp`, „no API key required“, Knopf „Add Higgsfield to Claude“; ein
+    // Claude-Code-Befehl steht dort nicht, darum zusammengesetzt (E5)
+    install: hosted('higgsfield', 'https://mcp.higgsfield.ai/mcp'),
+    installedAs: ['higgsfield'],
+    summary: 'Hosted video and image generation (Seedance, Veo, Kling, Sora and more) from the chat, billed in Higgsfield credits.',
+    keywords: {
+      de: ['higgsfield', 'seedance', 'ki-video*', 'video-ki', 'ki video*', 'video generieren', 'videos generieren', 'video erzeugen', 'bild zu video', 'text zu video', 'kling', 'veo', 'sora'],
+      en: ['higgsfield', 'seedance', 'ai video*', 'generate a video', 'generate videos', 'image to video', 'text to video', 'kling', 'veo', 'sora'],
+    },
+    risk: { ...HOSTED, note: { de: 'Credits, Uploads an Higgsfield', en: 'credits, uploads to Higgsfield' } },
+  },
+  {
+    id: 'higgsfield-skills',
+    name: 'Higgsfield Skills',
+    author: 'Higgsfield',
+    repo: 'higgsfield-ai/skills',
+    url: 'https://github.com/higgsfield-ai/skills',
+    license: 'MIT',
+    pinnedSha: '27000402070db19d958789d05b3b52b6f4718d7c',
+    checkedAt: '2026-11-17',
+    way: 'reference',
+    kind: 'plugin',
+    // README:33-34: `/plugin marketplace add higgsfield-ai/skills`, dann `/plugin install higgsfield@higgsfield`
+    install: { line: '/plugin marketplace add higgsfield-ai/skills' },
+    installedAs: ['higgsfield', 'higgsfield-skills'],
+    summary: 'Higgsfield skills for YouTube thumbnails, faceless videos, brand kits and a virality score; installs and uses the Higgsfield CLI.',
+    keywords: {
+      de: ['youtube-thumbnail*', 'youtube thumbnail*', 'faceless', 'viralität', 'viral gehen', 'brandkit', 'brand kit'],
+      en: ['youtube thumbnail*', 'faceless', 'virality', 'go viral', 'brand kit', 'brandkit'],
+    },
+    risk: { runsCode: true, network: true, heavy: false, paid: true, note: { de: 'Credits, installiert die Higgsfield-CLI', en: 'credits, installs the Higgsfield CLI' } },
+  },
+  {
+    id: 'fal',
+    name: 'fal MCP',
+    ...service('fal', 'https://fal.ai/docs/documentation/model-apis/mcp.md'),
+    kind: 'mcp',
+    // fal-Doku wörtlich: `claude mcp add --transport http --scope user fal https://mcp.fal.ai/mcp-relay`, Anmeldung über `/mcp` (OAuth);
+    // „The MCP server is free“, Modellläufe kosten Credits
+    install: { line: 'claude mcp add --transport http --scope user fal https://mcp.fal.ai/mcp-relay' },
+    installedAs: ['fal'],
+    summary: 'Hosted image, video, audio and 3D models (Flux, Nano Banana, Kling, Veo …) with cost preview; the server is free, runs cost fal credits.',
+    keywords: {
+      de: ['fal.ai', 'flux', 'nano banana', 'bild generieren', 'bilder generieren', 'bild erzeugen', 'ki-bild*', 'bild-ki', 'ki bild*'],
+      en: ['fal.ai', 'flux', 'nano banana', 'generate an image', 'generate images', 'ai image*', 'image generation'],
+    },
+    risk: { ...HOSTED, note: { de: 'Credits je Lauf, Uploads an fal', en: 'credits per run, uploads to fal' } },
+  },
+  {
+    id: 'elevenlabs',
+    name: 'ElevenLabs MCP',
+    ...service('ElevenLabs', 'https://elevenlabs.io/docs/agents-platform/operate/hosted-mcp'),
+    kind: 'connector',
+    // ElevenLabs-Doku „hosted MCP“: `https://api.elevenlabs.io/v1/mcp`, „Authentication uses OAuth“; nur als eigener Connector
+    // beschrieben, darum zusammengesetzt (E5). EU, Indien und Singapur haben andere URLs
+    install: hosted('elevenlabs', 'https://api.elevenlabs.io/v1/mcp'),
+    installedAs: ['elevenlabs'],
+    summary: 'Hosted ElevenLabs: voice-over, text to speech, sound effects and voices for videos, signed in with OAuth, billed in credits.',
+    keywords: {
+      de: ['elevenlabs', 'sprecherstimme', 'voiceover', 'voice-over', 'text-to-speech', 'tts', 'stimme klonen', 'vertonung', 'vertonen'],
+      en: ['elevenlabs', 'voiceover', 'voice-over', 'voice over', 'text to speech', 'tts', 'voice clone', 'narration'],
+    },
+    risk: { ...HOSTED, note: { de: 'Credits; Stimmklone berühren Persönlichkeitsrechte; Kokoro und real-sound decken vieles lokal ab', en: 'credits; voice clones touch personality rights; Kokoro and real-sound cover much locally' } },
+  },
+  {
+    id: 'suno',
+    name: 'Suno MCP (beta)',
+    ...service('Suno', 'https://help.suno.com/en/articles/14551425'),
+    kind: 'mcp',
+    // help.suno.com/en/articles/14551425 wörtlich: `claude mcp add --transport http suno https://api.suno.com/mcp`, dann `/mcp` zum
+    // Anmelden; Release-Notes: Beta mit Early Access. „Available on all Suno plans. Songs use your credits.“
+    install: { line: 'claude mcp add --transport http suno https://api.suno.com/mcp' },
+    installedAs: ['suno'],
+    summary: 'Official Suno server (beta, early access): songs and trailer music from the chat, using the credits of your Suno plan.',
+    keywords: {
+      de: ['suno', 'trailer-musik', 'trailermusik', 'hintergrundmusik', 'musik für den trailer', 'musik fürs video', 'song generieren', 'ki-musik', 'ki musik'],
+      en: ['suno', 'trailer music', 'background music', 'music for the trailer', 'music for the video', 'generate a song', 'ai music'],
+    },
+    risk: { ...HOSTED, note: { de: 'Beta, Credits des Suno-Plans; Rechte am Song je Plan', en: 'beta, credits of your Suno plan; rights to the song depend on the plan' } },
+  },
+  {
+    id: 'luma',
+    name: 'Luma connector',
+    ...service('Luma', 'https://lumalabs.ai/learning-center/articles/luma-claude-connector-guide'),
+    kind: 'connector',
+    // Luma-Anleitung: „paste https://agents.lumalabs.ai/mcp“ als eigenen Connector; kein Claude-Code-Befehl, darum zusammengesetzt (E5)
+    install: hosted('luma', 'https://agents.lumalabs.ai/mcp'),
+    installedAs: ['luma'],
+    summary: 'Hosted Luma (Ray): image to video and video generation from the chat, billed in the credits of your Luma team.',
+    keywords: {
+      de: ['luma', 'dream machine', 'lumalabs'],
+      en: ['luma', 'dream machine', 'lumalabs'],
+    },
+    risk: { ...HOSTED, note: { de: 'Credits des Luma-Teams, Uploads an Luma', en: 'Luma team credits, uploads to Luma' } },
+  },
+  {
+    id: 'video-use',
+    name: 'video-use',
+    author: 'browser-use',
+    repo: 'browser-use/video-use',
+    url: 'https://github.com/browser-use/video-use',
+    license: 'MIT',
+    pinnedSha: '43cfc566833548093455c9d4a46bd69913b7e552',
+    checkedAt: '2026-11-17',
+    way: 'reference',
+    kind: 'skill',
+    // README:28-33 hat keine Zeile, nur einen Einrichtungs-Prompt („Set up https://github.com/browser-use/video-use for me …“): nur `url`
+    installedAs: ['video-use'],
+    summary: 'Edits raw footage with ffmpeg: cut filler words, burn in subtitles, colour, overlays; needs an ElevenLabs key for transcripts.',
+    keywords: {
+      de: ['füllwörter', 'rohschnitt', 'video schneiden', 'videos schneiden', 'untertitel einbrennen', 'gameplay schneiden', 'aufnahme schneiden'],
+      en: ['filler words', 'rough cut', 'cut the video', 'edit the video', 'edit my footage', 'burn in subtitles', 'burn-in captions'],
+    },
+    risk: { runsCode: true, network: true, heavy: true, note: { de: 'installiert sich selbst, ffmpeg, ElevenLabs-Schlüssel nötig', en: 'installs itself, ffmpeg, needs an ElevenLabs key' } },
+  },
+  {
+    id: 'yutu',
+    name: 'yutu YouTube skill',
+    author: 'eat-pray-ai',
+    repo: 'eat-pray-ai/yutu',
+    url: 'https://github.com/eat-pray-ai/yutu',
+    license: 'Apache-2.0',
+    pinnedSha: '59095f7c7bda23f6e85998a9a16ce91a4c1c3c4f',
+    checkedAt: '2026-11-17',
+    way: 'reference',
+    kind: 'skill',
+    // README:246 am sha: `npx skills add eat-pray-ai/yutu --skill youtube-automation` (die Recherche vom 2026-11-14 nannte `--skill youtube`)
+    install: { line: 'npx skills add eat-pray-ai/yutu --skill youtube-automation' },
+    installedAs: ['yutu', 'youtube-automation'],
+    summary: 'YouTube know-how and automation: titles, descriptions, tags, playlists, captions, comments; the skill alone needs no upload token.',
+    keywords: {
+      de: ['youtube-upload', 'auf youtube hochladen', 'youtube hochladen', 'youtube-kanal', 'youtube kanal', 'youtube-beschreibung', 'youtube-titel', 'youtube seo', 'youtube-seo'],
+      en: ['upload to youtube', 'youtube upload', 'youtube channel', 'youtube description', 'youtube title', 'youtube seo'],
+    },
+    risk: { runsCode: true, network: true, heavy: false, note: NPX },
+  },
+  {
+    id: 'marketingskills',
+    name: 'marketingskills',
+    author: 'Corey Haines',
+    repo: 'coreyhaines31/marketingskills',
+    url: 'https://github.com/coreyhaines31/marketingskills',
+    license: 'MIT',
+    pinnedSha: '1f837447b20bb6f0e72d87b80ece1c221c362c7d',
+    checkedAt: '2026-11-17',
+    way: 'reference',
+    kind: 'plugin',
+    // README:166 `/plugin marketplace add coreyhaines31/marketingskills`, README:169 `/plugin install marketing-skills`
+    install: { line: '/plugin marketplace add coreyhaines31/marketingskills' },
+    installedAs: ['marketing-skills', 'marketingskills'],
+    summary: 'Marketing skills: product marketing, launch plans, social posts, video scripts, SEO audit, copywriting, A/B tests.',
+    keywords: {
+      de: ['marketing', 'vermarkten', 'vermarktung', 'launch-plan', 'launchplan', 'zielgruppe', 'social-media-post*', 'social media post*', 'mein spiel bewerben', 'spiel bewerben', 'werbung für mein'],
+      en: ['marketing', 'launch plan', 'target audience', 'social media post*', 'promote my game', 'go-to-market', 'product launch'],
+    },
+    risk: { runsCode: false, network: false, heavy: false, note: { de: 'Partner-Hinweise in der README; Texte prüfen antislop-copywriting und humanizer-de', en: 'partner notes in the README; antislop-copywriting and humanizer-de check the wording' } },
+  },
+  {
+    id: 'vidiq',
+    name: 'vidIQ connector',
+    ...service('vidIQ', 'https://support.vidiq.com/en/articles/15082430-vidiq-mcp'),
+    kind: 'connector',
+    // vidIQ-Hilfe: „The server URL is always the same: `https://mcp.vidiq.com/mcp`“, auch im claude.ai-Connector-Verzeichnis; die
+    // Befehlszeile ist nur aus einer Zusammenfassung belegt, darum zusammengesetzt (E5)
+    install: hosted('vidiq', 'https://mcp.vidiq.com/mcp'),
+    installedAs: ['vidiq'],
+    summary: 'YouTube research: keywords, outlier videos, similar thumbnails, channel stats, video ideas; most research calls cost vidIQ credits.',
+    keywords: {
+      de: ['vidiq', 'keyword-recherche', 'youtube-keywords', 'youtube keywords', 'outlier', 'kanalstatistik*', 'video-ideen', 'videoideen'],
+      en: ['vidiq', 'keyword research', 'youtube keywords', 'outlier video*', 'channel stats', 'video ideas'],
+    },
+    risk: { ...HOSTED, note: { de: 'vidIQ-Credits (meist 5 je Recherche)', en: 'vidIQ credits (mostly 5 per research call)' } },
+  },
+  {
+    id: 'canva',
+    name: 'Canva',
+    author: 'Canva',
+    repo: 'canva-sdks/canva-skills',
+    url: 'https://github.com/canva-sdks/canva-skills',
+    license: 'Apache-2.0',
+    // Stand, den der Eintrag `canva` in claude-plugins-official (fd30cee) pinnt
+    pinnedSha: 'bfcbc681560f6031e9949ea52f81e20beb87e39e',
+    checkedAt: '2026-11-17',
+    way: 'reference',
+    kind: 'plugin',
+    // README von claude-plugins-official:24 „/plugin install {plugin-name}@claude-plugins-official“, Eintrag `canva`
+    install: { line: '/plugin install canva@claude-plugins-official' },
+    installedAs: ['canva'],
+    summary: 'Create, edit, resize and brand-check Canva designs through the Canva MCP server: thumbnails, store graphics, social sizes.',
+    keywords: {
+      de: ['canva', 'social-media-grafik*', 'social media grafik*', 'store-grafik*', 'storegrafik*', 'flyer', 'poster'],
+      en: ['canva', 'social media graphic*', 'store graphic*', 'flyer', 'poster'],
+    },
+    risk: { runsCode: false, network: true, heavy: false, note: { de: 'Canva-Konto, OAuth', en: 'Canva account, OAuth' } },
+  },
 ]
 
 /**
@@ -386,6 +609,11 @@ export const CATALOG: readonly CatalogEntry[] = [
 export const CATALOG_MIN = 0.7
 /** Schwere Verweise bekommen nur eine Zeile, aber erst ab dieser Sicherheit (P2: superpowers bei einem Plan mit „testgetrieben“, 0,8–0,85). */
 export const CATALOG_MIN_HEAVY = 0.9
+/**
+ * Kostenpflichtige Verweise (Ausbau 0.30.0, E4) bekommen nur eine Zeile, ab dieser Sicherheit (Entscheidung Fynn 2026-11-17 nach Probe P2':
+ * bei 0,85 traf Haiku den fal-Auftrag in 2 von 3 Läufen, ohne unnötige Zeile in 3 × 54 Treffern; bei 0,9 keinen).
+ */
+export const CATALOG_MIN_PAID = 0.85
 /** Höchstens so viele Kandidaten an Haiku (Verhalten 1). */
 export const CATALOG_MAX = 3
 /** Höchstens eine Katalog-Rückfrage je so viele eigene Nachrichten (Verhalten 3). */
@@ -435,6 +663,28 @@ export function isInstalled(entry: CatalogEntry, cmds: readonly Cmd[]): boolean 
   })
 }
 
+/**
+ * Ausbau 0.31.0 (E2, Probe P1): der Befehl, der das installierte Original startet (ohne `/`), sonst ''. Lose Skills heißen wie der Skill,
+ * Plugin-Skills `plugin:skill` (Probe P1: `remotion:remotion-docs`, `source: plugin`). sidekicks eigene und eingebaute Befehle zählen nicht.
+ */
+export function launchOf(entry: CatalogEntry, cmds: readonly Cmd[]): string {
+  if (!entry.launchAs?.length) return ''
+  for (const a of entry.launchAs) {
+    const x = a.toLowerCase()
+    const hit = cmds.find((c) => !isOwnCmd(c) && c.source !== 'builtin' && (c.name.toLowerCase() === x || c.name.toLowerCase().endsWith(`:${x}`)))
+    if (hit) return hit.name
+  }
+  return ''
+}
+
+/** Ist `c` ein Befehl, der das Original des Eintrags startet? Dann lässt der Eintrag ihm nicht den Vortritt (`yieldedTo`). */
+const isOriginal = (entry: CatalogEntry, c: Cmd) =>
+  !!entry.launchAs?.some((a) => {
+    const x = a.toLowerCase()
+    const n = c.name.toLowerCase()
+    return n === x || n.endsWith(`:${x}`)
+  })
+
 /** Ein `yieldTo`-Muster als Regex über den ganzen Befehlsnamen: `*` = beliebig viele Zeichen, sonst wörtlich, ohne Groß/klein. */
 const globRe = (p: string) => new RegExp(`^${p.split('*').map(esc).join('.*')}$`, 'i')
 
@@ -446,7 +696,7 @@ const globRe = (p: string) => new RegExp(`^${p.split('*').map(esc).join('.*')}$`
 export function yieldedTo(entry: CatalogEntry, cmds: readonly Cmd[]): string {
   if (!entry.yieldTo?.length) return ''
   const res = entry.yieldTo.map(globRe)
-  const hit = cmds.find((c) => !isOwnCmd(c) && c.source !== 'builtin' && res.some((r) => r.test(c.name)))
+  const hit = cmds.find((c) => !isOwnCmd(c) && c.source !== 'builtin' && !isOriginal(entry, c) && res.some((r) => r.test(c.name)))
   return hit ? `/${hit.name}` : ''
 }
 
@@ -462,14 +712,17 @@ const BRIEF = /^(#\s*(Übergabe|Uebergabe|Handoff)\b|(Task|Background) \(from th
  * Vorfilter (Verhalten 1): Einträge, deren Stichwort vorkommt, die nicht installiert, nicht stumm und in diesem Chat noch nicht
  * angeboten sind; höchstens `CATALOG_MAX`. Leer unter 4 Wörtern, bei Slash-Befehlen und bei Übergaben. Ohne Modell.
  */
-export function findCandidates(text: string, o: { cmds: readonly Cmd[]; muted: readonly string[]; offered: readonly string[] }): CatalogEntry[] {
+export function findCandidates(text: string, o: { cmds: readonly Cmd[]; muted: readonly string[]; offered: readonly string[]; servers?: readonly string[] }): CatalogEntry[] {
   const s = String(text ?? '').replace(/<\/?pasted_content[^>]*>/g, ' ').trim()
   if (!s || s.startsWith('/') || BRIEF.test(s) || wordCount(s) < CATALOG_MIN_WORDS) return []
   const out: CatalogEntry[] = []
   for (const c of CATALOG) {
     if (o.muted.includes(c.id) || o.offered.includes(c.id)) continue
     if (!keywordHit(c, s)) continue
-    if (isInstalled(c, o.cmds) || yieldedTo(c, o.cmds)) continue
+    // Ausbau 0.31.0 (E2): ein installiertes Original bleibt Kandidat, „Mit … senden“ startet es
+    if ((isInstalled(c, o.cmds) && !launchOf(c, o.cmds)) || yieldedTo(c, o.cmds)) continue
+    // Ausbau 0.30.0 (E7): ein verbundener MCP-Server zählt wie installiert; „unbekannt“ (Desktop) bleibt Kandidat, nur eine Zeile
+    if (serverState(c, o.servers ?? []) === 'yes') continue
     out.push(c)
     if (out.length >= CATALOG_MAX) break
   }
@@ -480,18 +733,20 @@ export function findCandidates(text: string, o: { cmds: readonly Cmd[]; muted: r
 export const LOOP_SKILL = 'sp-debug'
 
 /**
- * Korrektur-Schleife (E4): Trifft die dritte Korrektur das Stichwort von `LOOP_SKILL`, heißt „Mit Denkanstoß senden“ stattdessen
- * „Mit systematic-debugging senden“. Nicht, wenn der Eintrag stumm, installiert, zurückgestellt oder in diesem Chat schon angeboten
- * ist (der Aufrufer prüft `catalog` und die Stufe). Ohne Modell; Übergaben und Slash-Befehle wie beim Vorfilter nicht.
+ * Korrektur-Schleife (0.28.0 E4): Trifft die dritte Korrektur das Stichwort von `LOOP_SKILL`, heißt „Mit Denkanstoß senden“ stattdessen
+ * „Mit systematic-debugging senden“. Seit 0.31.0 (E2) nur mit installiertem Original, das dann startet (`cmd`, ohne `/`); nicht, wenn
+ * der Eintrag stumm, zurückgestellt oder in diesem Chat schon angeboten ist (der Aufrufer prüft `catalog` und die Stufe). Ohne Modell;
+ * Übergaben und Slash-Befehle wie beim Vorfilter nicht.
  */
-export function loopSkill(text: string, o: { cmds: readonly Cmd[]; muted: readonly string[]; offered: readonly string[] }): CatalogEntry | null {
+export function loopSkill(text: string, o: { cmds: readonly Cmd[]; muted: readonly string[]; offered: readonly string[] }): { c: CatalogEntry; cmd: string } | null {
   const c = byId(LOOP_SKILL)
-  if (!c?.invoke) return null
+  if (!c) return null
   const s = String(text ?? '').replace(/<\/?pasted_content[^>]*>/g, ' ').trim()
   if (!s || s.startsWith('/') || BRIEF.test(s)) return null
   if (o.muted.includes(c.id) || o.offered.includes(c.id)) return null
-  if (!keywordHit(c, s) || isInstalled(c, o.cmds) || yieldedTo(c, o.cmds)) return null
-  return c
+  if (!keywordHit(c, s) || yieldedTo(c, o.cmds)) return null
+  const cmd = launchOf(c, o.cmds)
+  return cmd ? { c, cmd } : null
 }
 
 /** Höchstens eine Katalog-Rückfrage je `CATALOG_GAP` eigene Nachrichten; `lastAsk` = Stand des Zählers bei der letzten (0 = nie). */
@@ -609,16 +864,63 @@ export function catalogPick(v: CatalogVerdict | null, cands: readonly CatalogEnt
   if (!v || v.id === 'none') return null
   const c = cands.find((x) => x.id === v.id) ?? null
   if (!c || v.sicher < (c.minSure ?? CATALOG_MIN)) return null
+  // Schwer (0.25.0 E3) und kostenpflichtig (0.30.0 E4): nur eine Zeile, und erst ab der höheren Schwelle
   if (c && c.risk.heavy && v.sicher < CATALOG_MIN_HEAVY) return null
+  if (c && c.risk.paid && v.sicher < CATALOG_MIN_PAID) return null
   return c
 }
 
-/** Art des Eingriffs (Verhalten 3): Rückfrage mit Skill, Rückfrage mit Befehl, nur Hinweiszeile. */
-export function catalogKind(c: CatalogEntry): 'skill' | 'copy' | 'line' {
+/**
+ * Art des Eingriffs (Verhalten 3): Rückfrage mit mitgeliefertem Skill, Rückfrage mit dem installierten Original (`run`, Ausbau 0.31.0 E2;
+ * `launch` aus `launchOf`), Rückfrage mit Befehl, nur Hinweiszeile. Ein Verweis mit `launchAs` ohne installiertes Original bekommt nur
+ * die Zeile: die Nachricht geht unverändert (SPEC 0.31.0, Teil 3).
+ */
+export function catalogKind(c: CatalogEntry, launch = ''): 'skill' | 'run' | 'copy' | 'line' {
   if (c.way === 'bundled') return 'skill'
-  if (c.risk.heavy) return 'line'
+  if (c.launchAs?.length) return launch ? 'run' : 'line'
+  // Ausbau 0.30.0 (E4): Dienste mit Credits oder Abo halten nie an
+  if (c.risk.heavy || c.risk.paid) return 'line'
   // Ohne belegte Installationszeile gibt es nichts zu kopieren: nur die Zeile mit der Adresse
-  return c.install ? 'copy' : 'line'
+  return c.install?.line ? 'copy' : 'line'
+}
+
+// ---------- Ausbau 0.30.0: MCP-Server erkennen (Probe P1) ----------
+
+/**
+ * Servernamen aus `$.tool.list()`: `mcp__<server>__<tool>` (ToolInfo hat nur `name`, `description`, `mcp`; types@2.1.325:15109-15130).
+ * Probe P1 (2026-11-17): Terminal und `-p` nennen Connectoren von claude.ai `claude_ai_<Anzeigename>` (`claude_ai_fal_Bilder_Videos`),
+ * Plugin-Server `plugin_<plugin>_<server>`, `claude mcp add`-Server mit ihrem Schlüssel (`earshot`). Die Desktop-App nennt
+ * dieselben Connectoren nach einer UUID (`e610e383-…`), dort ist der Anbieter nicht zu erkennen.
+ */
+export function mcpServers(tools: readonly { name: string; mcp?: boolean }[]): string[] {
+  const out = new Set<string>()
+  for (const t of tools) {
+    if (!t?.mcp) continue
+    const m = /^mcp__(.+?)__/.exec(String(t.name ?? ''))
+    if (m) out.add(m[1]!)
+  }
+  return [...out]
+}
+
+/** Ein Servername, hinter dem der Anbieter nicht zu erkennen ist (Desktop: Connectoren als UUID, Probe P1). */
+export const isOpaqueServer = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)
+
+/** Passt ein Server zu einem Namen aus `installedAs`? Ohne Groß/klein; `claude_ai_` und `plugin_<x>_` vorne zählen nicht. */
+export function serverMatches(server: string, name: string): boolean {
+  const n = name.toLowerCase()
+  const s = server.toLowerCase()
+  const bare = [s, s.replace(/^claude_ai_/, ''), s.replace(/^plugin_[^_]+_/, '')]
+  return bare.some((b) => b === n || b.startsWith(`${n}_`) || b.startsWith(`${n}-`)) || s.startsWith(`plugin_${n}_`)
+}
+
+/**
+ * Stand eines MCP- oder Connector-Eintrags: `yes`, wenn ein Server passt; `unknown`, wenn es Server ohne erkennbaren Namen gibt
+ * (Desktop, P1: dann zeigt die Liste „?“); sonst `no`. Für andere Arten `no` (dort zählt `$.command.list()`).
+ */
+export function serverState(entry: CatalogEntry, servers: readonly string[]): 'yes' | 'no' | 'unknown' {
+  if (entry.kind !== 'mcp' && entry.kind !== 'connector') return 'no'
+  if (servers.some((s) => entry.installedAs.some((a) => serverMatches(s, a)))) return 'yes'
+  return servers.some(isOpaqueServer) ? 'unknown' : 'no'
 }
 
 /**
@@ -632,7 +934,5 @@ export function skillContext(body: string, dir: string, c: CatalogEntry, text: s
   const head = de
     ? `Der Nutzer hat diese Nachricht über sidekick mit dem Skill ${c.invoke} gesendet (${c.name} von ${c.author}, ${c.license}, ${c.repo}). Folge dem Skill für diese Nachricht.`
     : `The user sent this message through sidekick with the skill ${c.invoke} (${c.name} by ${c.author}, ${c.license}, ${c.repo}). Follow the skill for this message.`
-  // Ausbau 0.28.0 (E3): der Hinweis hinter dem Kopf, vor dem Skill-Text
-  const note = c.ctxNote ? ['', c.ctxNote[de ? 'de' : 'en']] : []
-  return [head, ...note, '', `Base directory for this skill: ${dir}`, '', rest.split('$ARGUMENTS').join(text).trim()].join('\n')
+  return [head, '', `Base directory for this skill: ${dir}`, '', rest.split('$ARGUMENTS').join(text).trim()].join('\n')
 }
