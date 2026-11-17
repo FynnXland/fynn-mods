@@ -1253,9 +1253,10 @@ function expectStripe(row: BN | undefined, keys: readonly string[]) {
   expect(stripe.props).toMatchObject({ width: '100%', overflow: 'hidden', flexShrink: 0 })
   const svg = (stripe.children ?? [])[0] as BN
   expect(svg.type).toBe('Svg')
-  expect(svg.props).toMatchObject({ alt: 'Trennlinie unter der sidekick-Anzeige', width: 2400, height: 14 })
+  // Nachtrag 0.32.0 C: 10 px, Linie ganz unten (0.29.0–0.31.2: 14 px, 4 px Luft darunter); darüber weiter 8 px
+  expect(svg.props).toMatchObject({ alt: 'Trennlinie unter der sidekick-Anzeige', width: 2400, height: 10 })
   const src = String(svg.props?.source)
-  expect(src).toContain('height="14" viewBox="0 0 2400 14"')
+  expect(src).toContain('height="10" viewBox="0 0 2400 10"')
   expect(src).toContain('fill="#6CB6FF"')
   expect(src).toContain('<rect y="8" width="2400" height="2"')
   expect(src).toContain('opacity="0.85"')
@@ -1400,9 +1401,66 @@ test('0.29.0: keine Knopfzeile mehr in sidekicks Zeile (prompt-deck zeichnet die
   await ui.unmount()
   const mode = await $.ui.mount({ plugin: 'sidekick', component: 'SessionMode', requestId: 'mode', surface: 'desktop', props: { modes: [] } } as never)
   const json = JSON.stringify(await mode.drawn())
-  expect(json).toContain('sidekick · Begleiter')
+  // Seit 0.32.0 Buchstabe statt Stufenname, dazu nur der Knopf „Chat“
+  expect(json).toContain('sidekick · B')
   expect(json).not.toContain('sidekick-p-')
   await mode.unmount()
+})
+
+// ---------- Nachtrag 0.32.0: Kurzlabel und Knopf „Chat“ in der Desktop-Fußzeile ----------
+
+const deskMode = async ($: Engine) => {
+  const ui = await $.ui.mount({ plugin: 'sidekick', component: 'SessionMode', requestId: 'mode', surface: 'desktop', props: { modes: ['plan mode'] } } as never)
+  const root = (await ui.drawn()) as BN
+  return { ui, root, label: JSON.stringify(await ui.find({ key: 'sidekick-mode' })), chat: (await ui.find({ key: 'sidekick-chat-open' })) as Found }
+}
+
+for (const [lng, guide] of [['de', 'B'], ['en', 'G']] as const)
+  test(`0.32.0 Fußzeile ${lng}: Buchstabe je Stufe (C, ${guide}), Aus ohne Buchstaben und ohne Knopf; Knopf vorn, Engine-Anteil bleibt`, { options: { language: lng } }, async ($, on) => {
+    setLang(lng)
+    world(on)
+    for (const [level, letter] of [['guide', guide], ['cache', 'C']] as const) {
+      await $.command.run({ ...CMD, command: 'sidekick', args: level } as never)
+      const d = await deskMode($)
+      expect(d.label).toContain(`"sidekick · ${letter}"`)
+      expect(d.label).not.toContain(T[lng].level[level])
+      expect(d.chat?.props).toMatchObject({ label: 'Chat' })
+      // Reihenfolge im Baum: Knopf, ●-Label, Engine-Anteil (der Desktop stellt Knöpfe ohnehin links, Probe 2026-11-17)
+      const kids = (d.root.children ?? []) as BN[]
+      expect(kids.length).toBe(3)
+      expect(JSON.stringify(kids[0])).toContain('sidekick-chat-open')
+      expect(bkey(kids[1])).toBe('sidekick-mode')
+      expect(JSON.stringify(kids[2])).toContain('plan mode')
+      await d.ui.unmount()
+    }
+    await $.command.run({ ...CMD, command: 'sidekick', args: 'off' } as never)
+    const d = await deskMode($)
+    expect(d.label).toContain('"sidekick"')
+    expect(d.label).toContain('#F85149')
+    expect(d.label).not.toContain(T[lng].modeOffWord)
+    expect(d.chat).toBeUndefined()
+    await d.ui.unmount()
+  })
+
+deTest('0.32.0 Fußzeile: Terminal unverändert (Stufenname, kein Knopf)', async ($, on) => {
+  world(on)
+  const ui = await mountMode($, 'terminal')
+  expect(await modeText(ui)).toBe('plan mode & 🟢 sidekick · Begleiter')
+  expect(await ui.find({ key: 'sidekick-chat-open' })).toBeUndefined()
+  await ui.unmount()
+})
+
+deTest('0.32.0 Legende: /sidekick status und Hilfe erklären die Buchstaben', async ($, on) => {
+  world(on)
+  const st = (await $.command.run({ ...CMD, command: 'sidekick', args: 'status' } as never)).text ?? ''
+  expect(st).toContain(T.de.modeLegend)
+  expect(T.de.modeLegend).toContain('B = Begleiter, C = Cache, ohne Buchstabe = Aus')
+  expect(T.en.modeLegend).toContain('G = Guide, C = Cache, no letter = Off')
+  const help = (await $.command.run({ ...CMD, command: 'sidekick', args: 'help' } as never)).text ?? ''
+  expect(help).toContain('Begleiter (Desktop-Fußzeile: B)')
+  expect(help).toContain('Cache (Desktop-Fußzeile: C)')
+  expect(help).toContain('Aus (Desktop-Fußzeile: roter Punkt ohne Buchstaben)')
+  expect(help).toContain('Knopf „Chat“ in der Fußzeile')
 })
 
 // ---------- Wartungs-Hinweise (SPEC Nachtrag 0.2.0) ----------
@@ -2991,7 +3049,7 @@ deTest('0.10.2: Desktop: eigener Baum mit farbigem ● neben der Zeichnung der E
   expect(d.theirs).toBe('plan mode')
   expect(d.mine).toContain('●')
   expect(d.mine).toContain('#3FB950')
-  expect(d.mine).toContain('sidekick · Begleiter')
+  expect(d.mine).toContain('"sidekick · B"')
   // Übergabe läuft: orange
   w.setCtx(90000)
   w.setReply({ isAnswered: true, text: verdict({ urteil: 'anhalten', art: 'neuer_chat', zeile: 'Neues Thema' }), usage: MODEL_USAGE })
@@ -3006,7 +3064,7 @@ deTest('0.10.2: Desktop: eigener Baum mit farbigem ● neben der Zeichnung der E
   await flush()
   d = await desk()
   expect(d.mine).toContain('#F85149')
-  expect(d.mine).toContain('sidekick aus')
+  expect(d.mine).toContain('"sidekick"')
 })
 
 // ---------- Nachtrag 0.11.0: Haiku 5.5 für die Prüfung, neue Preise ----------
@@ -3808,16 +3866,28 @@ const ctxOf = (r: unknown) => (r as { context?: readonly string[] }).context
 const ASK = { tool: 'AskUserQuestion', questions: [{ question: 'Q?', header: 'Q', multiSelect: false, options: [{ label: 'a', description: '' }, { label: 'b', description: '' }] }] }
 
 for (const surface of ['terminal', 'desktop'] as const)
-  deTest(`0.27.1 Ansicht ${surface}: eine Zeile mit drei Knöpfen, umbrechend, ohne Leerzeile, Ziffern 1/2/0`, async ($, on) => {
+  deTest(`0.27.1/0.32.0 Ansicht ${surface}: Kopf allein, darunter die Knopfzeile, umbrechend, ohne Leerzeile, Ziffern 1/2/0`, async ($, on) => {
     world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
     await notesOn($)
     let ui = await $.ui.mount(bandNote(surface))
-    const box = (await ui.find({ key: 'sidekick-note' })) as { props: Record<string, unknown> }
-    expect(box.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap', width: 100 })
+    const box = (await ui.find({ key: 'sidekick-note' })) as { props: Record<string, unknown>; children: { props: Record<string, unknown> }[] }
+    // Nachtrag 0.31.3: Spalte aus Kopf und Knopfzeile; `xs` zwischen beiden (der Desktop-Knopf ragt über seine Zeile)
+    expect(box.props).toMatchObject({ flexDirection: 'column', rowGap: 'xs', width: 100 })
+    expect(box.children.map((c) => c.props.key)).toEqual(['sidekick-note-head', 'sidekick-note-buttons'])
     expect(box.props.marginBottom).toBeUndefined()
+    const head = JSON.stringify(await ui.find({ key: 'sidekick-note-head' }))
+    expect(head).toContain('Achtung')
+    expect(head).toContain(THEMA)
+    // Kein Knopf im Kopf, alle Knöpfe in der eigenen Zeile
+    expect(head).not.toContain('"type":"Button"')
+    const row = (await ui.find({ key: 'sidekick-note-buttons' })) as { props: Record<string, unknown> }
+    expect(row.props).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap', columnGap: 3 })
+    const rowS = JSON.stringify(row)
+    for (const k of ['sidekick-note-claude', 'sidekick-note-explain', 'sidekick-note-ignore']) expect(rowS).toContain(k)
+    // Nachtrag 0.32.0: „Chat“ rechts in der Knopfzeile, nur im Desktop
+    if (surface === 'desktop') expect((await ui.find({ key: 'sidekick-note-chat' }))?.props).toMatchObject({ label: 'Chat', plain: true })
+    else expect(await ui.find({ key: 'sidekick-note-chat' })).toBeUndefined()
     const s = JSON.stringify(box)
-    expect(s).toContain('Achtung')
-    expect(s).toContain(THEMA)
     expect((await ui.find({ key: 'sidekick-note-claude' }))?.props).toMatchObject({ label: 'An Claude geben', hotkey: '1' })
     expect((await ui.find({ key: 'sidekick-note-explain' }))?.props).toMatchObject({ label: 'Erklären', hotkey: '2' })
     expect((await ui.find({ key: 'sidekick-note-ignore' }))?.props).toMatchObject({ label: 'Ignorieren', hotkey: '0' })
@@ -3826,9 +3896,24 @@ for (const surface of ['terminal', 'desktop'] as const)
     await ui.unmount()
     // Schmal (40 Spalten): Breite folgt bodyColumns, die Knöpfe brechen über flexWrap um
     ui = await $.ui.mount(bandNote(surface, { bodyColumns: 40 }))
-    expect((await ui.find({ key: 'sidekick-note' }))?.props).toMatchObject({ width: 40, flexWrap: 'wrap' })
+    expect((await ui.find({ key: 'sidekick-note' }))?.props).toMatchObject({ width: 40 })
+    expect((await ui.find({ key: 'sidekick-note-buttons' }))?.props).toMatchObject({ flexWrap: 'wrap' })
     await ui.unmount()
   })
+
+deTest('0.32.0 (Nachtrag 0.31.3): langes Thema bleibt im Kopf, die drei Knöpfe und „Chat“ stehen trotzdem gemeinsam darunter', async ($, on) => {
+  const long = 'Die Tests laufen gegen den alten Typen-Snapshot 2.1.325, obwohl Claude Code schon 2.1.326 installiert hat und sich die Pane-Props geändert haben'
+  world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: { ...NOTE, thema: long }, savedAt: NOW }]]) })
+  await notesOn($)
+  const ui = await $.ui.mount(bandNote('desktop'))
+  const head = (await ui.find({ key: 'sidekick-note-head' })) as { children: { props: Record<string, unknown> }[] }
+  expect(JSON.stringify(head)).toContain(long)
+  expect(head.children[0]!.props).toMatchObject({ wrap: 'wrap' })
+  const row = (await ui.find({ key: 'sidekick-note-buttons' })) as { children: { props: Record<string, unknown>; type: string }[] }
+  // An Claude geben, Erklären, Ignorieren, Abstandhalter, Chat
+  expect(row.children.map((c) => c.props.key ?? (c.props.flexGrow === 1 ? 'spacer' : '?'))).toEqual(['sidekick-note-claude', 'sidekick-note-explain', 'sidekick-note-ignore', 'spacer', 'sidekick-note-chat'])
+  await ui.unmount()
+})
 
 deTest('0.27.1: ein alter aufgeklappter Hinweis (open: true aus 0.27.0) erscheint als eine Zeile und altert normal', async ($, on) => {
   const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: { ...NOTE, open: true }, savedAt: NOW }]]) })
@@ -4109,7 +4194,7 @@ deTest('0.14.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstel
   const lines = text.split('\n')
   expect(lines[0]).toMatch(/^\*\*sidekick · Hilfe\*\* · #[0-9a-z]{5,}$/)
   expect(lines).toContain('**BEFEHLE**')
-  expect(lines).toContain(`- \`/sidekick guide\`: Begleiter: Prüfung mit ${CHECK_NAME}, Zeilen und Rückfragen`)
+  expect(lines).toContain(`- \`/sidekick guide\`: Begleiter (Desktop-Fußzeile: B): Prüfung mit ${CHECK_NAME}, Zeilen und Rückfragen`)
   expect(lines).toContain('- `/sidekick notes on|off`: Hinweise während Claude arbeitet, an oder aus (Standard aus)')
   expect(lines.some((l) => l.includes('/later') || l.includes('long 800'))).toBe(false)
   expect(text).not.toContain('worklist')
@@ -4965,8 +5050,13 @@ async function explainBox($: Engine, surface: string, cols: number): Promise<Fou
   await ui.press({ key: 'sidekick-note-explain' })
   await flush(120)
   const box = (await ui.find({ key: 'sidekick-note-text' })) as Found
-  // Die Zeile mit Thema und Knöpfen bleibt darüber
-  for (const key of ['sidekick-note-line', 'sidekick-note-claude', 'sidekick-note-explain', 'sidekick-note-ignore']) expect(await ui.find({ key }), key).toBeDefined()
+  // Kopf und Knopfzeile bleiben darüber (seit 0.32.0 getrennt, Nachtrag 0.31.3)
+  for (const key of ['sidekick-note-head', 'sidekick-note-buttons', 'sidekick-note-claude', 'sidekick-note-explain', 'sidekick-note-ignore']) expect(await ui.find({ key }), key).toBeDefined()
+  // Nachtrag 0.31.3: Knopfzeile und Box in einer Spalte mit Abstand `sm` (Desktop 12 px, Terminal 0)
+  const body = (await ui.find({ key: 'sidekick-note-body' })) as { props: Record<string, unknown>; children: { props: Record<string, unknown> }[] }
+  expect(body.props).toMatchObject({ flexDirection: 'column', rowGap: 'sm', width: cols })
+  expect(body.children.map((c) => c.props.key)).toEqual(['sidekick-note-buttons', 'sidekick-note-text'])
+  expect(((await ui.find({ key: 'sidekick-note' })) as Found)?.props).toMatchObject({ flexDirection: 'column', rowGap: 'xs' })
   await ui.press({ key: 'sidekick-note-explain' })
   await flush(120)
   expect(await ui.find({ key: 'sidekick-note-text' })).toBeUndefined()

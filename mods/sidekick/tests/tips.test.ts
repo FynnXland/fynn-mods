@@ -468,9 +468,9 @@ deTest('Annahme: Nachricht unverändert gesendet, danach jede Hauptanfrage auf S
   const ui = await $.ui.mount({ plugin: 'sidekick', component: 'SessionMode', requestId: 'mode', surface: 'terminal', props: { modes: [] } } as never)
   expect(JSON.stringify(await ui.find({ type: 'Text' }))).toContain('→ Sonnet')
   await ui.unmount()
-  // Desktop: eigener Baum mit ● und „sidekick · Begleiter → Sonnet“ (Review 0.18.0 K1)
+  // Desktop: eigener Baum mit ● und „sidekick · B→S“ (Review 0.18.0 K1; seit 0.32.0 Buchstaben neben dem Knopf „Chat“)
   const desk = await $.ui.mount({ plugin: 'sidekick', component: 'SessionMode', requestId: 'mode2', surface: 'desktop', props: { modes: [] } } as never)
-  expect(JSON.stringify(await desk.find({ key: 'sidekick-mode' }))).toContain('sidekick · Begleiter → Sonnet')
+  expect(JSON.stringify(await desk.find({ key: 'sidekick-mode' }))).toContain('sidekick · B→S')
 })
 
 deTest('Fynn wechselt selbst (anderes e.model) → Umschreiben endet; zurück auf Opus über /model → Ersparnis gestrichen (zurück)', async ($, on) => {

@@ -46,7 +46,8 @@ function commands(): HelpCommand[] {
   return [
     { cmd: '/sidekick [status]', does: h.status },
     // Die Stufen mit ihrer Beschreibung aus /sidekick status
-    ...LEVELS.map((l) => ({ cmd: `/sidekick ${l}`, does: `${x.level[l]}: ${x.levelDesc[l]}` })),
+    // Nachtrag 0.32.0: dazu der Buchstabe in der Desktop-Fußzeile (Aus ohne Buchstaben)
+    ...LEVELS.map((l) => ({ cmd: `/sidekick ${l}`, does: `${x.level[l]}${l === 'off' ? x.footerNoLetter : x.footerLetter(x.levelShort[l])}: ${x.levelDesc[l]}` })),
     { cmd: '/sidekick on', does: h.on },
     { cmd: '/sidekick threshold 80k', does: h.threshold },
     { cmd: '/sidekick big 150k', does: h.big },

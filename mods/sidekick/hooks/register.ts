@@ -11,7 +11,7 @@ import { isLanguage, languageCommand } from './language.js'
 import { NOTES_KEEP, NOTES_WORDS, addTopic, afterOwnMessage, cleanNote, cleanTopics, nonNeg, normTopic, noteBg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.js'
 import type { Note } from './notes.js'
 import { CATALOG as CATALOG_SPEC, CHAT, CHECK, HANDOFF, QUEUE, RATE, TIP_TARGETS, modelLabel, modelName } from './models.js'
-import { CHAT_NARROW, CHAT_QUESTION_MAX, addTurn, cardMeta, chatCard, chatPerQuestion, chatPrompt, chatSystem, chatText, cleanChat, emptyChat, offeredIds, parseChat, rawAnswer, skillText } from './chat.js'
+import { CHAT_NARROW, CHAT_QUESTION_MAX, addTurn, inputRows, cardMeta, chatCard, chatPerQuestion, chatPrompt, chatSystem, chatText, cleanChat, emptyChat, offeredIds, parseChat, rawAnswer, skillText } from './chat.js'
 import type { ChatAnswer, ChatState, ChatTurn } from './chat.js'
 import {
   CATALOG,
@@ -500,13 +500,17 @@ function el(type: 'Box' | 'Text', props: Record<string, string | number | boolea
 
 // Streifen wie die orange Trennlinie der Spotify-Leiste (tune-strip view.ts sepSvg): breiter als jedes Fenster, die Box schneidet ab.
 // Seit 0.29.0 14 statt 26 px wie tune-strip 0.12.3 (Merge ab1bdb6): 26 px belegten im Desktop zwei Band-Zeilen und erzeugten eine
-// Leerzeile; eine Zeile ist dort ≈ 20 px hoch [UNKLAR, nicht dokumentiert, Fynns Bild 2026-11-17]
+// Leerzeile; eine Zeile ist dort ≈ 20 px hoch [UNKLAR, nicht dokumentiert, Fynns Bild 2026-11-17]. Seit 0.32.0 10 px (Linie unten, C)
 const STRIPE_W = 2400
-const STRIPE_H = 14
+const STRIPE_H = 10
 
-/** Blaue Linie (2 px) mit 8 px Luft darüber und 4 px darunter (bis 0.28.0: 16 px darunter). */
+/**
+ * Blaue Linie (2 px) mit 8 px Luft darüber und keiner darunter (0.29.0–0.31.2: 4 px, bis 0.28.0: 16 px). Nachtrag 0.32.0 C: Mit 4 px
+ * lagen über dem Cover der Spotify-Leiste 11 px, darunter bis zur orangen Linie 7 px (Fynns Desktop-Bild 2026-11-17); ohne sind es oben
+ * und unten 7 px. Der Rest oben ist der Band-Abstand `xs` (8 px) und tune-strips eigener Rand.
+ */
 function stripeSvg(): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${STRIPE_W}" height="${STRIPE_H}" viewBox="0 0 ${STRIPE_W} ${STRIPE_H}"><rect y="8" width="${STRIPE_W}" height="2" fill="${ACCENT}" opacity="0.85"/></svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${STRIPE_W}" height="${STRIPE_H}" viewBox="0 0 ${STRIPE_W} ${STRIPE_H}"><rect y="${STRIPE_H - 2}" width="${STRIPE_W}" height="2" fill="${ACCENT}" opacity="0.85"/></svg>`
 }
 
 /**
@@ -2521,31 +2525,43 @@ async function pressNote($: EngineInterface, shownAt: number, action: NoteAction
 type NoteButton = (p: { key: string; label: string; hotkey?: string; plain?: true; onPress: () => void }) => RenderNode
 
 /**
- * Der Hinweis über dem Prompt in einer Zeile (Ausbau 0.27.1, E2): `✦ Achtung · <thema>` mit 1 An Claude geben, 2 Erklären, 0 Ignorieren
- * (Teil C, 0.29.0; bis 0.28.1 „Weiß ich schon“). `flexWrap`: Ist die Zeile zu schmal, brechen die Knöpfe um. Keine Leerzeile darunter.
+ * Der Hinweis über dem Prompt (Ausbau 0.27.1, E2): `✦ Achtung · <thema>` mit 1 An Claude geben, 2 Erklären, 0 Ignorieren (Teil C,
+ * 0.29.0; bis 0.28.1 „Weiß ich schon“). Seit 0.32.0 (Nachtrag 0.31.3) der Kopf allein, darunter die Knopfzeile; `chat` (nur Desktop)
+ * steht rechts in ihr. `flexWrap`: Ist die Knopfzeile zu schmal, brechen die Knöpfe um. Keine Leerzeile darunter.
  * `digits`: Ziffern als hotkey; nicht, solange quick-replies 1 … n belegt (types:9073). `open`: unter der Zeile die Erklärung
  * (`text`, ohne Text das Thema), Breite `bodyColumns`, Umbruch `wrap`; die Knöpfe bleiben, der zweite heißt dann „Zuklappen“.
  * Seit 0.29.1 in einer runden Box mit Rahmen `ACCENT`, `paddingX: 1` und Hintergrund `bg` (`noteBg`, fehlt er: nur Rahmen).
  * Ein bekanntes, schlimmer gewordenes Thema: `✦ Achtung · schlimmer geworden · <thema>`.
  */
-function noteView(n: Note, cols: number, digits: boolean, button: NoteButton, press: (a: NoteAction) => void, open = false, bg?: string): RenderElement {
+function noteView(n: Note, cols: number, digits: boolean, button: NoteButton, press: (a: NoteAction) => void, open = false, bg?: string, chat?: RenderNode): RenderElement {
   const x = t()
   const b = (key: string, label: string, hotkey: string, a: NoteAction) => button({ key, label, plain: true, ...(digits ? { hotkey } : {}), onPress: () => press(a) })
   const worse = n.worse ? [el('Text', { dimColor: true }, [' · ']), el('Text', { color: ACCENT }, [x.noteWorse])] : []
   const head = el('Text', {}, [el('Text', { color: ACCENT }, ['✦ ']), el('Text', { color: ACCENT, bold: true }, [x.noteTag[n.art]]), ...worse, el('Text', { dimColor: true }, [' · ']), el('Text', {}, [n.thema])])
   const width = Math.max(20, cols)
-  const line = [
-    head,
+  // Nachtrag 0.31.3: der Kopf allein in der ersten Zeile, darunter immer alle drei Knöpfe in einer eigenen Zeile. Vorher brachen sie
+  // mit dem Kopf um, und bei langem Thema stand „An Claude geben“ hinter dem Text, die anderen zwei darunter. `flexWrap` bleibt nur für
+  // ein sehr schmales Band (unter etwa 50 Spalten passen die drei Knöpfe nicht nebeneinander).
+  const buttons = el('Box', { key: 'sidekick-note-buttons', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3 }, [
     b('sidekick-note-claude', x.noteClaude, '1', 'claude'),
     b('sidekick-note-explain', open ? x.noteCollapse : x.noteExplain, '2', 'explain'),
     b('sidekick-note-ignore', x.noteIgnore, '0', 'ignore'),
-  ]
-  if (!open) return el('Box', { key: 'sidekick-note', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3, width }, line)
-  return el('Box', { key: 'sidekick-note', flexDirection: 'column', width }, [
-    el('Box', { key: 'sidekick-note-line', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3, width }, line),
-    // Nachtrag 0.29.1: blau umrahmte Box direkt unter der Zeile, Hintergrund aus noteBg (ohne Farbe nur der Rahmen)
-    el('Box', { key: 'sidekick-note-text', borderStyle: 'round', borderColor: ACCENT, paddingX: 1, width, ...(bg ? { backgroundColor: bg } : {}) }, [
-      el('Text', { wrap: 'wrap' }, [n.text || n.thema]),
+    // Nachtrag 0.32.0: Knopf „Chat“ in derselben Zeile, rechts über einen Abstandhalter oder links hinten an
+    ...(chat ? [el('Box', { flexGrow: 1 }, []), chat] : []),
+  ])
+  // `xs` (Desktop 8 px, Terminal 0 Zeilen, docs/raw/en/reference.md:371-377): Der native Knopf im Desktop ragt etwa 4 px über seine
+  // Zeile und läge sonst auf dem Kopf (Probe 2026-11-17, band-zeilenabstand)
+  const top = el('Box', { key: 'sidekick-note-head', width }, [el('Text', { wrap: 'wrap' }, [head])])
+  if (!open) return el('Box', { key: 'sidekick-note', flexDirection: 'column', rowGap: 'xs', width }, [top, buttons])
+  return el('Box', { key: 'sidekick-note', flexDirection: 'column', rowGap: 'xs', width }, [
+    top,
+    // Nachtrag 0.31.3: kleiner Abstand `sm` (Desktop 12 px) zwischen Knopfzeile und Erklärungsbox; im Terminal 0 Zeilen
+    el('Box', { key: 'sidekick-note-body', flexDirection: 'column', rowGap: 'sm', width }, [
+      buttons,
+      // Nachtrag 0.29.1: blau umrahmte Box, Hintergrund aus noteBg (ohne Farbe nur der Rahmen)
+      el('Box', { key: 'sidekick-note-text', borderStyle: 'round', borderColor: ACCENT, paddingX: 1, width, ...(bg ? { backgroundColor: bg } : {}) }, [
+        el('Text', { wrap: 'wrap' }, [n.text || n.thema]),
+      ]),
     ]),
   ])
 }
@@ -2728,6 +2744,8 @@ async function statusText($: EngineInterface): Promise<string> {
   // Anzeige in der Fußzeile (0.10.1): ob die Engine sie aufruft, wo, und ob das Lesen des Werts scheitert
   const md = (await $.store.get('diag:sessionMode')) as Partial<ModeDiag> | undefined
   out.push(md && typeof md.at === 'number' && typeof md.surface === 'string' ? x.modeSeen(hhmm(md.at), md.surface, typeof md.err === 'string' ? md.err : '') : x.modeNever, '')
+  // Nachtrag 0.32.0: die Buchstaben der Desktop-Fußzeile
+  out.push(x.modeLegend, '')
   const hs = await loadHints($)
   out.push(x.hintsLine(onOff(hs.on), hs.off.join(', ')), '')
   // Umzug der gespeicherten Prompts nach prompt-deck (Ausbau 0.29.0, Verhalten 6)
@@ -3572,6 +3590,21 @@ async function queueCommand($: EngineInterface, rest: string): Promise<string> {
 // ---------- sidekick-Chat im Seitenfenster (Ausbau 0.30.0) ----------
 
 const CHAT_PANE = 'sidekick-chat'
+/** Nachtrag 0.32.0: Höhe des Eingabefelds im Seitenchat, 1 bis CHAT_ROWS_MAX; nur im Speicher. */
+let chatRows = 1
+
+/** Beim Tippen (`onInput`): neue Zeilenzahl aus dem Text; neu gezeichnet wird nur bei einer Änderung, nicht bei jedem Zeichen. */
+function chatGrow($: EngineInterface, text: string, cols: number) {
+  const n = inputRows(text, cols)
+  if (n === chatRows) return
+  chatRows = n
+  try {
+    $.ui.invalidate('ui.render')
+  } catch {
+    // beim nächsten Zeichnen
+  }
+}
+
 /** Abbrechen der laufenden Antwort (Verhalten 2); null, wenn keine läuft. Nach einem Neuladen ist eine laufende Antwort verloren. */
 let chatAbort: AbortController | null = null
 /** Spiegel von `sidekick.chat` für ein Lesen, das fehlschlägt. */
@@ -3708,6 +3741,8 @@ async function chatCommand($: EngineInterface, question: string): Promise<{ text
   const surfaces = await $.session.surfaces().catch(() => [] as string[])
   if (!surfaces.length) return q ? asText() : { text: x.noPane }
   let why = ''
+  // Review 0.32.0 K1: ein frisch geöffnetes Fenster beginnt einzeilig (nach Escape mit halb getipptem Text blieb es sonst hoch)
+  chatRows = 1
   try {
     // Flags nur als true (CLAUDE.md, UI); types@2.1.325:8012-8060
     const r = await $.ui.open({ id: CHAT_PANE, title: 'sidekick', focus: true, closeOnEscape: true })
@@ -3719,6 +3754,28 @@ async function chatCommand($: EngineInterface, question: string): Promise<{ text
   // Die Antwort kommt ins Fenster; die Frage geht nicht in den Haupt-Chat (E9), darum keine Ausgabe
   if (q) void chatSubmit($, q)
   return {}
+}
+
+/**
+ * Knopf „Chat“ in der Desktop-Fußzeile (Nachtrag 0.32.0): ruft `chatCommand` ohne Frage, also denselben `$.ui.open` wie /sidekick chat.
+ * Ein offenes Fenster bekommt keinen zweiten: eine Id, ein Fenster (types@2.1.326:8709-8710); `focus` holt es nach vorn, solange das
+ * Eingabefeld leer ist (types@2.1.326:8724-8730). Was der Befehl als Text sagen würde (nicht aufgegangen, Aus), kommt als Toast.
+ * Steht das Fenster schon sichtbar da, schließt der Druck es (Wunsch Fynn 2026-11-17, Rechte `$.ui.panes`/`$.ui.close` freigegeben;
+ * nur das eigene Fenster, types@2.1.326:2872-2885). Der Befehl /sidekick chat schließt nie.
+ */
+async function chatPress($: EngineInterface) {
+  try {
+    const up = await $.ui.panes().then((ps) => ps.some((p) => p.id === CHAT_PANE && p.isShown && p.isPlaced), () => false)
+    if (up) {
+      // Review 0.32.0 K2: ein abgelehntes Schließen (`{ deny }` eines Hooks, types@2.1.326:2867-2868) mit eigenem Satz
+      await $.ui.close({ id: CHAT_PANE }).catch((err: unknown) => $.ui.toast(t().chat.closeFailed(msg(err)), { timeoutMs: 8000 }))
+      return
+    }
+    const r = await chatCommand($, '')
+    if (r.text) $.ui.toast(r.text, { timeoutMs: 8000 })
+  } catch (err) {
+    $.ui.toast(t().chat.notPlaced(msg(err)), { timeoutMs: 8000 })
+  }
 }
 
 /** Kopieren mit Toast; Shell-Zeilen gehören in ein Terminal (Review 0.25.0 S2), URLs in „Eigenen Connector hinzufügen“. */
@@ -3894,7 +3951,11 @@ async function chatTree($: EngineInterface, e: Parameters<EngineInterface['ui'][
     el('Box', { flexDirection: 'row', justifyContent: 'flex-end' }, [
       el('Box', { borderStyle: 'round', borderDimColor: true, paddingX: 1, marginLeft: narrow ? 0 : 6, flexShrink: 1 }, [el('Text', { wrap: 'wrap' }, [q])]),
     ])
-  const wechsel = (q: string, body: RenderNode[]) => el('Box', { flexDirection: 'column', rowGap: terminal ? 0 : 'sm' }, [question(q), ...body])
+  // Nachtrag 0.32.0: über der Frage klein, was ihre Antwort gekostet hat (Fynn 2026-11-17: „echte Kosten je Frage“); ohne Kosten nichts
+  const price = (usd: number) =>
+    usd > 0 ? [el('Box', { flexDirection: 'row', justifyContent: 'flex-end' }, [el('Text', { size: 'caption', dimColor: true, tabular: true }, [x.turnCost(usdText(usd))])])] : []
+  const wechsel = (q: string, body: RenderNode[], usd = 0) =>
+    el('Box', { flexDirection: 'column', rowGap: terminal ? 0 : 'sm' }, [el('Box', { flexDirection: 'column' }, [...price(usd), question(q)]), ...body])
 
   if (!s.turns.length && !busy) {
     kids.push(
@@ -3967,14 +4028,15 @@ async function chatTree($: EngineInterface, e: Parameters<EngineInterface['ui'][
     // Review S1: der Entwurf, den „Mit Skill senden“ und „In den Chat übernehmen“ senden, steht vor dem Klick lesbar da
     if (draft) {
       body.push(
-        el('Box', { flexDirection: 'column' }, [
+        // Nachtrag 0.31.3: Abstand `sm` (Desktop 12 px, Terminal 0) zwischen Überschrift, blauer Box und Knopf; vorher klebte die Box am Knopf
+        el('Box', { key: `sidekick-chat-draftbox-${i}`, flexDirection: 'column', rowGap: 'sm' }, [
           el('Text', { size: 'footnote', dimColor: true }, [x.draft]),
           el('Box', { borderStyle: 'round', borderColor: ACCENT, paddingX: 1, ...(draftBg ? { backgroundColor: draftBg } : {}) }, [el('Text', { wrap: 'wrap' }, [draft])]),
           el('Box', { flexDirection: 'row' }, [Button({ key: `sidekick-chat-${i}-draft`, label: x.btnDraft, ...(latest ? { variant: 'primary' as const } : {}), onPress: (p) => void chatDraft($, draft, p.surface) })]),
         ]),
       )
     }
-    kids.push(wechsel(turn.q, body))
+    kids.push(wechsel(turn.q, body, turn.usd))
   })
   if (busy) {
     kids.push(
@@ -3990,8 +4052,25 @@ async function chatTree($: EngineInterface, e: Parameters<EngineInterface['ui'][
   // Fehler ohne Kosten zählen nicht mit, sonst stünde hier „≈ 0 $“)
   const perQuestion = x.perQuestion(usdText(chatPerQuestion(s.turns)))
   kids.push(
-    el('Box', { flexDirection: 'column' }, [
-      ui.Input({ key: 'ask', rows: 2, placeholder: x.placeholder, submitLabel: x.submit, autoFocus: true, value: '', onSubmit: (v: string) => void chatSubmit($, v) }) as RenderNode,
+    // Nachtrag 0.32.0: feste Breite und `stretch`, denn einzeilig zeichnete der Desktop das Feld nur so breit wie den Knopf darüber
+    // (Fynn 2026-11-18); mit `rows: 2` (bis 0.31.2) nahm es die ganze Breite
+    el('Box', { key: 'sidekick-chat-ask', flexDirection: 'column', width: cols, alignItems: 'stretch' }, [
+      // Nachtrag 0.32.0: eine Zeile, beim Tippen bis CHAT_ROWS_MAX mitwachsend. `value` bleibt '', damit das Neuzeichnen den getippten
+      // Text stehen lässt (interface.md:859); neu gezeichnet wird nur, wenn sich die Zeilenzahl ändert
+      ui.Input({
+        key: 'ask',
+        rows: chatRows,
+        placeholder: x.placeholder,
+        submitLabel: x.submit,
+        autoFocus: true,
+        value: '',
+        onInput: (v: string) => chatGrow($, v, cols),
+        onSubmit: (v: string) => {
+          // Das Feld leert sich bei Enter (interface.md:856): wieder eine Zeile, auch wenn chatSubmit nichts speichert (Review 0.32.0 K1)
+          chatGrow($, '', cols)
+          void chatSubmit($, v)
+        },
+      }) as RenderNode,
       // Das Terminal zeigt „⏎ fragen“ selbst neben dem Feld
       el('Text', { size: 'caption', dimColor: true, wrap: 'wrap' }, [terminal ? perQuestion : `${x.enterSends} · ${perQuestion}`]),
     ]),
@@ -4785,10 +4864,13 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     }
     // Vorschlag kurz vor Ablauf (Ausbau 0.22.0): steht, bis er ausgeblendet wird; kein eigenes Neuzeichnen im Takt
     const s = step ? null : sug
+    // Nachtrag 0.32.0: Knopf „Chat“ im Desktop auch rechts in der Knopfzeile eines Hinweises (Fynn, Probe 2026-11-17)
+    const chatOn = !!note && e.surface === 'desktop' && settings.level !== 'off'
     if (!step && !note && !s) return next(e)
     if (!step) {
       try {
         const ui = $.ui.resolve(e)
+        const chat = chatOn ? (ui.Button({ key: 'sidekick-note-chat', label: t().chatOpen, plain: true, onPress: () => void chatPress($) }) as RenderNode) : undefined
         const views: RenderNode[] = []
         if (note) {
           const n = note
@@ -4798,7 +4880,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
           const digits = e.props.isWorking && !(await qrShown($))
           const open = noteOpen.has(n.shownAt)
           const bg = open ? noteBg(e.surface, e.surface === 'terminal' ? await termTheme($) : undefined) : undefined
-          views.push(noteView(n, e.props.bodyColumns, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a), open, bg))
+          views.push(noteView(n, e.props.bodyColumns, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a), open, bg, chat))
         }
         if (s) views.push(suggestView(s, e.props.bodyColumns, e.surface, (p) => ui.Button(p) as RenderNode, (a) => void pressSuggest($, a)))
         return sidekickLayer(views, e.surface)
@@ -4911,12 +4993,16 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       const theirs = await next(e)
       const dot = el('Text', { color: s.level === 'off' ? MODE_RED : s.busy ? MODE_ORANGE : MODE_GREEN }, ['●'])
       // Modell-Tipp (Ausbau 0.18.0): Die Auswahl der App zeigt weiter das Hauptmodell, das Label den Tipp („→ Sonnet“)
-      const tipText = s.level !== 'off' && typeof s.tip === 'string' && s.tip ? ` → ${s.tip}` : ''
-      const word = el('Text', { dimColor: true }, [s.level === 'off' ? x.modeOffWord : `sidekick · ${x.level[s.level]}${tipText}`])
+      // Nachtrag 0.32.0: neben dem Knopf nur der Anfangsbuchstabe des Tipps (B→S), sonst kürzte der Desktop das Label (Probe 2026-11-17)
+      const tipText = s.level !== 'off' && typeof s.tip === 'string' && s.tip ? `→${s.tip.charAt(0).toUpperCase()}` : ''
+      // Nachtrag 0.32.0: ein Buchstabe statt des Stufennamens (de C/B, en C/G), Aus nur „sidekick“ mit rotem Punkt. Kürzer, weil der
+      // Desktop den Baum als festen Block setzt und das Label neben Knöpfen kürzte (Nachtrag 0.21.2/0.21.3, 0.28.1)
+      const word = el('Text', { dimColor: true }, [s.level === 'off' ? 'sidekick' : `sidekick · ${x.levelShort[s.level]}${tipText}`])
       const mine = el('Box', { key: 'sidekick-mode', flexDirection: 'row', columnGap: 1, flexShrink: 0 }, [dot, word])
-      // Seit 0.28.1 nur Label und Engine-Anteil (E3): Neben Knöpfen wurde das Label im festen Block der Fußzeile gekürzt und fiel ganz
-      // weg (Nachtrag 0.21.2/0.21.3, Fynn 2026-11-17). Seit 0.29.0 zeichnet die Knöpfe prompt-deck über limit-bars (`layer:10`)
-      return el('Box', { flexDirection: 'row', columnGap: 2 }, theirs ? [mine, theirs] : [mine])
+      // Knopf „Chat“: derselbe Weg wie /sidekick chat (chatCommand); auf Aus lehnt der Befehl ab, darum dort keiner. Der Desktop stellt
+      // Knöpfe in diesem Block selbst links vor das Label, gleich in welcher Reihenfolge (Probe 2026-11-17); darum steht er im Baum vorn
+      const btn = s.level === 'off' ? [] : [el('Box', { flexShrink: 0 }, [$.ui.resolve(e).Button({ key: 'sidekick-chat-open', label: x.chatOpen, onPress: () => void chatPress($) }) as RenderNode])]
+      return el('Box', { flexDirection: 'row', columnGap: 2, alignItems: 'center' }, theirs ? [...btn, mine, theirs] : [...btn, mine])
     }
     const tipText = s.level !== 'off' && typeof s.tip === 'string' && s.tip ? ` → ${s.tip}` : ''
     const label = s.level === 'off' ? x.modeOff : x.modeOn(s.busy ? '🟠' : '🟢', x.level[s.level]) + tipText

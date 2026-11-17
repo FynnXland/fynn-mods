@@ -6,7 +6,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { dayKey } from '../hooks/cache.js'
 import { addDay, bookChat, cleanLedger, countChat, emptyDay, savingsReport } from '../hooks/logic.js'
 import type { Ledger } from '../hooks/logic.js'
-import { T, setLang } from '../hooks/i18n.js'
+import { T, setLang, usdText } from '../hooks/i18n.js'
 import { savingsTree } from '../hooks/view.js'
 import { sidekickHelp } from '../hooks/helpdata.js'
 import { CHAT } from '../hooks/models.js'
@@ -15,7 +15,10 @@ import {
   CHAT_IN_PROMPT,
   CHAT_KEEP,
   CHAT_NARROW,
+  CHAT_INPUT_PAD,
+  CHAT_ROWS_MAX,
   CHAT_USD_TYPICAL,
+  inputRows,
   addTurn,
   cardMeta,
   chatButton,
@@ -344,7 +347,7 @@ const ANSWER = JSON.stringify({
   anChat: 'Bau mir ein Shorts-Template mit Remotion.',
 })
 
-function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?: string; source?: string }[]; servers?: string[]; placed?: boolean; box?: string; catReply?: string; runFails?: boolean; toolsFail?: boolean; copyFails?: boolean } = {}) {
+function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?: string; source?: string }[]; servers?: string[]; placed?: boolean; box?: string; catReply?: string; runFails?: boolean; toolsFail?: boolean; copyFails?: boolean; closeDeny?: boolean } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const store = new Map<string, unknown>()
   const state = new Map<string, unknown>()
@@ -396,9 +399,21 @@ function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?:
     return { value: undefined }
   })
   on('ui.invalidate', () => ({ value: undefined }))
+  // Nachtrag 0.32.0: offene Fenster für den Knopf „Chat“ (auf/zu)
+  const up = new Set<string>()
+  const closes: unknown[] = []
+  let placed = o.placed !== false
   on('ui.open', ($, e) => {
     opens.push(e)
-    return { value: (o.placed === false ? { isPlaced: false, reason: 'narrow' } : { isPlaced: true }) as never }
+    if (placed) up.add(e.id)
+    return { value: (placed ? { isPlaced: true } : { isPlaced: false, reason: 'narrow' }) as never }
+  })
+  on('ui.panes', () => ({ value: [...up].map((id) => ({ id, title: 'sidekick', isShown: true, isFocused: true, isPlaced: true })) as never }))
+  on('ui.close', ($, e) => {
+    closes.push(e)
+    if (o.closeDeny) return { deny: 'offen lassen' } as never
+    up.delete(e.id)
+    return { value: undefined }
   })
   on('ui.copy', ($, e) => {
     copies.push(e.text)
@@ -449,6 +464,8 @@ function world(on: On, o: { surfaces?: string[]; cmds?: { name: string; plugin?:
     copies,
     fills,
     opens,
+    closes,
+    setPlaced: (v: boolean) => (placed = v),
     submits,
     chats,
     asks,
@@ -496,7 +513,9 @@ deTest('/sidekick chat öffnet das Fenster (Fokus, Escape schließt), ohne Ausga
   expect(all).toContain(X.empty)
   const input = await ui.find({ key: 'ask' })
   expect(JSON.stringify(input)).toContain(X.placeholder)
-  expect(JSON.stringify(input)).toContain('"rows":2')
+  // Nachtrag 0.32.0: einzeilig, wächst beim Tippen (bis 0.31.2: rows 2); volle Breite über die Hülle
+  expect(JSON.stringify(input)).toContain('"rows":1')
+  expect((await ui.find({ key: 'sidekick-chat-ask' }) as { props: Record<string, unknown> }).props).toMatchObject({ width: 70, alignItems: 'stretch' })
   // Nachtrag 0.31.1: Modell im Kopf, Überschrift, Beispielfragen als Knöpfe; noch keine Kosten im Kopf
   expect(all).toContain(`${X.head} · Sonnet 5.5`)
   expect(all).toContain(X.emptyHead)
@@ -1290,4 +1309,157 @@ deTest('/sidekick catalog im Terminal: verbundener Connector „installiert“',
   await start($, 'terminal')
   const md = (await run($, 'catalog')).text ?? ''
   expect(md).toContain('| `fal` fal MCP | fal | Dienst | MCP, Verweis, nur Hinweis, kostenpflichtig, Credits je Lauf, Uploads an fal | installiert |')
+})
+
+// ---------- Nachtrag 0.32.0: Knopf „Chat“ (auf/zu), Eingabefeld wächst mit, Kosten je Frage, Abstand unter dem Entwurf ----------
+
+const footer = ($: Engine) => $.ui.mount({ plugin: 'sidekick', component: 'SessionMode', requestId: 'mode', surface: 'desktop', props: { modes: [] } } as never)
+
+deTest('0.32.0 Knopf „Chat“: öffnet wie /sidekick chat, ein zweiter Druck schließt das sichtbare Fenster; der Befehl schließt nie', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const ui = await footer($)
+  await ui.press({ key: 'sidekick-chat-open' })
+  await flush()
+  // Derselbe Aufruf wie /sidekick chat (chatCommand), keine Ausgabe, kein Toast
+  expect(w.opens).toEqual([{ id: 'sidekick-chat', title: 'sidekick', focus: true, closeOnEscape: true }])
+  expect(w.closes).toEqual([])
+  expect(w.toasts).toEqual([])
+  await ui.press({ key: 'sidekick-chat-open' })
+  await flush()
+  expect(w.opens.length).toBe(1)
+  expect(w.closes).toMatchObject([{ id: 'sidekick-chat' }])
+  // Dritter Druck: wieder auf
+  await ui.press({ key: 'sidekick-chat-open' })
+  await flush()
+  expect(w.opens.length).toBe(2)
+  await ui.unmount()
+  // /sidekick chat bei offenem Fenster: öffnet erneut (eine Id, ein Fenster, types@2.1.326:8709-8710), schließt nicht
+  await run($, 'chat')
+  expect(w.opens.length).toBe(3)
+  expect(w.closes.length).toBe(1)
+})
+
+deTest('0.32.0 Knopf „Chat“: Fenster geht nicht auf → Toast mit dem Satz des Befehls (Aus ohne Knopf: sidekick.test.ts)', async ($, on) => {
+  const w = world(on, { placed: false })
+  await start($)
+  const ui = await footer($)
+  await ui.press({ key: 'sidekick-chat-open' })
+  await flush()
+  expect(w.toasts).toContain(X.notPlaced('narrow'))
+  expect(w.closes).toEqual([])
+  await ui.unmount()
+})
+
+test('0.32.0 inputRows: 1 Zeile leer und kurz, wächst mit Länge und Zeilenumbrüchen, höchstens CHAT_ROWS_MAX', () => {
+  const width = 70 - CHAT_INPUT_PAD
+  expect(CHAT_ROWS_MAX).toBe(6)
+  expect(inputRows('', 70)).toBe(1)
+  expect(inputRows('kurz', 70)).toBe(1)
+  expect(inputRows('x'.repeat(width), 70)).toBe(1)
+  expect(inputRows('x'.repeat(width + 1), 70)).toBe(2)
+  expect(inputRows('a\nb\nc', 70)).toBe(3)
+  expect(inputRows('x'.repeat(width * 3), 70)).toBe(3)
+  expect(inputRows('x'.repeat(width * 20), 70)).toBe(CHAT_ROWS_MAX)
+  expect(inputRows('a\n'.repeat(30), 70)).toBe(CHAT_ROWS_MAX)
+  // Sehr schmal: mindestens 10 Zellen Text je Zeile
+  expect(inputRows('x'.repeat(10), 5)).toBe(1)
+  expect(inputRows('x'.repeat(11), 5)).toBe(2)
+})
+
+deTest('0.32.0 Eingabefeld: einzeilig, wächst beim Tippen (kind change) ohne Frage und ohne value-Wechsel; nach Enter wieder 1', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const ui = await pane($)
+  const props = async () => ((await ui.find({ key: 'ask' })) as { props: Record<string, unknown> }).props
+  expect(await props()).toMatchObject({ rows: 1, value: '' })
+  // 70 Spalten: 58 Zellen je Zeile; 150 Zeichen → 3 Zeilen
+  await ui.input({ key: 'ask', text: 'x'.repeat(150), kind: 'change' } as never)
+  await flush()
+  await ui.redraw()
+  expect(await props()).toMatchObject({ rows: 3, value: '' })
+  expect(w.chats.length).toBe(0)
+  await ui.input({ key: 'ask', text: 'x'.repeat(5000), kind: 'change' } as never)
+  await flush()
+  await ui.redraw()
+  expect((await props()).rows).toBe(CHAT_ROWS_MAX)
+  // Enter: Frage geht, das Feld ist wieder einzeilig
+  await ui.input({ key: 'ask', text: 'Wie baue ich ein Thumbnail?' })
+  await flush()
+  await ui.redraw()
+  expect(w.chats.length).toBe(1)
+  expect((await props()).rows).toBe(1)
+  await ui.unmount()
+})
+
+deTest('0.32.0 Kosten je Frage: über jeder beantworteten Frage klein „kostete …“, über einer ohne Kosten nichts', async ($, on) => {
+  const w = world(on)
+  await start($)
+  const ui = await pane($)
+  await ui.input({ key: 'ask', text: 'Shorts?' })
+  await flush()
+  await ui.redraw()
+  const usd = w.chat()!.turns[0]!.usd
+  expect(usd > 0).toBe(true)
+  const all = JSON.stringify(await ui.drawn())
+  const cost = all.indexOf(X.turnCost(usdText(usd)))
+  expect(cost > 0).toBe(true)
+  // Die Kosten stehen vor (über) der Frage
+  expect(cost < all.indexOf('"children":["Shorts?"]')).toBe(true)
+  expect(all).toContain('"size":"caption","dimColor":true,"tabular":true')
+  await ui.unmount()
+  // Fehler ohne Kosten: kein „kostete“
+  w.setReply(new Error('down'))
+  const ui2 = await pane($)
+  await ui2.input({ key: 'ask', text: 'Zweite?' })
+  await flush()
+  await ui2.redraw()
+  const s = JSON.stringify(await ui2.drawn())
+  expect(s.split(X.turnCost('').trim()).length - 1).toBe(1)
+  await ui2.unmount()
+})
+
+deTest('0.32.0 (Nachtrag 0.31.3): Entwurf, blaue Box und Knopf in einer Spalte mit Abstand sm', async ($, on) => {
+  world(on)
+  await start($)
+  const ui = await pane($)
+  await ui.input({ key: 'ask', text: 'Shorts?' })
+  await flush()
+  await ui.redraw()
+  const col = (await ui.find({ key: 'sidekick-chat-draftbox-0' })) as { props: Record<string, unknown>; children: unknown[] }
+  expect(col.props).toMatchObject({ flexDirection: 'column', rowGap: 'sm' })
+  expect(col.children.length).toBe(3)
+  expect(JSON.stringify(col.children[2])).toContain('sidekick-chat-0-draft')
+  await ui.unmount()
+})
+
+test('0.32.0 Texte: turnCost und chatOpen in en und de', () => {
+  expect(T.de.chat.turnCost('≈ 0,02 $')).toBe('kostete ≈ 0,02 $')
+  expect(T.en.chat.turnCost('≈ $0.02')).toBe('cost ≈ $0.02')
+  expect(T.de.chatOpen).toBe('Chat')
+  expect(T.en.chatOpen).toBe('Chat')
+})
+
+deTest('0.32.0 Review K1/K2: Schließen abgelehnt → eigener Toast; ein neu geöffnetes Fenster beginnt wieder einzeilig', async ($, on) => {
+  const w = world(on, { closeDeny: true })
+  await start($)
+  const ui = await footer($)
+  await ui.press({ key: 'sidekick-chat-open' })
+  await flush()
+  const p = await pane($)
+  await p.input({ key: 'ask', text: 'x'.repeat(300), kind: 'change' } as never)
+  await flush()
+  await p.redraw()
+  expect(((await p.find({ key: 'ask' })) as { props: Record<string, unknown> }).props.rows).toBe(CHAT_ROWS_MAX)
+  // Zweiter Druck: Schließen wird abgelehnt → Satz zum Schließen, nicht „nicht aufgegangen“
+  await ui.press({ key: 'sidekick-chat-open' })
+  await flush()
+  expect(w.toasts.at(-1)).toBe(X.closeFailed('sidekick: $.ui.close: offen lassen'))
+  expect(w.toasts.some((x) => x.includes('nicht aufgegangen'))).toBe(false)
+  // /sidekick chat öffnet neu: wieder eine Zeile
+  await run($, 'chat')
+  await p.redraw()
+  expect(((await p.find({ key: 'ask' })) as { props: Record<string, unknown> }).props.rows).toBe(1)
+  await p.unmount()
+  await ui.unmount()
 })

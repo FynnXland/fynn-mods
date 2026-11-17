@@ -237,6 +237,23 @@ export const CHAT_NARROW = 44
 /** Übliche Kosten einer Frage für die Zeile unter dem Eingabefeld, solange der Chat keine eigene Zahl hat (Probe P3 in 0.30.0: 0,023–0,027 $). */
 export const CHAT_USD_TYPICAL = 0.025
 
+/** Nachtrag 0.32.0: das Eingabefeld wächst mit dem Text von 1 bis höchstens so vielen Zeilen, danach rollt es (Fynn 2026-11-17). */
+export const CHAT_ROWS_MAX = 6
+/** Zellen neben dem Feld, die nicht für Text bleiben: Rahmen und der Knopf „fragen“ bzw. „⏎ fragen“ (geschätzt). */
+export const CHAT_INPUT_PAD = 12
+
+/**
+ * Höhe des Eingabefelds aus dem getippten Text (Nachtrag 0.32.0): jede Zeile zählt mindestens einmal, lange Zeilen so oft, wie sie
+ * bei `cols - CHAT_INPUT_PAD` Zellen umbrechen; 1 bis CHAT_ROWS_MAX. Die Engine kennt nur eine feste Höhe (`rows`,
+ * types@2.1.326:6533-6539), darum rechnet sidekick sie beim Tippen nach.
+ */
+export function inputRows(text: string, cols: number): number {
+  const width = Math.max(10, Math.floor(cols) - CHAT_INPUT_PAD)
+  let n = 0
+  for (const line of String(text ?? '').split('\n')) n += Math.max(1, Math.ceil([...line].length / width))
+  return Math.min(CHAT_ROWS_MAX, Math.max(1, n))
+}
+
 /**
  * Was das Fenster zu einem Vorschlag zeigt: Name, Art, Lizenz, Stand und Grund stehen als Text da, der Knopf trägt nur noch die Aktion.
  * `state` folgt derselben Reihenfolge wie `chatButton`: `yielded` (Projekt-Befehl `cmd` hat Vorrang), `bundled` (liegt bei, `tokens`
