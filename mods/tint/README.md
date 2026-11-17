@@ -10,7 +10,7 @@ A calm color set for the **Claude Desktop app** (Code tab), in light and dark mo
 
 Every set keeps the main text at 7:1 or better and muted text at 4.5:1 or better on every surface, in both modes. Texts are English by default; set `language` to `de` for German, or run `/tint language de`.
 
-Requires Claude Code **2.1.324 or later** · Tested with Claude Code **v2.1.325** · Plugin version **0.2.1**
+Requires Claude Code **2.1.324 or later** · Tested with Claude Code **v2.1.325** · Plugin version **0.2.2**
 
 ## Use your own design system
 
@@ -46,7 +46,7 @@ It can be a Tailwind config, CSS variables, a Figma or design-token export, a br
 | `/tint <name>` · `/tint custom` | Choose one of your own sets (`custom` = the one chosen last) |
 | `/tint remove <name>` | Delete one of your own sets; if it was in use, Herbstglut applies |
 | `/tint on` · `off` | Apply the colors, or go back to the app's own (`off` clears the session's theme) |
-| `/tint language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tint, tune-strip), one line per mod in the answer; without a value, show each mod's language |
+| `/tint language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, prompt-deck, quick-replies, sidekick, tint, tune-strip), one line per mod in the answer; without a value, show each mod's language |
 | `/tint help` (or `/tint ?`) | Help as a table: commands, state and your settings |
 
 Commands and arguments are English in both languages. A choice saves the setting (`pluginConfigs` in your user settings). In a terminal session Claude Code reloads the mod with the new value; in the desktop app and `claude -p` the setting is saved through `claude plugin configure tint@fynn-mods` and applies in other open chats after `/reload-plugins` or in the next chat. A copy loaded with `--plugin-dir` changes only the current chat and answers "Not saved". Choosing a set while tint is off saves it and applies it with `/tint on`.

@@ -11,7 +11,7 @@
 import type { ConfigRow, EngineInterface } from 'claude-code'
 
 /** Die Mods, deren Feld `language` der Befehl umstellt; nie andere Plugins, nie andere Felder. */
-export const FYNN_MODS: readonly string[] = ['clawd-buddy', 'cost-ledger', 'limit-bars', 'quick-replies', 'sidekick', 'tint', 'tune-strip']
+export const FYNN_MODS: readonly string[] = ['clawd-buddy', 'cost-ledger', 'limit-bars', 'prompt-deck', 'quick-replies', 'sidekick', 'tint', 'tune-strip']
 export const LANGUAGE_WORD = 'language'
 export const LANGUAGES: readonly string[] = ['en', 'de']
 /** Marketplace der Mods (Weg 2 setzt nur `<name>@fynn-mods` um). */

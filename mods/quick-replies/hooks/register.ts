@@ -385,9 +385,11 @@ async function ownRow($: EngineInterface, e: AbovePromptEvent): Promise<RenderEl
     } else {
       for (const b of buttons) rows.push(Box({ flexDirection: 'row', flexShrink: 0, children: [b] }))
     }
-    // Eigene Pille: gedimmter Rahmen, eine Zeile Abstand zu Clawd und den Balken darunter
+    // Eigene Pille: gedimmter Rahmen, eine Zeile Abstand zu Clawd und den Balken darunter. Der native Desktop-Knopf ist höher als
+    // eine Zeile; ohne Abstand ragte seine Hover-Fläche in die Zeile darüber. rowGap 'sm' (Stufenname, docs/raw/en/reference.md:369-381,
+    // types@2.1.325:13454) gibt im Desktop einen kleinen Abstand, im Terminal wären es 0 Zeilen (Wahl Fynn nach Desktop-Probe, 0.8.4)
     const node = framed
-      ? Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, borderStyle: 'round', borderDimColor: true, paddingX: 1, marginBottom: 1, children: rows })
+      ? Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, borderStyle: 'round', borderDimColor: true, paddingX: 1, marginBottom: 1, rowGap: 'sm', children: rows })
       : Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, children: rows })
     cached = { sig, node }
   }

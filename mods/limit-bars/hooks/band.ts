@@ -1,5 +1,5 @@
 // band.ts: gemeinsamer Baustein für das Band über dem Prompt ab Claude Code 2.1.323 (docs/BAND.md, docs/BAND-SPEC-2.md §3).
-// Vorlage: templates/band/band.ts. Jede Band-Mod (clawd-buddy, limit-bars, quick-replies, sidekick, tune-strip) hat eine
+// Vorlage: templates/band/band.ts. Jede Band-Mod (clawd-buddy, limit-bars, prompt-deck, quick-replies, sidekick, tune-strip) hat eine
 // wörtliche Kopie in hooks/band.ts und importiert sie als './band.js'; scripts/check-mods.ps1 vergleicht die Kopien.
 // Die Datei ruft nichts an `$` auf und braucht deshalb keine Rechte.
 //
@@ -7,14 +7,16 @@
 // Die Wurzel dieser Zeile trägt einen Schlüssel:
 // - Ebene `layer:<Höhe>:<Name>`: eigene Zeile über der Grundzeile, die höhere Zahl steht oben.
 // - Platz `slot:<Zahl>:<Name>` bzw. `slot:<Zahl>:<Name>:right`: Teil der einen Grundzeile, aufsteigend von links.
-// - Platz 0 ist Clawds Bühne im Desktop (absolut an der eigenen Wurzel): eine eigene, unterste Zeile nach der Grundzeile.
+// - Platz 0 ist Clawds Bühne im Desktop (absolut an der eigenen Wurzel): eine eigene Zeile nach der Grundzeile.
+// - Fuß `foot:<Zahl>:<Name>`: eigene Zeile unter Grundzeile und Bühne, direkt über dem Eingabefeld; kleinere Zahl weiter
+//   oben (BAND-SPEC-2 §10; derzeit nutzt keine Mod sie, sidekick steht seit 0.29.0 wieder als Ebene 50 oben, §11).
 // `arrange` setzt die Zeilen in `AbovePromptList` danach zusammen (types@2.1.325:11440-11489, Probe docs/BAND-PROBE-2.1.325.md).
 import type { RenderElement, RenderNode } from 'claude-code'
 
-/** Höhen der Ebenen: weiter oben = größere Zahl. */
-export const LEVEL = { quickReplies: 20, tuneStrip: 40, sidekick: 50 } as const
+/** Höhen der Ebenen: weiter oben = größere Zahl. prompt-deck (10) steht direkt über der Grundzeile (BAND-SPEC-2 §11). */
+export const LEVEL = { promptDeck: 10, quickReplies: 20, tuneStrip: 40, sidekick: 50 } as const
 
-/** Plätze: kleinere Zahl = weiter links. Platz 0 ist Clawds Bühne im Desktop (eigene unterste Zeile). */
+/** Plätze: kleinere Zahl = weiter links. Platz 0 ist Clawds Bühne im Desktop (eigene Zeile nach der Grundzeile). */
 export const SLOTS = { clawdStage: 0, limitBars: 10, tuneStrip: 20, clawdBuddy: 30 } as const
 
 /** Abstand zwischen den Plätzen der Grundzeile, in Zellen (Terminal und Desktop, Probe 7b). */
@@ -22,6 +24,7 @@ export const SLOT_GAP = 2
 
 const LAYER = 'layer:'
 const SLOT = 'slot:'
+const FOOT_KEY = 'foot:'
 const RIGHT = ':right'
 
 /** Eine Zeile des Bands, wie `AbovePromptList` sie in `e.props.rows` liefert (types@2.1.325:111-121). */
@@ -31,6 +34,7 @@ export type BandRow = { readonly plugin: string; readonly tree: RenderElement }
 export type BandKey =
   | { kind: 'layer'; level: number; name: string }
   | { kind: 'slot'; no: number; name: string; right: boolean }
+  | { kind: 'foot'; no: number; name: string }
   | { kind: 'rest' }
 
 /** Stilangaben für die eigene Wurzel, z. B. `width`, `overflow` oder Clawds `position: 'absolute'`. */
@@ -66,9 +70,17 @@ export function slot(no: number, name: string, content: RenderNode | readonly Re
   return box({ ...align, ...style, key, flexDirection: 'column' }, list(content))
 }
 
+/**
+ * Wurzel eines Fußes: `Box{key:'foot:<Zahl>:<Name>', column}` um den Inhalt, als Zeile unter Grundzeile und Bühne.
+ * `style` geht an dieselbe Wurzel; `key` und `flexDirection` setzt immer diese Funktion.
+ */
+export function foot(no: number, name: string, content: RenderNode | readonly RenderNode[], style: RootStyle = {}): RenderElement {
+  return box({ ...style, key: `${FOOT_KEY}${no}:${name}`, flexDirection: 'column' }, list(content))
+}
+
 const NUMBER = /^\d+$/
 
-/** Schlüssel lesen: `layer:20:quick-replies`, `slot:30:clawd-buddy:right`; alles andere ist Rest. */
+/** Schlüssel lesen: `layer:20:quick-replies`, `slot:30:clawd-buddy:right`, `foot:10:<Name>`; alles andere ist Rest. */
 export function parseKey(key: string): BandKey {
   if (key.startsWith(LAYER)) {
     const [n = '', ...rest] = key.slice(LAYER.length).split(':')
@@ -80,6 +92,11 @@ export function parseKey(key: string): BandKey {
     const right = rest.length > 1 && rest[rest.length - 1] === 'right'
     const name = (right ? rest.slice(0, -1) : rest).join(':')
     if (NUMBER.test(n) && name !== '') return { kind: 'slot', no: Number(n), name, right }
+  }
+  if (key.startsWith(FOOT_KEY)) {
+    const [n = '', ...rest] = key.slice(FOOT_KEY.length).split(':')
+    const name = rest.join(':')
+    if (NUMBER.test(n) && name !== '') return { kind: 'foot', no: Number(n), name }
   }
   return { kind: 'rest' }
 }
@@ -123,6 +140,8 @@ export type Split = {
   right: BandRow[]
   /** Platz 0 (Clawds Bühne im Desktop), in Kettenfolge. */
   stage: BandRow[]
+  /** Füße unter Grundzeile und Bühne, aufsteigend (bei gleicher Zahl in Kettenfolge). */
+  foot: BandRow[]
 }
 
 /** Einteilen nach Schlüssel (SPEC §3 Schritt 1). Rein, ohne `$`. */
@@ -136,18 +155,23 @@ export function splitRows(rows: readonly BandRow[]): Split {
   const no = (x: (typeof keyed)[number]) => (x.key.kind === 'slot' ? x.key.no : 0)
   const isRight = (x: (typeof keyed)[number]) => x.key.kind === 'slot' && x.key.right
   const asc = (a: (typeof keyed)[number], b: (typeof keyed)[number]) => no(a) - no(b) || by(a, b)
+  const footNo = (x: (typeof keyed)[number]) => (x.key.kind === 'foot' ? x.key.no : 0)
   return {
     layers: layers.map((x) => x.row),
     rest: keyed.filter((x) => x.key.kind === 'rest').map((x) => x.row),
     left: slots.filter((x) => no(x) > 0 && !isRight(x)).sort(asc).map((x) => x.row),
     right: slots.filter((x) => no(x) > 0 && isRight(x)).sort(asc).map((x) => x.row),
     stage: slots.filter((x) => no(x) === 0).map((x) => x.row),
+    foot: keyed
+      .filter((x) => x.key.kind === 'foot')
+      .sort((a, b) => footNo(a) - footNo(b) || by(a, b))
+      .map((x) => x.row),
   }
 }
 
-/** Die Reihenfolge, in der die Zeilen untereinander stehen: Ebenen, Rest, Plätze, Bühne. */
+/** Die Reihenfolge, in der die Zeilen untereinander stehen: Ebenen, Rest, Plätze, Bühne, Füße. */
 export function orderOf(s: Split): BandRow[] {
-  return [...s.layers, ...s.rest, ...s.left, ...s.right, ...s.stage]
+  return [...s.layers, ...s.rest, ...s.left, ...s.right, ...s.stage, ...s.foot]
 }
 
 /**
@@ -181,7 +205,7 @@ export type ListEvent = { readonly props: { readonly rows: readonly BandRow[] } 
  * - Grundzeile mit höchstens einem Platz: `next(e)` unverändert, bzw. ein `next` mit den Zeilen in der richtigen Folge.
  * - Sonst `Box{column, key:'band'}`: Ebenen (ein `next`), Rest (ein `next`, falls vorhanden), `Box{row, key:'band-row'}`
  *   mit je einem `next` pro Platz in `Box{flexShrink:0}` (links aufsteigend, Abstand `Box{flexGrow:1}`, rechts
- *   aufsteigend), danach Clawds Bühne (ein `next`) als unterste Zeile.
+ *   aufsteigend), danach Clawds Bühne (ein `next`) und zuletzt die Füße (ein `next`) als unterste Zeile.
  * - Hüllen um fremde Zeilen tragen nur `key`, `flexDirection`, `flexShrink`, `flexGrow`, `columnGap`, `rowGap`, `alignItems`
  *   (Probe 7: `minWidth` oder `position` darum wird abgelehnt).
  * - Scheitert etwas: `next(e)`, lieber gestapelt als leer (SPEC §3 Schritt 4).
@@ -207,6 +231,7 @@ export async function arrange<E extends ListEvent>(e: E, next: (e: NoInfer<E>) =
     }
     kids.push(box({ key: 'band-row', flexDirection: 'row', columnGap: SLOT_GAP, alignItems: 'flex-end' }, line))
     if (s.stage.length > 0) kids.push(await sub(s.stage))
+    if (s.foot.length > 0) kids.push(await sub(s.foot))
     return box({ key: 'band', flexDirection: 'column' }, kids)
   } catch {
     return next(e)

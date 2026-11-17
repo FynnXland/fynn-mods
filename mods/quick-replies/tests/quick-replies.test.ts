@@ -240,6 +240,24 @@ test('more an: Fork über den Timer nach dem Turn, Claude Code vorn, bis zu 4 im
   await narrow.unmount()
 })
 
+test("0.8.4 Desktop: Abstand rowGap 'sm' zwischen den Zeilen der Pille (Hover-Fläche des nativen Knopfs), Terminal ohne", { options: { more: true } }, async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await boot($, surface)
+    await finish($)
+    await suggest($, 'Committe die Änderungen')
+    await w.clock.advance(100)
+    const pill = findKey(await ui.drawn(), OWN)!.children[0]!
+    // 2 × 2: zwei Zeilen, je zwei Zellen
+    expect(pill.children.length).toBe(2)
+    expect(pill.children.map((r) => r.children.length)).toEqual([2, 2])
+    expect(pill.props.rowGap).toBe(surface === 'desktop' ? 'sm' : undefined)
+    if (surface === 'desktop') expect(pill.children[1]!.children.map((c) => c.children[0]!.props.key)).toEqual(['reply-3', 'reply-4'])
+    await ui.unmount()
+    await $.turn.start({ turnId: `t-${surface}`, text: 'weiter' })
+  }
+})
+
 test('more an: kommt der Fork vor Claude Code, rückt Claude Codes Vorschlag auf 1, die anderen rücken nach, der vierte fällt weg', async ($, on) => {
   const w = world(on, { stored: { enabled: true, more: true } })
   const ui = await boot($, 'terminal')

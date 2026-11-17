@@ -1189,7 +1189,7 @@ deTest('Während der Übergabe: blaue Box über dem Prompt mit Sekunden, danach 
   const busy = JSON.stringify(await band.find({ key: 'sidekick-busy' }))
   expect(busy).toContain('sidekick schreibt die Übergabe')
   expect(busy).toContain('3 s')
-  // Leerzeile unter der Box (Fynn, 2026-10-06) nur im Terminal; im Desktop gibt seit 0.15.2 der blaue Streifen den Abstand
+  // Leerzeile unter der Box (Fynn, 2026-10-06) nur im Terminal; im Desktop ohne (dort gibt der blaue Streifen den Abstand, 0.15.2 bis 0.28.0 und wieder seit 0.29.0)
   expect(busy).not.toContain('marginBottom')
   await band.unmount()
   // Übergabe fertig: /clear, senden, Box weg
@@ -1201,7 +1201,7 @@ deTest('Während der Übergabe: blaue Box über dem Prompt mit Sekunden, danach 
   await band.unmount()
 })
 
-// ---------- 0.26.0: Band 2, eigene Zeile layer:50:sidekick (BAND-SPEC-2 §3–§5, docs/BAND.md) ----------
+// ---------- 0.26.0 / 0.29.0: Band 2, eigene Zeile layer:50:sidekick (BAND-SPEC-2 §3–§5, §11, docs/BAND.md) ----------
 
 type Tier = 'prepend' | 'append'
 type BN = { type?: string; props?: Record<string, unknown>; children?: BN[] }
@@ -1214,10 +1214,11 @@ const BUSY_BAND = (surface: string) =>
 // Steht sie in sidekicks eigener Zeile, hätte sidekick eine fremde Zeichnung übernommen (seit Band 2 nie)
 const FREMD = { type: 'Text', props: {}, children: ['FREMD'] }
 const hasFremd = (n: unknown) => JSON.stringify(n).includes('FREMD')
+const SK_KEY = 'layer:50:sidekick'
 /** sidekicks eigene Zeile im gestapelten Band, über ihren Schlüssel gefunden. */
 function skRow(n: unknown): BN | undefined {
   if (!n || typeof n !== 'object') return undefined
-  if (bkey(n) === 'layer:50:sidekick') return n as BN
+  if (bkey(n) === SK_KEY) return n as BN
   for (const c of (n as BN).children ?? []) {
     const f = skRow(c)
     if (f) return f
@@ -1233,25 +1234,38 @@ const startHandoff = async ($: Engine, w: ReturnType<typeof world>) => {
 }
 const lastBand = (w: ReturnType<typeof world>) => w.statusVals[w.statusVals.length - 1] as { handoff?: true } | null | undefined
 
-/** Die sidekick-Ebene im Desktop: Inhalt (`key`) und darunter der blaue Streifen als Svg 2400 × 26 in Akzentfarbe. */
-function expectStripe(layer: BN, key: string) {
-  expect(bkey(layer)).toBe('layer:50:sidekick')
-  const inner = (layer.children ?? [])[0] as BN
-  expect((inner.children ?? []).map(bkey)).toEqual([key, 'sidekick-stripe'])
+/**
+ * sidekicks Ebene im Desktop (Ausbau 0.29.0 wie bis 0.28.0): Schlüssel `layer:50:sidekick`, Kinder von oben nach unten `keys`, darunter
+ * der blaue Streifen als Svg 2400 × 14 (bis 0.28.0: 26) in Akzentfarbe, Linie bei y = 8. Keine Knopfzeile (die zeichnet prompt-deck).
+ */
+function expectStripe(row: BN | undefined, keys: readonly string[]) {
+  expect(row).toBeDefined()
+  expect(bkey(row)).toBe(SK_KEY)
+  expect((row?.children ?? []).map(bkey)).toEqual([...keys, 'sidekick-stripe'])
   // Keine Leerzeile zwischen Anzeige und Streifen (Sicht-Check 0.15.2)
-  expect(JSON.stringify((inner.children ?? [])[0])).not.toContain('marginBottom')
-  const stripe = (inner.children ?? [])[1] as BN
+  for (const c of (row?.children ?? []).slice(0, -1)) expect(JSON.stringify(c.props)).not.toContain('marginBottom')
+  const stripe = (row?.children ?? [])[keys.length] as BN
   expect(stripe.props).toMatchObject({ width: '100%', overflow: 'hidden', flexShrink: 0 })
   const svg = (stripe.children ?? [])[0] as BN
   expect(svg.type).toBe('Svg')
-  expect(svg.props).toMatchObject({ alt: 'Trennlinie unter der sidekick-Anzeige', width: 2400, height: 26 })
+  expect(svg.props).toMatchObject({ alt: 'Trennlinie unter der sidekick-Anzeige', width: 2400, height: 14 })
   const src = String(svg.props?.source)
+  expect(src).toContain('height="14" viewBox="0 0 2400 14"')
   expect(src).toContain('fill="#6CB6FF"')
   expect(src).toContain('<rect y="8" width="2400" height="2"')
   expect(src).toContain('opacity="0.85"')
+  expect(bkeys(row)).not.toContain('sidekick-prompts')
+}
+/** Terminal: dieselbe Ebene ohne Streifen und ohne Svg. */
+function expectPlain(row: BN | undefined, keys: readonly string[]) {
+  expect(row).toBeDefined()
+  expect(bkey(row)).toBe(SK_KEY)
+  expect((row?.children ?? []).map(bkey)).toEqual([...keys])
+  expect(bkeys(row)).not.toContain('sidekick-stripe')
+  expect(types(row)).not.toContain('Svg')
 }
 
-deTest('0.26.0: Übergabe zeichnet nur die eigene Zeile layer:50:sidekick, nie fremde Zeilen; status.handoff, solange die Box steht', async ($, on) => {
+deTest('0.26.0 / 0.29.0: Übergabe zeichnet nur die eigene Zeile layer:50:sidekick, nie fremde Zeilen; status.handoff, solange die Box steht', async ($, on) => {
   const w = world(on, { handoffDelayMs: 5000 })
   w.setBand(FREMD)
   // Vorher: keine eigene Zeile (next(e)), kein handoff
@@ -1262,10 +1276,13 @@ deTest('0.26.0: Übergabe zeichnet nur die eigene Zeile layer:50:sidekick, nie f
   expect(lastBand(w)?.handoff).toBe(true)
   for (const surface of ['terminal', 'desktop']) {
     band = await $.ui.mount(BUSY_BAND(surface))
-    const tree = skRow(await band.drawn())
+    const drawn = await band.drawn()
+    const tree = skRow(drawn)
     expect(tree).toBeDefined()
     expect(bkeys(tree)).toContain('sidekick-busy')
     expect(hasFremd(tree)).toBe(false)
+    // Kein Fuß mehr (0.28.1): der Schlüssel foot:10 kommt nirgends vor
+    expect(bkeys(drawn)).not.toContain('foot:10:sidekick')
     await band.unmount()
   }
   // Übergabe fertig: Zeile weg, handoff fehlt wieder
@@ -1276,11 +1293,10 @@ deTest('0.26.0: Übergabe zeichnet nur die eigene Zeile layer:50:sidekick, nie f
   expect(skRow(await band.drawn())).toBeUndefined()
   await band.unmount()
   expect(lastBand(w)?.handoff).toBeUndefined()
-  // handoff unabhängig von der Stufe (BAND-SPEC-2 §4): jede Fassung mit handoff kam nur während der Box
   expect(w.statusVals.filter((v) => (v as { handoff?: true } | null)?.handoff === true).length).toBeGreaterThan(0)
 })
 
-deTest('0.26.0: AbovePromptList mit der echten sidekick-Zeile: sidekick oben, dann tune-strip (40), quick-replies (20), die Grundzeile, Clawds Bühne zuletzt', async ($, on) => {
+deTest('0.29.0: AbovePromptList mit der echten sidekick-Zeile: sidekick oben, tune-strip (40), quick-replies (20), prompt-deck (10), Grundzeile, Clawds Bühne', async ($, on) => {
   const w = world(on, { handoffDelayMs: 5000 })
   await startHandoff($, w)
   const text = (s: string) => ({ type: 'Text' as const, props: {}, children: [s] })
@@ -1292,71 +1308,65 @@ deTest('0.26.0: AbovePromptList mit der echten sidekick-Zeile: sidekick oben, da
     const rows = [
       row('limit-bars', 'slot:10:limit-bars', { width: 40 }),
       ...(surface === 'desktop' ? [row('clawd-buddy', 'slot:0:clawd-buddy', { position: 'absolute', bottom: 0, right: 0 })] : [row('clawd-buddy', 'slot:30:clawd-buddy:right')]),
+      row('prompt-deck', 'layer:10:prompt-deck'),
       row('quick-replies', 'layer:20:quick-replies'),
       sk,
-      // tune-strip ist seit 2026-11-15 immer eigene Leiste (BAND-SPEC-2 §3, Entscheidung Fynn)
       row('tune-strip', 'layer:40:tune-strip'),
     ]
     const ui = await $.ui.mount({ plugin: 'sidekick', component: 'AbovePromptList', requestId: 'above-prompt-list', viewport: { columns: 125, rows: 40 }, surface, props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 12, bodyColumns: 120, scroll: { offset: 0, bodyRows: 12 }, view: {}, rows } } as never)
-    const keys = bkeys(await ui.drawn()).filter((k) => /^(layer|slot):|^band-row$/.test(k))
+    const keys = bkeys(await ui.drawn()).filter((k) => /^(layer|slot|foot):|^band-row$/.test(k))
     const want =
       surface === 'desktop'
         ? // Desktop, tune-strip als Ebene: nur ein Platz in der Grundzeile, also kein band-row (templates/band/README.md Schritt 2)
-          ['layer:50:sidekick', 'layer:40:tune-strip', 'layer:20:quick-replies', 'slot:10:limit-bars', 'slot:0:clawd-buddy']
-        : ['layer:50:sidekick', 'layer:40:tune-strip', 'layer:20:quick-replies', 'band-row', 'slot:10:limit-bars', 'slot:30:clawd-buddy:right']
+          [SK_KEY, 'layer:40:tune-strip', 'layer:20:quick-replies', 'layer:10:prompt-deck', 'slot:10:limit-bars', 'slot:0:clawd-buddy']
+        : [SK_KEY, 'layer:40:tune-strip', 'layer:20:quick-replies', 'layer:10:prompt-deck', 'band-row', 'slot:10:limit-bars', 'slot:30:clawd-buddy:right']
     expect(keys, surface).toEqual(want)
     expect(await ui.find({ key: 'sidekick-busy' })).toBeDefined()
     await ui.unmount()
   }
 })
 
-test('0.26.0 / 0.15.2: Übergabe-Box mit blauem Streifen nur im Desktop; Terminal mit Leerzeile; VS Code und mobile keine Zeile', DE, async ($, on) => {
+test('0.29.0 / 0.15.2: Übergabe-Box mit blauem Streifen (14 px) nur im Desktop; Terminal mit Leerzeile; VS Code und mobile keine Zeile', DE, async ($, on) => {
   setLang('de')
   const w = world(on, { handoffDelayMs: 5000 })
   w.setBand(FREMD)
   await startHandoff($, w)
   let band = await $.ui.mount(BUSY_BAND('desktop'))
-  expectStripe(skRow(await band.drawn()) as BN, 'sidekick-busy')
+  expectStripe(skRow(await band.drawn()), ['sidekick-busy'])
   await band.unmount()
   band = await $.ui.mount(BUSY_BAND('terminal'))
-  let tree = skRow(await band.drawn()) as BN
-  expect(bkey(tree)).toBe('layer:50:sidekick')
-  expect(bkeys(tree)).toContain('sidekick-busy')
-  expect(bkeys(tree)).not.toContain('sidekick-stripe')
+  const tree = skRow(await band.drawn())
+  expectPlain(tree, ['sidekick-busy'])
   expect(JSON.stringify(tree)).toContain('"marginBottom":1')
-  expect(types(tree)).not.toContain('Svg')
   await band.unmount()
   for (const surface of ['vscode', 'mobile']) {
     band = await $.ui.mount(BUSY_BAND(surface))
-    tree = (await band.drawn()) as BN
-    expect(bkeys(tree).some((k) => k.startsWith('layer:') || k.startsWith('sidekick'))).toBe(false)
+    const drawn = (await band.drawn()) as BN
+    expect(bkeys(drawn).some((k) => /^(layer|foot):/.test(k) || k.startsWith('sidekick'))).toBe(false)
     await band.unmount()
   }
 })
 
-test('0.26.0 / 0.15.2: Gut zu wissen als eigene Zeile, Streifen nur im Desktop; aus = keine Zeile; VS Code und mobile keine Zeile', DE, async ($, on) => {
+test('0.29.0 / 0.15.2: Gut zu wissen als eigene Zeile, Streifen nur im Desktop; aus = keine Zeile; VS Code und mobile keine Zeile', DE, async ($, on) => {
   setLang('de')
   const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
   w.setBand(FREMD)
   // „Gut zu wissen“ aus: keine eigene Zeile
   let ui = await $.ui.mount(bandNote('desktop'))
   let tree = (await ui.drawn()) as BN
-  expect(bkeys(tree)).not.toContain('layer:50:sidekick')
+  expect(bkeys(tree)).not.toContain(SK_KEY)
   await ui.unmount()
   await notesOn($)
   ui = await $.ui.mount(bandNote('desktop'))
   tree = skRow(await ui.drawn()) as BN
-  expectStripe(tree, 'sidekick-note')
+  expectStripe(tree, ['sidekick-note'])
   expect(hasFremd(tree)).toBe(false)
   await ui.unmount()
   ui = await $.ui.mount(bandNote('terminal'))
   tree = skRow(await ui.drawn()) as BN
-  expect(bkey(tree)).toBe('layer:50:sidekick')
-  expect(bkeys(tree)).toContain('sidekick-note')
-  expect(bkeys(tree)).not.toContain('sidekick-stripe')
+  expectPlain(tree, ['sidekick-note'])
   // Ausbau 0.27.1 (E2): keine Leerzeile unter dem Hinweis, auch im Terminal
   expect(JSON.stringify(tree)).not.toContain('"marginBottom"')
-  expect(types(tree)).not.toContain('Svg')
   await ui.unmount()
   // Eingeklappt: die Zeile wird weiter gezeichnet (nichts davon ist zu sehen, types@2.1.325:11393)
   ui = await $.ui.mount(bandNote('terminal', { isCollapsed: true }))
@@ -1365,9 +1375,29 @@ test('0.26.0 / 0.15.2: Gut zu wissen als eigene Zeile, Streifen nur im Desktop; 
   for (const surface of ['vscode', 'mobile']) {
     ui = await $.ui.mount(bandNote(surface))
     tree = (await ui.drawn()) as BN
-    expect(bkeys(tree).some((k) => k.startsWith('layer:') || k.startsWith('sidekick'))).toBe(false)
+    expect(bkeys(tree).some((k) => /^(layer|foot):/.test(k) || k.startsWith('sidekick'))).toBe(false)
     await ui.unmount()
   }
+})
+
+test('0.29.0: keine Knopfzeile mehr in sidekicks Zeile (prompt-deck zeichnet die Knöpfe); ohne Hinweis keine Zeile; Fußzeile mit vollem Label', DE, async ($, on) => {
+  setLang('de')
+  const w = world(on, { handoffDelayMs: 5000 })
+  w.setBand(FREMD)
+  // Früher (bis 0.28.1) speicherte `/sidekick save` und zeichnete einen Knopf; jetzt nur noch der Verweis, keine Zeile im Band
+  await $.command.run({ ...CMD, command: 'sidekick', args: 'save tidy-chats Sortiere die Chats' } as never)
+  let ui = await $.ui.mount(bandNote('desktop'))
+  expect(skRow(await ui.drawn())).toBeUndefined()
+  await ui.unmount()
+  await startHandoff($, w)
+  ui = await $.ui.mount(BUSY_BAND('desktop'))
+  expectStripe(skRow(await ui.drawn()), ['sidekick-busy'])
+  await ui.unmount()
+  const mode = await $.ui.mount({ plugin: 'sidekick', component: 'SessionMode', requestId: 'mode', surface: 'desktop', props: { modes: [] } } as never)
+  const json = JSON.stringify(await mode.drawn())
+  expect(json).toContain('sidekick · Begleiter')
+  expect(json).not.toContain('sidekick-p-')
+  await mode.unmount()
 })
 
 // ---------- Wartungs-Hinweise (SPEC Nachtrag 0.2.0) ----------
@@ -3566,7 +3596,7 @@ deTest('0.13.0/0.27.1: Band zeigt den Hinweis mit 1/2/0 (Terminal und Desktop); 
     expect(box).toContain('Achtung')
     expect(box).toContain(THEMA)
     expect((await ui.find({ key: 'sidekick-note-claude' }))?.props).toMatchObject({ label: 'An Claude geben', hotkey: '1' })
-    expect((await ui.find({ key: 'sidekick-note-known' }))?.props).toMatchObject({ label: 'Weiß ich schon', hotkey: '2' })
+    expect((await ui.find({ key: 'sidekick-note-explain' }))?.props).toMatchObject({ label: 'Erklären', hotkey: '2' })
     expect((await ui.find({ key: 'sidekick-note-ignore' }))?.props).toMatchObject({ label: 'Ignorieren', hotkey: '0' })
     expect(box).toContain('"width":100')
     await ui.unmount()
@@ -3610,7 +3640,7 @@ deTest('0.13.0 Review K1: nach der Runde (isWorking false) keine Ziffern an den 
   await notesOn($)
   const ui = await $.ui.mount(bandNote('terminal', { isWorking: false }))
   expect(await ui.find({ key: 'sidekick-note' })).toBeDefined()
-  for (const key of ['sidekick-note-claude', 'sidekick-note-known', 'sidekick-note-ignore']) expect((await ui.find({ key }))?.props.hotkey).toBeUndefined()
+  for (const key of ['sidekick-note-claude', 'sidekick-note-explain', 'sidekick-note-ignore']) expect((await ui.find({ key }))?.props.hotkey).toBeUndefined()
   await ui.unmount()
 })
 
@@ -3749,7 +3779,7 @@ test('0.13.0 en: tags, buttons and status in English', async ($, on) => {
   const ui = await $.ui.mount(bandNote())
   const box = JSON.stringify(await ui.find({ key: 'sidekick-note' }))
   expect(box).toContain('Good to know')
-  expect((await ui.find({ key: 'sidekick-note-known' }))?.props.label).toBe('Know this')
+  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.label).toBe('Explain')
   expect((await ui.find({ key: 'sidekick-note-claude' }))?.props.label).toBe('Hand to Claude')
   expect((await ui.find({ key: 'sidekick-note-ignore' }))?.props.label).toBe('Ignore')
   await ui.unmount()
@@ -3758,7 +3788,8 @@ test('0.13.0 en: tags, buttons and status in English', async ($, on) => {
 
 // ---------- 0.27.1: Hinweis in einer Zeile, „An Claude geben“, „Ignorieren“ ----------
 
-const PASS_DE = `sidekick-Hinweis, vom Nutzer an dich weitergegeben: Plan unter alter Adresse: ${THEMA} Der Planer speichert je Adresse. Prüf das jetzt. Ist es ein Problem, behebe es oder sag, was du vorschlägst, wenn es größer ist. Ist es keins, erklär in einem Satz, warum nicht.`
+// Teil C (0.29.0): Problem oder Hinterfragen; NOTE ist `achtung`, darum vorn „Achtung, wahrscheinlich ein Problem:“
+const PASS_DE = `Achtung, wahrscheinlich ein Problem: sidekick-Hinweis, vom Nutzer an dich weitergegeben. Das kann ein Problem sein oder etwas, das du an deinem Vorgehen hinterfragen solltest: Plan unter alter Adresse: ${THEMA} Der Planer speichert je Adresse. Schau es dir jetzt an. Ist es ein Problem, behebe es oder sag, was du vorschlägst, wenn es größer ist. Musst du dein Vorgehen ändern, sag kurz, was du änderst. Ist es keins, erklär in einem Satz, warum nicht.`
 const PASS_DE_TURN = `${PASS_DE} Mach danach mit deiner Aufgabe weiter.`
 const endTurn = ($: Engine, turnId: string, aborted = false) =>
   $.turn.complete({ turnId, answer: 'fertig', reason: aborted ? 'aborted' : 'answer', durationMs: 10, isAborted: aborted, usage: null } as never)
@@ -3783,9 +3814,10 @@ for (const surface of ['terminal', 'desktop'] as const)
     expect(s).toContain('Achtung')
     expect(s).toContain(THEMA)
     expect((await ui.find({ key: 'sidekick-note-claude' }))?.props).toMatchObject({ label: 'An Claude geben', hotkey: '1' })
-    expect((await ui.find({ key: 'sidekick-note-known' }))?.props).toMatchObject({ label: 'Weiß ich schon', hotkey: '2' })
+    expect((await ui.find({ key: 'sidekick-note-explain' }))?.props).toMatchObject({ label: 'Erklären', hotkey: '2' })
     expect((await ui.find({ key: 'sidekick-note-ignore' }))?.props).toMatchObject({ label: 'Ignorieren', hotkey: '0' })
-    for (const gone of ['Erklären', 'Später', 'Im Chat', 'Verstanden', 'Schließen']) expect(s).not.toContain(gone)
+    for (const gone of ['Weiß ich schon', 'Zuklappen', 'Später', 'Im Chat', 'Verstanden', 'Schließen']) expect(s).not.toContain(gone)
+    expect(await ui.find({ key: 'sidekick-note-text' })).toBeUndefined()
     await ui.unmount()
     // Schmal (40 Spalten): Breite folgt bodyColumns, die Knöpfe brechen über flexWrap um
     ui = await $.ui.mount(bandNote(surface, { bodyColumns: 40 }))
@@ -3805,21 +3837,17 @@ deTest('0.27.1: ein alter aufgeklappter Hinweis (open: true aus 0.27.0) erschein
   expect(savedNote(w)).toBe(null)
 })
 
-deTest('0.27.1: Weiß ich schon merkt das Thema, Ignorieren nicht; beide räumen ab, zählen und setzen die Zurückhaltung zurück', async ($, on) => {
-  const w = world(on)
+deTest('0.29.0 Teil C: Ignorieren = nie wieder: merkt das Thema in known, räumt ab, zählt „nie wieder“, setzt die Zurückhaltung zurück', async ($, on) => {
+  const w = world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
   await notesOn($)
-  for (const [key, field] of [['sidekick-note-ignore', 'spaeter'], ['sidekick-note-known', 'bekannt']] as const) {
-    w.setId(`sess-${key}`)
-    w.saved.set(`sitzung:sess-${key}`, { note: NOTE, savedAt: NOW })
-    w.saved.set('notes:ignored', 4)
-    w.saved.set('notes:skip', 2)
-    await pressKey($, key)
-    expect(savedNote(w, `sess-${key}`)).toBe(null)
-    expect(today(w.ledger(`sess-${key}`)).notizen[field]).toBe(1)
-    expect(w.saved.get('notes:ignored')).toBe(0)
-    expect(w.saved.get('notes:skip')).toBe(0)
-    expect(w.saved.get('notes:known') ?? []).toEqual(key === 'sidekick-note-known' ? [THEMA] : [])
-  }
+  w.saved.set('notes:ignored', 4)
+  w.saved.set('notes:skip', 2)
+  await pressKey($, 'sidekick-note-ignore')
+  expect(savedNote(w)).toBe(null)
+  expect(today(w.ledger()).notizen).toMatchObject({ niewieder: 1, bekannt: 0, spaeter: 0 })
+  expect(w.saved.get('notes:ignored')).toBe(0)
+  expect(w.saved.get('notes:skip')).toBe(0)
+  expect(w.saved.get('notes:known')).toEqual([THEMA])
   expect(w.sent).toEqual([])
 })
 
@@ -4010,11 +4038,11 @@ test('0.27.1 en: Hand to Claude sends the English text, without the last sentenc
   await notesOn($)
   await pressKey($, 'sidekick-note-claude')
   expect(w.sent).toEqual([
-    `sidekick note, passed on to you by the user: Plan unter alter Adresse: ${THEMA} Der Planer speichert je Adresse. Check this now. If it is a problem, fix it, or say what you suggest if it is bigger. If it is not, explain in one sentence why not.`,
+    `Heads up, likely a problem: sidekick note, passed on to you by the user. It may be a problem or something you should question about your approach: Plan unter alter Adresse: ${THEMA} Der Planer speichert je Adresse. Look at it now. If it is a problem, fix it, or say what you suggest if it is bigger. If you need to change your approach, say briefly what you change. If it is not a problem, explain in one sentence why not.`,
   ])
 })
 
-deTest('0.27.1 /savings detail: Spalten nur mit Werten; alter Tag zeigt erklärt, neuer an Claude', async () => {
+deTest('0.27.1 / 0.29.0 /savings detail: Spalten nur mit Werten; alter Tag zeigt erklärt, neuer an Claude und „nie wieder“ (alte ignoriert (Knopf))', async () => {
   const old = emptyDay()
   old.notizen = { ...old.notizen, n: 4, usd: 0.17, ms: 20000, gezeigt: 1, erklaert: 1, keins: 3 }
   const neu = emptyDay()
@@ -4023,14 +4051,14 @@ deTest('0.27.1 /savings detail: Spalten nur mit Werten; alter Tag zeigt erklärt
   expect(a).toContain('| Prüfungen | ≈ $ | Ø Dauer | gezeigt | erklärt | keins |')
   expect(a).toContain('| 4 | ≈ 0,17 $ | 5,0 s | 1 | 1 | 3 |')
   const b = savingsReport(neu, 'all', NOW, '', { [dayKey(NOW)]: neu })
-  expect(b).toContain('| Prüfungen | ≈ $ | Ø Dauer | gezeigt | an Claude | ignoriert (Knopf) |')
+  expect(b).toContain('| Prüfungen | ≈ $ | Ø Dauer | gezeigt | an Claude | nie wieder |')
   expect(b).toContain('| 2 | ≈ 0,08 $ | 4,0 s | 2 | 1 | 1 |')
   expect(b).not.toContain('erklärt')
   const sum = addDay(old, neu)
   expect(sum.notizen).toMatchObject({ n: 6, gezeigt: 3, erklaert: 1, weiter: 1, spaeter: 1, keins: 3 })
   expect(cleanLedger({ tage: { [dayKey(NOW)]: { notizen: { n: 1, erklaert: 2, chat: 1 } } } }).tage[dayKey(NOW)]?.notizen).toMatchObject({ erklaert: 2, chat: 1, weiter: 0 })
   const tree = JSON.stringify(savingsTree(neu, 'all', NOW, 100, 'terminal'))
-  expect(tree).toContain('gezeigt 2 · an Claude 1 · ignoriert (Knopf) 1')
+  expect(tree).toContain('gezeigt 2 · an Claude 1 · nie wieder 1')
   expect(tree).not.toContain('erklärt')
   expect(JSON.stringify(savingsTree(old, 'all', NOW, 100, 'terminal'))).toContain('gezeigt 1 · erklärt 1')
 })
@@ -4086,7 +4114,7 @@ deTest('0.14.0 Hilfe (de): Markdown mit Befehlen, Bedienung, Funktionen, Einstel
   expect(text).toMatch(/^\*\*FUNKTIONEN:\*\* Stufe Begleiter \(Standard\) \(\/sidekick off\|cache\|guide\) · Schwelle 80k \(Standard\)/m)
   expect(text).toContain('Gut zu wissen ○ aus (Standard) (/sidekick notes on)')
   // Seit 0.23.0 alle userConfig-Felder in der Reihenfolge von plugin.json, Sprache zuletzt
-  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Stufe guide \(Standard\) · Prüfung ab \(Tokens\) 80k \(Standard\) · .* · Korrektur-Schleife an \(Standard\) · Warteschlange an \(Standard\) · Skill-Katalog an \(Standard\) · Danach-Knopf an \(Standard\) · Prompt-Knöpfe an \(Standard\) · Sprache de$/m)
+  expect(text).toMatch(/^\*\*EINSTELLUNGEN \(\/plugin\):\*\* Stufe guide \(Standard\) · Prüfung ab \(Tokens\) 80k \(Standard\) · .* · Korrektur-Schleife an \(Standard\) · Warteschlange an \(Standard\) · Skill-Katalog an \(Standard\) · Sprache de$/m)
   expect(lines[lines.length - 1]).toBe('Einstellungen ändern: /plugin configure sidekick · Mod abschalten: /plugin disable sidekick')
 })
 
@@ -4254,7 +4282,7 @@ test('0.14.0 Hilfe (en): Funktionen und Einstellungen in Englisch, Desktop-Fußz
   const text = await helpRun($)
   expect(text).toContain('Level Guide (default) (/sidekick off|cache|guide)')
   expect(text).toContain('Good to know ○ off (default) (/sidekick notes on)')
-  expect(text).toMatch(/^\*\*SETTINGS \(\/plugin\):\*\* Level guide \(default\) · .* · Retry loop on \(default\) · Queue on \(default\) · Skill catalog on \(default\) · Later button on \(default\) · Prompt buttons on \(default\) · Language en \(default\)$/m)
+  expect(text).toMatch(/^\*\*SETTINGS \(\/plugin\):\*\* Level guide \(default\) · .* · Retry loop on \(default\) · Queue on \(default\) · Skill catalog on \(default\) · Language en \(default\)$/m)
   const ui = await mountHelp($, text, 'desktop')
   expect(await ui.find({ type: 'Text', text: 'Change settings: Settings → Plugins → sidekick → Settings · Turn the mod off: + → Plugins → Manage plugins' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'CONTROLS' })).toBeDefined()
@@ -4511,7 +4539,7 @@ test('0.17.0 language: Wort im argumentHint von /sidekick, nicht in /savings', a
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await flush(200)
   const hint = (name: string) => w.registered.find((c) => c.name === name)?.argumentHint ?? ''
-  expect(hint('sidekick')).toBe('[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|save <name> [text]|prompts [name]|forget <name>|language|help]')
+  expect(hint('sidekick')).toBe('[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|queue on|off|catalog …|language|help]')
   expect(hint('savings')).not.toContain('language')
 })
 
@@ -4729,7 +4757,8 @@ deTest('0.20.0: status.cold: kippt nach Ablauf der TTL auf true, mit der nächst
   expect(lastStatus(w)?.cold).toBeUndefined()
   await w.clock.advance(2 * MIN)
   await flush(200)
-  expect(lastStatus(w)).toEqual({ level: 'guide', busy: false, cold: true })
+  // `later` (0.29.0): die Runde läuft noch (kein turn.complete in dieser Welt)
+  expect(lastStatus(w)).toEqual({ level: 'guide', busy: false, cold: true, later: true })
   // Weitere Minuten ohne Änderung: kein neues Schreiben
   const n = w.statusVals.length
   await w.clock.advance(10 * MIN)
@@ -4874,4 +4903,139 @@ deTest('0.23.0 MIN_OF gleich min in fields.ts; Altwerte unter dem Minimum werden
   expect(legacyOf({ threshold: 500, big: 200 }, { auditMin: 50 })?.values).toMatchObject({ threshold: 1000, bigTokens: 1000, auditMin: 100 })
   expect(legacyOf({ threshold: 500, migrated: true }, { on: false, migrated: true })).toBe(null)
   expect(legacyOf({ threshold: 500, migrated: true }, { on: false })?.values).toEqual({ maintenanceHints: false })
+})
+
+// ---------- 0.29.0 Teil C: Erklären, Ignorieren = nie wieder, schlimmer geworden, Text an Claude ----------
+
+for (const surface of ['terminal', 'desktop'] as const)
+  deTest(`0.29.0 Teil C ${surface}: Erklären klappt die Erklärung auf, Knöpfe bleiben, Zuklappen klappt zu; kein Modellaufruf, erklärt einmal gezählt`, async ($, on) => {
+    const w = world(on, { surfaces: [surface], saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+    await notesOn($)
+    const ui = await $.ui.mount(bandNote(surface, { bodyColumns: 60 }))
+    await ui.press({ key: 'sidekick-note-explain' })
+    await flush(120)
+    const text = (await ui.find({ key: 'sidekick-note-text' })) as { props: Record<string, unknown> } | undefined
+    expect(JSON.stringify(text)).toContain('Der Planer speichert je Adresse.')
+    expect(text?.props).toMatchObject({ width: 60 })
+    expect(JSON.stringify(text)).toContain('"wrap":"wrap"')
+    for (const key of ['sidekick-note-claude', 'sidekick-note-ignore']) expect(await ui.find({ key })).toBeDefined()
+    expect((await ui.find({ key: 'sidekick-note-explain' }))?.props).toMatchObject({ label: 'Zuklappen', hotkey: '2' })
+    // Der Hinweis bleibt, nichts gesendet, kein Fork, nichts in known
+    expect(savedNote(w)).toMatchObject({ thema: THEMA })
+    expect(w.sent).toEqual([])
+    expect(w.forks.length).toBe(0)
+    expect(w.saved.get('notes:known') ?? []).toEqual([])
+    await ui.press({ key: 'sidekick-note-explain' })
+    await flush(120)
+    expect(await ui.find({ key: 'sidekick-note-text' })).toBeUndefined()
+    expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.label).toBe('Erklären')
+    await ui.press({ key: 'sidekick-note-explain' })
+    await flush(120)
+    expect(today(w.ledger()).notizen.erklaert).toBe(1)
+    await ui.unmount()
+  })
+
+deTest('0.29.0 Teil C: alter Hinweis ohne text → die Erklärung zeigt das Thema; en: Explain/Collapse', async ($, on) => {
+  world(on, { saved: new Map<string, unknown>([['sitzung:sess-1', { note: { ...NOTE, text: '' }, savedAt: NOW }]]) })
+  await notesOn($)
+  const ui = await $.ui.mount(bandNote())
+  await ui.press({ key: 'sidekick-note-explain' })
+  await flush(120)
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-note-text' }))).toContain(THEMA)
+  await ui.unmount()
+  expect([T.en.noteExplain, T.en.noteCollapse, T.en.noteWorse]).toEqual(['Explain', 'Collapse', 'got worse'])
+  expect(Object.keys(T.en.help).sort()).toEqual(Object.keys(T.de.help).sort())
+})
+
+deTest('0.29.0 Teil C: parseNote: bekanntes Thema ohne schlimmer verworfen, mit schlimmer und achtung angenommen, mit wissen oder schon einmal verworfen', async () => {
+  const worse = 'Inzwischen speichert auch der Export unter der alten Adresse.'
+  expect(parseNote(noteJson(), [], [THEMA])).toEqual({ kind: 'bad', why: 'doppelt' })
+  expect(parseNote(noteJson({ schlimmer: '  ' }), [], [THEMA])).toEqual({ kind: 'bad', why: 'doppelt' })
+  expect(parseNote(noteJson({ schlimmer: worse }), [THEMA], [THEMA])).toMatchObject({ kind: 'note', thema: THEMA, art: 'achtung', schlimmer: worse })
+  expect(parseNote(noteJson({ schlimmer: worse, art: 'wissen' }), [], [THEMA])).toEqual({ kind: 'bad', why: 'doppelt' })
+  expect(parseNote(noteJson({ schlimmer: worse }), [], [THEMA], [normTopic(THEMA)])).toEqual({ kind: 'bad', why: 'doppelt' })
+  // nur gezeigt, nicht ignoriert: bleibt doppelt; Review S1: `schlimmer` an einem Thema, das nicht wörtlich in known steht → verworfen
+  expect(parseNote(noteJson({ schlimmer: worse }), [THEMA], [])).toEqual({ kind: 'bad', why: 'doppelt' })
+  expect(parseNote(noteJson({ schlimmer: worse }), [], [])).toEqual({ kind: 'bad', why: 'doppelt' })
+  expect(parseNote(noteJson({ schlimmer: worse }), [], ['Ein ganz anderes Thema.'])).toEqual({ kind: 'bad', why: 'doppelt' })
+  // ohne `schlimmer` bleibt ein neues Thema ein normaler Hinweis
+  expect(parseNote(noteJson(), [], ['Ein ganz anderes Thema.'])).toMatchObject({ kind: 'note', thema: THEMA })
+  const p = notesPrompt([], [THEMA], 'de')
+  expect(p).toContain('mit "thema" wörtlich wie in dieser Liste')
+  // Review S2: Sprachvorgabe nennt auch "schlimmer"
+  expect(p).toContain('Schreib "thema", "titel", "erklaerung" und "schlimmer" auf Deutsch.')
+  expect(notesPrompt([], [], 'en')).toContain('Schreib "thema", "titel", "erklaerung" und "schlimmer" auf Englisch (English).')
+  expect(p).toContain('höchstens 80 Wörter in einfacher Sprache')
+  expect(p).toContain('Der erste Satz sagt, was genau das Problem ist')
+  expect(p).toContain('"schlimmer"')
+  expect(p).toContain('nur mit "art": "achtung"')
+  expect(p).not.toContain('höchstens 100 Wörter')
+})
+
+deTest('0.29.0 Teil C: Fork mit bekanntem, schlimmer gewordenem Thema → Zeile „schlimmer geworden“, Erklärung beginnt mit dem Satz; ein zweites Mal im selben Chat verworfen', async ($, on) => {
+  const w = world(on)
+  await notesOn($)
+  const worse = 'Inzwischen speichert auch der Export unter der alten Adresse.'
+  w.saved.set('notes:known', [THEMA])
+  w.setFork({ isAnswered: true, text: noteJson({ schlimmer: worse }), usage: FORK_USAGE })
+  await stepAt($, 6, 'w1')
+  await until(() => !!savedNote(w))
+  const n = savedNote(w)
+  expect(n).toMatchObject({ thema: THEMA, art: 'achtung', worse: true, text: `${worse} Der Planer speichert je Adresse.` })
+  expect(today(w.ledger()).notizen).toMatchObject({ gezeigt: 1, schlimmer: 1 })
+  const ui = await $.ui.mount(bandNote())
+  const line = JSON.stringify(await ui.find({ key: 'sidekick-note' }))
+  expect(line).toContain('Achtung')
+  expect(line).toContain('schlimmer geworden')
+  expect(line.indexOf('schlimmer geworden')).toBeLessThan(line.indexOf(THEMA))
+  await ui.press({ key: 'sidekick-note-explain' })
+  await flush(120)
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-note-text' }))).toContain(`${worse} Der Planer`)
+  await ui.press({ key: 'sidekick-note-ignore' })
+  await flush(120)
+  await ui.unmount()
+  // Dasselbe Thema wird in diesem Chat nicht noch einmal schlimmer
+  await stepAt($, 6, 'w2')
+  await flush(200)
+  expect(w.forks.length).toBe(2)
+  expect(savedNote(w)).toBe(null)
+  expect(today(w.ledger()).notizen).toMatchObject({ gezeigt: 1, schlimmer: 1, verworfen: 1 })
+})
+
+for (const lang of ['de', 'en'] as const)
+  test(`0.29.0 Teil C (${lang}): Text an Claude mit und ohne achtung, im Zug mit und im Leerlauf ohne Schlusssatz`, { options: { language: lang } }, async () => {
+    setLang(lang)
+    const x = T[lang]
+    const ach = x.notePassText('Titel', 'Thema.', 'Text.', true, true)
+    const wis = x.notePassText('Titel', 'Thema.', 'Text.', false, false)
+    if (lang === 'de') {
+      expect(ach.startsWith('Achtung, wahrscheinlich ein Problem: sidekick-Hinweis')).toBe(true)
+      expect(ach).toContain('etwas, das du an deinem Vorgehen hinterfragen solltest: Titel: Thema. Text.')
+      expect(ach).toContain('Musst du dein Vorgehen ändern, sag kurz, was du änderst.')
+      expect(ach.endsWith(' Mach danach mit deiner Aufgabe weiter.')).toBe(true)
+      expect(wis.startsWith('sidekick-Hinweis, vom Nutzer an dich weitergegeben. Das kann ein Problem sein')).toBe(true)
+      expect(wis.endsWith('erklär in einem Satz, warum nicht.')).toBe(true)
+    } else {
+      expect(ach.startsWith('Heads up, likely a problem: sidekick note')).toBe(true)
+      expect(ach).toContain('something you should question about your approach: Titel: Thema. Text.')
+      expect(ach.endsWith(' Then carry on with your task.')).toBe(true)
+      expect(wis.startsWith('sidekick note, passed on to you by the user. It may be a problem')).toBe(true)
+      expect(wis.endsWith('explain in one sentence why not.')).toBe(true)
+    }
+    setLang('de')
+  })
+
+deTest('0.29.0 Teil C: /savings detail mit alten und neuen Tagen: „nie wieder“ = weiß ich + ignoriert (Knopf) + neu, schlimmer und erklärt', async () => {
+  const old = emptyDay()
+  old.notizen = { ...old.notizen, n: 3, usd: 0.1, ms: 9000, gezeigt: 3, bekannt: 1, spaeter: 1 }
+  const neu = emptyDay()
+  neu.notizen = { ...neu.notizen, n: 2, usd: 0.08, ms: 8000, gezeigt: 2, niewieder: 1, schlimmer: 1, erklaert: 2 }
+  const sum = addDay(old, neu)
+  const md = savingsReport(sum, 'all', NOW, '', { [dayKey(NOW)]: sum })
+  expect(md).toContain('| Prüfungen | ≈ $ | Ø Dauer | gezeigt | erklärt | nie wieder | schlimmer |')
+  expect(md).toContain('| 5 | ≈ 0,18 $ | 3,4 s | 5 | 2 | 3 | 1 |')
+  expect(md).not.toContain('weiß ich')
+  expect(md).not.toContain('ignoriert (Knopf)')
+  expect(JSON.stringify(savingsTree(old, 'all', NOW, 100, 'terminal'))).toContain('nie wieder 2')
+  expect(cleanLedger({ tage: { [dayKey(NOW)]: { notizen: { n: 1, bekannt: 2 } } } }).tage[dayKey(NOW)]?.notizen).toMatchObject({ bekannt: 2, niewieder: 0, schlimmer: 0 })
 })

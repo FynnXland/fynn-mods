@@ -8,7 +8,7 @@ import { colsIn } from '../hooks/register.js'
 import { LANGUAGE_WORD, LANGUAGES } from '../hooks/language.js'
 import { CONTROL_SCRIPT, PS_ABS, QUERY_SCRIPT, parseQuery, trackKey } from '../hooks/ps.js'
 import type { Track } from '../hooks/ps.js'
-import { DESKTOP_WIDTHS, TERMINAL_WIDTHS, aheadOf, clip, coverSvg, infoSvg, sepSvg } from '../hooks/view.js'
+import { DESKTOP_WIDTHS, SEP_H, TERMINAL_WIDTHS, aheadOf, clip, coverSvg, infoSvg, sepSvg } from '../hooks/view.js'
 
 // Was die Zeichnung sagt: der Text der Knoten und die Beschreibungen der Svg-Bilder (die Leiste zeichnet Titel und Zeit als Bild)
 const seen = (tree: Node): string => {
@@ -903,6 +903,10 @@ test('Leiste: Segmentbalken wie bei limit-bars (44 × 3 px mit 1 px Fuge), Titel
   expect(clip('abcdef', 4)).toBe('abc…')
   expect(sepSvg()).toContain('#D77757')
   expect(sepSvg().length).toBeLessThan(1000)
+  // 0.12.3: die Trennlinie passt in eine Band-Zeile (≈ 20 px im Desktop); Linie bei 8 px, darunter 4 px statt 16
+  expect(SEP_H).toBe(14)
+  expect(sepSvg()).toContain('height="14" viewBox="0 0 2400 14"')
+  expect(sepSvg()).toContain('<rect y="8" width="2400" height="2"')
 })
 
 // Wert eines <animate> (calcMode discrete, fill freeze) zur Dokumentzeit t, wie SMIL ihn rechnet; undefined vor dem Beginn

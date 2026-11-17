@@ -1,38 +1,37 @@
-// Tests zum Nachtrag 0.21.0: gespeicherte Prompts als Befehl und Knopf (SPEC „Tests“). Eigene, kleine Welt mit Stubs.
+// Tests zur Erkennung wiederholter Prompts (Nachtrag 0.21.0) und zur Abgabe an prompt-deck (Ausbau 0.29.0): Angebot nur mit
+// `prompt-deck.saved`, Speichern über `/deck save`, Umzug von `prompts:saved`, Verweise der alten Unterbefehle. Eigene Welt mit Stubs.
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 import { MIN, dayKey } from '../hooks/cache.js'
-import { cliStubs, written } from './cli.js'
-import { FOOTER_BUTTONS, buttonRows, buttonsArg, buttonsMarkdown, shownPrompts } from '../hooks/buttons.js'
+import { cliStubs } from './cli.js'
 import { SETTINGS } from '../hooks/fields.js'
-import { readSettings } from '../hooks/settings.js'
 import { DEFAULT_SETTINGS, addDay, bookPrompts, cleanLedger, countPrompt, emptyDay, savingsReport } from '../hooks/logic.js'
 import type { Ledger } from '../hooks/logic.js'
-import { setLang } from '../hooks/i18n.js'
+import { T, setLang } from '../hooks/i18n.js'
 import { savingsTree } from '../hooks/view.js'
 import { sidekickHelp } from '../hooks/helpdata.js'
 import {
-  BUTTONS_MAX,
   JACCARD,
   MIN_CHARS,
   RECENT_DAYS,
   RECENT_MAX,
-  SAVED_MAX,
   addRecent,
   addSeen,
   budgetLeft,
-  buttonLabel,
-  buttonNames,
   candidates,
   checkName,
   cleanBudget,
+  cleanDeckSaved,
   cleanRecent,
   cleanSaved,
   cleanSeen,
-  commandDescription,
+  deckAnswer,
+  deckLaterAt,
   freeName,
   jaccard,
+  migrateArgs,
+  movedTarget,
   nearSaved,
   parseProposal,
   proposePrompt,
@@ -40,12 +39,10 @@ import {
   recentOf,
   remembers,
   seenSet,
-  pHint,
-  upsert,
   useBudget,
   wordSet,
 } from '../hooks/prompts.js'
-import type { Saved } from '../hooks/prompts.js'
+import type { DeckItem, Saved } from '../hooks/prompts.js'
 
 const NOW = new Date(2026, 10, 6, 10, 0, 0).getTime()
 const DAY = 24 * 60 * MIN
@@ -67,7 +64,7 @@ deTest('Verlauf: kurze Nachrichten, Slash-Befehle und Plugin-Nachrichten werden 
   expect(remembers(TIDY, 'composer')).toBe(true)
   expect(remembers(TIDY, 'sdk')).toBe(true)
   expect(remembers(TIDY, 'plugin')).toBe(false)
-  expect(remembers(`/sidekick save x ${TIDY}`, 'composer')).toBe(false)
+  expect(remembers(`/deck save x ${TIDY}`, 'composer')).toBe(false)
   expect(remembers('ja, weiter so, mach das bitte', 'composer')).toBe(false)
   // 60 Zeichen, aber unter 8 Wörtern
   expect(remembers('Donaudampfschifffahrtsgesellschaftskapitänsmützenhalterung prüfen', 'composer')).toBe(false)
@@ -98,23 +95,18 @@ deTest('Vorfilter: 3 ähnliche aus 3 Sessions → Kandidat; 3 aus derselben Sess
   const c = recentOf(`${TIDY} Danke dir.`, 's3', NOW)
   const g = candidates([a, b], c)
   expect(g?.map((r) => r.sid)).toEqual(['s3', 's1', 's2'])
-  // dieselbe Session
   const same = [recentOf(TIDY, 's3', NOW - 2), recentOf(`Bitte ${TIDY}`, 's3', NOW - 1)]
   expect(candidates(same, c)).toBe(null)
-  // nur zwei Sessions zusammen
   expect(candidates([a, recentOf(`Bitte ${TIDY}`, 's1', NOW - 1)], c)).toBe(null)
-  // unähnlich
   const other = [recentOf('Baue im Spiel eine neue Waffe mit Rückstoß und Nachladezeit ein, bitte mit Test.', 's1', NOW - 1), recentOf('Prüfe die Rechnung vom Oktober und trage die Beträge in die Tabelle ein, danke.', 's2', NOW - 1)]
   expect(candidates(other, c)).toBe(null)
-  // gesehene Einträge zählen nicht
   expect(candidates([a, b], c, new Set([a.id]))).toBe(null)
-  // höchstens 4 Nachrichten an Haiku, je Session eine
   const more = Array.from({ length: 6 }, (_, i) => recentOf(TIDY, `x${i}`, NOW - 10 - i))
   expect(candidates(more, c)?.length).toBe(4)
   expect(JACCARD).toBe(0.25)
 })
 
-deTest('Gesehene Gruppen, Tagesgrenze 5, Nähe zu gespeicherten', () => {
+deTest('Gesehene Gruppen, Tagesgrenze 5, Nähe zu gespeicherten (Wortmengen aus prompt-deck.saved)', () => {
   const s = addSeen(cleanSeen([['a', 'b']]), ['c'])
   expect(seenSet(s)).toEqual(new Set(['a', 'b', 'c']))
   expect(cleanSeen(Array.from({ length: 120 }, (_, i) => [`g${i}`])).length).toBe(100)
@@ -124,47 +116,48 @@ deTest('Gesehene Gruppen, Tagesgrenze 5, Nähe zu gespeicherten', () => {
   for (let i = 0; i < 5; i++) b = useBudget(b, day)
   expect(budgetLeft(b, day)).toBe(0)
   expect(budgetLeft(b, dayKey(NOW + DAY))).toBe(5)
-  expect(nearSaved([{ name: 'tidy-chats', text: TIDY, button: true, at: 0, from: 'auto' }], wordSet(`Bitte ${TIDY}`))).toBe(true)
+  expect(nearSaved([{ name: 'tidy-chats', words: wordSet(TIDY) }], wordSet(`Bitte ${TIDY}`))).toBe(true)
+  expect(nearSaved([{ name: 'x', words: ['ganz', 'anders'] }], wordSet(TIDY))).toBe(false)
   expect(nearSaved([], wordSet(TIDY))).toBe(false)
 })
 
-deTest('Namen: gültig, ungültig, eigener gespeicherter, Vorschlag -2; andere Befehle stören nicht (/p <name>)', () => {
+deTest('Namen: gültig, ungültig, schon gespeichert → Vorschlag -2; andere Befehle stören nicht (/p <name>)', () => {
   expect(checkName('tidy-chats', [], false)).toEqual({ ok: true, name: 'tidy-chats' })
   expect(checkName('/Tidy Chats', [], false)).toEqual({ ok: true, name: 'tidy-chats' })
-  // Gesendet wird mit `/p <name>`: eingebaute und fremde Befehlsnamen sind frei (Fynn 2026-11-06)
   expect(checkName('clear', [], false)).toEqual({ ok: true, name: 'clear' })
-  expect(checkName('sidekick', [], true)).toEqual({ ok: true, name: 'sidekick' })
-  // „/p tidy-chats“ als Eingabe speichert „tidy-chats“
   expect(checkName('/p tidy-chats', [], false)).toEqual({ ok: true, name: 'tidy-chats' })
   expect(checkName('tidy-chats', ['tidy-chats'], false)).toMatchObject({ ok: false, why: 'own', suggest: 'tidy-chats-2' })
-  expect(checkName('tidy-chats', ['tidy-chats'], true)).toEqual({ ok: true, name: 'tidy-chats' })
   expect(checkName('a'.repeat(25), [], false)).toMatchObject({ ok: false, why: 'invalid' })
   expect(checkName('ä-ö', [], false)).toMatchObject({ ok: false, why: 'invalid' })
-  expect(checkName('-x', [], false)).toMatchObject({ ok: false, why: 'invalid' })
   expect(freeName('clear', new Set(['clear', 'clear-2']))).toBe('clear-3')
   expect(freeName('a'.repeat(24), new Set()).length).toBeLessThanOrEqual(24)
-  // Hinweis hinter /p im Menü
-  const sv = (name: string) => ({ name, text: 'x', button: true, at: 0, from: 'manual' as const })
-  expect(pHint([])).toBe('<name>')
-  expect(pHint([sv('tidy-chats'), sv('review-pr')])).toBe('<tidy-chats|review-pr>')
-  expect(pHint(Array.from({ length: 12 }, (_, i) => sv(`ein-langer-name-${i}`))).endsWith('|…>')).toBe(true)
 })
 
-deTest('Gespeicherte: tolerant gelesen, höchstens 12, Überschreiben behält Knopf, der 13. passt nicht, 4 Knöpfe', () => {
-  expect(cleanSaved([{ name: 'ok-1', text: 'x' }, { name: 'Bad Name', text: 'x' }, { name: 'ok-1', text: 'doppelt' }, { name: 'leer', text: ' ' }])).toEqual([{ name: 'ok-1', text: 'x', button: true, at: 0, from: 'manual' }])
-  let list: Saved[] = []
-  for (let i = 0; i < SAVED_MAX; i++) list = upsert(list, { name: `p${i}`, text: `t${i}`, button: true, at: i, from: 'manual' }).list
-  expect(list.length).toBe(12)
-  expect(upsert(list, { name: 'p12', text: 'x', button: true, at: 99, from: 'manual' }).kind).toBe('full')
-  list[1] = { ...list[1]!, button: false }
-  const r = upsert(list, { name: 'p1', text: 'neu', button: true, at: 99, from: 'auto' })
-  expect(r.kind).toBe('replaced')
-  expect(r.list[1]).toEqual({ name: 'p1', text: 'neu', button: false, at: 1, from: 'auto' })
-  expect(buttonNames(r.list)).toEqual(['p0', 'p2', 'p3', 'p4'])
-  expect(BUTTONS_MAX).toBe(4)
-  expect(buttonLabel('ein-sehr-langer-name-x')).toBe('ein-sehr-lang…')
-  expect(buttonLabel('tidy-chats')).toBe('tidy-chats')
-  expect(commandDescription(`  ${'Sortiere die Chats '.repeat(5)}`)).toMatch(/^sidekick: Sortiere die Chats .*…$/)
+deTest('0.29.0 Absprachen: prompt-deck.saved und .later tolerant gelesen, Antwort von /deck save, Umzugs-Argumente, Verweise', () => {
+  expect(cleanDeckSaved(undefined)).toBe(null)
+  expect(cleanDeckSaved(null)).toBe(null)
+  expect(cleanDeckSaved({ items: 'x' })).toBe(null)
+  expect(cleanDeckSaved({ items: [] })).toEqual([])
+  expect(cleanDeckSaved({ items: [{ name: 'a', words: ['eins', 3] }, { name: '' }, null, { name: 'b' }] })).toEqual([
+    { name: 'a', words: ['eins'] },
+    { name: 'b', words: [] },
+  ])
+  expect(deckLaterAt({ armed: true, at: 5 })).toBe(5)
+  for (const v of [null, undefined, { at: 5 }, { armed: true }, { armed: 'ja', at: 5 }]) expect(deckLaterAt(v)).toBe(null)
+  expect(deckAnswer('saved tidy-chats\nGespeichert.')).toEqual({ kind: 'saved', name: 'tidy-chats', human: 'Gespeichert.' })
+  expect(deckAnswer('saved x-2')).toEqual({ kind: 'saved', name: 'x-2', human: '' })
+  expect(deckAnswer('full\nSchon 12.')).toEqual({ kind: 'full', why: 'full', human: 'Schon 12.' })
+  expect(deckAnswer('refused invalid-name\nGeht nicht.')).toEqual({ kind: 'refused', why: 'invalid-name', human: 'Geht nicht.' })
+  expect(deckAnswer(undefined)).toEqual({ kind: 'other', why: '', human: '' })
+  expect(deckAnswer('core deck')).toMatchObject({ kind: 'other', why: 'core deck' })
+  const sv = (name: string, button: boolean, from: 'auto' | 'manual'): Saved => ({ name, text: 'Zeile eins\nZeile zwei', button, at: 1, from })
+  expect(migrateArgs(sv('a', true, 'auto'))).toBe('a Zeile eins\nZeile zwei')
+  expect(migrateArgs(sv('b', false, 'auto'))).toBe('--off b Zeile eins\nZeile zwei')
+  expect(migrateArgs(sv('c', true, 'manual'))).toBe('--manual c Zeile eins\nZeile zwei')
+  expect(migrateArgs(sv('d', false, 'manual'))).toBe('--off --manual d Zeile eins\nZeile zwei')
+  expect(cleanSaved([{ name: 'ok-1', text: 'x' }, { name: 'Bad Name', text: 'x' }])).toEqual([{ name: 'ok-1', text: 'x', button: true, at: 0, from: 'manual' }])
+  expect(['save', 'prompts', 'forget', 'buttons', 'PROMPTS'].map(movedTarget)).toEqual(['/deck save', '/deck list', '/deck forget', '/deck buttons', '/deck list'])
+  expect(movedTarget('tips')).toBe(null)
 })
 
 deTest('Haiku: Prompt mit Nachrichten, Antwort gültig, same false, ungültiges JSON, Name falsch, Text zu lang', () => {
@@ -198,38 +191,52 @@ deTest('/savings: Rolle Prompts, Zeilen knapp und detail; alte Tage ohne Feld', 
   expect(short).toContain('1 angeboten · 1 gespeichert*')
   const md = savingsReport(d, 'all', NOW, '', { [dayKey(NOW)]: d })
   expect(md).toContain('| Haiku 5.5 | Prompts | 3 |')
-  expect(md).toContain('Prompts: 3 Prüfungen (')
   expect(md).toContain('2× gesendet')
   expect(JSON.stringify(savingsTree(d, 'all', NOW, 100, 'terminal'))).toContain('Prompts: 3 Prüfungen')
-  expect(JSON.stringify(savingsTree(d, 'all', NOW, 100, 'terminal', { [dayKey(NOW)]: d }))).toContain('2× gesendet')
   expect(savingsReport(emptyDay(), 'all', NOW)).not.toContain('Prompts')
 })
 
-deTest('Hilfe: Befehle und Funktion „Gespeicherte Prompts“', () => {
-  const h = sidekickHelp({ settings: { ...DEFAULT_SETTINGS }, ttl: { min: 60, source: 'default' }, hints: { on: true, off: [] }, known: 0, now: NOW, prompts: { n: 2, buttons: 1 } })
-  for (const c of ['/sidekick save <name> [text]', '/sidekick prompts [name]', '/sidekick prompts <name> on|off', '/sidekick forget <name>', '/p <name>']) expect(h.commands.some((x) => x.cmd === c), c).toBe(true)
-  expect(h.features.find((f) => f.name === 'Gespeicherte Prompts')?.state.text).toBe('2 gespeichert · 1 mit Knopf')
+deTest('0.29.0 Hilfe: keine Befehle der Knöpfe mehr (save, prompts, forget, buttons, /p), Verweis-Zeile auf prompt-deck; Felder weg', () => {
+  for (const lang of ['de', 'en'] as const) {
+    setLang(lang)
+    for (const deck of [true, false]) {
+      const h = sidekickHelp({ settings: { ...DEFAULT_SETTINGS }, ttl: { min: 60, source: 'default' }, hints: { on: true, off: [] }, known: 0, now: NOW, deck })
+      const cmds = h.commands.map((c) => c.cmd)
+      for (const c of cmds) expect(/^\/sidekick (save|prompts|forget|buttons)\b|^\/p\b/.test(c), c).toBe(false)
+      const note = h.notes?.find((n) => n.includes('prompt-deck')) ?? ''
+      expect(note).toContain(deck ? '/deck help' : 'claude plugin install prompt-deck@fynn-mods')
+      expect(JSON.stringify(h.settings)).not.toMatch(/Danach-Knopf|Later button|Prompt-Knöpfe|Prompt buttons/)
+    }
+  }
+  setLang('de')
+  expect(Object.keys(SETTINGS)).not.toContain('laterButton')
+  expect(Object.keys(SETTINGS)).not.toContain('promptButtons')
+  expect(Object.keys(T.en.pr).sort()).toEqual(Object.keys(T.de.pr).sort())
 })
 
 // ---------- Hooks ----------
 
-// Stufe und Schalter kommen seit 0.23.0 als userConfig (Test-Optionen); Befehle schreiben über den CLI-Stub (tests/cli.ts)
-function world(on: On, o: { submitDrop?: string; cmds?: { name: string; source: string; plugin?: string }[]; surfaces?: string[] } = {}) {
+type DeckCall = { args: string; origin: unknown }
+
+/**
+ * Stufe und Schalter kommen seit 0.23.0 als userConfig (Test-Optionen). prompt-deck ist ein Stub: `deck` meldet `/deck` in
+ * `command.list` an, `deckSaved` ist `prompt-deck.saved` (null = kein Wert), `/deck save` speichert Namen in diesen Wert und antwortet
+ * wie prompt-deck (`saved <name>`, belegter Name → `-2`); `setDeckReply` ersetzt die Antwort.
+ */
+function world(on: On, o: { deck?: boolean; deckSaved?: DeckItem[] | null; cmds?: { name: string; source: string; plugin?: string }[]; surfaces?: string[] } = {}) {
   const clock = mock.clock(on, { now: NOW })
   const store = new Map<string, unknown>()
   const cli = cliStubs(on)
   const toasts: string[] = []
-  const submitted: { text: string; asUser?: boolean; origin?: unknown }[] = []
   const registered: string[] = []
   const passed: string[] = []
   const stateVals = new Map<string, unknown>()
-  const stateSets: { key: string; value: unknown }[] = []
+  const deck = { on: o.deck !== false, saved: o.deckSaved === undefined ? ([] as DeckItem[]) : o.deckSaved }
+  const deckCalls: DeckCall[] = []
+  let deckReply: ((args: string) => string | undefined) | null = null
   let msgs: unknown[] = [{ role: 'assistant', text: 'vorher', toolUses: [] }]
-  let release: (() => void) | null = null
-  let hold = false
   on('session.start', () => ({ cwd: '/work' }) as never)
   let sid = 'sess-1'
-  // Erkennung: Antworten je Anweisung (Absicht, Vorschlag), sonst ein Urteil der Prüfung „durch“
   let intentOf: (text: string) => string = () => 'einmalig'
   let proposal: string = '{"same": false}'
   const calls: { kind: 'intent' | 'propose' | 'check'; prompt: string }[] = []
@@ -239,11 +246,16 @@ function world(on: On, o: { submitDrop?: string; cmds?: { name: string; source: 
   on('session.usage', () => ({ value: { startedAt: NOW, context: { tokens: 20000, window: 1000000 }, rateLimits: [] } as never }))
   on('session.root', () => ({ value: 'C:\\Proj' }))
   on('session.messages', () => ({ value: msgs as never }))
-  on('command.list', () => ({ value: [{ name: 'clear', description: '', source: 'builtin' }, ...(o.cmds ?? []), ...registered.map((n) => ({ name: n, description: '', source: 'plugin', plugin: 'sidekick' }))] as never }))
-  const hints = new Map<string, string>()
+  on('command.list', () => ({
+    value: [
+      { name: 'clear', description: '', source: 'builtin' },
+      ...(deck.on ? [{ name: 'deck', description: '', source: 'plugin', plugin: 'prompt-deck' }] : []),
+      ...(o.cmds ?? []),
+      ...registered.map((n) => ({ name: n, description: '', source: 'plugin', plugin: 'sidekick' })),
+    ] as never,
+  }))
   on('command.register', ($, e) => {
     if (!registered.includes(e.name)) registered.push(e.name)
-    hints.set(e.name, e.argumentHint ?? '')
     return { value: { command: e.name } as never }
   })
   on('store.get', ($, e) => ({ value: store.get(e.key) }))
@@ -260,12 +272,12 @@ function world(on: On, o: { submitDrop?: string; cmds?: { name: string; source: 
     toasts.push(e.text)
     return { value: undefined }
   })
-  on('state.get', ($: unknown, e: any) => ({ value: { value: e.plugin === 'sidekick' ? stateVals.get(e.key) : undefined, version: 1 } }))
+  on('state.get', ($: unknown, e: any) => {
+    if (e.plugin === 'prompt-deck') return { value: { value: e.key === 'saved' && deck.saved ? { items: deck.saved } : undefined, version: 1 } }
+    return { value: { value: e.plugin === 'sidekick' ? stateVals.get(e.key) : undefined, version: 1 } }
+  })
   on('state.set', ($: unknown, e: any) => {
-    if (e.plugin === 'sidekick') {
-      stateVals.set(e.key, e.value)
-      stateSets.push({ key: e.key, value: e.value })
-    }
+    if (e.plugin === 'sidekick') stateVals.set(e.key, e.value)
     return { value: { isSet: true, version: 1 } }
   })
   const U = { input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
@@ -283,17 +295,23 @@ function world(on: On, o: { submitDrop?: string; cmds?: { name: string; source: 
     calls.push({ kind: 'check', prompt: e.prompt })
     return { value: { isAnswered: true, text: '{"urteil":"durch","art":"sonstiges","zeile":"","fassung":"","skill":"","kurzfassung":"k"}', usage: U } as never }
   })
-  // Fremde Befehle: kommt der Lauf hier an, hat sidekick ihn durchgereicht
+  // Fremde Befehle: kommt der Lauf hier an, hat sidekick ihn durchgereicht. `deck` antwortet wie prompt-deck (Verhalten 5)
   on('command.run', ($, e) => {
+    if (e.command === 'deck' && deck.on) {
+      deckCalls.push({ args: e.args, origin: e.origin })
+      const own = deckReply?.(e.args)
+      if (own !== undefined) return { text: own }
+      const m = /^save\s+((?:--off\s+|--manual\s+)*)(\S+)\s+([\s\S]+)$/.exec(e.args)
+      if (!m) return { text: 'refused no-text\nKein Text.' }
+      const list = deck.saved ?? []
+      const name = list.some((s) => s.name === m[2]) ? `${m[2]}-2` : m[2]!
+      deck.saved = [...list, { name, words: wordSet(m[3]!) }]
+      return { text: `saved ${name}\nGespeichert als /p ${name}.` }
+    }
     passed.push(e.command)
     return { text: `core ${e.command}` }
   })
-  on('prompt.submit', async ($, e) => {
-    if (hold) await new Promise<void>((r) => (release = r))
-    if (o.submitDrop) return { drop: o.submitDrop }
-    submitted.push({ text: e.text, ...((e as { asUser?: boolean }).asUser ? { asUser: true } : {}), origin: e.origin })
-    return { text: e.text }
-  })
+  on('prompt.submit', async ($, e) => ({ text: e.text }))
   on('ui.render', ($, e) => {
     if (e.component === 'SessionMode') return { type: 'Text', props: {}, children: [((e.props as { modes?: string[] }).modes ?? []).join(' & ')] }
     return { type: 'Text', props: {}, children: [String((e.props as { text?: string }).text ?? '')] }
@@ -305,24 +323,18 @@ function world(on: On, o: { submitDrop?: string; cmds?: { name: string; source: 
     clock,
     store,
     toasts,
-    submitted,
     registered,
-    hints,
     passed,
     stateVals,
-    stateSets,
+    deck,
+    deckCalls,
+    setDeckReply: (f: ((args: string) => string | undefined) | null) => (deckReply = f),
     setMessages: (m: unknown[]) => (msgs = m),
-    holdSubmit: () => (hold = true),
-    releaseSubmit: () => {
-      hold = false
-      release?.()
-    },
     ledger: (id = 'sess-1') => cleanLedger(store.get(`bilanz:${id}`)),
     calls,
     setSid: (x: string) => (sid = x),
     setIntent: (f: (text: string) => string) => (intentOf = f),
     setProposal: (x: string) => (proposal = x),
-    saved: () => cleanSaved(store.get('prompts:saved')),
     cli,
   }
 }
@@ -336,253 +348,156 @@ async function start($: Engine) {
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' } as never)
   await flush()
 }
-
-deTest('/sidekick save mit Text: gespeichert, als Befehl angemeldet, Knopf in sidekick.prompts', async ($, on) => {
-  const w = world(on)
+/** Start und der Timer des Umzugs (MOVE_DELAY_MS = 1500) samt allen `/deck save` nacheinander. */
+async function startAndMove($: Engine, w: ReturnType<typeof world>) {
   await start($)
-  const out = await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  expect(out).toContain('✓ Gespeichert als /p tidy-chats.')
-  expect(out).toContain('Mit Knopf.')
-  expect(w.saved()).toEqual([{ name: 'tidy-chats', text: TIDY, button: true, at: NOW, from: 'manual' }])
-  expect(w.registered).toContain('p')
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['tidy-chats'] })
+  await w.clock.advance(1600)
+  await flush(2000)
+}
+/** Nach einem Klick: der Timer vor `/deck save` (`later`, 100 ms) und die Antwort. */
+async function afterPress(w: ReturnType<typeof world>) {
   await flush()
-  expect(today(w.ledger()).prompts.gespeichert).toBe(1)
-})
-
-deTest('/sidekick save ohne Text: letzte eigene Nachricht dieses Chats, Befehle und Host-Texte zählen nicht', async ($, on) => {
-  const w = world(on)
-  await start($)
-  w.setMessages([
-    { role: 'user', text: TIDY, toolUses: [] },
-    { role: 'assistant', text: 'erledigt', toolUses: [] },
-    { role: 'user', text: '<system-reminder>x</system-reminder>', toolUses: [] },
-    { role: 'user', text: '/sidekick save tidy', toolUses: [] },
-  ])
-  expect(await run($, 'sidekick', 'save tidy')).toContain('✓ Gespeichert als /p tidy.')
-  expect(w.saved()[0]!.text).toBe(TIDY)
-  w.setMessages([{ role: 'assistant', text: 'nur ich', toolUses: [] }])
-  expect(await run($, 'sidekick', 'save leer')).toContain('keine eigene Nachricht')
-  expect(await run($, 'sidekick', 'save')).toContain('So geht es')
-})
-
-deTest('/sidekick save: eingebauter Name frei, ungültig, 13. Prompt, Überschreiben', async ($, on) => {
-  const w = world(on, { cmds: [{ name: 'review', source: 'plugin', plugin: 'other' }] })
-  await start($)
-  // Namen anderer Befehle sind frei: gesendet wird mit /p <name>
-  expect(await run($, 'sidekick', 'save clear x y z')).toContain('✓ Gespeichert als /p clear.')
-  expect(await run($, 'sidekick', 'save review x y z')).toContain('✓ Gespeichert als /p review.')
-  await run($, 'sidekick', 'forget clear')
-  await run($, 'sidekick', 'forget review')
-  expect(await run($, 'sidekick', 'save Böse! x')).toContain('geht nicht als Name')
-  for (let i = 0; i < 12; i++) await run($, 'sidekick', `save p${i} Text ${i}`)
-  expect(w.saved().length).toBe(12)
-  expect(await run($, 'sidekick', 'save p12 zu viel')).toContain('Schon 12 gespeicherte Prompts')
-  // Überschreiben eines eigenen Namens
-  const over = await run($, 'sidekick', 'save p0 Neuer Text')
-  expect(over).toContain('✓ /p p0 überschrieben.')
-  expect(w.saved()[0]!.text).toBe('Neuer Text')
-  // Knöpfe: nur die ersten 4
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['p0', 'p1', 'p2', 'p3'] })
-  expect(over).toContain('Mit Knopf.')
-  expect(await run($, 'sidekick', 'save p11 anders')).toContain('Nur als Befehl')
-})
-
-deTest('/sidekick prompts, prompts <name>, prompts <name> on|off, forget', async ($, on) => {
-  const w = world(on)
-  await start($)
-  expect(await run($, 'sidekick', 'prompts')).toContain('Noch keine gespeicherten Prompts')
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  const list = await run($, 'sidekick', 'prompts')
-  expect(list).toContain('**Gespeicherte Prompts** · 1 von 12 · #')
-  expect(list).toContain('| `/p tidy-chats` | Sortiere die Chats')
-  expect(list).toContain('| an |')
-  // jede Tabellenzeile hat 3 Spalten (kein | in den Zellen)
-  for (const l of list.split('\n').filter((x) => x.startsWith('|'))) expect(l.split('|').length - 2).toBe(3)
-  const one = await run($, 'sidekick', 'prompts tidy-chats')
-  expect(one).toContain('**/p tidy-chats** · Knopf an · selbst gespeichert')
-  expect(one).toContain(TIDY)
-  expect(await run($, 'sidekick', 'prompts tidy-chats off')).toContain('ohne Knopf')
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
-  expect(await run($, 'sidekick', 'prompts tidy-chats on')).toContain('hat jetzt einen Knopf')
-  expect(await run($, 'sidekick', 'prompts gibtsnicht')).toContain('Keinen gespeicherten Prompt „gibtsnicht“')
-  expect(await run($, 'sidekick', 'forget tidy-chats')).toContain('✓ /p tidy-chats gelöscht.')
-  expect(w.saved()).toEqual([])
-  expect(await run($, 'sidekick', 'forget tidy-chats')).toContain('Keinen gespeicherten Prompt')
-  // gelöscht: /p sagt es, sendet nichts
-  expect(await run($, 'p', 'tidy-chats')).toContain('Keinen gespeicherten Prompt „tidy-chats“')
-  // /p ohne Namen: die Namen
-  expect(await run($, 'p')).toContain('Noch keine gespeicherten Prompts')
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  expect(await run($, 'p')).toContain('gespeichert: `tidy-chats`')
-  await run($, 'sidekick', 'forget tidy-chats')
-  await flush()
-  expect(w.submitted).toEqual([])
-})
-
-deTest('/<name>: $.prompt.submit mit asUser, Bestätigung; Stufe Aus → nichts; abgelehnt → Toast', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  expect(await run($, 'p', 'tidy-chats')).toBe('/p tidy-chats gesendet')
   await w.clock.advance(200)
   await flush()
-  expect(w.submitted).toEqual([{ text: TIDY, origin: { kind: 'plugin', name: 'sidekick', asUser: true } }])
-  expect(today(w.ledger()).prompts.gesendet).toBe(1)
-  // Stufe Aus
-  await run($, 'sidekick', 'off')
-  expect(await run($, 'p', 'tidy-chats')).toContain('sidekick ist aus')
-  await flush()
-  expect(w.submitted.length).toBe(1)
-})
-
-deTest('/<name>: abgelehnter Submit → Toast mit Grund', async ($, on) => {
-  const w = world(on, { submitDrop: 'Grenze erreicht' })
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  await run($, 'p', 'tidy-chats')
-  await w.clock.advance(200)
-  await flush()
-  expect(w.toasts.some((x) => x.includes('/p tidy-chats nicht gesendet: Grenze erreicht'))).toBe(true)
-})
-
-deTest('Fremde Befehle bleiben unberührt; /p meldet sich mit den Namen im Hinweis an', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  expect(await run($, 'review', 'x')).toBe('core review')
-  expect(w.passed).toEqual(['review'])
-  expect(await run($, 'savings')).toContain('Kosten')
-  expect(await run($, 'sidekick', 'status')).toContain('Stufe')
-  expect(w.passed).toEqual(['review'])
-  expect(w.registered).toEqual(expect.arrayContaining(['sidekick', 'savings', 'p']))
-  expect(w.hints.get('p')).toBe('<tidy-chats>')
-  await run($, 'sidekick', 'forget tidy-chats')
-  expect(w.hints.get('p')).toBe('<name>')
-})
-
-deTest('session.start: gespeicherte Prompts aus dem Store werden angemeldet, Knöpfe geschrieben', async ($, on) => {
-  const w = world(on)
-  w.store.set('prompts:saved', [
-    { name: 'tidy-chats', text: TIDY, button: true, at: 1, from: 'auto' },
-    { name: 'nur-befehl', text: 'Mach etwas Bestimmtes mit allen offenen Punkten.', button: false, at: 2, from: 'manual' },
-  ])
-  await start($)
-  expect(w.registered).toEqual(expect.arrayContaining(['sidekick', 'savings', 'p']))
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['tidy-chats'] })
-  expect(await run($, 'p', 'nur-befehl')).toBe('/p nur-befehl gesendet')
-})
-
-async function footer($: Engine, surface: 'desktop' | 'terminal') {
-  return $.ui.mount({ plugin: 'sidekick', component: 'SessionMode', requestId: `mode-${surface}`, surface, props: { modes: [] } } as never)
 }
 
-deTest('Knöpfe: im Desktop links vor dem ●-Label, key je Knopf, höchstens 4; im Terminal keine', async ($, on) => {
+deTest('0.29.0 /p und die Knöpfe gehören prompt-deck: sidekick meldet /p nicht an, /p läuft durch, keine Knopfzeile im Band', async ($, on) => {
   const w = world(on)
   await start($)
-  for (let i = 0; i < 6; i++) await run($, 'sidekick', `save p${i} Text ${i} für den Knopf`)
-  const ui = await footer($, 'desktop')
-  const row = await ui.find({ key: 'sidekick-prompts' })
-  const json = JSON.stringify(row)
-  for (let i = 0; i < 4; i++) expect(json).toContain(`sidekick-p-p${i}`)
-  expect(json).not.toContain('sidekick-p-p4')
-  // Reihenfolge: die Knöpfe links, dann das Label (Stand 0.21.3)
-  const all = JSON.stringify(await ui.find({ type: 'Box' }))
-  expect(all.indexOf('sidekick-prompts')).toBeLessThan(all.indexOf('sidekick-mode'))
-  await ui.unmount()
-  const term = await footer($, 'terminal')
-  expect(await term.find({ key: 'sidekick-prompts' })).toBeUndefined()
-  await term.unmount()
-  // Stufe Aus: keine Knöpfe
-  await run($, 'sidekick', 'off')
-  await run($, 'sidekick', 'status')
-  const off = await footer($, 'desktop')
-  expect(await off.find({ key: 'sidekick-prompts' })).toBeUndefined()
-  await off.unmount()
+  expect(w.registered).toEqual(expect.arrayContaining(['sidekick', 'savings', 'handoff']))
+  expect(w.registered).not.toContain('p')
+  expect(await run($, 'p', 'tidy-chats')).toBe('core p')
+  expect(w.passed).toEqual(['p'])
+  expect(w.stateVals.has('prompts')).toBe(false)
+  const band = await $.ui.mount({ plugin: 'sidekick', component: 'AbovePrompt', requestId: 'b', surface: 'desktop', props: { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 12, bodyColumns: 100, scroll: { offset: 0, bodyRows: 12 }, view: {} } } as never)
+  const json = JSON.stringify(await band.drawn())
+  expect(json).not.toContain('sidekick-prompts')
+  expect(json).not.toContain('sidekick-p-')
+  await band.unmount()
 })
 
-deTest('Knopf: Klick sendet mit asUser; zwei Klicks vor dem Senden senden einmal; während einer Antwort Toast „danach“', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  const ui = await footer($, 'desktop')
-  w.holdSubmit()
-  await ui.press({ key: 'sidekick-p-tidy-chats' })
-  await ui.press({ key: 'sidekick-p-tidy-chats' })
-  await flush()
-  expect(w.toasts.some((x) => x.includes('/p tidy-chats ist schon unterwegs'))).toBe(true)
-  w.releaseSubmit()
-  await flush()
-  expect(w.submitted.map((s) => s.text)).toEqual([TIDY])
-  // während einer Antwort: der Toast sagt „danach“, gesendet wird trotzdem (die Engine reiht ein)
-  const s = $.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 3 } as never)
-  let r = await s.next()
-  while (r.done !== true) r = await s.next()
-  await ui.press({ key: 'sidekick-p-tidy-chats' })
-  await flush()
-  expect(w.toasts.some((x) => x.includes('/p tidy-chats kommt nach der aktuellen Antwort'))).toBe(true)
-  expect(w.submitted.length).toBe(2)
-  await ui.unmount()
-})
+for (const verb of ['save', 'prompts', 'forget', 'buttons'] as const)
+  deTest(`0.29.0 /sidekick ${verb}: Verweis auf prompt-deck; ohne prompt-deck die Installation`, async ($, on) => {
+    const target = { save: '/deck save', prompts: '/deck list', forget: '/deck forget', buttons: '/deck buttons' }[verb]
+    const w = world(on)
+    await start($)
+    for (const args of [verb, `${verb} tidy-chats Sortiere die Chats`]) expect(await run($, 'sidekick', args)).toBe(`\`/sidekick ${verb}\` ist in prompt-deck umgezogen: \`${target}\`.`)
+    w.deck.on = false
+    const out = await run($, 'sidekick', verb)
+    expect(out).toContain(`\`${target}\``)
+    expect(out).toContain('`claude plugin install prompt-deck@fynn-mods`')
+    expect(w.deckCalls).toEqual([])
+    expect(w.store.has('prompts:saved')).toBe(false)
+  })
 
-deTest('Knöpfe zeichnen nur bei Änderung der Liste neu: sidekick.prompts wird nur bei Änderung geschrieben', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  const n = w.stateSets.filter((x) => x.key === 'prompts').length
-  // Liste, Detail und Senden ändern nichts an den Knöpfen
-  await run($, 'sidekick', 'prompts')
-  await run($, 'sidekick', 'prompts tidy-chats')
-  await run($, 'p', 'tidy-chats')
-  await flush()
-  expect(w.stateSets.filter((x) => x.key === 'prompts').length).toBe(n)
-  await run($, 'sidekick', 'prompts tidy-chats off')
-  expect(w.stateSets.filter((x) => x.key === 'prompts').length).toBe(n + 1)
-})
-
-test('Englisch: /sidekick save und Senden', { options: { language: 'en' } }, async ($, on) => {
+test('0.29.0 English: /sidekick save and buttons point to prompt-deck', { options: { language: 'en' } }, async ($, on) => {
   setLang('en')
-  world(on)
-  await start($)
-  expect(await run($, 'sidekick', `save tidy-chats ${TIDY}`)).toContain('✓ Saved as /p tidy-chats. With a button.')
-  expect(await run($, 'p', 'tidy-chats')).toBe('/p tidy-chats sent')
-  expect(await run($, 'sidekick', 'prompts')).toContain('**Saved prompts** · 1 of 12')
-})
-
-deTest('/sidekick prompts gezeichnet: je Zeile Senden, Knopf an/aus, Löschen; andere Oberflächen Markdown', async ($, on) => {
   const w = world(on)
   await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  const text = await run($, 'sidekick', 'prompts')
-  const mount = (surface: string) => $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', requestId: `out-${surface}`, surface, props: { command: 'sidekick', args: 'prompts', text, isErrored: false } } as never)
-  const ui = await mount('desktop')
-  expect(await ui.find({ key: 'sidekick-pr-send-tidy-chats' })).toBeDefined()
-  expect(await ui.find({ key: 'sidekick-pr-del-tidy-chats' })).toBeDefined()
-  await ui.press({ key: 'sidekick-pr-btn-tidy-chats' })
-  await flush()
-  expect(w.saved()[0]!.button).toBe(false)
-  await ui.press({ key: 'sidekick-pr-send-tidy-chats' })
-  await flush()
-  expect(w.submitted.map((s) => s.text)).toEqual([TIDY])
-  await ui.press({ key: 'sidekick-pr-del-tidy-chats' })
-  await flush()
-  expect(w.saved()).toEqual([])
-  await ui.unmount()
-  const plain = await mount('vscode')
-  expect(JSON.stringify(await plain.find({ type: 'Text' }))).toContain('Gespeicherte Prompts')
-  expect(await plain.find({ key: 'sidekick-pr-send-tidy-chats' })).toBeUndefined()
-  await plain.unmount()
+  expect(await run($, 'sidekick', 'save x')).toBe('`/sidekick save` moved to `/deck save` in prompt-deck.')
+  expect(await run($, 'sidekick', 'buttons')).toBe('`/sidekick buttons` moved to `/deck buttons` in prompt-deck.')
+  w.deck.on = false
+  expect(await run($, 'sidekick', 'prompts')).toContain('Install it: `claude plugin install prompt-deck@fynn-mods`')
 })
 
-deTest('/<name> zweimal vor dem Senden: nur einmal gesendet', async ($, on) => {
+// ---------- Umzug (Verhalten 6) ----------
+
+const OLD: Saved[] = [
+  { name: 'tidy-chats', text: TIDY, button: true, at: 1, from: 'auto' },
+  { name: 'nur-befehl', text: 'Mach etwas Bestimmtes mit allen offenen Punkten.', button: false, at: 2, from: 'auto' },
+  { name: 'review', text: 'Prüfe alle offenen Pull Requests\nund fasse den Stand zusammen.', button: true, at: 3, from: 'manual' },
+]
+
+deTest('0.29.0 Umzug: leer → nichts abgegeben, prompts:moved bleibt ungesetzt', async ($, on) => {
   const w = world(on)
+  await startAndMove($, w)
+  expect(w.deckCalls).toEqual([])
+  expect(w.store.has('prompts:moved')).toBe(false)
+})
+
+deTest('0.29.0 Umzug: drei Einträge nacheinander (einer ohne Knopf, einer selbst gespeichert), origin sidekick; zweiter Start gibt nichts ab', async ($, on) => {
+  const w = world(on)
+  w.store.set('prompts:saved', OLD)
   await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  expect(await run($, 'p', 'tidy-chats')).toBe('/p tidy-chats gesendet')
-  expect(await run($, 'p', 'tidy-chats')).toBe('/p tidy-chats ist schon unterwegs')
-  await w.clock.advance(200)
-  await flush()
-  expect(w.submitted.length).toBe(1)
+  // nicht im Hook selbst: erst der Timer gibt ab
+  expect(w.deckCalls).toEqual([])
+  await w.clock.advance(1600)
+  await flush(2000)
+  expect(w.deckCalls.map((c) => c.args)).toEqual([`save tidy-chats ${TIDY}`, 'save --off nur-befehl Mach etwas Bestimmtes mit allen offenen Punkten.', 'save --manual review Prüfe alle offenen Pull Requests\nund fasse den Stand zusammen.'])
+  for (const c of w.deckCalls) expect(c.origin).toEqual({ kind: 'plugin', name: 'sidekick' })
+  expect(w.store.get('prompts:moved')).toEqual({ at: NOW + 1500, n: 3 })
+  // Sicherung bleibt
+  expect(cleanSaved(w.store.get('prompts:saved')).length).toBe(3)
+  expect(await run($, 'sidekick', 'status')).toContain('**Gespeicherte Prompts:** 3 nach prompt-deck umgezogen (')
+  await startAndMove($, w)
+  expect(w.deckCalls.length).toBe(3)
+})
+
+deTest('0.29.0 Umzug: einer scheitert → prompts:moved ungesetzt; der nächste Start gibt nur den fehlenden ab, dann gesetzt', async ($, on) => {
+  const w = world(on)
+  w.store.set('prompts:saved', OLD)
+  w.setDeckReply((args) => (args.includes('nur-befehl') ? 'refused invalid-name\nGeht nicht.' : undefined))
+  await startAndMove($, w)
+  expect(w.deckCalls.length).toBe(3)
+  expect(w.store.has('prompts:moved')).toBe(false)
+  expect(w.deck.saved?.map((s) => s.name)).toEqual(['tidy-chats', 'review'])
+  expect(await run($, 'sidekick', 'status')).toContain('**Gespeicherte Prompts:** 3 noch nicht nach prompt-deck umgezogen')
+  w.setDeckReply(null)
+  await startAndMove($, w)
+  expect(w.deckCalls.slice(3).map((c) => c.args)).toEqual(['save --off nur-befehl Mach etwas Bestimmtes mit allen offenen Punkten.'])
+  expect(w.store.get('prompts:moved')).toMatchObject({ n: 3 })
+})
+
+deTest('0.29.0 Umzug: vorhandene Namen in prompt-deck.saved werden übersprungen; Fehler beim Aufruf zählt als gescheitert', async ($, on) => {
+  const w = world(on, { deckSaved: [{ name: 'tidy-chats', words: [] }] })
+  w.store.set('prompts:saved', OLD)
+  w.setDeckReply((args) => {
+    if (args.includes('review')) throw new Error('weg')
+    return undefined
+  })
+  await startAndMove($, w)
+  expect(w.deckCalls.map((c) => c.args.split(' ')[1])).toEqual(['--off', '--manual'])
+  expect(w.store.has('prompts:moved')).toBe(false)
+})
+
+deTest('0.29.0 Review K2: prompt-deck voll → Umzug endet, prompts:moved mit full; /sidekick status nennt es; nächster Start gibt nichts ab', async ($, on) => {
+  const w = world(on)
+  w.store.set('prompts:saved', OLD)
+  w.setDeckReply((args) => (args.includes('nur-befehl') ? 'full\nSchon 12 gespeicherte Prompts.' : undefined))
+  await startAndMove($, w)
+  // nach full keine weiteren Aufrufe
+  expect(w.deckCalls.map((c) => c.args.split(' ').slice(1, 3).join(' '))).toEqual([`tidy-chats ${TIDY.split(' ')[0]}`, '--off nur-befehl'])
+  expect(w.store.get('prompts:moved')).toEqual({ at: NOW + 1500, n: 1, full: true })
+  expect(await run($, 'sidekick', 'status')).toContain('**Gespeicherte Prompts:** 1 von 3 nach prompt-deck umgezogen (')
+  expect(await run($, 'sidekick', 'status')).toContain('dann war prompt-deck voll')
+  w.setDeckReply(null)
+  await startAndMove($, w)
+  expect(w.deckCalls.length).toBe(2)
+})
+
+deTest('0.29.0 Review K4: in -p (keine Oberfläche) kein Umzug', async ($, on) => {
+  const w = world(on, { surfaces: [] })
+  w.store.set('prompts:saved', OLD)
+  await startAndMove($, w)
+  expect(w.deckCalls).toEqual([])
+  expect(w.store.has('prompts:moved')).toBe(false)
+})
+
+deTest('0.29.0 Umzug: ohne /deck oder ohne prompt-deck.saved kein Umzug', async ($, on) => {
+  const w = world(on, { deck: false })
+  w.store.set('prompts:saved', OLD)
+  await startAndMove($, w)
+  expect(w.deckCalls).toEqual([])
+  expect(w.store.has('prompts:moved')).toBe(false)
+  w.deck.on = true
+  w.deck.saved = null
+  await startAndMove($, w)
+  expect(w.deckCalls).toEqual([])
+  expect(w.store.has('prompts:moved')).toBe(false)
+  w.deck.saved = []
+  await startAndMove($, w)
+  expect(w.deckCalls.length).toBe(3)
+  expect(w.store.has('prompts:moved')).toBe(true)
 })
 
 // ---------- Erkennung (Variante B: Absicht je Nachricht) ----------
@@ -590,13 +505,14 @@ deTest('/<name> zweimal vor dem Senden: nur einmal gesendet', async ($, on) => {
 const Z1 = 'Du sollst mir einmal sagen, welche Chats ich hier entfernen kann, es sind einfach viel zu viele geworden.'
 const Z2 = 'Und eine klare Auflistung einmal: Welche Chats behalten wir, welche archivieren wir, welche benennen wir um?'
 const Z3 = 'Kannst du die Chats unter dir nach Zweck sortieren und die archivieren, die du nicht mehr brauchst? Sofort.'
-const PROPOSAL = JSON.stringify({ same: true, name: 'tidy-chats', text: 'Sortiere die Chats unter dir nach ihrem Zweck, benenne sie klar und archiviere die, die nicht mehr gebraucht werden.' })
+const FASSUNG = 'Sortiere die Chats unter dir nach ihrem Zweck, benenne sie klar und archiviere die, die nicht mehr gebraucht werden.'
+const PROPOSAL = JSON.stringify({ same: true, name: 'tidy-chats', text: FASSUNG })
 const userPrompt = (text: string, kind: 'composer' | 'sdk' | 'plugin' = 'composer') => ({ text, wait: false, origin: kind === 'plugin' ? { kind, name: 'x' } : { kind } }) as never
-async function mountMsg($: Engine, text: string, requestId: string) {
-  return $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId, surface: 'desktop', props: { text, origin: { kind: 'composer' }, isExpanded: true } } as never)
+async function mountMsg($: Engine, text: string, requestId: string, surface = 'desktop') {
+  return $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId, surface, props: { text, origin: { kind: 'composer' }, isExpanded: true } } as never)
 }
 /** Drei Chats, je eine Fassung; die dritte wird gezeichnet, bevor die Erkennung fertig ist. */
-async function threeChats($: Engine, w: ReturnType<typeof world>) {
+async function threeChats($: Engine, w: ReturnType<typeof world>, surface = 'desktop') {
   w.setIntent(() => 'Chats aufräumen')
   w.setProposal(PROPOSAL)
   await start($)
@@ -607,29 +523,31 @@ async function threeChats($: Engine, w: ReturnType<typeof world>) {
   }
   w.setSid('s3')
   await $.prompt.submit(userPrompt(Z3))
-  const ui = await mountMsg($, Z3, 'm3')
+  const ui = await mountMsg($, Z3, 'm3', surface)
   await flush()
   return ui
 }
 
-deTest('Erkennung: gleiche Absicht in 3 Chats → ein Vorschlag, Angebot unter der dritten Nachricht; Speichern legt Prompt und Befehl an', async ($, on) => {
+deTest('Erkennung: gleiche Absicht in 3 Chats → Angebot; Speichern ruft /deck save <name> <text> (nach dem Klick, über den Timer), Zeile und Toast', async ($, on) => {
   const w = world(on)
   const ui = await threeChats($, w)
   expect(w.calls.filter((c) => c.kind === 'intent').length).toBe(3)
   expect(w.calls.filter((c) => c.kind === 'propose').length).toBe(1)
   const p = w.calls.find((c) => c.kind === 'propose')!.prompt
   for (const z of [Z1, Z2, Z3]) expect(p).toContain(z)
-  // Die zweite Absicht-Anfrage kennt die erste
   expect(w.calls.filter((c) => c.kind === 'intent')[1]!.prompt).toContain('- Chats aufräumen')
-  const line = JSON.stringify(await ui.find({ key: 'sidekick-line' }))
-  expect(line).toContain('Das schickst du öfter. Als /p tidy-chats speichern?')
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Das schickst du öfter. Als /p tidy-chats speichern?')
   expect(JSON.stringify(await ui.find({ key: 'sidekick-offer-text' }))).toContain('Sortiere die Chats unter dir')
   await ui.press({ key: 'sidekick-offer-save' })
   await flush()
-  expect(w.saved()).toEqual([expect.objectContaining({ name: 'tidy-chats', from: 'auto', button: true })])
-  expect(w.registered).toContain('p')
-  expect(w.toasts).toContain('Gespeichert als /p tidy-chats. Ansehen und ändern: /sidekick prompts')
+  // noch nichts abgegeben: erst der Timer
+  expect(w.deckCalls).toEqual([])
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('…')
+  await afterPress(w)
+  expect(w.deckCalls).toEqual([{ args: `save tidy-chats ${FASSUNG}`, origin: { kind: 'plugin', name: 'sidekick' } }])
+  expect(w.toasts).toContain('Gespeichert als /p tidy-chats in prompt-deck. Ansehen und ändern: /deck list')
   expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('gespeichert als /p tidy-chats')
+  expect(await ui.find({ key: 'sidekick-offer-save' })).toBeUndefined()
   await ui.unmount()
   // gesehen: dieselbe Gruppe löst keinen Vorschlag mehr aus
   expect(cleanSeen(w.store.get('prompts:seen')).flat().length).toBe(3)
@@ -643,12 +561,93 @@ deTest('Erkennung: gleiche Absicht in 3 Chats → ein Vorschlag, Angebot unter d
   expect((d.modelle['claude-haiku-5-5']?.prompts.n ?? 0) > 0).toBe(true)
 })
 
-deTest('Erkennung: Nein merkt die Gruppe als abgelehnt; kein neuer Vorschlag', async ($, on) => {
+deTest('Speichern: prompt-deck vergibt einen anderen Namen (saved tidy-chats-2) → Zeile mit diesem Namen', async ($, on) => {
+  const w = world(on)
+  const ui = await threeChats($, w)
+  w.setDeckReply(() => 'saved tidy-chats-2\nGespeichert als /p tidy-chats-2.')
+  await ui.press({ key: 'sidekick-offer-save' })
+  await afterPress(w)
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('gespeichert als /p tidy-chats-2')
+  expect(w.toasts).toContain('Gespeichert als /p tidy-chats-2 in prompt-deck. Ansehen und ändern: /deck list')
+  await ui.unmount()
+})
+
+for (const [kind, reply, toast] of [
+  ['full', 'full\nSchon 12 gespeicherte Prompts. Erst einen löschen: `/deck forget <name>`', 'Schon 12 gespeicherte Prompts. Erst einen löschen: `/deck forget <name>`'],
+  ['refused', 'refused not-allowed\nprompt-deck nimmt das nicht an.', 'prompt-deck nimmt das nicht an.'],
+  ['refused ohne Satz', 'refused invalid-name', 'Nicht gespeichert (prompt-deck: refused invalid-name). Das Angebot bleibt stehen.'],
+  ['Fehler', 'THROW', 'Nicht gespeichert (prompt-deck: '],
+] as const)
+  deTest(`Speichern: ${kind} → Toast mit dem Satz von prompt-deck, Angebot bleibt offen, nichts gebucht, Gruppe nicht gesehen`, async ($, on) => {
+    const w = world(on)
+    const ui = await threeChats($, w)
+    w.setDeckReply(() => {
+      if (reply === 'THROW') throw new Error('kaputt')
+      return reply
+    })
+    await ui.press({ key: 'sidekick-offer-save' })
+    await afterPress(w)
+    expect(w.toasts.some((x) => x.includes(toast)), w.toasts.join(' | ')).toBe(true)
+    expect(await ui.find({ key: 'sidekick-offer-save' })).toBeDefined()
+    expect(today(w.ledger('s3')).prompts.gespeichert).toBe(0)
+    expect(cleanSeen(w.store.get('prompts:seen')).length).toBe(0)
+    // zweiter Versuch gelingt
+    w.setDeckReply(null)
+    await ui.press({ key: 'sidekick-offer-save' })
+    await afterPress(w)
+    expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('gespeichert als /p tidy-chats')
+    await ui.unmount()
+  })
+
+deTest('Erkennung ohne prompt-deck.saved (prompt-deck fehlt oder nach /clear): kein Vorschlags-Aufruf, kein Angebot, Gruppe nicht gesehen; später angeboten', async ($, on) => {
+  const w = world(on, { deck: false, deckSaved: null })
+  const ui = await threeChats($, w)
+  expect(w.calls.filter((c) => c.kind === 'propose').length).toBe(0)
+  expect(await ui.find({ key: 'sidekick-offer-save' })).toBeUndefined()
+  expect(cleanSeen(w.store.get('prompts:seen')).length).toBe(0)
+  expect(today(w.ledger('s3')).prompts.angeboten).toBe(0)
+  await ui.unmount()
+  // prompt-deck kommt dazu: dieselbe Gruppe wird jetzt angeboten
+  w.deck.on = true
+  w.deck.saved = []
+  w.setSid('s4')
+  await $.prompt.submit(userPrompt(Z1))
+  await flush()
+  expect(w.calls.filter((c) => c.kind === 'propose').length).toBe(1)
+})
+
+deTest('Erkennung: ähnelt einem Prompt in prompt-deck.saved → kein Vorschlag; belegter Name → Angebot mit -2', async ($, on) => {
+  const w = world(on, { deckSaved: [{ name: 'tidy-chats', words: wordSet('Prüfe alle offenen Pull Requests und fasse den Stand kurz zusammen.') }] })
+  w.setIntent(() => 'Chats aufräumen')
+  w.setProposal(PROPOSAL)
+  await start($)
+  for (const [i, z] of [Z1, Z2, Z3].entries()) {
+    w.setSid(`s${i + 1}`)
+    await $.prompt.submit(userPrompt(z))
+    await flush()
+  }
+  // Z3 nie gezeichnet: unter der nächsten eigenen Nachricht
+  const NEXT = 'Und danach bitte noch die offenen Punkte aus der Liste von gestern abarbeiten, ja?'
+  await $.prompt.submit(userPrompt(NEXT))
+  const ui = await mountMsg($, NEXT, 'm4')
+  await flush()
+  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Als /p tidy-chats-2 speichern?')
+  await ui.unmount()
+  // jetzt ähnelt die Nachricht einem gespeicherten: kein weiterer Vorschlag
+  const n = w.calls.filter((c) => c.kind === 'propose').length
+  w.deck.saved = [{ name: 'x', words: wordSet(Z1) }]
+  w.setSid('s9')
+  await $.prompt.submit(userPrompt(Z1))
+  await flush()
+  expect(w.calls.filter((c) => c.kind === 'propose').length).toBe(n)
+})
+
+deTest('Erkennung: Nein merkt die Gruppe als abgelehnt; kein neuer Vorschlag, kein /deck', async ($, on) => {
   const w = world(on)
   const ui = await threeChats($, w)
   await ui.press({ key: 'sidekick-offer-no' })
-  await flush()
-  expect(w.saved()).toEqual([])
+  await afterPress(w)
+  expect(w.deckCalls).toEqual([])
   expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('nicht gespeichert')
   await ui.unmount()
   expect(today(w.ledger('s3')).prompts.abgelehnt).toBe(1)
@@ -670,10 +669,8 @@ deTest('Erkennung: dieselbe Session → kein Vorschlag; same false → kein Ange
     await $.prompt.submit(userPrompt(z))
     await flush()
   }
-  // jetzt 3 Sessions: Vorschlag, aber same false
   expect(w.calls.filter((c) => c.kind === 'propose').length).toBe(1)
   expect(cleanSeen(w.store.get('prompts:seen')).length).toBe(1)
-  // einmalig: kein Eintrag
   w.setIntent(() => 'einmalig')
   const before = (w.store.get('prompts:recent') as unknown[]).length
   await $.prompt.submit(userPrompt('Die Seite Themen im Leitstand lädt gerade nicht, bitte behebe den Fehler dort.'))
@@ -686,7 +683,6 @@ deTest('Erkennung: Tagesgrenze 5 Vorschläge; Grenze der Absicht-Aufrufe; ungül
   w.store.set('prompts:budget', { day: dayKey(NOW), n: 5 })
   await threeChats($, w)
   expect(w.calls.filter((c) => c.kind === 'propose').length).toBe(0)
-  // am nächsten Tag wieder, aber kaputte Antwort
   await w.clock.advance(DAY)
   w.setProposal('kein json')
   w.setSid('s9')
@@ -710,7 +706,7 @@ deTest('Erkennung läuft nicht: Stufe Cache, Plugin-Nachricht, Slash-Befehl, kur
   expect(w.calls.filter((c) => c.kind === 'intent').length).toBe(0)
   await run($, 'sidekick', 'guide')
   await $.prompt.submit(userPrompt(Z1, 'plugin'))
-  await $.prompt.submit(userPrompt(`/sidekick save x ${Z1}`))
+  await $.prompt.submit(userPrompt(`/deck save x ${Z1}`))
   await $.prompt.submit(userPrompt('ja, mach weiter'))
   await $.prompt.submit(userPrompt(Z1, 'sdk'))
   await flush()
@@ -734,341 +730,24 @@ deTest('Erkennung hält das Senden nie auf: ein Fehler im Modell wird verschluck
   const r = await $.prompt.submit(userPrompt(Z1))
   expect((r as { text?: string }).text).toBe(Z1)
   await flush()
-  expect(w.submitted.map((s) => s.text)).toContain(Z1)
-})
-
-deTest('Angebot wartet auf die nächste eigene Nachricht, wenn die eigene nicht gezeichnet ist; belegter Name → -2', async ($, on) => {
-  const w = world(on)
-  w.setIntent(() => 'Chats aufräumen')
-  w.setProposal(PROPOSAL)
-  await start($)
-  // ein eigener Prompt heißt schon so (anderer Text): Vorschlag -2
-  await run($, 'sidekick', 'save tidy-chats Prüfe alle offenen Pull Requests und fasse den Stand kurz zusammen.')
-  for (const [i, z] of [Z1, Z2, Z3].entries()) {
-    w.setSid(`s${i + 1}`)
-    await $.prompt.submit(userPrompt(z))
-    await flush()
-  }
-  // Z3 nie gezeichnet (z. B. Rückfrage, nicht gesendet): unter der nächsten eigenen Nachricht
-  const NEXT = 'Und danach bitte noch die offenen Punkte aus der Liste von gestern abarbeiten, ja?'
-  await $.prompt.submit(userPrompt(NEXT))
-  const ui = await mountMsg($, NEXT, 'm4')
-  await flush()
-  expect(JSON.stringify(await ui.find({ key: 'sidekick-line' }))).toContain('Als /p tidy-chats-2 speichern?')
-  await ui.unmount()
-})
-
-deTest('/<name> in -p (keine Oberfläche): sagt es, sendet nichts', async ($, on) => {
-  const w = world(on, { surfaces: [] })
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  expect(await run($, 'p', 'tidy-chats')).toContain('geht nur in einer laufenden Session')
-  await w.clock.advance(200)
-  await flush()
-  expect(w.submitted).toEqual([])
-})
-
-deTest('/clear leert sidekick.prompts (en/interface.md:841): die Fußzeile zeigt die Knöpfe aus dem Speicher; Terminal-Baum der Liste', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  w.stateVals.delete('prompts')
-  const ui = await footer($, 'desktop')
-  expect(await ui.find({ key: 'sidekick-p-tidy-chats' })).toBeDefined()
-  await ui.unmount()
-  const text = await run($, 'sidekick', 'prompts')
-  const term = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', requestId: 'out-t', surface: 'terminal', viewport: { columns: 60, rows: 30 }, props: { command: 'sidekick', args: 'prompts', text, isErrored: false } } as never)
-  expect(await term.find({ key: 'sidekick-pr-send-tidy-chats' })).toBeDefined()
-  await term.unmount()
+  expect(w.toasts).toEqual([])
 })
 
 for (const surface of ['terminal', 'vscode'] as const)
-  deTest(`Angebot auf ${surface}: ${surface === 'terminal' ? 'Knöpfe Speichern und Nein' : 'als Text mit /sidekick save'} (Review 0.21.0 S1)`, async ($, on) => {
+  deTest(`Angebot auf ${surface}: ${surface === 'terminal' ? 'Knöpfe Speichern und Nein' : 'als Text mit /deck save'} (Review 0.21.0 S1)`, async ($, on) => {
     const w = world(on)
-    w.setIntent(() => 'Chats aufräumen')
-    w.setProposal(PROPOSAL)
-    await start($)
-    for (const [i, z] of [Z1, Z2].entries()) {
-      w.setSid(`s${i + 1}`)
-      await $.prompt.submit(userPrompt(z))
-      await flush()
-    }
-    w.setSid('s3')
-    await $.prompt.submit(userPrompt(Z3))
-    const ui = await $.ui.mount({ plugin: 'sidekick', component: 'UserMessage', requestId: 'm3', surface, props: { text: Z3, origin: { kind: 'composer' }, isExpanded: true } } as never)
-    await flush()
+    const ui = await threeChats($, w, surface)
     if (surface === 'terminal') {
       expect(await ui.find({ key: 'sidekick-offer-save' })).toBeDefined()
       expect(await ui.find({ key: 'sidekick-offer-no' })).toBeDefined()
       await ui.press({ key: 'sidekick-offer-save' })
-      await flush()
-      expect(w.saved().map((s) => s.name)).toEqual(['tidy-chats'])
+      await afterPress(w)
+      expect(w.deck.saved?.map((s) => s.name)).toEqual(['tidy-chats'])
     } else {
       const all = JSON.stringify(await ui.find({ type: 'Text' }))
       expect(all).toContain('Das schickst du öfter. Als /p tidy-chats speichern?')
-      expect(all).toContain('/sidekick save tidy-chats Sortiere die Chats unter dir')
+      expect(all).toContain('/deck save tidy-chats Sortiere die Chats unter dir')
       expect(await ui.find({ key: 'sidekick-offer-save' })).toBeUndefined()
     }
     await ui.unmount()
   })
-
-deTest('/p von einem anderen Plugin ($.command.run): sendet nicht als Fynns Worte (Review 0.21.0 K3)', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  expect(await run($, 'p', 'tidy-chats', { kind: 'plugin', name: 'other' })).toContain('nur, wenn du es selbst tippst')
-  await w.clock.advance(200)
-  await flush()
-  expect(w.submitted).toEqual([])
-})
-
-deTest('Hilfe: kein Text nennt noch einen eigenen Befehl /<name> (Review 0.21.0 S1)', () => {
-  for (const lang of ['de', 'en'] as const) {
-    setLang(lang)
-    const h = sidekickHelp({ settings: { ...DEFAULT_SETTINGS }, ttl: { min: 60, source: 'default' }, hints: { on: true, off: [] }, known: 0, now: NOW, prompts: { n: 0, buttons: 0 } })
-    const all = JSON.stringify(h)
-    expect(all.replace(/\/p <name>/g, '').includes('/<name>'), lang).toBe(false)
-    expect(all).toContain('/p <name>')
-  }
-  setLang('de')
-})
-
-// ---------- Ausbau 0.27.0: Fußzeilen-Knöpfe einstellbar ----------
-
-const sv = (name: string, button = true): Saved => ({ name, text: `Text für ${name}, lang genug zum Senden.`, button, at: 1, from: 'manual' })
-const facts = (saved: Saved[], cfg: Record<string, unknown> = {}, level: 'off' | 'cache' | 'guide' = 'guide') => ({ cfg, level, saved })
-
-deTest('0.27.0 Felder: laterButton und promptButtons, boolean, Standard an; aus wird gelesen, Unsinn gibt den Standard', () => {
-  expect(SETTINGS.laterButton).toEqual({ type: 'boolean', default: true })
-  expect(SETTINGS.promptButtons).toEqual({ type: 'boolean', default: true })
-  const d = readSettings(SETTINGS, undefined)
-  expect([d.laterButton, d.promptButtons]).toEqual([true, true])
-  const o = readSettings(SETTINGS, { laterButton: false, promptButtons: 'nein' })
-  expect([o.laterButton, o.promptButtons]).toEqual([false, true])
-  // die gemeinsame Liste kennt genau diese zwei Felder, jedes mit Titel en/de
-  expect(FOOTER_BUTTONS.map((k) => [k.id, k.field])).toEqual([
-    ['later', 'laterButton'],
-    ['prompts', 'promptButtons'],
-  ])
-  for (const k of FOOTER_BUTTONS) expect(SETTINGS[k.field]?.type).toBe('boolean')
-  for (const k of FOOTER_BUTTONS) expect(k.title.en && k.title.de).toBeTruthy()
-})
-
-deTest('0.27.0 Liste: 0, 1 und 5 Prompts; bei 5 ist einer „nicht sichtbar (nur 4 Plätze)“', () => {
-  const zero = buttonsMarkdown(facts([]), '#abcdefg')
-  expect(zero).toContain('**Fußzeilen-Knöpfe** · Desktop, links vor „● sidekick“ · #abcdefg')
-  expect(zero).toContain('| Danach | an | an · nur während Claude arbeitet |')
-  expect(zero).toContain('| Prompt-Knöpfe | an | an · 0 von 4 Plätzen belegt |')
-  expect(zero).toContain('`/sidekick save <name>` legt einen an')
-  const one = buttonsMarkdown(facts([sv('tidy')]), '')
-  expect(one).toContain('| `/p tidy` | an | sichtbar |')
-  expect(one).not.toContain('Noch keine gespeicherten Prompts')
-  const five = buttonRows(facts(['a', 'b', 'c', 'd', 'e'].map((n) => sv(n))))
-  expect(five.length).toBe(7)
-  expect(five.filter((r) => r.state === 'sichtbar').map((r) => r.id)).toEqual(['a', 'b', 'c', 'd'])
-  expect(five.find((r) => r.id === 'e')?.state).toBe('nicht sichtbar (nur 4 Plätze)')
-  expect(five.find((r) => r.id === 'prompts')?.state).toBe('an · 4 von 4 Plätzen belegt')
-  // jede Tabellenzeile hat 3 Spalten
-  for (const l of buttonsMarkdown(facts(['a', 'b'].map((n) => sv(n))), '').split('\n').filter((x) => x.startsWith('|'))) expect(l.split('|').length - 2).toBe(3)
-})
-
-deTest('0.27.0 Zustand: Danach bei queue aus und außerhalb von Begleiter; Prompt-Knöpfe aus; Prompt aus; Stufe Aus', () => {
-  const r = (cfg: Record<string, unknown>, level: 'off' | 'cache' | 'guide' = 'guide', saved: Saved[] = []) => buttonRows(facts(saved, cfg, level))
-  expect(r({ queue: false })[0]).toMatchObject({ id: 'later', on: true, state: 'aus (Warteschlange aus)' })
-  expect(r({}, 'cache')[0]!.state).toBe('aus (nur auf der Stufe Begleiter)')
-  expect(r({ laterButton: false })[0]).toMatchObject({ on: false, state: 'aus' })
-  const hidden = r({ promptButtons: false }, 'guide', [sv('a'), sv('b', false)])
-  expect(hidden[1]).toMatchObject({ id: 'prompts', on: false, state: 'aus' })
-  expect(hidden[2]).toMatchObject({ id: 'a', kind: 'prompt', on: true, state: 'nicht sichtbar (Prompt-Knöpfe aus)' })
-  expect(hidden[3]).toMatchObject({ id: 'b', on: false, state: 'aus' })
-  expect(shownPrompts(facts([sv('a')], { promptButtons: false }))).toEqual([])
-  // die Stufe zählt hier nicht (Review S1), die Zeichnung blendet bei Stufe Aus selbst aus
-  expect(shownPrompts(facts([sv('a')], {}, 'off'))).toEqual(['a'])
-  expect(shownPrompts(facts([sv('a'), sv('b', false), sv('c')]))).toEqual(['a', 'c'])
-  expect(buttonsMarkdown(facts([], {}, 'off'), '')).toContain('sidekick ist aus: die Fußzeile zeigt keine Knöpfe')
-})
-
-deTest('0.27.0 Textbefehle: Parser', () => {
-  expect(buttonsArg('')).toEqual({ kind: 'list' })
-  expect(buttonsArg(' status ')).toEqual({ kind: 'list' })
-  expect(buttonsArg('later OFF')).toEqual({ kind: 'set', target: 'later', on: false })
-  expect(buttonsArg('tidy on')).toEqual({ kind: 'set', target: 'tidy', on: true })
-  for (const a of ['later', 'later an', 'a b on', 'on']) expect(buttonsArg(a)).toEqual({ kind: 'usage' })
-})
-
-deTest('0.27.0 /sidekick buttons: Liste; neu gespeicherter Prompt steht sofort darin; Textbefehle ändern genau ein Feld bzw. einen Prompt', async ($, on) => {
-  const w = world(on)
-  await start($)
-  const empty = await run($, 'sidekick', 'buttons')
-  expect(empty).toMatch(/^\*\*Fußzeilen-Knöpfe\*\* · Desktop, links vor „● sidekick“ · #[0-9a-z]{5,}/)
-  expect(empty).toContain('| Danach | an |')
-  expect(empty).toContain('`/sidekick save <name>` legt einen an')
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  await run($, 'sidekick', 'save zwei Noch ein Prompt mit genug Text.')
-  const list = await run($, 'sidekick', 'buttons')
-  expect(list).toContain('| `/p tidy-chats` | an | sichtbar |')
-  expect(list).toContain('| `/p zwei` | an | sichtbar |')
-  // ein Prompt: nur sein `button`, keine Einstellung
-  expect(await run($, 'sidekick', 'buttons tidy-chats off')).toContain('✓ /p tidy-chats ohne Knopf, nur als Befehl.')
-  expect(w.saved().map((s) => [s.name, s.button])).toEqual([
-    ['tidy-chats', false],
-    ['zwei', true],
-  ])
-  expect(w.cli.writes).toEqual([])
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['zwei'] })
-  // `/sidekick prompts <name> on|off` bleibt
-  expect(await run($, 'sidekick', 'prompts tidy-chats on')).toContain('hat jetzt einen Knopf')
-  // eine Knopfart: genau ihr Feld
-  const off = await run($, 'sidekick', 'buttons prompts off')
-  expect(off).toContain('✓ Prompt-Knöpfe aus. Die Einstellung je Prompt bleibt erhalten.')
-  expect(w.cli.writes).toEqual([{ promptButtons: 'false' }])
-  expect(w.saved().map((s) => s.button)).toEqual([true, true])
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
-  expect(await run($, 'sidekick', 'buttons prompts off')).toBe('Prompt-Knöpfe ist schon aus.')
-  expect(await run($, 'sidekick', 'buttons zwei on')).toContain('Sichtbar erst mit `/sidekick buttons prompts on`.')
-  expect(await run($, 'sidekick', 'buttons prompts on')).toContain('Die Knöpfe je Prompt gelten wieder wie vorher.')
-  expect(written(w.cli)).toEqual({ promptButtons: 'true' })
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['tidy-chats', 'zwei'] })
-  // Fehlerpfade
-  expect(await run($, 'sidekick', 'buttons gibtsnicht on')).toBe('Keinen Fußzeilen-Knopf „gibtsnicht“. Vorhanden: `later`, `prompts` und die Namen gespeicherter Prompts. Alle: `/sidekick buttons`')
-  expect(await run($, 'sidekick', 'buttons later')).toBe('Aufruf: `/sidekick buttons` · `later on|off` · `prompts on|off` · `<name> on|off`')
-  expect(w.cli.writes.length).toBe(2)
-})
-
-deTest('0.27.0 Schreiben scheitert: Grund, nichts geändert, Fußzeile unverändert', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  w.cli.fail = 'gesperrt'
-  expect(await run($, 'sidekick', 'buttons prompts off')).toContain('Nicht gespeichert')
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['tidy-chats'] })
-  expect(await run($, 'sidekick', 'buttons')).toContain('| Prompt-Knöpfe | an |')
-})
-
-deTest('0.27.0 promptButtons aus: keine Prompt-Knöpfe in der Fußzeile; wieder an: dieselben wie vorher', { promptButtons: false }, async ($, on) => {
-  const w = world(on)
-  w.store.set('prompts:saved', [sv('a'), sv('b', false), sv('c')])
-  await start($)
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
-  const off = await footer($, 'desktop')
-  expect(await off.find({ key: 'sidekick-prompts' })).toBeUndefined()
-  await off.unmount()
-  await run($, 'sidekick', 'buttons prompts on')
-  const back = await footer($, 'desktop')
-  const json = JSON.stringify(await back.find({ key: 'sidekick-prompts' }))
-  expect(json).toContain('sidekick-p-a')
-  expect(json).toContain('sidekick-p-c')
-  expect(json).not.toContain('sidekick-p-b')
-  await back.unmount()
-  expect(w.saved().map((s) => s.button)).toEqual([true, false, true])
-})
-
-deTest('0.27.0 Review S1: Start auf Stufe Aus, dann /sidekick guide → die Prompt-Knöpfe sind sofort da', { level: 'off' }, async ($, on) => {
-  const w = world(on)
-  w.store.set('prompts:saved', [sv('a'), sv('b', false), sv('c')])
-  await start($)
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['a', 'c'] })
-  const off = await footer($, 'desktop')
-  expect(await off.find({ key: 'sidekick-prompts' })).toBeUndefined()
-  await off.unmount()
-  await run($, 'sidekick', 'guide')
-  const ui = await footer($, 'desktop')
-  const json = JSON.stringify(await ui.find({ key: 'sidekick-prompts' }))
-  expect(json).toContain('sidekick-p-a')
-  expect(json).toContain('sidekick-p-c')
-  await ui.unmount()
-})
-
-deTest('0.27.0 Klick bei scheiterndem Schreiben: Toast mit Grund, Feld und Fußzeile unverändert; /sidekick prompts <name> on nennt den Hauptschalter', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  const text = await run($, 'sidekick', 'buttons status')
-  const ui = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', requestId: 'bt-fail', surface: 'desktop', props: { command: 'sidekick', args: 'buttons status', text, isErrored: false } } as never)
-  w.cli.fail = 'gesperrt'
-  await ui.press({ key: 'sidekick-bt-prompts' })
-  await flush()
-  expect(w.toasts.some((x) => x.includes('Nicht gespeichert'))).toBe(true)
-  expect(w.cli.writes).toEqual([])
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: ['tidy-chats'] })
-  await ui.unmount()
-  w.cli.fail = ''
-  await run($, 'sidekick', 'buttons prompts off')
-  await run($, 'sidekick', 'prompts tidy-chats off')
-  expect(await run($, 'sidekick', 'prompts tidy-chats on')).toContain('Sichtbar erst mit `/sidekick buttons prompts on`.')
-})
-
-deTest('0.27.0 sidekick.prompts nur bei Änderung: Schalter ohne sichtbare Wirkung schreibt nichts', async ($, on) => {
-  const w = world(on)
-  await start($)
-  const n = w.stateSets.filter((x) => x.key === 'prompts').length
-  // keine Prompts: Prompt-Knöpfe aus und an ändern die Fußzeile nicht
-  await run($, 'sidekick', 'buttons prompts off')
-  await run($, 'sidekick', 'buttons prompts on')
-  // keine Runde: der Danach-Knopf steht ohnehin nicht
-  await run($, 'sidekick', 'buttons later off')
-  await run($, 'sidekick', 'buttons')
-  expect(w.stateSets.filter((x) => x.key === 'prompts').length).toBe(n)
-})
-
-deTest('0.27.0 /sidekick buttons gezeichnet: An/Aus je Zeile im Terminal und Desktop, Klick schaltet; VS Code Markdown', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  const text = await run($, 'sidekick', 'buttons')
-  const mount = (surface: string) =>
-    $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', requestId: `bt-${surface}`, surface, viewport: { columns: 80, rows: 30 }, props: { command: 'sidekick', args: 'buttons', text, isErrored: false } } as never)
-  const ui = await mount('desktop')
-  for (const k of ['sidekick-bt-later', 'sidekick-bt-prompts', 'sidekick-bt-p-tidy-chats']) expect(await ui.find({ key: k })).toBeDefined()
-  expect(JSON.stringify(await ui.find({ key: 'sidekick-bt-later' }))).toContain('"Aus"')
-  await ui.press({ key: 'sidekick-bt-p-tidy-chats' })
-  await flush()
-  expect(w.saved()[0]!.button).toBe(false)
-  await ui.press({ key: 'sidekick-bt-later' })
-  await flush()
-  expect(w.cli.writes).toEqual([{ laterButton: 'false' }])
-  expect(w.toasts.some((x) => x.includes('✓ Danach-Knopf aus.'))).toBe(true)
-  await ui.unmount()
-  // neu gezeichnet: der aktuelle Stand
-  const again = await mount('terminal')
-  expect(JSON.stringify(await again.find({ key: 'sidekick-bt-later' }))).toContain('"An"')
-  expect(JSON.stringify(await again.find({ key: 'sidekick-bt-p-tidy-chats' }))).toContain('"An"')
-  await again.unmount()
-  const plain = await mount('vscode')
-  expect(JSON.stringify(await plain.find({ type: 'Text' }))).toContain('Fußzeilen-Knöpfe')
-  expect(await plain.find({ key: 'sidekick-bt-later' })).toBeUndefined()
-  await plain.unmount()
-  // fremde Kennung (andere Instanz): Markdown der Engine
-  const stale = await $.ui.mount({ plugin: 'sidekick', component: 'CommandOutput', requestId: 'bt-old', surface: 'desktop', props: { command: 'sidekick', args: 'buttons', text: '**Fußzeilen-Knöpfe** · #zzzzzz', isErrored: false } } as never)
-  expect(await stale.find({ key: 'sidekick-bt-later' })).toBeUndefined()
-  await stale.unmount()
-})
-
-test('0.27.0 English: /sidekick buttons and the text commands', { options: { language: 'en' } }, async ($, on) => {
-  setLang('en')
-  world(on)
-  await start($)
-  await run($, 'sidekick', `save tidy-chats ${TIDY}`)
-  const list = await run($, 'sidekick', 'buttons')
-  expect(list).toContain('**Footer buttons** · desktop, left of "● sidekick"')
-  expect(list).toContain('| Later | on | on · only while Claude works |')
-  expect(list).toContain('| `/p tidy-chats` | on | shown |')
-  expect(await run($, 'sidekick', 'buttons later off')).toContain('✓ Later button off.')
-  expect(await run($, 'sidekick', 'buttons nope off')).toContain('No footer button "nope"')
-})
-
-deTest('0.27.0 Hilfe: Befehle, Zeile „Fußzeilen-Knöpfe“, Funktionen je Knopfart aus der Liste, beide Felder in EINSTELLUNGEN', () => {
-  for (const l of ['de', 'en'] as const) {
-    setLang(l)
-    const h = sidekickHelp({ settings: { ...DEFAULT_SETTINGS }, ttl: { min: 60, source: 'default' }, hints: { on: true, off: [] }, known: 0, now: NOW, cfg: { laterButton: false } })
-    for (const c of ['/sidekick buttons', '/sidekick buttons later|prompts|<name> on|off']) expect(h.commands.some((x) => x.cmd === c), c).toBe(true)
-    expect(h.controls?.some((x) => x.does.includes('/sidekick buttons'))).toBe(true)
-    const later = l === 'de' ? 'Danach-Knopf' : 'Later button'
-    const prompts = l === 'de' ? 'Prompt-Knöpfe' : 'Prompt buttons'
-    expect(h.features.find((f) => f.name === later)).toEqual({ name: later, state: { kind: 'off' }, toggle: '/sidekick buttons later on' })
-    expect(h.features.find((f) => f.name === prompts)).toEqual({ name: prompts, state: { kind: 'on' }, toggle: '/sidekick buttons prompts off' })
-    expect(h.settings?.find((s) => s.title === later)?.isDefault).toBe(false)
-    expect(h.settings?.find((s) => s.title === prompts)?.isDefault).toBe(true)
-  }
-  setLang('de')
-})

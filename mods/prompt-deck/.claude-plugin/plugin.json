@@ -1,0 +1,34 @@
+{
+  "name": "prompt-deck",
+  "version": "0.1.0",
+  "description": "Saves prompts you send again and again and puts them as buttons above the prompt in the desktop app: one click sends. Send by name with /p <name>, manage with /deck. With sidekick also the Later button.",
+  "author": {
+    "name": "Fynn Hansen"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "laterButton": {
+      "type": "boolean",
+      "title": "Later button",
+      "description": "Desktop, above the prompt, while Claude works: the Later button. Needs sidekick with Queue on. Also /deck buttons later on|off.",
+      "default": true
+    },
+    "promptButtons": {
+      "type": "boolean",
+      "title": "Prompt buttons",
+      "description": "Desktop, above the prompt: up to 4 buttons of saved prompts. Off hides all, each prompt keeps its own setting. Also /deck buttons prompts on|off.",
+      "default": true
+    },
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "Language of the mod's texts. en: English, de: Deutsch. Also /deck language.",
+      "default": "en",
+      "options": [
+        "en",
+        "de"
+      ]
+    }
+  }
+}

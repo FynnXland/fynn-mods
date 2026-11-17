@@ -4,7 +4,7 @@ A cost ledger across all your chats. After every answer, cost-ledger records wha
 
 > Texts are English by default; set `language` to `de` for German.
 
-Tested with Claude Code **v2.1.325** · Plugin version **0.12.4** · Requires Claude Code v2.1.318 or later
+Tested with Claude Code **v2.1.325** · Plugin version **0.12.5** · Requires Claude Code v2.1.318 or later
 
 ## Usage
 
@@ -23,7 +23,7 @@ Tested with Claude Code **v2.1.325** · Plugin version **0.12.4** · Requires Cl
 | `/ledger sync` | Sync state: folder, this device's name and ID, the other devices with the time of their last update |
 | `/ledger sync name <name>` | Name this device (up to 30 characters); the other devices show its chats under this name. Default: “Device 1a2b” from a random ID. Saved as the setting `deviceName` |
 | `/ledger sync off` | Turn sync off. This device's file stays in the folder; cost-ledger never deletes files |
-| `/ledger language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tint, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.9.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
+| `/ledger language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, prompt-deck, quick-replies, sidekick, tint, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.9.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/ledger reset` | Delete everything on this device, after a confirmation (**Cancel** is recommended and listed first). The plan and sync settings stay; other devices keep their entries |
 | `/ledger help` | Help as a table: all commands, the current state (plan, sync, storage used, recording since) and your settings with their values, plus how to change them and how to turn the mod off. Also `/ledger ?` |
 

@@ -8,7 +8,7 @@ import type { EngineInterface, On, RenderElement, RenderNode, Timer, UiPressArgu
 import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.js'
 import { lang, setLang, shortDate, spanText, t, tokensText, usdText } from './i18n.js'
 import { isLanguage, languageCommand } from './language.js'
-import { NOTES_WORDS, addTopic, afterOwnMessage, cleanNote, cleanTopics, nonNeg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.js'
+import { NOTES_KEEP, NOTES_WORDS, addTopic, afterOwnMessage, cleanNote, cleanTopics, nonNeg, normTopic, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.js'
 import type { Note } from './notes.js'
 import { CATALOG as CATALOG_SPEC, CHECK, HANDOFF, QUEUE, RATE, TIP_TARGETS, modelLabel, modelName } from './models.js'
 import {
@@ -37,8 +37,6 @@ import { changed, migrateSettings, readSettings, writeNote, writeSettings } from
 import { storeOffDefaults } from './offdefaults.js'
 import type { Values, WriteResult } from './settings.js'
 import { SETTINGS } from './fields.js'
-import { FOOTER_BUTTONS, buttonRows, buttonTarget, buttonsArg, buttonsMarkdown, kindTitle, laterAllowed, shownPrompts, switchOn } from './buttons.js'
-import type { ButtonFacts, ButtonKind } from './buttons.js'
 import {
   DEFAULT_RUNTIME,
   MIN_OF,
@@ -129,18 +127,15 @@ import {
 import type { Art, Booking, BuddyWhy, Choice, Day, HandoffHow, HandoffRec, Ignored, Ledger, Level, Loop, LoopChoice, MethodOut, NoteField, Period, Rate, Runtime, Settings, Skill, TipWay, Tips, Trigger, Verdict } from './logic.js'
 import { savingsTree } from './view.js'
 import {
-  SAVED_MAX,
-  TEXT_MAX,
-  buttonLabel,
-  buttonNames,
+  DECK_CMD,
   checkName,
+  cleanDeckSaved,
   cleanSaved,
-  normName,
+  deckAnswer,
+  deckLaterAt,
+  migrateArgs,
+  movedTarget,
   preview,
-  upsert,
-  cmdOf,
-  P_CMD,
-  pHint,
   addSeen,
   cleanSeen,
   HAIKU_PER_DAY,
@@ -162,7 +157,7 @@ import {
   seenSet,
   useBudget,
 } from './prompts.js'
-import type { NameCheck, Recent as PromptRecent, Saved } from './prompts.js'
+import type { DeckAnswer, DeckItem, Recent as PromptRecent } from './prompts.js'
 import { helpMarkdown, helpTree } from './help.js'
 import type { HelpData } from './help.js'
 import { sidekickHelp } from './helpdata.js'
@@ -257,6 +252,8 @@ type Sitzung = {
   // Skill-Katalog (Ausbau 0.25.0): in diesem Chat schon angebotene Einträge; `catAsk` = `own` bei der letzten Katalog-Rückfrage (0 = nie)
   catOffered: string[]
   catAsk: number
+  // „Gut zu wissen“, Teil C (0.29.0): Themen (Vergleichsform), die in diesem Chat schon als „schlimmer geworden“ wiederkamen
+  worse: string[]
 }
 
 /** Offener Wartungs-Hinweis; `at`: seit wann er wartet (Review 0.12.0 K5: in einer anderen Session gezeigt oder erledigt → verfällt). */
@@ -264,7 +261,7 @@ type Offen = WHint & { at?: number }
 const offenOf = (h: WHint, now: number): Offen => ({ ...h, at: (h as Offen).at ?? now })
 
 function emptySitzung(): Sitzung {
-  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null, wartung2: false, wartungCommits: 0, ownAt: 0, note: null, leitsatz: false, korr: 0, korrCommits: 0, korrAsked: false, nudged: false, compacts: 0, compactMark: 0, afterCompact: false, catOffered: [], catAsk: 0 }
+  return { summary: '', recent: [], own: 0, ignored: {}, hints: [], last: null, open: null, commits: 0, commit: null, wartung: false, wartungOffen: null, wartung2: false, wartungCommits: 0, ownAt: 0, note: null, leitsatz: false, korr: 0, korrCommits: 0, korrAsked: false, nudged: false, compacts: 0, compactMark: 0, afterCompact: false, catOffered: [], catAsk: 0, worse: [] }
 }
 
 /** Offener Wartungs-Hinweis aus dem Store, tolerant gelesen (fehlt oder kaputt → null). */
@@ -327,6 +324,7 @@ function cleanSitzung(v: unknown): Sitzung {
   if (o.afterCompact === true) s.afterCompact = true
   if (Array.isArray(o.catOffered)) s.catOffered = o.catOffered.filter((x: unknown): x is string => typeof x === 'string' && !!byId(x))
   s.catAsk = nat(o.catAsk)
+  if (Array.isArray(o.worse)) s.worse = o.worse.filter((x: unknown): x is string => typeof x === 'string').slice(-NOTES_KEEP)
   return s
 }
 
@@ -490,23 +488,27 @@ function el(type: 'Box' | 'Text', props: Record<string, string | number | boolea
   return { type, props, children }
 }
 
-// Höhe der sidekick-Ebene im Band (Nachtrag 0.15.2): über der Spotify-Leiste (40). Seit Band 2 (0.26.0) aus band.ts (docs/BAND.md)
-const SIDEKICK_LEVEL = LEVEL.sidekick
-// Streifen wie die orange Trennlinie der Spotify-Leiste (mods/spotify/hooks/view.ts sepSvg): breiter als jedes Fenster, die Box schneidet ab
+// Streifen wie die orange Trennlinie der Spotify-Leiste (tune-strip view.ts sepSvg): breiter als jedes Fenster, die Box schneidet ab.
+// Seit 0.29.0 14 statt 26 px wie tune-strip 0.12.3 (Merge ab1bdb6): 26 px belegten im Desktop zwei Band-Zeilen und erzeugten eine
+// Leerzeile; eine Zeile ist dort ≈ 20 px hoch [UNKLAR, nicht dokumentiert, Fynns Bild 2026-11-17]
 const STRIPE_W = 2400
-const STRIPE_H = 26
+const STRIPE_H = 14
 
-/** Blaue Linie (2 px) mit 8 px Luft darüber und 16 px darunter. */
+/** Blaue Linie (2 px) mit 8 px Luft darüber und 4 px darunter (bis 0.28.0: 16 px darunter). */
 function stripeSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${STRIPE_W}" height="${STRIPE_H}" viewBox="0 0 ${STRIPE_W} ${STRIPE_H}"><rect y="8" width="${STRIPE_W}" height="2" fill="${ACCENT}" opacity="0.85"/></svg>`
 }
 
-/** Die sidekick-Ebene; im Desktop mit dem blauen Streifen darunter. Svg gibt es nur auf entfernten Oberflächen (types:3795-3800). */
-function sidekickLayer(content: RenderElement, surface: string): RenderElement {
-  if (surface !== 'desktop') return layer(SIDEKICK_LEVEL, 'sidekick', content)
+/**
+ * sidekicks Zeile im Band (Ausbau 0.29.0, BAND-SPEC-2 §11): wieder die oberste Ebene `layer:50:sidekick` wie bis 0.28.0, im Desktop
+ * mit dem blauen Streifen darunter (Nachtrag 0.15.2). Inhalt: Übergabe-Box oder Hinweis/Vorschlag; die Knöpfe zeichnet seit 0.29.0
+ * prompt-deck (`layer:10`). Svg gibt es nur auf entfernten Oberflächen (types:3795-3800). Leer: keine Zeile, der Aufrufer gibt `next(e)`.
+ */
+function sidekickLayer(views: readonly RenderNode[], surface: string): RenderElement {
+  if (surface !== 'desktop') return layer(LEVEL.sidekick, 'sidekick', views, { flexShrink: 0 })
   const svg = { type: 'Svg', props: { source: stripeSvg(), alt: t().stripeAlt, width: STRIPE_W, height: STRIPE_H } } as RenderElement
   const stripe = el('Box', { key: 'sidekick-stripe', width: '100%', overflow: 'hidden', flexShrink: 0 }, [svg])
-  return layer(SIDEKICK_LEVEL, 'sidekick', el('Box', { flexDirection: 'column', flexShrink: 0 }, [content, stripe]))
+  return layer(LEVEL.sidekick, 'sidekick', [...views, stripe], { flexShrink: 0 })
 }
 
 /**
@@ -644,7 +646,10 @@ function startColdTimer($: EngineInterface) {
 // `cold` (Ausbau 0.20.0): nur `true` oder fehlend; auf `off` fehlt es immer (coldOf)
 // `handoff` (0.26.0, BAND-SPEC-2 §4): nur `true` oder fehlend; `true`, solange die Übergabe-Box steht (`busy !== null`), auf jeder
 // Stufe. quick-replies zeichnet dann keine Zeile (Selbstausblenden statt Herausfiltern im Band)
-type Status = { level: Level; busy: boolean; tip?: string; cold?: true; handoff?: true }
+// `later` (0.29.0, prompt-deck SPEC „Absprachen“): nur `true` oder fehlend; `true`, solange der Knopf „Danach“ von prompt-deck gelten
+// darf (Zug läuft, Stufe Begleiter, `queue` an). `laterUsed`: `at` der zuletzt verbrauchten Markierung `prompt-deck.later`; prompt-deck
+// löscht sie daraufhin (Bau-Ergänzung, sonst bliebe „Danach ✓“ nach dem Verbrauch stehen)
+type Status = { level: Level; busy: boolean; tip?: string; cold?: true; handoff?: true; later?: true; laterUsed?: number }
 let statusLast: string | undefined = undefined // `undefined` = unbekannt (nach einem Neuladen): sicher schreiben
 let statusChain: Promise<unknown> = Promise.resolve()
 /**
@@ -667,6 +672,12 @@ function noteMode($: EngineInterface, surface: string, err: string) {
 
 /** Arbeitet sidekick gerade: Prüfung (`check`), offene Rückfrage (`stop`), Übergabe (`handoff`) oder eine Box (Übergabe). */
 const busyNow = () => buddyKind === 'check' || buddyKind === 'stop' || buddyKind === 'handoff' || busy !== null
+/** Danach-Knopf von prompt-deck (Ausbau 0.29.0, Verhalten 5): `at` der zuletzt verbrauchten Markierung, null = noch keine. */
+let laterUsed: number | null = null
+/** Beginn der laufenden (bzw. letzten) Runde: Zeit des ersten `turn.step` ohne `agentId` nach einem `turn.complete`; 0 = noch keine. */
+let turnStartAt = 0
+/** Darf „Danach“ gelten (`sidekick.status.later`): Zug läuft, Stufe Begleiter, `queue` an. */
+const laterOpen = () => turnRunning && settings.level === 'guide' && cfg.queue !== false
 function pushStatus($: EngineInterface) {
   const tipName = tip && !tip.ended && tip.way === 'chat' ? modelName(tip.to) : ''
   const cold = coldNow && settings.level !== 'off'
@@ -676,6 +687,8 @@ function pushStatus($: EngineInterface) {
     ...(tipName ? { tip: tipName } : {}),
     ...(cold ? { cold: true as const } : {}),
     ...(busy !== null ? { handoff: true as const } : {}),
+    ...(laterOpen() ? { later: true as const } : {}),
+    ...(laterUsed !== null ? { laterUsed } : {}),
   }
   const key = JSON.stringify(value)
   if (key === statusLast) return
@@ -2299,7 +2312,7 @@ async function runNote($: EngineInterface, e: StepFacts) {
   if (!r.isAnswered && r.reason === 'nothing-to-fork') return
   const ms = (await $.clock.now()) - t0
   const usage = 'usage' in r ? (r.usage as CompleteUsage) : undefined
-  const p = r.isAnswered ? parseNote(r.text, seen, known) : null
+  const p = r.isAnswered ? parseNote(r.text, seen, known, ses.worse) : null
   // Veraltet: inzwischen /clear, eine neue Runde (der Nutzer hat weitergeschrieben) oder schon ein Hinweis
   await bindSession($)
   const stale = sessionId !== sid || curTurn !== e.turnId || !!ses.note
@@ -2308,10 +2321,16 @@ async function runNote($: EngineInterface, e: StepFacts) {
     // Auf dem Hauptmodell der Runde; eigene Rechnung, nicht in `kosten` (Nachtrag 0.13.0, Kosten)
     if (usage) bookNote(d, e.model, completeCost(usage, e.model), ms)
     countNote(d, field)
+    // Teil C: ein bekanntes Thema kam wieder, weil es schlimmer geworden ist
+    if (field === 'gezeigt' && p?.kind === 'note' && p.schlimmer) countNote(d, 'schlimmer')
   })
   if (!p || p.kind !== 'note' || stale) return
   const now = await $.clock.now()
-  ses.note = { thema: p.thema, art: p.art, titel: p.titel, text: p.text, shownAt: now, turnId: e.turnId, survived: 0 }
+  // Teil C: „schlimmer geworden“ höchstens einmal je Thema und Chat; die Erklärung beginnt mit dem `schlimmer`-Satz
+  const worse = !!p.schlimmer
+  if (worse) ses.worse = [...ses.worse.filter((x) => x !== normTopic(p.thema)), normTopic(p.thema)].slice(-NOTES_KEEP)
+  const text = worse ? [p.schlimmer, p.text].filter(Boolean).join(' ') : p.text
+  ses.note = { thema: p.thema, art: p.art, titel: p.titel, text, shownAt: now, turnId: e.turnId, survived: 0, ...(worse ? { worse: true as const } : {}) }
   noteTurn = e.turnId
   saveSes($, now)
   // Frisch gelesen: eine andere Session kann inzwischen geschrieben haben
@@ -2337,7 +2356,10 @@ async function noteAfterOwn($: EngineInterface, text: string, kind: string) {
   $.ui.invalidate('ui.render')
 }
 
-type NoteAction = 'claude' | 'known' | 'ignore'
+type NoteAction = 'claude' | 'explain' | 'ignore'
+/** Aufgeklappte Hinweise (Teil C, `shownAt`), nur im Speicher; `noteExplained`: schon als „erklärt“ gezählt (je Hinweis einmal). */
+const noteOpen = new Set<number>()
+const noteExplained = new Set<number>()
 
 /**
  * „An Claude geben“ während eines Zugs (Ausbau 0.27.1, E1): höchstens einer offen. Der nächste `tool.call` des Hauptagenten, dessen
@@ -2362,9 +2384,10 @@ function passNote($: EngineInterface, n: Note, now: number): boolean {
     $.ui.toast(x.notePassAlready, { timeoutMs: 8000 })
     return false
   }
-  const idle = x.notePassText(n.titel, n.thema, n.text, false)
+  const achtung = n.art === 'achtung'
+  const idle = x.notePassText(n.titel, n.thema, n.text, false, achtung)
   if (turnRunning && curTurn) {
-    pass = { sid: sessionId, turnId: curTurn, text: x.notePassText(n.titel, n.thema, n.text, true), idle, at: now }
+    pass = { sid: sessionId, turnId: curTurn, text: x.notePassText(n.titel, n.thema, n.text, true, achtung), idle, at: now }
     $.ui.toast(x.notePassed, { timeoutMs: 5000 })
   } else sendNote($, idle)
   return true
@@ -2399,7 +2422,10 @@ function passAtEnd($: EngineInterface, turnId: string, aborted: boolean) {
   })
 }
 
-/** Ein Knopf am Hinweis. `shownAt` bindet den Druck an den Hinweis, der gezeichnet war; jede Wahl beendet die Zurückhaltung. */
+/**
+ * Ein Knopf am Hinweis. `shownAt` bindet den Druck an den Hinweis, der gezeichnet war. „Erklären“ (Teil C) klappt nur auf oder zu, ohne
+ * Modellaufruf, und zählt je Hinweis einmal als `erklaert`; die anderen beiden beenden den Hinweis und die Zurückhaltung.
+ */
 async function pressNote($: EngineInterface, shownAt: number, action: NoteAction) {
   if (notePressing) return
   notePressing = true
@@ -2408,12 +2434,22 @@ async function pressNote($: EngineInterface, shownAt: number, action: NoteAction
     const n = ses.note
     if (!n || n.shownAt !== shownAt) return
     const now = await $.clock.now()
+    if (action === 'explain') {
+      if (noteOpen.has(shownAt)) noteOpen.delete(shownAt)
+      else noteOpen.add(shownAt)
+      if (!noteExplained.has(shownAt)) {
+        noteExplained.add(shownAt)
+        bookDay($, now, (d) => countNote(d, 'erklaert'))
+      }
+      return
+    }
     if (action === 'claude' && !passNote($, n, now)) return
     ses.note = null
+    noteOpen.delete(shownAt)
     saveSes($, now)
-    // „Weiß ich schon“: das Thema nie wieder anbieten; „Ignorieren“ (früher „Später“): es darf wiederkommen
-    if (action === 'known') await $.store.set('notes:known', addTopic(cleanTopics(await $.store.get('notes:known')), n.thema))
-    const field: NoteField = action === 'claude' ? 'weiter' : action === 'known' ? 'bekannt' : 'spaeter'
+    // „Ignorieren“ (Teil C, bis 0.28.1 „Weiß ich schon“): das Thema nie wieder anbieten, außer es wird deutlich schlimmer (parseNote)
+    if (action === 'ignore') await $.store.set('notes:known', addTopic(cleanTopics(await $.store.get('notes:known')), n.thema))
+    const field: NoteField = action === 'claude' ? 'weiter' : 'niewieder'
     bookDay($, now, (d) => countNote(d, field))
     await $.store.set('notes:ignored', 0)
     await $.store.set('notes:skip', 0)
@@ -2428,19 +2464,28 @@ async function pressNote($: EngineInterface, shownAt: number, action: NoteAction
 type NoteButton = (p: { key: string; label: string; hotkey?: string; plain?: true; onPress: () => void }) => RenderNode
 
 /**
- * Der Hinweis über dem Prompt in einer Zeile (Ausbau 0.27.1, E2): `✦ Achtung · <thema>` mit 1 An Claude geben, 2 Weiß ich schon,
- * 0 Ignorieren. `flexWrap`: Ist die Zeile zu schmal, brechen die Knöpfe um. Keine Leerzeile darunter, auch im Terminal nicht.
- * `digits`: Ziffern als hotkey; nicht, solange quick-replies 1 … n belegt (types:9073).
+ * Der Hinweis über dem Prompt in einer Zeile (Ausbau 0.27.1, E2): `✦ Achtung · <thema>` mit 1 An Claude geben, 2 Erklären, 0 Ignorieren
+ * (Teil C, 0.29.0; bis 0.28.1 „Weiß ich schon“). `flexWrap`: Ist die Zeile zu schmal, brechen die Knöpfe um. Keine Leerzeile darunter.
+ * `digits`: Ziffern als hotkey; nicht, solange quick-replies 1 … n belegt (types:9073). `open`: unter der Zeile die Erklärung
+ * (`text`, ohne Text das Thema), Breite `bodyColumns`, Umbruch `wrap`; die Knöpfe bleiben, der zweite heißt dann „Zuklappen“.
+ * Ein bekanntes, schlimmer gewordenes Thema: `✦ Achtung · schlimmer geworden · <thema>`.
  */
-function noteView(n: Note, cols: number, digits: boolean, button: NoteButton, press: (a: NoteAction) => void): RenderElement {
+function noteView(n: Note, cols: number, digits: boolean, button: NoteButton, press: (a: NoteAction) => void, open = false): RenderElement {
   const x = t()
   const b = (key: string, label: string, hotkey: string, a: NoteAction) => button({ key, label, plain: true, ...(digits ? { hotkey } : {}), onPress: () => press(a) })
-  const head = el('Text', {}, [el('Text', { color: ACCENT }, ['✦ ']), el('Text', { color: ACCENT, bold: true }, [x.noteTag[n.art]]), el('Text', { dimColor: true }, [' · ']), el('Text', {}, [n.thema])])
-  return el('Box', { key: 'sidekick-note', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3, width: Math.max(20, cols) }, [
+  const worse = n.worse ? [el('Text', { dimColor: true }, [' · ']), el('Text', { color: ACCENT }, [x.noteWorse])] : []
+  const head = el('Text', {}, [el('Text', { color: ACCENT }, ['✦ ']), el('Text', { color: ACCENT, bold: true }, [x.noteTag[n.art]]), ...worse, el('Text', { dimColor: true }, [' · ']), el('Text', {}, [n.thema])])
+  const width = Math.max(20, cols)
+  const line = [
     head,
     b('sidekick-note-claude', x.noteClaude, '1', 'claude'),
-    b('sidekick-note-known', x.noteKnown, '2', 'known'),
+    b('sidekick-note-explain', open ? x.noteCollapse : x.noteExplain, '2', 'explain'),
     b('sidekick-note-ignore', x.noteIgnore, '0', 'ignore'),
+  ]
+  if (!open) return el('Box', { key: 'sidekick-note', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3, width }, line)
+  return el('Box', { key: 'sidekick-note', flexDirection: 'column', width }, [
+    el('Box', { key: 'sidekick-note-line', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3, width }, line),
+    el('Box', { key: 'sidekick-note-text', paddingLeft: 2, width }, [el('Text', { wrap: 'wrap' }, [n.text || n.thema])]),
   ])
 }
 
@@ -2456,8 +2501,7 @@ async function helpCommand($: EngineInterface): Promise<string> {
   const hs = await loadHints($)
   const known = cleanTopics(await $.store.get('notes:known')).length
   const source = settings.ttl ? 'set' : mem.ttlSource === 'gemessen' ? 'measured' : 'default'
-  const list = await loadSaved($).catch(() => saved)
-  const data = sidekickHelp({ settings, ttl: { min: ttlOf(mem, settings.ttl), source }, hints: { on: hs.on, off: hs.off }, known, now, prompts: { n: list.length, buttons: buttonNames(list).length }, cfg })
+  const data = sidekickHelp({ settings, ttl: { min: ttlOf(mem, settings.ttl), source }, hints: { on: hs.on, off: hs.off }, known, now, deck: await hasDeck($), cfg })
   const tag = `#${(++helpNo).toString(36)}${now.toString(36).slice(-5)}`
   helps.set(tag, data)
   while (helps.size > 10) helps.delete(helps.keys().next().value as string)
@@ -2598,6 +2642,9 @@ async function statusText($: EngineInterface): Promise<string> {
   out.push(md && typeof md.at === 'number' && typeof md.surface === 'string' ? x.modeSeen(hhmm(md.at), md.surface, typeof md.err === 'string' ? md.err : '') : x.modeNever, '')
   const hs = await loadHints($)
   out.push(x.hintsLine(onOff(hs.on), hs.off.join(', ')), '')
+  // Umzug der gespeicherten Prompts nach prompt-deck (Ausbau 0.29.0, Verhalten 6)
+  const mv = await movedLine($)
+  if (mv) out.push(mv, '')
   out.push(x.change(USAGE))
   return out.join('\n')
 }
@@ -2640,229 +2687,120 @@ async function hintsCommand($: EngineInterface, rest: string): Promise<string> {
   return note ? `${note}\n\n${out}` : out
 }
 
-// ---------- Gespeicherte Prompts (Nachtrag 0.21.0) ----------
+// ---------- Gespeicherte Prompts: seit 0.29.0 in prompt-deck (Ausbau 0.29.0; bis 0.28.1 Nachtrag 0.21.0) ----------
+// sidekick erkennt weiter wiederholte Prompts und bietet das Speichern an (prompt-deck SPEC E6); gespeichert, gesendet und als Knopf
+// gezeichnet wird in prompt-deck. Der Weg dorthin ist `/deck save …` über `$.command.run` (origin `{ kind: 'plugin', name: 'sidekick' }`,
+// types@2.1.325:3313-3326), nie aus einem Hook, auf den Zug oder Start warten: immer über `later()`.
 
-/** Gespeicherte Prompts (`prompts:saved`), frisch gelesen bei session.start, Befehlen und Senden: eine andere Session kann sie geändert haben. */
-let saved: Saved[] = []
-/** Gesendet, aber noch nicht als Nachricht angekommen: ein zweiter Klick sendet nicht doppelt. */
-const sendingNames = new Set<string>()
 /** Läuft gerade eine Antwort im Hauptchat? `turn.step` setzt, `turn.complete` (ohne `agentId`) löscht. */
 let turnRunning = false
 let pChain: Promise<unknown> = Promise.resolve() // `prompts:*` lesen, ändern, schreiben nacheinander
-let promptsLast: string | undefined = undefined // zuletzt geschriebene Knopfliste (`sidekick.prompts`)
-/** Abstand zwischen dem Befehl `/p <name>` und dem Senden (nach dem Hook, siehe runPrompt). */
+/** Abstand zwischen einem Befehl bzw. einem Klick und dem Aufruf, der nicht aus dem Hook heraus laufen darf (`later`). */
 const SUBMIT_DELAY_MS = 100
-
-async function loadSaved($: EngineInterface): Promise<Saved[]> {
-  saved = cleanSaved(await $.store.get('prompts:saved'))
-  return saved
-}
-
-/** `prompts:saved` frisch lesen, ändern, schreiben; nacheinander mit allen anderen Änderungen. */
-function updateSaved<R>($: EngineInterface, fn: (list: Saved[]) => { list: Saved[]; r: R }): Promise<R> {
-  const run = pChain.then(async () => {
-    const { list, r } = fn(cleanSaved(await $.store.get('prompts:saved')))
-    await $.store.set('prompts:saved', list)
-    saved = list
-    return r
-  })
-  pChain = run.catch(() => {})
-  return run
-}
-
-/** Was die Fußzeilen-Knöpfe brauchen (Ausbau 0.27.0, hooks/buttons.ts): userConfig, Stufe, gespeicherte Prompts. */
-const btnFacts = (): ButtonFacts => ({ cfg, level: settings.level, saved })
+/** Umzug nach dem Start (Verhalten 6): so lange nach `session.start`, damit prompt-deck `/deck` und `prompt-deck.saved` gesetzt hat. */
+const MOVE_DELAY_MS = 1500
 
 /**
- * Knopfliste nach `$.state` (nur bei Änderung): der Knopf-Baum liest sie und zeichnet nur dann neu (kein $.ui.invalidate). `later`
- * ist seit 0.25.1 nur noch Anlass zum Neuzeichnen über das Abo; den Zustand nimmt die Zeichnung aus dem Speicher (`laterNow`).
- * Seit 0.27.0 nur die sichtbaren Knöpfe: `promptButtons` aus → `buttons: []`, `laterButton` aus → ohne `later`. Ein Schalter ändert
- * den Wert also nur, wenn sich in der Fußzeile etwas ändert, und nur dann zeichnet sie neu.
+ * `prompt-deck.saved`: Namen und Wortmengen der in prompt-deck gespeicherten Prompts. null = prompt-deck fehlt, schrieb noch nicht
+ * (nach /clear bis zur nächsten Änderung, en/interface.md:942) oder das Lesen scheitert: dann bietet sidekick nichts an.
  */
-function pushBtns($: EngineInterface) {
-  const laterBtn = laterNow()
-  const value = { buttons: shownPrompts(btnFacts()), ...(laterBtn ? { later: laterBtn } : {}) }
-  const key = JSON.stringify(value)
-  if (key === promptsLast) return
-  promptsLast = key
+async function deckSaved($: EngineInterface): Promise<DeckItem[] | null> {
   try {
-    $.state.set({ plugin: 'sidekick', key: 'prompts' }, value).catch(() => {
-      if (promptsLast === key) promptsLast = undefined
-    })
+    return cleanDeckSaved((await $.state.get({ plugin: 'prompt-deck', key: 'saved' })).value)
   } catch {
-    if (promptsLast === key) promptsLast = undefined
+    return null
+  }
+}
+
+/** Ist `/deck` von prompt-deck angemeldet? Ohne: kein Umzug, und die alten Unterbefehle sagen, wie man prompt-deck installiert. */
+async function hasDeck($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.command.list()).some((c) => c.name === DECK_CMD)
+  } catch {
+    return false
   }
 }
 
 /**
- * Den festen Befehl `/p` anmelden; der Hinweis dahinter nennt die gespeicherten Namen. „Registering a name again replaces it“
- * (types@2.1.319:3250-3257): nach Speichern und Löschen neu, damit das Menü die aktuellen Namen zeigt.
+ * Der einzige Aufruf von `/deck` (wie `tick`: validate nennt je Call die Funktionen, die ihn enthalten). Nur aus einem Timer oder
+ * einem Klick, nie aus einem Hook (types@2.1.325:3313-3326). Fehler kommen als `other` zurück, nie als Ausnahme.
  */
-async function registerPrompts($: EngineInterface) {
+async function deckRun($: EngineInterface, args: string): Promise<DeckAnswer> {
   try {
-    await $.command.register({ name: P_CMD, description: t().pr.cmdP, argumentHint: pHint(saved) })
-  } catch {
-    // ohne /p; die Knöpfe senden trotzdem
-  }
-}
-
-/**
- * Einen gespeicherten Prompt senden: `$.prompt.submit({ text, asUser: true })`, als Nachricht des Nutzers ohne Plugin-Rahmen
- * (types@2.1.319:9699-9711). Ein Plugin-Prompt läuft, sobald die Session frei ist (types@2.1.319:9694-9697), also während einer
- * Antwort danach. Nicht abgewartet (Review 0.13.0 S1).
- * Rückgabe: der Text für die Befehlsausgabe; ein Knopf zeigt ihn als Toast.
- */
-async function runPrompt($: EngineInterface, name: string, via: 'cmd' | 'button'): Promise<string> {
-  const x = t().pr
-  await loadSettings($)
-  if (settings.level === 'off') return x.offLevel
-  // In `-p` ist keine Session gebunden: „$.prompt.submit is not available in this mode“ (Smoke-Test 2026-11-06); dort ist `surfaces()` leer
-  if (!(await $.session.surfaces()).length) return x.noSession(name)
-  const p = (await loadSaved($)).find((s) => s.name === name)
-  if (!p) return x.unknownName(name)
-  if (sendingNames.has(name)) return x.already(name)
-  sendingNames.add(name)
-  const busyNowTurn = turnRunning
-  const done = () => sendingNames.delete(name)
-  const fire = () => {
-    try {
-      asUser($, p.text)
-        .then((r) => {
-          done()
-          if (r && 'drop' in r && typeof r.drop === 'string') $.ui.toast(x.submitFailed(name, cut(r.drop, 140)), { timeoutMs: 10000 })
-        })
-        .catch((err) => {
-          done()
-          $.ui.toast(x.submitFailed(name, msg(err)), { timeoutMs: 10000 })
-        })
-    } catch (err) {
-      done()
-      $.ui.toast(x.submitFailed(name, msg(err)), { timeoutMs: 10000 })
-    }
-  }
-  try {
-    await bindSession($)
-    bookDay($, await $.clock.now(), (d) => countPrompt(d, 'gesendet'))
-  } catch {
-    // Beiwerk
-  }
-  // Aus einem `command.run`-Hook lehnt die Engine den Aufruf ab („it would wait on the turn this hook is holding; submit from a later
-  // event“, Test 2026-11-06): erst nach dem Befehl über einen einmaligen Timer, als letzter Schritt des Hooks (Review 0.21.0 K3).
-  // Ein Knopf ist kein Hook und sendet sofort.
-  try {
-    if (via === 'cmd') later($, SUBMIT_DELAY_MS, fire)
-    else fire()
+    return deckAnswer((await $.command.run({ command: DECK_CMD, args })).text)
   } catch (err) {
-    done()
-    return x.submitFailed(name, msg(err))
+    return { kind: 'other', why: msg(err), human: '' }
   }
-  // Ein Befehl läuft ohnehin erst nach der Antwort (ohne `immediate`, types@2.1.319:1944-1952); ein Knopf sagt es per Toast
-  if (busyNowTurn && via === 'button') return x.queued(name)
-  return x.sent(name)
 }
 
-/** Letzte eigene Nachricht dieses Chats, ohne Befehle und Host-Texte; leer, wenn es keine gibt. */
-function lastOwnText(msgs: readonly { role: string; text?: string }[]): string {
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i]!
-    const text = typeof m.text === 'string' ? stripLeadReminders(m.text).trim() : ''
-    if (m.role !== 'user' || !text || isHostNote(text) || text.startsWith('/') || text.startsWith('<command-')) continue
-    return text
-  }
-  return ''
-}
-
-/** Text zur Ablehnung eines Namens. */
-function nameRefusal(c: Extract<NameCheck, { ok: false }>): string {
-  const x = t().pr
-  return c.why === 'invalid' ? x.nameInvalid(c.name, c.suggest) : x.nameOwn(c.name, c.suggest)
+/** `deckRun` zeitversetzt über `later()`: aus `onPress` wie aus einem Hook derselbe sichere Weg (Auftrag 0.29.0, Probe P1 prompt-deck). */
+function deckLater($: EngineInterface, args: string): Promise<DeckAnswer> {
+  return new Promise<DeckAnswer>((resolve) => {
+    try {
+      later($, SUBMIT_DELAY_MS, () => {
+        deckRun($, args).then(resolve, (err) => resolve({ kind: 'other', why: msg(err), human: '' }))
+      })
+    } catch (err) {
+      resolve({ kind: 'other', why: msg(err), human: '' })
+    }
+  })
 }
 
 /**
- * Einen Prompt speichern (manuell oder aus dem Angebot), anmelden und die Knöpfe neu schreiben. `overwrite`: ein eigener Name wird
- * ersetzt (manuell); beim Angebot nicht.
+ * `prompts:moved` (Verhalten 6): wann und wie viele Einträge aus `prompts:saved` in prompt-deck stehen; null = noch nicht umgezogen.
+ * `full` (Review K2): prompt-deck war voll, der Umzug gilt trotzdem als beendet (sonst schriebe jeder Start neue `/deck save`-Zeilen).
  */
-async function savePrompt($: EngineInterface, raw: string, text: string, from: 'auto' | 'manual'): Promise<{ ok: true; name: string; replaced: boolean; button: boolean } | { ok: false; text: string }> {
-  const x = t().pr
-  await loadSaved($)
-  const c = checkName(raw, saved.map((s) => s.name), from === 'manual')
-  if (!c.ok) return { ok: false, text: nameRefusal(c) }
-  const now = await $.clock.now()
-  const u = await updateSaved($, (list) => {
-    const r = upsert(list, { name: c.name, text: text.trim().slice(0, TEXT_MAX * 4), button: true, at: now, from })
-    return { list: r.list, r }
-  })
-  if (u.kind === 'full') return { ok: false, text: x.full(SAVED_MAX) }
-  await registerPrompts($)
-  pushBtns($)
-  try {
-    await bindSession($)
-    bookDay($, now, (d) => countPrompt(d, 'gespeichert'))
-  } catch {
-    // Beiwerk
-  }
-  return { ok: true, name: c.name, replaced: u.kind === 'replaced', button: buttonNames(saved).includes(c.name) }
+type Moved = { at: number; n: number; full?: true }
+function cleanMoved(v: unknown): Moved | null {
+  const o = (v && typeof v === 'object' ? v : null) as { at?: unknown; n?: unknown; full?: unknown } | null
+  return o && typeof o.at === 'number' && typeof o.n === 'number' ? { at: o.at, n: o.n, ...(o.full === true ? { full: true as const } : {}) } : null
 }
 
-// Die letzten `/sidekick prompts`-Listen (höchstens 10), über die Kennung gefunden wie bei /savings
-const promptLists = new Map<string, Saved[]>()
-let promptListNo = 0
-
-/** Markdown von `/sidekick prompts`: Tabelle ohne `|` in den Zellen (Fix 0.18.1), dazu die Befehle. */
-function promptsMarkdown(list: readonly Saved[], tag: string): string {
-  const x = t().pr
-  if (!list.length) return x.listEmpty
-  const shown = new Set(buttonNames(list))
-  const rows = list.map((s) => `| \`/${cmdOf(s.name)}\` | ${mdCell(preview(s.text, 60))} | ${s.button ? (shown.has(s.name) ? x.on : `${x.on} (5+)`) : x.off} |`)
-  return [`${x.listHead(list.length, SAVED_MAX)}${tag ? ` · ${tag}` : ''}`, '', x.listCols, '|---|---|---|', ...rows, '', x.listFoot].join('\n')
+/**
+ * Umzug, einmalig (SPEC 0.29.0 Verhalten 6): Ist `/deck` da, `prompts:saved` nicht leer und `prompts:moved` nicht gesetzt, gibt sidekick
+ * jeden Eintrag, dessen Name noch nicht in `prompt-deck.saved` steht, nacheinander mit `/deck save [--off] [--manual] <name> <text>`
+ * ab. Gelingt alles (oder steht schon da), merkt er sich `prompts:moved`; scheitert einer, bleibt es ungesetzt, und der nächste Start
+ * versucht die fehlenden (vorhandene Namen werden übersprungen, prompt-deck überschreibt nie). `prompts:saved` bleibt als Sicherung.
+ * Ohne `prompt-deck.saved` wartet er auf den nächsten Start: sonst entstünden in prompt-deck Doppel unter `<name>-2`.
+ * Antwortet prompt-deck `full`, endet der Umzug sofort und gilt als beendet (`full: true`, Review K2). Nicht in `-p` (Review K4):
+ * dort ist die Liste der Oberflächen leer, und jeder Lauf schriebe sonst `/deck save`-Zeilen in einen Chat ohne Nutzer.
+ */
+async function movePrompts($: EngineInterface): Promise<void> {
+  if (cleanMoved(await $.store.get('prompts:moved'))) return
+  const list = cleanSaved(await $.store.get('prompts:saved'))
+  if (!list.length || !(await hasDeck($))) return
+  if (!(await $.session.surfaces()).length) return
+  const there = await deckSaved($)
+  if (!there) return
+  const names = new Set(there.map((s) => s.name))
+  let ok = true
+  let full = false
+  for (const s of list) {
+    if (names.has(s.name)) continue
+    const r = await deckRun($, `save ${migrateArgs(s)}`)
+    if (r.kind === 'saved') names.add(s.name)
+    else if (r.kind === 'full') {
+      full = true
+      break
+    } else ok = false
+  }
+  const n = list.filter((s) => names.has(s.name)).length
+  if (full) await $.store.set('prompts:moved', { at: await $.clock.now(), n, full: true })
+  else if (ok) await $.store.set('prompts:moved', { at: await $.clock.now(), n })
 }
 
-/** `/sidekick save …`, `/sidekick prompts …`, `/sidekick forget …`. */
-async function promptsCommand($: EngineInterface, args: string, messages?: () => Promise<readonly { role: string; text?: string }[]>): Promise<string> {
-  const x = t().pr
-  const [verb = '', name = '', ...rest] = args.trim().split(/\s+/)
-  const v = verb.toLowerCase()
-  if (v === 'save') {
-    if (!name) return x.saveUsage
-    // Der Text nach dem Namen unverändert (Zeilenumbrüche bleiben)
-    const after = args.trim().replace(/^\S+\s+\S+\s*/, '')
-    const text = after || (messages ? lastOwnText(await messages()) : '')
-    if (!text) return x.noLast
-    const r = await savePrompt($, name, text, 'manual')
-    return r.ok ? x.savedCmd(r.name, r.replaced, r.button) : r.text
-  }
-  if (v === 'forget') {
-    if (!name) return x.unknownName('')
-    const n = normName(name)
-    const had = await updateSaved($, (list) => ({ list: list.filter((s) => s.name !== n), r: list.some((s) => s.name === n) }))
-    if (!had) return x.unknownName(n)
-    pushBtns($)
-    await registerPrompts($)
-    return x.forgotten(n)
-  }
-  // prompts [name [on|off]]
-  const list = await loadSaved($)
-  pushBtns($)
-  if (!name) {
-    const now = await $.clock.now()
-    const tag = list.length ? `#${(++promptListNo).toString(36)}${now.toString(36).slice(-5)}` : ''
-    if (tag) {
-      promptLists.set(tag, list)
-      while (promptLists.size > 10) promptLists.delete(promptLists.keys().next().value as string)
-    }
-    return promptsMarkdown(list, tag)
-  }
-  const n = normName(name)
-  const p = list.find((s) => s.name === n)
-  if (!p) return x.unknownName(n)
-  const sw = (rest[0] ?? '').toLowerCase()
-  if (sw === 'on' || sw === 'off') {
-    await setButton($, n, sw === 'on')
-    const out = x.buttonSet(n, sw === 'on', buttonNames(saved).includes(n))
-    // Review 0.27.0 K4: wie `/sidekick buttons <name> on`, wenn alle Prompt-Knöpfe aus sind
-    return sw === 'on' && !switchOn(btnFacts(), 'promptButtons') ? `${out} ${t().bt.promptsOffNote}` : out
-  }
-  return [x.detail(p.name, p.button, p.from), '', '```text', p.text, '```'].join('\n')
+/** `/sidekick save|prompts|forget|buttons` (bis 0.28.1): eine Version lang der Verweis auf `/deck …` (Verhalten 2). */
+async function movedCommand($: EngineInterface, verb: string): Promise<string> {
+  const target = movedTarget(verb) ?? '/deck'
+  return (await hasDeck($)) ? t().pr.moved(verb.toLowerCase(), target) : t().pr.movedInstall(verb.toLowerCase(), target)
+}
+
+/** Zeile in `/sidekick status`: Umzug erledigt (Datum, Sicherung bleibt) oder alte Prompts warten auf prompt-deck. */
+async function movedLine($: EngineInterface): Promise<string> {
+  const moved = cleanMoved(await $.store.get('prompts:moved'))
+  if (moved) return moved.full ? t().pr.movedFull(moved.n, cleanSaved(await $.store.get('prompts:saved')).length, shortDate(moved.at)) : t().pr.movedState(moved.n, shortDate(moved.at))
+  const n = cleanSaved(await $.store.get('prompts:saved')).length
+  return n ? t().pr.movedWaiting(n) : ''
 }
 
 /** Eigene Nachrichten mit ihrer ID aus `UserMessage` (das Angebot kommt erst nach dem Senden und sucht dann seine Nachricht). */
@@ -2952,8 +2890,10 @@ async function rememberPrompt($: EngineInterface, text: string, kind: string) {
   const seen = seenSet(cleanSeen(await $.store.get('prompts:seen')))
   const group = DETECT === 'intent' ? intentGroup(list, entry, seen) : candidates(list, entry, seen)
   if (!group) return
-  const own = await loadSaved($)
-  if (nearSaved(own, entry.words)) return
+  // Ausbau 0.29.0 (Verhalten 3): gespeichert wird in prompt-deck. Ohne `prompt-deck.saved` (prompt-deck fehlt, nach /clear) kein
+  // Angebot und kein Vorschlags-Aufruf; die Gruppe bleibt ungesehen und kann später noch angeboten werden
+  const own = await deckSaved($)
+  if (!own || nearSaved(own, entry.words)) return
   if (!(await takeBudget($, 'prompts:budget', HAIKU_PER_DAY, now))) return
   const p = parseProposal(await haiku($, PROPOSE, proposeSystem(de), proposePrompt(group, de)))
   const ids = group.map((g) => g.id)
@@ -2996,7 +2936,12 @@ function markSeen($: EngineInterface, ids: readonly string[]) {
     .catch(() => {})
 }
 
-/** Knopf am Angebot: Speichern legt Prompt und Befehl an (Toast), Nein merkt die Gruppe als abgelehnt. */
+/**
+ * Knopf am Angebot (Ausbau 0.29.0, Verhalten 4): „Speichern“ gibt den Prompt über `/deck save <name> <text>` an prompt-deck ab
+ * (zeitversetzt über `later()`) und wertet die erste Zeile der Antwort aus: `saved <name>` → Zeile „gespeichert als /p <name>“ und
+ * Toast; `full`/`refused …` oder ein Fehler → Toast mit dem Satz von prompt-deck, das Angebot bleibt offen. Nein merkt die Gruppe
+ * als abgelehnt.
+ */
 async function answerOffer($: EngineInterface, id: string, yes: boolean) {
   const h = ses.hints.find((x) => x.id === id)
   if (!h?.offer || h.offerDone || pressing.has(id)) return
@@ -3004,213 +2949,27 @@ async function answerOffer($: EngineInterface, id: string, yes: boolean) {
   pressing.add(id)
   $.ui.invalidate('ui.render')
   try {
-    const now = await $.clock.now()
     if (yes) {
-      const r = await savePrompt($, of.name, of.text, 'auto')
-      if (!r.ok) {
-        $.ui.toast(r.text, { timeoutMs: 15000 })
+      const r = await deckLater($, `save ${of.name} ${of.text}`)
+      if (r.kind !== 'saved') {
+        $.ui.toast(r.human || t().pr.deckFailed(r.kind === 'other' ? r.why : r.kind === 'full' ? 'full' : `refused ${r.why}`.trim()), { timeoutMs: 15000 })
         return
       }
-      $.ui.toast(t().pr.savedToast(r.name, r.replaced), { timeoutMs: 10000 })
+      $.ui.toast(t().pr.savedToast(r.name), { timeoutMs: 10000 })
       if (r.name !== of.name) h.offer = { ...of, name: r.name }
-    } else bookDay($, now, (d) => countPrompt(d, 'abgelehnt'))
+    }
+    const now = await $.clock.now()
+    await bindSession($)
+    bookDay($, now, (d) => countPrompt(d, yes ? 'gespeichert' : 'abgelehnt'))
     markSeen($, of.ids)
     h.offerDone = yes ? 'saved' : 'no'
     saveSes($, now)
   } catch (err) {
-    $.ui.toast(t().pr.submitFailed(of.name, msg(err)), { timeoutMs: 10000 })
+    $.ui.toast(t().pr.deckFailed(msg(err)), { timeoutMs: 10000 })
   } finally {
     pressing.delete(id)
     $.ui.invalidate('ui.render')
   }
-}
-
-/**
- * Wo die Prompt-Knöpfe stehen (Phase-0-Probe, SPEC „Bau 0.21.0“, Lage 0.21.1): `footer` im eigenen SessionMode-Baum des
- * Desktops links vor dem ●-Label. Ein linker Rand der Fußzeile ließ sich über SessionMode nicht erreichen: der Desktop setzt den Baum
- * als festen Block rechts in die Fußzeile (Befund 0.21.1 und 0.21.2, Fynn 2026-11-07). `band` als Zeile unten in sidekicks AbovePrompt-Ebene.
- */
-const BUTTON_PLACE: 'footer' | 'band' = 'footer'
-
-/** Ein Knopf: senden; ein Toast nur, wenn es nicht gleich losgeht oder nicht geht (das Senden selbst sieht man im Chat). */
-async function pressPrompt($: EngineInterface, name: string) {
-  try {
-    const r = await runPrompt($, name, 'button')
-    if (r !== t().pr.sent(name)) $.ui.toast(r, { timeoutMs: 8000 })
-  } catch (err) {
-    $.ui.toast(t().pr.submitFailed(name, msg(err)), { timeoutMs: 10000 })
-  }
-}
-
-/**
- * Die Knöpfe aus `sidekick.prompts`: Das Lesen abonniert den Wert, der Baum zeichnet also nur neu, wenn sich die Liste ändert
- * (kein $.ui.invalidate; tune-strip Nachtrag 0.10.0, mods/clawd-buddy/SPEC.md:278). Stufe Aus: keine. „Danach“ seit 0.25.1 aus dem Speicher.
- */
-async function promptButtons($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0]): Promise<RenderNode[]> {
-  if (settings.level === 'off') return []
-  let names = shownPrompts(btnFacts())
-  try {
-    const { value } = await $.state.get({ plugin: 'sidekick', key: 'prompts' })
-    if (value && Array.isArray(value.buttons)) names = value.buttons
-  } catch {
-    // ohne Abo: die Liste im Speicher
-  }
-  // Ausbau 0.27.0: Schalter `promptButtons` aus → keine, auch wenn ein älterer Wert noch Namen trägt
-  if (!switchOn(btnFacts(), 'promptButtons')) names = []
-  // Patch 0.25.1: Zustand von „Danach“ aus dem Speicher, `get` oben nur fürs Abo. Im Desktop verschwand der Knopf nach dem zweiten
-  // Klick (Fynns Sicht-Check 2026-11-09): las die Zeichnung nach `$.ui.invalidate` einen Stand ohne `later` (oder warf `get`), kam
-  // er nicht zurück, weil danach nichts mehr geschrieben wurde
-  const laterState = laterNow()
-  if (!names.length && !laterState) return []
-  const ui = $.ui.resolve(e)
-  // Warteschlange (Ausbau 0.24.0): „Danach“ links vor den Prompt-Knöpfen, nur während einer Runde
-  // Zustand als Text (0.24.2): „Danach“ → „Danach ✓“. Die Farbe der `Text`-Kinder (0.24.0) zeigte der native Knopf im Desktop nicht
-  // (Fynns Sicht-Check 2026-11-09: „bleibt immer bei derselben Farbe“)
-  const first = laterState ? [ui.Button({ key: 'sidekick-later', label: t().q.btn(laterState === 'armed'), onPress: () => void pressLater($) }) as RenderNode] : []
-  return [...first, ...names.map((n) => ui.Button({ key: `sidekick-p-${n}`, label: buttonLabel(n), dimColor: true, onPress: () => void pressPrompt($, n) }) as RenderNode)]
-}
-
-/**
- * `/sidekick prompts` gezeichnet: je Prompt Name, Anfang des Texts und die Knöpfe Senden, Knopf an/aus, Löschen. Die Zeilen folgen
- * dem aktuellen Stand (`saved`); ein in dieser Ausgabe gelöschter Prompt steht als „gelöscht“ da. Nach einem Klick zeichnet ein
- * einmaliges $.ui.invalidate die Ausgabe neu (Klick des Nutzers, kein Takt).
- */
-function promptsTree($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], snap: readonly Saved[]): RenderElement {
-  const x = t().pr
-  const ui = $.ui.resolve(e)
-  const Button = (p: { key: string; label: string; onPress: () => void }) => ui.Button(p) as RenderNode
-  const shown = new Set(buttonNames(saved))
-  const after = (fn: () => Promise<unknown>) => () =>
-    void fn()
-      .catch((err) => $.ui.toast(msg(err), { timeoutMs: 8000 }))
-      .then(() => $.ui.invalidate('ui.render'))
-  const rows: RenderNode[] = snap.map((s0) => {
-    const s = saved.find((y) => y.name === s0.name)
-    // Breite nach dem Platz (Review 0.21.0 K3): ein Drittel der Spalten, höchstens 26
-    const cols = viewportCols(e)
-    const name = el('Box', { width: Math.max(10, Math.min(26, Math.floor(cols / 3))), flexShrink: 0 }, [el('Text', { color: ACCENT }, [`/${cmdOf(s0.name)}`])])
-    if (!s) return el('Box', { key: `sidekick-pr-${s0.name}`, flexDirection: 'row' }, [name, el('Text', { dimColor: true }, [x.deleted(s0.name).split('.')[0] ?? ''])])
-    const state = s.button ? (shown.has(s.name) ? x.on : `${x.on} (5+)`) : x.off
-    return el('Box', { key: `sidekick-pr-${s.name}`, flexDirection: 'column' }, [
-      el('Box', { flexDirection: 'row', columnGap: 1, flexWrap: 'wrap' }, [
-        name,
-        Button({ key: `sidekick-pr-send-${s.name}`, label: x.btnSend, onPress: () => void pressPrompt($, s.name) }),
-        Button({ key: `sidekick-pr-btn-${s.name}`, label: s.button ? x.btnButtonOff : x.btnButtonOn, onPress: after(() => setButton($, s.name, !s.button)) }),
-        Button({ key: `sidekick-pr-del-${s.name}`, label: x.btnDelete, onPress: after(() => promptsCommand($, `forget ${s.name}`)) }),
-        el('Text', { dimColor: true }, [`${t().pr.listCols.split('|')[3]?.trim() ?? ''}: ${state}`]),
-      ]),
-      el('Box', { paddingLeft: 2 }, [el('Text', { dimColor: true }, [preview(s.text, 90)])]),
-    ])
-  })
-  return el('Box', { key: 'sidekick-prompts-list', flexDirection: 'column', rowGap: 0 }, [
-    el('Text', { bold: true }, [x.listHead(saved.length, SAVED_MAX).replace(/\*\*/g, '')]),
-    ...rows,
-    el('Box', { marginTop: 1 }, [el('Text', { dimColor: true }, [x.listFoot.replace(/`/g, '')])]),
-  ])
-}
-
-async function setButton($: EngineInterface, name: string, on: boolean) {
-  await updateSaved($, (list) => ({ list: list.map((s) => (s.name === name ? { ...s, button: on } : s)), r: null }))
-  pushBtns($)
-}
-
-// ---- Fußzeilen-Knöpfe (Ausbau 0.27.0): `/sidekick buttons` listet die Knopfarten aus hooks/buttons.ts und jeden gespeicherten Prompt,
-// mit An/Aus je Zeile. Knopfarten schreiben ihr userConfig-Feld (`writeCfg`), Prompts ihren Schalter `button` (`setButton`).
-
-// Kennungen der letzten `/sidekick buttons`-Ausgaben (höchstens 10): nur sie zeichnet diese Instanz als Baum
-const btnLists = new Set<string>()
-let btnListNo = 0
-
-type BtnTarget = { kind: 'switch'; k: ButtonKind } | { kind: 'prompt'; name: string }
-
-/** Titel einer Knopfart wie auf der Einstellungsseite („Danach-Knopf“), sonst der Titel aus der Liste. */
-const switchTitle = (k: ButtonKind) => (t().help.settings as Readonly<Record<string, string>>)[k.field] ?? kindTitle(k)
-
-/** Einen Schalter umlegen; zurück kommt der Text für Befehl bzw. Toast. */
-async function applyButton($: EngineInterface, tg: BtnTarget, want: boolean): Promise<string> {
-  const x = t().bt
-  if (tg.kind === 'prompt') {
-    await setButton($, tg.name, want)
-    const out = t().pr.buttonSet(tg.name, want, buttonNames(saved).includes(tg.name))
-    return want && !switchOn(btnFacts(), 'promptButtons') ? `${out} ${x.promptsOffNote}` : out
-  }
-  const title = switchTitle(tg.k)
-  if (switchOn(btnFacts(), tg.k.field) === want) return x.already(title, want)
-  const w = await writeCfg($, { [tg.k.field]: want })
-  if (!w.ok) return writeNote(w, lang())
-  // Ohne Knopf verfällt auch eine Markierung dieser Runde (sie wäre sonst unsichtbar noch scharf)
-  if (tg.k.id === 'later' && !want) laterArmed = false
-  pushBtns($)
-  const hint = tg.k.id === 'later' ? (want && !laterAllowed(btnFacts()) ? x.laterHint : '') : tg.k.id === 'prompts' ? x.promptsHint(want) : ''
-  return [[x.set(title, want), hint].filter(Boolean).join(' '), writeNote(w, lang())].filter(Boolean).join('\n')
-}
-
-/** `/sidekick buttons [later|prompts|<name> on|off]`. */
-async function buttonsCommand($: EngineInterface, rest: string): Promise<string> {
-  const x = t().bt
-  await loadSettings($)
-  await loadSaved($)
-  const a = buttonsArg(rest)
-  if (a.kind === 'usage') return x.usage
-  if (a.kind === 'set') {
-    const tg = buttonTarget(a.target, saved)
-    if (!tg) return x.unknown(a.target, FOOTER_BUTTONS.map((k) => `\`${k.id}\``).join(', '))
-    return applyButton($, tg, a.on)
-  }
-  pushBtns($)
-  const now = await $.clock.now()
-  const tag = `#${(++btnListNo).toString(36)}${now.toString(36).slice(-5)}`
-  btnLists.add(tag)
-  while (btnLists.size > 10) btnLists.delete(btnLists.values().next().value as string)
-  return buttonsMarkdown(btnFacts(), tag)
-}
-
-/** Klick auf An/Aus in der Tabelle; Knopfarten sagen per Toast, ob und wo es gilt. Danach einmal neu zeichnen (Klick, kein Takt). */
-async function pressButtonRow($: EngineInterface, tg: BtnTarget, want: boolean) {
-  try {
-    const out = await applyButton($, tg, want)
-    if (tg.kind === 'switch') $.ui.toast(out.replace(/`/g, ''), { timeoutMs: 8000 })
-  } catch (err) {
-    // Nach einem Neuladen (Weg 1) kann auch der Toast der alten Instanz scheitern (Review 0.27.0 K1)
-    try {
-      $.ui.toast(msg(err), { timeoutMs: 8000 })
-    } catch {
-      // nichts mehr anzuzeigen
-    }
-  }
-  try {
-    $.ui.invalidate('ui.render')
-  } catch {
-    // nach einem Neuladen (Weg 1 im Terminal) zeichnet die neue Instanz
-  }
-}
-
-/**
- * `/sidekick buttons` gezeichnet (Terminal und Desktop): je Zeile Titel, Knopf An/Aus und der Zustand. Die Zeilen folgen dem
- * aktuellen Stand (`cfg`, `saved`), ein neu gespeicherter Prompt steht also gleich darin.
- */
-function buttonsTree($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0]): RenderElement {
-  const x = t().bt
-  const ui = $.ui.resolve(e)
-  const f = btnFacts()
-  const width = Math.max(10, Math.min(26, Math.floor(viewportCols(e) / 3)))
-  const rows: RenderNode[] = buttonRows(f).map((r) => {
-    const key = r.kind === 'switch' ? `sidekick-bt-${r.id}` : `sidekick-bt-p-${r.id}`
-    const k = FOOTER_BUTTONS.find((y) => y.id === r.id)
-    const tg: BtnTarget = r.kind === 'switch' && k ? { kind: 'switch', k } : { kind: 'prompt', name: r.id }
-    return el('Box', { key: `${key}-row`, flexDirection: 'row', columnGap: 1, flexWrap: 'wrap' }, [
-      el('Box', { width, flexShrink: 0 }, [el('Text', r.kind === 'prompt' ? { color: ACCENT } : {}, [r.title])]),
-      ui.Button({ key, label: r.on ? x.btnOff : x.btnOn, onPress: () => void pressButtonRow($, tg, !r.on) }) as RenderNode,
-      el('Text', { dimColor: true }, [r.state]),
-    ])
-  })
-  return el('Box', { key: 'sidekick-buttons', flexDirection: 'column' }, [
-    el('Text', { bold: true }, [x.head.replace(/\*\*/g, '')]),
-    ...(f.level === 'off' ? [el('Text', { dimColor: true }, [x.levelOff.replace(/`/g, '')])] : []),
-    ...rows,
-    ...(f.saved.length ? [] : [el('Text', { dimColor: true }, [x.noPrompts.replace(/`/g, '')])]),
-    el('Box', { marginTop: 1 }, [el('Text', { dimColor: true }, [x.footTree])]),
-  ])
 }
 
 // ---- Warteschlange (Ausbau 0.24.0; Entscheidung Fynn 2026-11-08: Variante B „durchlassen mit Hinweis“). Schreibt der Nutzer, während
@@ -3411,24 +3170,12 @@ function catalogTree($: EngineInterface, e: Parameters<EngineInterface['ui']['re
   ])
 }
 
-/** Knopf „Danach“ geklickt (Fynn 2026-11-08): die nächste eigene Nachricht dieser Runde gilt als „danach“; verfällt mit der Runde. */
-let laterArmed = false
-
-/** Knopf „Danach“ (Ausbau 0.24.0): nur während einer Runde, auf Begleiter, mit `queue` und (0.27.0) `laterButton` an; `armed` nach einem Klick. */
-function laterNow(): 'on' | 'armed' | null {
-  return turnRunning && laterAllowed(btnFacts()) ? (laterArmed ? 'armed' : 'on') : null
-}
-
-/** Klick auf „Danach“: an oder zurück; nur während einer Runde (der Knopf steht nur dann da). */
-function pressLater($: EngineInterface) {
-  if (!turnRunning) return
-  laterArmed = !laterArmed
-  pushBtns($)
-  // 0.24.2: zusätzlich sofort neu zeichnen, wie die Desktop-Probe (`btn-probe`, 22 Klicks umgeschaltet); aus `onPress` erlaubt
+/** `prompt-deck.later` (Ausbau 0.29.0): Zeitpunkt des Klicks auf „Danach“, null ohne Markierung, ohne prompt-deck oder bei einem Fehler. */
+async function armedLater($: EngineInterface): Promise<number | null> {
   try {
-    $.ui.invalidate('ui.render')
+    return deckLaterAt((await $.state.get({ plugin: 'prompt-deck', key: 'later' })).value)
   } catch {
-    // das Abo von `sidekick.prompts` zeichnet ohnehin neu
+    return null
   }
 }
 
@@ -3436,7 +3183,8 @@ function pressLater($: EngineInterface) {
  * Urteil in `prompt.submit` (Verhalten 1): `later` = die Nachricht ist ein späterer Punkt; `text` = die Nachricht ohne Präfix
  * „danach:“/„later:“, wenn sie eins hatte. Nur unter E1: vom Nutzer getippt, Stufe Begleiter, Einstellung `queue` an, nicht `-p`;
  * der Hinweis nur während einer Runde (`turnId`) und nicht bei `wait` (ctrl+x enter gehört Claude Codes eigener Warteschlange).
- * Vorrang: Knopf „Danach“, dann Präfix, dann Regeln und Haiku. Die graue Zeile hängt an der nächsten eigenen Zeile (`pending`).
+ * Vorrang: Knopf „Danach“ (seit 0.29.0 von prompt-deck), dann Präfix, dann Regeln und Haiku. Die graue Zeile hängt an der nächsten
+ * eigenen Zeile (`pending`).
  */
 async function queueJudge($: EngineInterface, e: { text: string; turnId?: string; wait: boolean; origin: { kind: string }; attachments?: readonly unknown[] }, signal: AbortSignal): Promise<{ later: boolean; text?: string }> {
   if (e.origin.kind === 'plugin') return { later: false }
@@ -3451,9 +3199,12 @@ async function queueJudge($: EngineInterface, e: { text: string; turnId?: string
   let grund = t().q.ruleReason
   // Delta-Review K1: eine leere Nachricht oder ein Slash-Befehl verbraucht die Markierung nicht und bekommt keinen Hinweis
   if (!text.trim() || text.trim().startsWith('/')) return { later: false, ...out }
-  if (laterArmed) {
-    laterArmed = false
-    pushBtns($)
+  // Knopf „Danach“ von prompt-deck (Ausbau 0.29.0, Verhalten 5): gilt, wenn er in dieser Runde geklickt und noch nicht verbraucht ist.
+  // Verbraucht: `laterUsed` in `sidekick.status`, daraufhin löscht prompt-deck die Markierung und zeigt wieder „Danach“
+  const mark = await armedLater($)
+  if (mark !== null && mark >= turnStartAt && mark !== laterUsed) {
+    laterUsed = mark
+    pushStatus($)
     grund = t().q.buttonReason
   } else if (pre) {
     grund = t().q.prefixReason
@@ -3505,6 +3256,8 @@ async function queueCommand($: EngineInterface, rest: string): Promise<string> {
   if (on === want) return x.already(want)
   const w = await writeCfg($, { queue: want })
   if (!w.ok) return writeNote(w, lang())
+  // `sidekick.status.later` folgt dem Schalter (0.29.0): prompt-deck zeigt „Danach“ nur damit
+  pushStatus($)
   return [x.set(want), writeNote(w, lang())].filter(Boolean).join('\n')
 }
 
@@ -3557,9 +3310,18 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       // ohne Takt kippt `cold` erst mit dem nächsten Schreiben der Anzeige
     }
     housekeeping($).catch(() => {})
+    // Umzug der gespeicherten Prompts nach prompt-deck (Ausbau 0.29.0, Verhalten 6): nie im Hook, auf den der Start wartet
+    // (`$.command.run` lehnt dort ab, types@2.1.325:3313-3325), sondern danach über einen einmaligen Timer
+    try {
+      later($, MOVE_DELAY_MS, () => {
+        movePrompts($).catch(() => {})
+      })
+    } catch {
+      // nächster Start
+    }
     // Befehle zuletzt, jeder für sich (CLAUDE.md, Registrieren in session.start); englisch
     for (const c of [
-      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|save <name> [text]|prompts [name]|forget <name>|language|help]' },
+      { name: 'sidekick', description: t().cmdSidekick, argumentHint: '[off|cache|guide|on|status|threshold 80k|big 150k|skills on|off|ttl 5|60|auto|hints …|notes on|off|forget|tips …|loop on|off|queue on|off|catalog …|language|help]' },
       { name: 'savings', description: t().cmdSavings, argumentHint: '[detail] [today|week|all|help]' },
       // Ausbau 0.22.0 (von limit-bars übernommen). Hat noch ein anderes Plugin `/handoff`, lehnt die Engine das zweite ab (Probe 2026-11-07)
       { name: 'handoff', description: t().ho.cmd, argumentHint: '[show|continue|fork|text|help]' },
@@ -3569,15 +3331,6 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       } catch {
         // ohne diesen Befehl
       }
-    }
-    // Gespeicherte Prompts (Nachtrag 0.21.0): der Befehl /p mit den Namen als Hinweis, danach die Knopfliste
-    try {
-      await loadSaved($)
-      await registerPrompts($)
-      promptsLast = undefined
-      pushBtns($)
-    } catch {
-      // ohne gespeicherte Prompts
     }
     return next(e)
   })
@@ -3607,16 +3360,14 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     }
     let startedAt = 0
     let want = ''
-    // Gespeicherte Prompts: ein Knopf während einer Antwort sagt „kommt danach“ (Nachtrag 0.21.0)
+    // Eine Runde läuft (für /handoff und den Danach-Knopf); der erste Schritt nach turn.complete beginnt sie
+    const first = !turnRunning
     turnRunning = true
-    // Warteschlange (Ausbau 0.24.0): Knopf „Danach“ während der Runde; `pushBtns` schreibt nur bei Änderung
-    try {
-      pushBtns($)
-    } catch {
-      // Beiwerk
-    }
     try {
       startedAt = await $.clock.now()
+      // Danach-Knopf von prompt-deck (Ausbau 0.29.0, Verhalten 5): Rundenstart merken, dann `sidekick.status.later` (nur bei Änderung)
+      if (first) turnStartAt = startedAt
+      pushStatus($)
       // Modell-Tipp angenommen: jede Hauptanfrage dieses Chats auf das Ziel (S1 (ii), types:14677-14700 `model` umschreibbar)
       await bindSession($)
       want = tipModel($, e.model, startedAt)
@@ -3671,10 +3422,9 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       } catch {
         // Beiwerk
       }
-      // Warteschlange (Ausbau 0.24.0): eine Markierung per Knopf verfällt mit der Runde, der Knopf verschwindet
-      laterArmed = false
+      // Danach-Knopf (Ausbau 0.29.0): `sidekick.status.later` fällt weg; prompt-deck nimmt Knopf und Markierung daraufhin zurück
       try {
-        pushBtns($)
+        pushStatus($)
       } catch {
         // Beiwerk
       }
@@ -4200,7 +3950,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       // Andere Oberflächen: nur Text (Farbe und Rahmen sind dort nicht belegt)
       if (e.surface !== 'terminal' && e.surface !== 'desktop') {
         // Ohne Knöpfe: das Angebot mit dem Befehl, der dasselbe tut
-        if (hit.offer && !hit.offerDone) return next({ ...e, props: { ...e.props, text: `${e.props.text}\n\n· sidekick: ${hit.line} /sidekick save ${hit.offer.name} ${hit.offer.text}` } })
+        if (hit.offer && !hit.offerDone) return next({ ...e, props: { ...e.props, text: `${e.props.text}\n\n· sidekick: ${hit.line} /deck save ${hit.offer.name} ${hit.offer.text}` } })
         const sent = hit.sent ? t().sentPlain(hit.sent) : ''
         const why = hit.wid && hit.why ? `\n\n${hit.why}` : ''
         return next({ ...e, props: { ...e.props, text: `${e.props.text}\n\n· sidekick: ${hit.line}${sent}${why}` } })
@@ -4278,8 +4028,9 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
 
   // Während „Neuer Chat“ läuft: kleine blaue Box über dem Prompt (sonst nichts Sichtbares, während das Modell
   // die Übergabe schreibt). Seit 0.13.0 außerdem „Gut zu wissen“: der Hinweis auf derselben Ebene; die Übergabe-Box hat Vorrang.
-  // Band 2 (0.26.0, ab Claude Code 2.1.323): sidekick zeichnet nur seine eigene Zeile `layer:50:sidekick` (en/interface.md:200-204,
-  // docs/BAND.md); nichts zu zeigen heißt `next(e)` = keine Zeile. Das Band ordnet der AbovePromptList-Hook unten (band.ts).
+  // Band 2 (0.26.0, ab Claude Code 2.1.323): sidekick zeichnet nur seine eigene Zeile (en/interface.md:200-204, docs/BAND.md); nichts
+  // zu zeigen heißt `next(e)` = keine Zeile. Das Band ordnet der AbovePromptList-Hook unten (band.ts). Seit 0.29.0 wieder die oberste
+  // Ebene `layer:50:sidekick` mit blauem Streifen im Desktop (0.28.1 stand sie als Fuß unten); die Knöpfe zeichnet prompt-deck.
   // quick-replies blendet sich während der Übergabe selbst aus (`sidekick.status.handoff`), sidekick filtert nichts mehr heraus.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if ((e.surface !== 'terminal' && e.surface !== 'desktop') || e.props.hasSurvey) return next(e)
@@ -4294,18 +4045,9 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
         note = null
       }
     }
-    // Gespeicherte Prompts, Rückfall (Nachtrag 0.21.0): eine Knopfzeile ganz unten in sidekicks Ebene, nur wenn es Knöpfe gibt
-    let btns: RenderNode[] = []
-    if (BUTTON_PLACE === 'band' && !step)
-      try {
-        btns = await promptButtons($, e)
-      } catch {
-        btns = []
-      }
     // Vorschlag kurz vor Ablauf (Ausbau 0.22.0): steht, bis er ausgeblendet wird; kein eigenes Neuzeichnen im Takt
     const s = step ? null : sug
-    if (!step && !note && !s && !btns.length) return next(e)
-    const btnRow = btns.length ? el('Box', { key: 'sidekick-prompts', flexDirection: 'row', columnGap: 1, flexWrap: 'wrap' }, btns) : null
+    if (!step && !note && !s) return next(e)
     if (!step) {
       try {
         const ui = $.ui.resolve(e)
@@ -4316,12 +4058,10 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
           // (docs/raw/en/reference.md:320), etwa die Antwort „2“ auf „Variante 1 oder 2?“ (Review 0.13.0 K1). Und nur ohne Pille von
           // quick-replies (BAND-SPEC-2 §5): gleiche Ziffern in zwei Zeilen lösen nichts aus (Probe §5)
           const digits = e.props.isWorking && !(await qrShown($))
-          views.push(noteView(n, e.props.bodyColumns, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a)))
+          views.push(noteView(n, e.props.bodyColumns, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a), noteOpen.has(n.shownAt)))
         }
         if (s) views.push(suggestView(s, e.props.bodyColumns, e.surface, (p) => ui.Button(p) as RenderNode, (a) => void pressSuggest($, a)))
-        if (btnRow) views.push(btnRow)
-        const content = views.length === 1 ? (views[0] as RenderElement) : el('Box', { flexDirection: 'column' }, views)
-        return sidekickLayer(content, e.surface)
+        return sidekickLayer(views, e.surface)
       } catch {
         return next(e)
       }
@@ -4329,13 +4069,13 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     try {
       const secs = Math.max(0, Math.round(((await $.clock.now()) - step.since) / 1000))
       // Eine Leerzeile Abstand unter der Box (wirkt sauberer; marginBottom wie unter der Hinweis-Zeile). Im Desktop nicht: Dort steht
-      // der blaue Streifen 8 px darunter wie die orange Linie unter der Spotify-Leiste; mit Leerzeile hinge er ab (Nachtrag 0.15.2)
+      // der blaue Streifen darunter wie die orange Linie unter der Spotify-Leiste; mit Leerzeile hinge er ab (Nachtrag 0.15.2)
       const gap: Record<string, number> = e.surface === 'desktop' ? {} : { marginBottom: 1 }
       const box = el('Box', { key: 'sidekick-busy', flexShrink: 0, borderStyle: 'round', borderColor: ACCENT, paddingX: 1, ...gap }, [
         el('Text', { color: ACCENT }, [`sidekick ${{ fork: t().ho.busyFork, text: t().ho.busyText, plain: t().busyPlain, clear: t().busyClear }[step.step]} … ${secs} s`]),
       ])
       // Oberste Ebene (layer:50); quick-replies liest `sidekick.status.handoff` und zeichnet während der Übergabe keine Zeile
-      return sidekickLayer(box, e.surface)
+      return sidekickLayer([box], e.surface)
     } catch {
       return next(e)
     }
@@ -4355,14 +4095,13 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     if (/^notes\b/i.test(args)) return { text: await notesCommand($, args.slice(5)) }
     if (/^tips\b/i.test(args)) return { text: await tipsCommand($, args.slice(4)) }
     if (/^loop\b/i.test(args)) return { text: await loopCommand($, args.slice(4)) }
-    // Gespeicherte Prompts (Nachtrag 0.21.0)
-    if (/^(save|prompts|forget)(\s|$)/i.test(args)) return { text: await promptsCommand($, args, () => $.session.messages()) }
+    // Gespeicherte Prompts und Knöpfe (Nachtrag 0.21.0, Ausbau 0.27.0): seit 0.29.0 in prompt-deck, eine Version lang ein Verweis
+    const moved = /^(save|prompts|forget|buttons)(\s|$)/i.exec(args)
+    if (moved) return { text: await movedCommand($, moved[1]!) }
     // Warteschlange (Ausbau 0.24.0)
     if (/^queue(\s|$)/i.test(args)) return { text: await queueCommand($, args.slice(5)) }
     // Skill-Katalog (Ausbau 0.25.0)
     if (/^catalog(\s|$)/i.test(args)) return { text: await catalogCommand($, args.slice(7)) }
-    // Fußzeilen-Knöpfe (Ausbau 0.27.0)
-    if (/^buttons(\s|$)/i.test(args)) return { text: await buttonsCommand($, args.slice(7)) }
     // Laufzeitwerte frisch laden: eine andere Session kann sie geändert haben
     await loadSettings($)
     let note = ''
@@ -4421,16 +4160,9 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       const tipText = s.level !== 'off' && typeof s.tip === 'string' && s.tip ? ` → ${s.tip}` : ''
       const word = el('Text', { dimColor: true }, [s.level === 'off' ? x.modeOffWord : `sidekick · ${x.level[s.level]}${tipText}`])
       const mine = el('Box', { key: 'sidekick-mode', flexDirection: 'row', columnGap: 1, flexShrink: 0 }, [dot, word])
-      // Gespeicherte Prompts (Nachtrag 0.21.0, 0.21.3): Knöpfe links vor dem ●-Label; ein Fehler kostet nur die Knöpfe
-      let btns: RenderNode[] = []
-      if (BUTTON_PLACE === 'footer')
-        try {
-          btns = await promptButtons($, e)
-        } catch {
-          btns = []
-        }
-      const btnBox = btns.length ? [el('Box', { key: 'sidekick-prompts', flexDirection: 'row', columnGap: 1, flexShrink: 0 }, btns)] : []
-      return el('Box', { flexDirection: 'row', columnGap: 2 }, theirs ? [...btnBox, mine, theirs] : [...btnBox, mine])
+      // Seit 0.28.1 nur Label und Engine-Anteil (E3): Neben Knöpfen wurde das Label im festen Block der Fußzeile gekürzt und fiel ganz
+      // weg (Nachtrag 0.21.2/0.21.3, Fynn 2026-11-17). Seit 0.29.0 zeichnet die Knöpfe prompt-deck über limit-bars (`layer:10`)
+      return el('Box', { flexDirection: 'row', columnGap: 2 }, theirs ? [mine, theirs] : [mine])
     }
     const tipText = s.level !== 'off' && typeof s.tip === 'string' && s.tip ? ` → ${s.tip}` : ''
     const label = s.level === 'off' ? x.modeOff : x.modeOn(s.busy ? '🟠' : '🟢', x.level[s.level]) + tipText
@@ -4473,16 +4205,7 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
     return { text: x.starting }
   })
 
-  // Gespeicherte Prompts senden (Nachtrag 0.21.0): `/p <name>`, ein fester Befehl (Fynn 2026-11-06). Ein Hook ohne Filter oder mit Muster
-  // stellte jede Ausgabe anderer Plugin-Befehle unter sidekicks Namen (Smoke-Tests 2026-11-06). Ohne Namen: die Liste der Namen.
-  on('command.run', { command: 'p' }, async ($, e) => {
-    // Nur auf Fynns eigenen Befehl: ruft ein anderes Plugin `/p` über $.command.run, sendet sidekick nicht als seine Worte (Review 0.21.0 K3;
-    // origin `{ kind: 'plugin', name }`, types@2.1.319:1840-1846)
-    if (e.origin.kind === 'plugin') return { text: t().pr.notByPlugin }
-    const name = normName(e.args.trim().split(/\s+/)[0] ?? '')
-    if (!name) return { text: t().pr.pUsage((await loadSaved($)).map((s) => s.name)) }
-    return { text: await runPrompt($, name, 'cmd') }
-  })
+  // `/p <name>` sendet seit 0.29.0 prompt-deck (ein Name kann nur einmal angemeldet werden, sidekick gibt ihn im selben Merge ab)
 
   on('command.run', { command: 'savings' }, async ($, e) => {
     // Nebenbefehl: keine eigene Tabelle, nur der Verweis (HELP-SPEC §2)
@@ -4522,17 +4245,6 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
   // Status, Fehlermeldungen und andere Oberflächen: Markdown der Engine.
   on('ui.render', { component: 'CommandOutput', props: { command: 'sidekick' } }, async ($, e, next) => {
     if (e.props.isErrored || (e.surface !== 'terminal' && e.surface !== 'desktop')) return next(e)
-    // `/sidekick prompts` ohne Namen (Nachtrag 0.21.0): Tabelle mit Knöpfen je Zeile; die Markdown-Fassung nennt dieselben Befehle
-    if (/^prompts\s*$/i.test(String(e.props.args ?? '').trim())) {
-      const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
-      const snap = tag ? promptLists.get(tag) : undefined
-      if (!snap) return next(e)
-      try {
-        return promptsTree($, e, snap)
-      } catch {
-        return next(e)
-      }
-    }
     // `/sidekick catalog` (Ausbau 0.25.0): Liste mit Knöpfen; die Markdown-Fassung nennt dieselben Befehle
     if (/^catalog\s*$/i.test(String(e.props.args ?? '').trim())) {
       const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
@@ -4540,16 +4252,6 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
       if (!snap) return next(e)
       try {
         return catalogTree($, e, snap)
-      } catch {
-        return next(e)
-      }
-    }
-    // `/sidekick buttons` (Ausbau 0.27.0): Tabelle mit An/Aus je Zeile; die Markdown-Fassung nennt dieselben Befehle
-    if (/^buttons(\s+status)?$/i.test(String(e.props.args ?? '').trim())) {
-      const tag = /#[0-9a-z]{5,}/.exec(e.props.text.split('\n')[0] ?? '')?.[0]
-      if (!tag || !btnLists.has(tag)) return next(e)
-      try {
-        return buttonsTree($, e)
       } catch {
         return next(e)
       }

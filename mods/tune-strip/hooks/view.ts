@@ -33,7 +33,10 @@ const INFO_H = 32
 export const HORIZON_S = 3600
 const CHAR_PX = 7.2 // Breite eines Zeichens der Mono-Schrift bei 12 px, großzügig gerechnet
 const SEP_W = 2400 // die Trennlinie ist breiter als jedes Fenster; ihre Box schneidet sie ab
-const SEP_H = 26
+// 0.12.3: 14 statt 26 px. Mit 26 px belegte die Linie im Desktop zwei Zeilen des Bands (Fynns Bild 2026-11-17: ≈ 30 px leer bis
+// limit-bars, im Bild selbst nur 16 px); mit quick-replies wurde das Band dadurch so hoch, dass es scrollte. Eine Zeile ist im
+// Desktop nach dem Bild ≈ 20 px hoch [UNKLAR, nicht dokumentiert], 14 px passen also in eine
+export const SEP_H = 14
 // Seit Band 2 (0.12.0): Layout-Zahlen (`width`, `columnGap` …) zählen auch im Desktop in Zellen, nur `Svg` in px (docs/BAND-SPEC-2.md §3
 // „Breite“, Probe 7b: ≈ 7,8 px je Zelle). Bis 0.11.x stand die Spalte der kompakten Stufe als `width: 190` da, gemeint waren Pixel.
 const PX_PER_CELL = 7.8
@@ -158,7 +161,7 @@ export function infoSvg(title: string, artist: string, pos: number, end: number,
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${INFO_W}" height="${INFO_H}" viewBox="0 0 ${INFO_W} ${INFO_H}">${head}${segs}${time}</svg>`
 }
 
-/** Orange Trennlinie (2 px) mit 8 px Luft darüber und 16 px darunter. */
+/** Orange Trennlinie (2 px) mit 8 px Luft darüber und 4 px darunter (bis 0.12.2: 16 px darunter). */
 export function sepSvg(): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${SEP_W}" height="${SEP_H}" viewBox="0 0 ${SEP_W} ${SEP_H}"><rect y="8" width="${SEP_W}" height="2" fill="${ORANGE}" opacity="0.85"/></svg>`
 }

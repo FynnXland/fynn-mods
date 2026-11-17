@@ -4,7 +4,7 @@ After Claude answers, Claude Code often suggests your next message itself (the g
 
 Texts are English by default; set `language` to `de` for German.
 
-Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.8.2**
+Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.8.5**
 
 ## Display
 
@@ -17,8 +17,8 @@ Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin 
 - **Labels** are at most 40 characters, shortened with `…`. That only affects Claude Code's own suggestion, which is shown in full as grey text in the prompt and is sent in full.
 - **The pill only shows** when a turn has finished since your last message, at least one suggestion exists, the prompt is empty and the mod is on. It disappears while Claude is working, while you type, during a survey in the band, while a subagent transcript is open, and after `/clear` until the next answer. Without a pill the band keeps its height; quick-replies never moves Clawd or the bars.
 - **Stability:** if suggestions are already shown and you typed or clicked within the last 2 s, newly arriving suggestions wait until 2 s of quiet. If nothing is shown yet, a new suggestion appears at once.
-- While sidekick starts a new chat (its handoff box in the band), the pill is hidden. sidekick's other rows (its prompt buttons, tips) stay above the pill. While the band is collapsed (ctrl+x ctrl+a) there is no pill either, and a digit stays a digit.
-- **One band (since 0.8.0):** since Claude Code 2.1.323 each mod draws its own row. quick-replies draws the pill as its own row and carries a small `AbovePromptList` hook, the same in every band mod from fynn-mods, that puts the rows back into one band. From top to bottom: sidekick, tune-strip's bar as its own row, the pill, then one row with limit-bars on the left and Clawd on the right.
+- While sidekick starts a new chat (its handoff box in the band), the pill is hidden. sidekick's other content (its notes and suggestions) stays in its own row on top of the band (sidekick 0.29.0 or later; in 0.28.1 it was at the bottom). While the band is collapsed (ctrl+x ctrl+a) there is no pill either, and a digit stays a digit.
+- **One band (since 0.8.0):** since Claude Code 2.1.323 each mod draws its own row. quick-replies draws the pill as its own row and carries a small `AbovePromptList` hook, the same in every band mod from fynn-mods, that puts the rows back into one band. From top to bottom: sidekick's row (0.29.0 or later), tune-strip's bar as its own row, the pill, prompt-deck's button row right above the base row, then one row with limit-bars on the left and Clawd on the right.
 
 **Runs in:** terminal and the desktop Code tab. In `claude -p`, the Agent SDK, VS Code and mobile it draws nothing and makes no model calls.
 
@@ -46,7 +46,7 @@ The fork only runs after a normal answer of at least 40 characters, not for suba
 | `/replies` or `/replies status` | On/off, `more` on/off, the current suggestions with their source, fork state, the fork calls in this chat with their estimated cost, how often Claude Code supplied a suggestion in this session, surface, band width and layout |
 | `/replies on` · `/replies off` | Turn the suggestions on or off (setting `enabled`) |
 | `/replies more on` · `/replies more off` | Turn the extra fork suggestions on or off (setting `more`) |
-| `/replies language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tint, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.6.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
+| `/replies language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, prompt-deck, quick-replies, sidekick, tint, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes. In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.6.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/replies help` | Help as a table: all commands, how to send a suggestion (click, key, lone digit), the current state of the suggestions and the fork, and your settings with their values, plus how to change them and how to turn the mod off. Also `/replies ?` |
 
 **Help:** `/replies help` draws a table in the terminal and the desktop app (accent violet, the theme's auto-accept color, so it adapts to light and dark), with the state as of the moment you ran it; run it again to see a change. Everywhere else (`claude -p`, the Agent SDK, VS Code, mobile) you get a short Markdown version, which is also what Claude reads. Unknown arguments answer with the usage line and a pointer to `/replies help`.
@@ -136,12 +136,15 @@ claude --plugin-dir <path-to-clone>/mods/quick-replies
 - **Messages starting with a digit:** while the pill shows, a message cannot start with a digit from `1` to the number of suggestions; typing it sends the suggestion instead. This also applies to the same digit repeated, whether a held key repeats it or `11` is pasted. A digit after other text, a higher digit, or a digit pasted together with other characters (`12`) stays normal text. Likewise, a message that is only such a digit (or repeated digit) is sent as the suggestion, not as the digit; this also applies when Claude offered numbered options in its answer. Write `1.` or `option 1` to send the number itself.
 - **Same digit right after sending:** after a digit has sent a suggestion, the same digit is ignored as the first character of the prompt until about 1.2 s after its last repeat, so a held key does not fill the prompt. The delay is chosen for the longest key-repeat delay Windows offers (1 s); with a longer delay on another system, a repeat may still land in the prompt.
 - **Older Claude Code:** 0.8.0 needs Claude Code 2.1.323 or later, where each mod draws its own row. On older versions use 0.7.5.
-- **Band mods from fynn-mods on older versions:** the band only looks like one band again when the other band mods (clawd-buddy, limit-bars, sidekick, tune-strip) are on their Band 2 versions too; an older one draws its own stacked row. Rows of other mods that do not use the shared keys stay in the band, between the pill and the bottom row.
+- **Band mods from fynn-mods on older versions:** the band only looks like one band again when the other band mods (clawd-buddy, limit-bars, prompt-deck, sidekick, tune-strip) are on their Band 2 versions too; an older one draws its own stacked row. Rows of other mods that do not use the shared keys stay in the band, below prompt-deck's row and above the base row.
 - **Haiku 5.5 above 100k tokens:** Haiku 5.5 costs five times as much when a request has more than 100,000 prompt tokens. The fork reports only the sum over its requests, so the cost line always uses the lower price. Each fork request carries the whole chat, so in a Haiku 5.5 chat whose context is over 100,000 tokens the estimate is about five times too low.
 - **Hover flicker in the desktop app:** next to animated mods in the band (e.g. clawd-buddy's Clawd), the buttons can flicker under the mouse. Clicks still work.
 
 ## Changes
 
+- **0.8.5**: band.ts: prompt-deck as level 10 above the base row, sidekick back on top (level 50); language switch also covers prompt-deck. Update the band mods together (clawd-buddy 0.16.3, limit-bars 0.17.4, quick-replies 0.8.5, tune-strip 0.12.4, sidekick 0.29.0, prompt-deck 0.1.0). No other change.
+- **0.8.4**: desktop app: the grey hover area of a suggestion no longer reaches into the row above it (seen with 3 or 4 suggestions in the 2 × 2 layout). The pill now has a small gap between its rows in both layouts (`rowGap: 'sm'`). The terminal draws no gap and is unchanged.
+- **0.8.3**: shared band code learned the bottom row `foot`, so sidekick 0.28.1 can stand under the band row, right above the prompt. Update the band mods together (clawd-buddy 0.16.2, limit-bars 0.17.3, quick-replies 0.8.3, tune-strip 0.12.2, sidekick 0.28.1). No other change.
 - **0.8.2**: README: order of the band rows. No other change.
 
 ## Credits

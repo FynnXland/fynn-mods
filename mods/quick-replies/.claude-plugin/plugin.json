@@ -1,6 +1,6 @@
 {
   "name": "quick-replies",
-  "version": "0.8.2",
+  "version": "0.8.5",
   "description": "Turns Claude Code's suggested next message into a button above the prompt. Click it or type 1 to send it.",
   "author": {
     "name": "Fynn Hansen"

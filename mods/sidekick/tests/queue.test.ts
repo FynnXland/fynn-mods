@@ -174,7 +174,8 @@ deTest('Hilfe: /sidekick queue und on|off, Funktion und Einstellung Warteschlang
 
 type Verdict = string | Error | 'timeout'
 
-function world(on: On, o: { surfaces?: string[]; host?: boolean; read?: 'stale' | 'throw' } = {}) {
+// `deckThrows` (0.29.0): das Lesen von `prompt-deck.*` wirft (prompt-deck fehlt nicht nur, der Host lehnt ab)
+function world(on: On, o: { surfaces?: string[]; host?: boolean; deckThrows?: boolean } = {}) {
   const clock = mock.clock(on, { now: NOW })
   // Delta-Review 0.24.0 K4: Prüf-Prompts und Neuzeichnen mitschreiben
   const checks: string[] = []
@@ -221,11 +222,14 @@ function world(on: On, o: { surfaces?: string[]; host?: boolean; read?: 'stale' 
   })
   const stateVals = new Map<string, unknown>()
   const stateSets: { key: string; value: unknown }[] = []
+  // Werte von prompt-deck (0.29.0): `later` = Knopf „Danach“ geklickt, `saved` = Namen und Wortmengen
+  const deckState = new Map<string, unknown>()
   if (!o.host) {
-    // `read` (Patch 0.25.1): das Lesen in der Zeichnung liefert einen Stand ohne „Danach“ oder wirft
     on('state.get', ($: unknown, e: any) => {
-      if (o.read === 'throw') throw new Error('state.get')
-      if (o.read === 'stale' && e.key === 'prompts') return { value: { value: { buttons: [] }, version: 1 } }
+      if (e.plugin === 'prompt-deck') {
+        if (o.deckThrows) throw new Error('state.get')
+        return { value: { value: deckState.get(e.key), version: 1 } }
+      }
       return { value: { value: e.plugin === 'sidekick' ? stateVals.get(e.key) : undefined, version: 1 } }
     })
     on('state.set', ($: unknown, e: any) => {
@@ -271,6 +275,7 @@ function world(on: On, o: { surfaces?: string[]; host?: boolean; read?: 'stale' 
     cli,
     stateVals,
     stateSets,
+    deckState,
     setMessages: (m: unknown[]) => (msgs = m),
     setSurfaces: (s: string[]) => (surfaces = s),
     setVerdict: (v: Verdict) => (verdict = v),
@@ -418,9 +423,6 @@ deTest('Präfix: „danach:“/„later:“ am Anfang (nach dem Vorspann) wird e
   expect(laterPrefix('danach:   ')).toBe(null)
   expect(laterPrefix('Danach bitte die README')).toBe(null)
   expect(laterPrefix('mach das danach: README')).toBe(null)
-  expect(T.de.q.btn(false)).toBe('Danach')
-  expect(T.de.q.btn(true)).toBe('Danach ✓')
-  expect(T.en.q.btn(true)).toBe('Later ✓')
 })
 
 deTest('Präfix während der Runde: entfernt, Hinweis an Claude, Zeile „mit danach:“, kein Haiku, auch vor einer Korrektur', async ($, on) => {
@@ -446,8 +448,11 @@ deTest('Präfix bei queue aus: bleibt stehen, kein Hinweis', { queue: false }, a
   expect(hasNote(r)).toBe(false)
 })
 
-async function footer($: Engine, surface: 'desktop' | 'terminal') {
-  return $.ui.mount({ plugin: 'sidekick', component: 'SessionMode', requestId: `mode-${surface}`, surface, props: { modes: [] } } as never)
+// ---------- Ausbau 0.29.0: Knopf „Danach“ von prompt-deck (Absprache über `$.state`) ----------
+
+/** Das Band (AbovePrompt), wie es sidekick zeichnet. */
+async function bandOf($: Engine, surface: 'desktop' | 'terminal') {
+  return $.ui.mount({ plugin: 'sidekick', component: 'AbovePrompt', requestId: `band-${surface}`, surface, props: { hasSurvey: false, isCollapsed: false, isWorking: true, maxRows: 12, bodyColumns: 100, scroll: { offset: 0, bodyRows: 12 }, view: {} } } as never)
 }
 async function stepOn($: Engine, turnId = 't1') {
   const s = $.turn.step({ turnId, index: 0, model: 'claude-opus-5-5', messageCount: 3 } as never)
@@ -455,154 +460,183 @@ async function stepOn($: Engine, turnId = 't1') {
   while (r.done !== true) r = await s.next()
 }
 const endTurn = ($: Engine, turnId = 't1') => $.turn.complete({ turnId, answer: 'fertig', reason: 'answer', durationMs: 10, isAborted: false, usage: null } as never)
+type St = { later?: true; laterUsed?: number } | undefined
+const status = (w: ReturnType<typeof world>) => w.stateVals.get('status') as St
 
-deTest('Knopf „Danach“: nur während der Runde im Desktop; Klick → „Danach ✓“, nächste Nachricht ohne Haiku mit Hinweis; einmal, dann wieder offen', async ($, on) => {
+deTest('0.29.0 sidekick.status.later: an während der Runde, weg nach der Runde; nur bei Änderung geschrieben', async ($, on) => {
   const w = world(on)
   await start($)
-  const idle = await footer($, 'desktop')
-  expect(await idle.find({ key: 'sidekick-later' })).toBeUndefined()
-  await idle.unmount()
+  expect(status(w)?.later).toBeUndefined()
   await stepOn($)
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'on' })
-  const ui = await footer($, 'desktop')
-  expect(JSON.stringify(await ui.find({ key: 'sidekick-later' }))).toContain('"Danach"')
-  // links vor dem ●-Label
-  const all = JSON.stringify(await ui.find({ type: 'Box' }))
-  expect(all.indexOf('sidekick-later')).toBeLessThan(all.indexOf('sidekick-mode'))
-  await ui.press({ key: 'sidekick-later' })
+  expect(status(w)?.later).toBe(true)
+  const n = w.stateSets.filter((x) => x.key === 'status').length
+  // ein weiterer Schritt derselben Runde schreibt nichts Neues
+  await stepOn($)
+  expect(w.stateSets.filter((x) => x.key === 'status').length).toBe(n)
+  await endTurn($)
   await flush()
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'armed' })
-  await ui.unmount()
-  const armed = await footer($, 'desktop')
-  expect(JSON.stringify(await armed.find({ key: 'sidekick-later' }))).toContain('Danach ✓')
-  await armed.unmount()
-  // die nächste Nachricht: sicher „danach“, ohne Haiku (das Haiku-Urteil wäre „jetzt“)
+  expect(status(w)?.later).toBeUndefined()
+})
+
+for (const [name, cfg] of [
+  ['Stufe Cache', { level: 'cache' }],
+  ['queue aus', { queue: false }],
+] as const)
+  deTest(`0.29.0 sidekick.status.later fehlt bei ${name}, auch während der Runde`, cfg, async ($, on) => {
+    const w = world(on)
+    await start($)
+    await stepOn($)
+    expect(status(w)?.later).toBeUndefined()
+  })
+
+deTest('0.29.0 sidekick.status.later folgt /sidekick queue off|on und der Stufe während der Runde', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await stepOn($)
+  expect(status(w)?.later).toBe(true)
+  await run($, 'queue off')
+  expect(status(w)?.later).toBeUndefined()
+  await run($, 'queue on')
+  expect(status(w)?.later).toBe(true)
+  await run($, 'cache')
+  expect(status(w)?.later).toBeUndefined()
+  await run($, 'guide')
+  expect(status(w)?.later).toBe(true)
+})
+
+deTest('0.29.0 prompt-deck.later in dieser Runde: nächste Nachricht ohne Haiku als „danach“, laterUsed geschrieben; danach urteilt Haiku wieder', async ($, on) => {
+  const w = world(on)
+  await start($)
+  await stepOn($)
+  w.deckState.set('later', { armed: true, at: NOW + 5 })
   const r = await during($, MID)
   expect(hasNote(r)).toBe(true)
   expect(w.queueCalls.length).toBe(0)
   expect(await lineUnder($, MID, 'k1')).toContain('kommt nach dieser Aufgabe · per Knopf „Danach“')
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'on' })
-  // die übernächste urteilt wieder selbst
+  expect(status(w)?.laterUsed).toBe(NOW + 5)
+  // dieselbe Markierung steht noch (prompt-deck löscht sie erst nach dem Lesen von laterUsed): verbraucht, gilt nicht noch einmal
   expect(hasNote(await during($, MID))).toBe(false)
   expect(w.queueCalls.length).toBe(1)
-  // Terminal: kein Knopf
-  const term = await footer($, 'terminal')
-  expect(await term.find({ key: 'sidekick-later' })).toBeUndefined()
-  await term.unmount()
+  // ein neuer Klick in derselben Runde gilt wieder
+  w.deckState.set('later', { armed: true, at: NOW + 9 })
+  expect(hasNote(await during($, MID))).toBe(true)
+  expect(status(w)?.laterUsed).toBe(NOW + 9)
 })
 
-deTest('Knopf „Danach“: zweiter Klick nimmt zurück; Ende der Runde löscht Markierung und Knopf', async ($, on) => {
+deTest('0.29.0 prompt-deck.later zu alt (vor dem Rundenstart), ohne armed oder fehlend: zählt nicht', async ($, on) => {
   const w = world(on)
   await start($)
+  await w.clock.advance(10000)
   await stepOn($)
-  const ui = await footer($, 'desktop')
-  await ui.press({ key: 'sidekick-later' })
-  await ui.press({ key: 'sidekick-later' })
-  await flush()
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'on' })
+  w.deckState.set('later', { armed: true, at: NOW + 1000 })
   expect(hasNote(await during($, MID))).toBe(false)
-  await ui.press({ key: 'sidekick-later' })
-  await flush()
-  await ui.unmount()
-  await endTurn($)
-  await flush()
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
-  // neue Runde: die alte Markierung gilt nicht mehr
-  await stepOn($, 't2')
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'on' })
-  expect(hasNote(await during($, MID, { turnId: 't2' }))).toBe(false)
+  w.deckState.set('later', { at: NOW + 20000 })
+  expect(hasNote(await during($, MID))).toBe(false)
+  w.deckState.delete('later')
+  expect(hasNote(await during($, MID))).toBe(false)
+  expect(w.queueCalls.length).toBe(3)
+  expect(status(w)?.laterUsed).toBeUndefined()
 })
 
-// Absicherung des Normalfalls mit dem Test-Host (auch vor 0.25.1 grün, Delta-Review S1); den Desktop-Fehler stellen die Tests mit
-// `read` darunter nach
-deTest('Patch 0.25.1: offene Zeichnung, Klick → „Danach ✓“, Klick zurück → „Danach“, der Knopf bleibt bis zum Ende der Runde', async ($, on) => {
-  world(on, { host: true })
-  await start($)
-  await stepOn($)
-  const ui = await footer($, 'desktop')
-  const label = async () => JSON.stringify((await ui.find({ key: 'sidekick-later' })) ?? null)
-  expect(await label()).toContain('"Danach"')
-  for (let i = 0; i < 3; i++) {
-    await ui.press({ key: 'sidekick-later' })
-    await flush()
-    expect(await label()).toContain('Danach ✓')
-    await ui.press({ key: 'sidekick-later' })
-    await flush()
-    const back = await label()
-    expect(back).toContain('"Danach"')
-    expect(back).not.toContain('✓')
-  }
-  // ein weiterer Schritt derselben Runde lässt ihn stehen
-  await stepOn($)
-  await flush()
-  expect(await label()).toContain('"Danach"')
-  await endTurn($)
-  await flush()
-  expect(await ui.find({ key: 'sidekick-later' })).toBeUndefined()
-  await ui.unmount()
-})
-
-for (const read of ['stale', 'throw'] as const)
-  deTest(`Patch 0.25.1: Lesen in der Zeichnung ${read === 'stale' ? 'ohne „Danach“' : 'wirft'} → Knopf steht trotzdem, Klick und Klick zurück`, async ($, on) => {
-    const w = world(on, { read })
-    await start($)
-    await stepOn($)
-    const label = async () => {
-      const ui = await footer($, 'desktop')
-      const s = JSON.stringify((await ui.find({ key: 'sidekick-later' })) ?? null)
-      await ui.unmount()
-      return s
-    }
-    expect(await label()).toContain('"Danach"')
-    const ui = await footer($, 'desktop')
-    await ui.press({ key: 'sidekick-later' })
-    await flush()
-    await ui.unmount()
-    expect(await label()).toContain('Danach ✓')
-    const ui2 = await footer($, 'desktop')
-    await ui2.press({ key: 'sidekick-later' })
-    await flush()
-    await ui2.unmount()
-    expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'on' })
-    const back = await label()
-    expect(back).toContain('"Danach"')
-    expect(back).not.toContain('✓')
-    await endTurn($)
-    await flush()
-    expect(await label()).toBe('null')
-  })
-
-deTest('Knopf „Danach“: nicht bei queue aus', { queue: false }, async ($, on) => {
+deTest('0.29.0 prompt-deck.later: ein Slash-Befehl oder leerer Text verbraucht die Markierung nicht (Delta-Review K1)', async ($, on) => {
   const w = world(on)
   await start($)
   await stepOn($)
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
-  const ui = await footer($, 'desktop')
-  expect(await ui.find({ key: 'sidekick-later' })).toBeUndefined()
-  await ui.unmount()
-})
-
-deTest('Hilfe: Präfix und Knopf „Danach“', () => {
-  const h = sidekickHelp({ settings: DEFAULT_SETTINGS, ttl: { min: 5, source: 'default' as const }, hints: { on: true, off: [] }, known: 0, now: NOW })
-  expect(h.commands.map((c) => c.cmd)).toContain('danach: <text>')
-  expect(h.controls?.map((c) => c.cmd)).toContain('Danach')
-  expect(T.de.q.state(true, true)).toContain('gilt erst in neuen Chats')
-  expect(T.en.q.state(true, true)).toContain('applies in new chats only')
-})
-
-deTest('Knopf „Danach“: ein Slash-Befehl oder leerer Text verbraucht die Markierung nicht (Delta-Review K1)', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await stepOn($)
-  const ui = await footer($, 'desktop')
-  await ui.press({ key: 'sidekick-later' })
-  await flush()
-  await ui.unmount()
+  w.deckState.set('later', { armed: true, at: NOW })
   expect(hasNote(await during($, '/sidekick queue'))).toBe(false)
   expect(hasNote(await during($, REMINDER))).toBe(false)
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'armed' })
+  expect(status(w)?.laterUsed).toBeUndefined()
   expect(hasNote(await during($, MID))).toBe(true)
   expect(w.queueCalls.length).toBe(0)
+})
+
+deTest('0.29.0 prompt-deck.later bei queue aus: keine Wirkung; Präfix „danach:“ wirkt ohne prompt-deck', { queue: false }, async ($, on) => {
+  const w = world(on)
+  await start($)
+  await stepOn($)
+  w.deckState.set('later', { armed: true, at: NOW })
+  expect(hasNote(await during($, MID))).toBe(false)
+})
+
+deTest('0.29.0 ohne prompt-deck: „danach:“ wirkt weiter; Lesen von prompt-deck.later scheitert → Regeln und Haiku', async ($, on) => {
+  const w = world(on, { deckThrows: true })
+  await start($)
+  await stepOn($)
+  const r = await during($, 'danach: README im Ordner docs anpassen')
+  expect(r.text).toBe('README im Ordner docs anpassen')
+  expect(hasNote(r)).toBe(true)
+  expect(hasNote(await during($, MID))).toBe(false)
+  expect(w.queueCalls.length).toBe(1)
+})
+
+deTest('0.29.0 Band: kein Knopf „Danach“ und keine Knopfzeile in sidekicks Zeile, auch während der Runde (Knöpfe zeichnet prompt-deck)', async ($, on) => {
+  world(on)
+  await start($)
+  await stepOn($)
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await bandOf($, surface)
+    const json = JSON.stringify(await ui.drawn())
+    expect(json).not.toContain('sidekick-later')
+    expect(json).not.toContain('sidekick-prompts')
+    expect(json).not.toContain('layer:50:sidekick')
+    await ui.unmount()
+  }
+})
+
+// Test-Kit-Probe (SPEC 0.29.0, offener Punkt der prompt-deck-SPEC): `$.state.get` auf `prompt-deck.later` aus sidekicks
+// `prompt.submit`, mit dem echten `$.state` des Test-Hosts. prompt-deck ist hier ein Inline-Plugin, das seinen Wert selbst schreibt
+// (wie mods/prompt-deck/hooks/register.ts `writeLater`, aus einem Befehl statt aus `onPress`) und `sidekick.status` zurückmeldet
+// (`peek`): Das `$` des Tests hat kein `$.state`.
+test(
+  '0.29.0 Test-Host: prompt-deck schreibt prompt-deck.later, sidekick liest es in prompt.submit und schreibt laterUsed',
+  {
+    options: { language: 'de' },
+    plugins: [
+      {
+        name: 'prompt-deck',
+        register(on) {
+          on('command.run', { command: 'deck' }, async ($, e) => {
+            if (e.args === 'peek') {
+              const status = (await $.state.get({ plugin: 'sidekick', key: 'status' })).value
+              const later = (await $.state.get({ plugin: 'prompt-deck', key: 'later' })).value
+              return { text: JSON.stringify({ status: status ?? null, later: later ?? null }) }
+            }
+            const at = await $.clock.now()
+            await $.state.set({ plugin: 'prompt-deck', key: 'later' }, e.args === 'off' ? null : { armed: true, at })
+            return { text: `later ${at}` }
+          })
+        },
+      },
+    ],
+  },
+  async ($, on) => {
+    setLang('de')
+    world(on, { host: true })
+    const peek = async () => JSON.parse((await $.command.run({ command: 'deck', args: 'peek', origin: { kind: 'composer' } } as never)).text ?? '{}') as { status: St | null; later: { armed: true; at: number } | null }
+    await start($)
+    await stepOn($)
+    await flush()
+    expect((await peek()).status?.later).toBe(true)
+    await $.command.run({ command: 'deck', args: 'arm', origin: { kind: 'composer' } } as never)
+    const mark = (await peek()).later
+    expect(mark?.armed).toBe(true)
+    const r = await during($, MID)
+    expect(hasNote(r)).toBe(true)
+    await flush()
+    expect((await peek()).status?.laterUsed).toBe(mark?.at)
+    await endTurn($)
+    await flush()
+    expect((await peek()).status?.later).toBeUndefined()
+  },
+)
+
+deTest('Hilfe: Präfix und „Danach (prompt-deck)“', () => {
+  const h = sidekickHelp({ settings: DEFAULT_SETTINGS, ttl: { min: 5, source: 'default' as const }, hints: { on: true, off: [] }, known: 0, now: NOW })
+  expect(h.commands.map((c) => c.cmd)).toContain('danach: <text>')
+  expect(h.controls?.map((c) => c.cmd)).toContain('Danach (prompt-deck)')
+  expect(T.de.q.state(true, true)).toContain('gilt erst in neuen Chats')
+  expect(T.de.q.state(true, true)).toContain('mit prompt-deck der Knopf „Danach“')
+  expect(T.en.q.state(true, true)).toContain('applies in new chats only')
 })
 
 // ---------- Delta-Review 0.24.0 K4 ----------
@@ -639,53 +673,4 @@ deTest('K4: Präfix hinter dem Vorspann der App im Hook-Pfad: Präfix weg, Vorsp
   expect(hasNote(r)).toBe(true)
   expect(w.queueCalls.length).toBe(0)
   expect(await lineUnder($, REMINDER + 'danach: README im Ordner docs anpassen', 'k4')).toContain('mit „danach:“')
-})
-
-// ---------- Ausbau 0.27.0: Schalter `laterButton` ----------
-
-deTest('0.27.0 laterButton aus: kein Knopf „Danach“ während der Runde, `danach:` wirkt weiter; sidekick.prompts ohne later', { laterButton: false }, async ($, on) => {
-  const w = world(on)
-  await start($)
-  await stepOn($)
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
-  const ui = await footer($, 'desktop')
-  expect(await ui.find({ key: 'sidekick-later' })).toBeUndefined()
-  await ui.unmount()
-  const r = await during($, 'danach: README im Ordner docs anpassen')
-  expect(r.text).toBe('README im Ordner docs anpassen')
-  expect(hasNote(r)).toBe(true)
-})
-
-deTest('0.27.0 queue aus: kein Knopf „Danach“, auch mit laterButton an', { queue: false, laterButton: true }, async ($, on) => {
-  const w = world(on)
-  await start($)
-  await stepOn($)
-  const ui = await footer($, 'desktop')
-  expect(await ui.find({ key: 'sidekick-later' })).toBeUndefined()
-  await ui.unmount()
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
-})
-
-deTest('0.27.0 /sidekick buttons later off während der Runde: Knopf weg, eine Markierung verfällt; on: wieder da', async ($, on) => {
-  const w = world(on)
-  await start($)
-  await stepOn($)
-  const ui = await footer($, 'desktop')
-  await ui.press({ key: 'sidekick-later' })
-  await flush()
-  await ui.unmount()
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'armed' })
-  const off = await run($, 'buttons later off')
-  expect(off).toContain('✓ Danach-Knopf aus.')
-  expect(written(w.cli)).toEqual({ laterButton: 'false' })
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [] })
-  // die Markierung gilt nicht mehr: Haiku urteilt („jetzt“)
-  expect(hasNote(await during($, MID))).toBe(false)
-  expect(await run($, 'buttons later off')).toBe('Danach-Knopf ist schon aus.')
-  expect(await run($, 'buttons later on')).toContain('✓ Danach-Knopf an.')
-  expect(w.stateVals.get('prompts')).toEqual({ buttons: [], later: 'on' })
-  // queue aus: an, aber der Befehl sagt, dass er so nicht wirkt
-  await run($, 'queue off')
-  await run($, 'buttons later off')
-  expect(await run($, 'buttons later on')).toContain('Wirkt nur mit der Warteschlange an')
 })

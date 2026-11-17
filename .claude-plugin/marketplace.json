@@ -1,6 +1,6 @@
 {
   "name": "fynn-mods",
-  "description": "Fynn's daily-driver Claude Code mods: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies, a music bar for Spotify (Windows), a cost ledger and color sets for the desktop app.",
+  "description": "Fynn's daily-driver Claude Code mods: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies, a music bar for Spotify (Windows), a cost ledger, color sets for the desktop app and buttons for the prompts you send often.",
   "owner": {
     "name": "Fynn Hansen"
   },
@@ -19,6 +19,11 @@
       "name": "sidekick",
       "source": "./mods/sidekick",
       "description": "Checks your message before it is sent and offers a better way where there is one: a new chat with a handoff, a skill, a clearer version or a cheaper model. It never changes your words or sends anything without asking."
+    },
+    {
+      "name": "prompt-deck",
+      "source": "./mods/prompt-deck",
+      "description": "Saves prompts you send again and again and puts them as buttons above the prompt in the desktop app: one click sends. Send by name with /p <name>, manage with /deck. With sidekick also the Later button."
     },
     {
       "name": "quick-replies",

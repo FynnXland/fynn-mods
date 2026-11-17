@@ -1,12 +1,12 @@
 # fynn-mods
 
-**Seven mods for Claude Code: an animated mascot, usage-limit bars, a pre-send sidekick, quick replies, a music bar
-for Spotify (Windows), a cost ledger and color sets for the desktop app.**
+**Eight mods for Claude Code: an animated mascot, usage-limit bars, a pre-send sidekick, prompt buttons, quick replies,
+a music bar for Spotify (Windows), a cost ledger and color sets for the desktop app.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Checks](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/FynnXland/fynn-mods/actions/workflows/checks.yml)
 [![Claude Code](https://img.shields.io/badge/Claude_Code-v2.1.325_tested-D97757)](https://code.claude.com/docs/en/plugins/mods/overview)
-[![Mods](https://img.shields.io/badge/mods-7-555)](#the-mods)
+[![Mods](https://img.shields.io/badge/mods-8-555)](#the-mods)
 [![Languages](https://img.shields.io/badge/UI-English_%7C_German-555)](#the-mods)
 
 [Install](#installation) · [The mods](#the-mods) · [Troubleshooting](#troubleshooting) · [Website](https://fynn.land/fynn-mods/) · **English** · [Deutsch](README.de.md)
@@ -25,14 +25,14 @@ tuned to work side by side, but each one is a separate plugin you can install on
 
 This repository is a Claude Code plugin marketplace named `fynn-mods`.
 
-> **New in fynn-mods 2.0:** all band mods are rebuilt for the new band of Claude Code 2.1.323, where each mod draws
-> its own row and the rows line up as one band again, and there is a seventh mod, [tint](#tint): calm color sets for
-> the desktop app, or the colors of your own design system. Update with `claude plugin marketplace update fynn-mods`,
-> then `claude plugin update <mod>@fynn-mods` for each mod you use.
+> **New:** [prompt-deck](#prompt-deck) is an eighth mod. Saved prompts as one-click buttons above the prompt moved
+> out of sidekick into their own mod, and sidekick 0.29.0 no longer has `/sidekick save|prompts|forget|buttons`.
+> Update with `claude plugin marketplace update fynn-mods`, then `claude plugin update <mod>@fynn-mods` for each mod
+> you use, and install prompt-deck if you used saved prompts.
 
 > **English or German.** Every mod speaks English by default: buttons, messages, dialogs and the answers of the model
 > calls some mods make. Each mod has a `language` option (`en` or `de`). `/clawd language de` (or the same with
-> `/bars`, `/sidekick`, `/replies`, `/tune`, `/ledger`, `/tint`) switches all installed fynn-mods at once; for one mod only,
+> `/bars`, `/sidekick`, `/deck`, `/replies`, `/tune`, `/ledger`, `/tint`) switches all installed fynn-mods at once; for one mod only,
 > use `/plugin configure <mod>@fynn-mods`. The pictures below show the English default. They are rebuilt
 > from the mods' own drawing code with an invented sample project, so no real chats, paths or costs appear. The one
 > exception is tint's picture: a real screenshot of a sample chat in German.
@@ -41,14 +41,15 @@ This repository is a Claude Code plugin marketplace named `fynn-mods`.
 |---|---|
 | [clawd-buddy](#clawd-buddy) | Animated pixel mascot above the prompt that reacts to what Claude is doing |
 | [limit-bars](#limit-bars) | 5-hour and weekly limit bars, a ring showing how long the prompt cache stays warm, optional cost ring and system values |
-| [sidekick](#sidekick) | Checks your message before it is sent: cold-cache costs, wrong chat, better wording, due maintenance; also saved prompts, a message queue, handoffs and skill suggestions |
+| [sidekick](#sidekick) | Checks your message before it is sent: cold-cache costs, wrong chat, better wording, due maintenance; also a message queue, handoffs and skill suggestions |
+| [prompt-deck](#prompt-deck) | Your saved prompts as one-click buttons above the prompt (desktop app), sent with `/p <name>`, managed with `/deck` |
 | [quick-replies](#quick-replies) | Claude Code's next-message suggestion as a one-click button |
 | [tune-strip](#tune-strip) | Music bar for Spotify above the prompt with cover, position and controls (Windows only) |
 | [cost-ledger](#cost-ledger) | Cost ledger across all chats, by day, project, chat and model |
 | [tint](#tint) | Calm color sets for the desktop app (Herbstglut, Rosé Pine, Nord), or the colors of your own design system |
 
-**Help in every mod:** `/<command> help` (`/clawd`, `/bars`, `/sidekick`, `/replies`, `/tune`, `/ledger`, `/tint`) draws a
-table of all commands, what is on or off right now and how to switch it, and the mod's settings with their values.
+**Help in every mod:** `/<command> help` (`/clawd`, `/bars`, `/sidekick`, `/deck`, `/replies`, `/tune`, `/ledger`, `/tint`)
+draws a table of all commands, what is on or off right now and how to switch it, and the mod's settings with their values.
 In `claude -p` and VS Code you get the same as short text.
 
 **Settings:** every setting of every mod is on Claude Code's plugin settings page (desktop app: Settings → Plugins →
@@ -61,7 +62,7 @@ settings, and values saved by earlier versions move over once.
   `claude --version`.
 - Runs in the terminal and in the Code tab of the Claude desktop app. In `claude -p`, the Agent SDK, VS Code and on
   mobile most mods draw nothing; see each mod's README.
-- tune-strip needs Windows and the Spotify desktop app. The other six are not tied to one system (used daily on
+- tune-strip needs Windows and the Spotify desktop app. The other seven are not tied to one system (used daily on
   Windows, tested on Linux in CI); limit-bars' optional storage ring and system values are Windows only.
 - The mods API can change between Claude Code releases. If a mod breaks after an update, please open an issue.
 
@@ -79,9 +80,11 @@ Then install the mods you want, one by one:
 claude plugin install clawd-buddy@fynn-mods
 claude plugin install limit-bars@fynn-mods
 claude plugin install sidekick@fynn-mods
+claude plugin install prompt-deck@fynn-mods
 claude plugin install quick-replies@fynn-mods
 claude plugin install tune-strip@fynn-mods     # Windows only
 claude plugin install cost-ledger@fynn-mods
+claude plugin install tint@fynn-mods
 ```
 
 Inside a session the same works with `/plugin marketplace add FynnXland/fynn-mods` and `/plugin install <mod>@fynn-mods`.
@@ -106,8 +109,8 @@ Three mods make model calls **on your account** (on a subscription they count to
 - **sidekick** asks Haiku 5.5 (effort `medium`) only when a check can pay off (first message of a chat, large context,
   cold cache): about $0.001 and 3 seconds per check (API value). A handoff to a new chat is one larger call, made only
   when you choose it: your session's own model from the warm cache (about $0.06 at 150k context with Opus 5.5) or,
-  with a cold cache, Sonnet 5.5 from the history (about $0.08). Saved prompts, the queue and the skill catalog add
-  tiny Haiku calls (a fraction of a cent each). Level `cache` makes no model call at all. `/savings` sets both against the measured
+  with a cold cache, Sonnet 5.5 from the history (about $0.08). The offer to save a prompt, the queue and the skill
+  catalog add tiny Haiku calls (a fraction of a cent each). Level `cache` makes no model call at all. `/savings` sets both against the measured
   savings. Turn it off with `/sidekick off`. *Good to know* (off by default, `/sidekick notes on`) asks your session's
   own model during longer tasks, mostly from the cache: about $0.04 per check at 150k context with Opus 5.5.
 - **quick-replies** forks the session after each answer **only with `/replies more on`** (off by default): roughly
@@ -209,8 +212,9 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
   the calculation, a model comparison and a day-by-day history.
 - **Good to know (optional, off by default):** with `/sidekick notes on`, sidekick asks during a longer task whether
   you very likely missed something with consequences, and shows it in one line above the prompt with *Hand to Claude*,
-  *Know this* and *Ignore*. *Hand to Claude* passes it to the working chat, still in the same turn, so Claude fixes it
-  or says why it is no problem. Most of the time nothing appears.
+  *Explain* and *Ignore*. *Hand to Claude* passes it to the working chat, still in the same turn, so Claude fixes it
+  or says why it is no problem. *Explain* opens the note's explanation, and *Ignore* never offers the topic again
+  unless it has clearly got worse. Most of the time nothing appears.
 - **Model tip:** on the first message of a chat on Opus or Fable, sidekick asks whether a simple task should run on
   Sonnet 5.5 or Haiku 5.5. With `/sidekick tips auto on` (off by default) it also switches built-in subagents and
   chats Claude starts when Haiku rates their task simple. `/savings` shows the savings as a marked estimate.
@@ -220,32 +224,29 @@ too. sidekick never chats on its own: it stays quiet, adds a blue hint line unde
 - **Handoff:** `/handoff` (moved here from limit-bars) writes a short handoff and asks whether to continue in a fresh
   chat. While the prompt cache is warm, your session's own model writes it from the cache; with a cold cache, Sonnet
   5.5 writes it from the history. A line above the prompt can suggest it shortly before a big chat's cache expires.
-- **Saved prompts:** an instruction you keep sending can become your own command, e.g. `/p tidy-chats`, with a footer
-  button in the desktop app. Save one with `/sidekick save <name>`, or accept sidekick's offer after the same kind of
-  instruction showed up in three chats.
+- **Saved prompts and buttons:** moved to [prompt-deck](#prompt-deck). sidekick still notices an instruction you keep
+  sending and offers to save it there, and it only offers if prompt-deck is installed.
 - **Queue:** if you write a clearly separate, later item while Claude is still working, it goes straight in with a
-  note for Claude to finish the running task first. To decide yourself, click **Later** in the desktop footer or start
-  the message with `later:`.
+  note for Claude to finish the running task first. To decide yourself, click **Later** (a button of prompt-deck) or
+  start the message with `later:`.
 - **Skill catalog:** when a message clearly asks for what a hand-picked third-party skill does, sidekick asks once per
   chat before sending. Eight plain-Markdown skills ship with sidekick, all MIT with their license: three by Emil
   Kowalski (design), systematic-debugging, verification-before-completion and receiving-code-review by Jesse Vincent,
   fixing-metadata by Julien Thibeaut and grilling by Matt Pocock. For the rest it only copies the install command, it
   never installs anything.
-- **Footer buttons:** `/sidekick buttons` lists the desktop footer buttons (Later, saved prompts) and switches each on
-  or off.
 - **Shared reasons:** with clawd-buddy installed, Clawd shows why sidekick holds a message back.
 
 If a check fails or times out, your message goes through unchanged.
 
 - **Commands:** `/sidekick` (status and settings), `/sidekick off|cache|guide|on`,
   `/sidekick hints …`, `/sidekick notes on|off`, `/sidekick tips …`, `/sidekick loop on|off`,
-  `/sidekick queue on|off`, `/sidekick catalog …`, `/sidekick save|prompts|forget …`, `/p <name>`,
+  `/sidekick queue on|off`, `/sidekick catalog …`,
   `/handoff [fork|text|show|continue]`, `/sidekick language de|en`, `/sidekick help`, `/savings [today|week|all]`,
   `/savings detail`
 - **Rights in short:** reads your message before it is sent; holds it back or replaces it only after your choice in
   the dialog; Haiku 5.5 and Sonnet 5.5 via `$.model.complete` with a short running summary, your last 3 messages and the end of Claude's last reply, never the whole
   history; `$.model.fork` to your session's own model over the conversation, with every tool denied, only with Good
-  to know on or to write a handoff from the warm cache; saved prompts and handoffs are sent (`$.prompt.submit`) only
+  to know on or to write a handoff from the warm cache; handoffs are sent (`$.prompt.submit`) only
   on your command or click; for a message you write while Claude works it may add a hidden note for Claude (Queue)
   or, after you choose **Send with …**, the text of a bundled skill; on a button click it runs the command shown in the line (plugin and your own commands, `/skill-doctor`,
   `/init`; never MCP prompts, `/clear`, `/exit`, `/quit`, `/login`, `/logout`, `/rewind`); draws its label in the prompt footer; fills
@@ -257,6 +258,36 @@ If a check fails or times out, your message goes through unchanged.
   Besides that only the [settings commands](#rights-and-trust). No network or environment; files only to read the
   `SKILL.md` of a bundled skill after your click, nothing is written.
 - **Details:** [mods/sidekick](mods/sidekick/README.md)
+
+### prompt-deck
+
+Saves the prompts you send again and again and puts them as buttons above the prompt box in the desktop app: one click
+sends the prompt as your own message. One set of saved prompts is shared by all your chats and projects. It took over
+the saved prompts and buttons from [sidekick](#sidekick).
+
+- **Buttons:** up to 4 buttons in a row directly above limit-bars and Clawd, left-aligned, labelled with the prompt's
+  name. At most 12 saved prompts.
+- **`/p <name>`** sends a saved prompt as your message; during an answer it goes out after it. `/p` alone lists the
+  names.
+- **`/deck`** lists, saves, shows and deletes your prompts: `/deck list`, `/deck save <name> [text]` (without a text it
+  saves your last message), `/deck show <name>`, `/deck forget <name>`, `/deck <name> on|off` for a prompt's button and
+  `/deck buttons` for all buttons above the prompt.
+- **Later with sidekick:** with sidekick installed you also get the **Later** button, which turns your next message
+  during a running task into a later item in sidekick's queue, and sidekick's offer "You send this often, save it as a
+  button?".
+- **Works alone:** without sidekick only those two parts are missing; everything else works.
+- **Surfaces:** the buttons show in the desktop app only. In the terminal, VS Code and `claude -p` you have the
+  commands and tables (`/p` does not send in `-p`).
+- **Moving from sidekick:** if you had saved prompts in sidekick 0.28 or older, sidekick 0.29.0 hands them over once,
+  with the same button settings. Update sidekick to 0.29.0 or later first.
+- **Commands:** `/deck` (list), `/deck save|show|forget …`, `/deck <name> on|off`, `/deck buttons […]`, `/p <name>`,
+  `/deck language de|en`, `/deck help`
+- **Rights in short:** sends a saved prompt as your message only when you click a button or type `/p` yourself;
+  reads your last message only for `/deck save` without a text; keeps your prompts in its own plugin store, on this
+  computer only; shares only the names and word sets of your prompts and the time of a Later click with sidekick
+  (`$.state`), no texts. Besides that only the [settings commands](#rights-and-trust). No model calls, files or
+  network.
+- **Details:** [mods/prompt-deck](mods/prompt-deck/README.md)
 
 ### quick-replies
 
@@ -362,17 +393,18 @@ The terminal and VS Code draw no theme, so there you see nothing.
 
 ## How they work together
 
-- **One band above the prompt.** clawd-buddy, limit-bars, quick-replies, tune-strip and sidekick all draw into the band
-  above the prompt. Since Claude Code 2.1.323 each mod draws its own row, and a small shared helper in every band mod
+- **One band above the prompt.** clawd-buddy, limit-bars, quick-replies, tune-strip, sidekick and prompt-deck all draw
+  into the band above the prompt. Since Claude Code 2.1.323 each mod draws its own row, and a small shared helper in every band mod
   puts the rows back into one band: the limit bars and cache ring sit left of Clawd in one row, tune-strip's bar and
-  the quick-replies pill sit above it, and sidekick's boxes appear on top only while it has something to show. In the
+  the quick-replies pill sit above it, prompt-deck's buttons sit directly above the limit bars, and sidekick's boxes
+  appear on top only while it has something to show. In the
   desktop app Clawd stands behind the row at the right edge. Each mod also works alone.
 - **Clawd moves to your music.** With tune-strip playing, Clawd nods on the beat of the song when he has time, picks
   his moves by how it sounds and sometimes puts on headphones. tune-strip tells him only that music is playing, the
   tempo and the group (calm, groove, hard, sad), never what is playing.
 - **cost-ledger feeds limit-bars.** With both installed, limit-bars draws a cost ring with what this chat and this
   project cost, the same numbers as `/ledger here all`.
-- **One language switch for all.** `/<command> language de|en` in any of the seven mods switches every installed
+- **One language switch for all.** `/<command> language de|en` in any of the eight mods switches every installed
   fynn-mod at once.
 - **limit-bars steps aside for sidekick.** Both can ask before a cold send. While sidekick runs on `cache` or `guide`,
   limit-bars stays quiet by itself (`/cache` shows "on (sidekick is asking right now)"), so you never get two dialogs
@@ -390,14 +422,14 @@ API calls it makes; `claude plugin validate mods/<mod>` prints the exact list, a
 language what they are for. None of these mods reads or stores login data or tokens, none has network access of its own, and
 none writes anywhere but its own plugin store and plugin settings, with two exceptions: cost-ledger writes its own file
 into the folder you choose, but only if you turn on `/ledger sync`; and the language switch changes the `language`
-setting of the seven fynn-mods, nothing else.
+setting of the eight fynn-mods, nothing else.
 
 **Settings commands:** `/<command> language de|en` reads the plugin settings and changes only the `language` field of
-the seven fynn-mods (`$.config`). The commands that mirror a setting (`/clawd on|off`, `/replies on|off`, `/tune size`,
+the eight fynn-mods (`$.config`). The commands that mirror a setting (`/clawd on|off`, `/replies on|off`, `/tune size`,
 `/ledger plan`, `/sidekick cache` and so on) change only the fields of their own mod. In the desktop app and `claude -p`,
 where Claude Code lists no plugin settings, they run the `claude` CLI instead, only `claude plugin list --json` and
-`claude plugin configure <mod>@fynn-mods` (for the seven fynn-mods, own fields only). That is the only process
-clawd-buddy, cost-ledger, quick-replies, sidekick and tint ever start.
+`claude plugin configure <mod>@fynn-mods` (for the eight fynn-mods, own fields only). That is the only process
+clawd-buddy, cost-ledger, prompt-deck, quick-replies, sidekick and tint ever start.
 
 **Other processes,** all Windows PowerShell with fixed scripts: tune-strip, to read and control the Spotify session of
 the Windows media controls and, for the beat, to listen to Spotify's audio only (tempo only, nothing recorded, no files,

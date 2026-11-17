@@ -17,7 +17,5 @@ export const SETTINGS: FieldDefs = {
   retryLoop: { type: 'boolean', default: true },
   queue: { type: 'boolean', default: true },
   catalog: { type: 'boolean', default: true },
-  laterButton: { type: 'boolean', default: true },
-  promptButtons: { type: 'boolean', default: true },
   language: { type: 'string', default: 'en', options: ['en', 'de'] },
 }

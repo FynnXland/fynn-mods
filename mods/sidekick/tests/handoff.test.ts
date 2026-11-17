@@ -751,8 +751,11 @@ deTest('Vorschlag im Desktop: Zeile mit Knöpfen in sidekicks Ebene (Review 0.22
   const band = await $.ui.mount(BAND('desktop') as never)
   const line = JSON.stringify(await band.find({ key: 'sidekick-sug' }))
   expect(line).toContain('Cache läuft um 11:00 ab')
-  // Desktop: ohne Leerzeile darunter (der blaue Streifen gibt den Abstand, Nachtrag 0.15.2)
+  // Desktop: ohne Leerzeile darunter, der blaue Streifen gibt den Abstand (Nachtrag 0.15.2, seit 0.29.0 wieder, 14 px)
   expect(line).not.toContain('marginBottom')
+  const layer = (await band.find({ key: 'layer:50:sidekick' })) as { children?: { props?: { key?: string } }[] } | undefined
+  expect((layer?.children ?? []).map((c) => c.props?.key)).toEqual(['sidekick-sug', 'sidekick-stripe'])
+  expect(JSON.stringify(layer)).not.toContain('sidekick-prompts')
   for (const k of ['sidekick-sug-handoff', 'sidekick-sug-keepwarm', 'sidekick-sug-later']) expect(await band.find({ key: k }), k).toBeDefined()
   await band.press({ key: 'sidekick-sug-keepwarm' })
   await flush()

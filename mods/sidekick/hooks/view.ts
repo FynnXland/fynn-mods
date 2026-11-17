@@ -4,7 +4,7 @@
 // ganzzahliger Prozentbreite (Kommaprozente verwirft er, cost-ledger-Befund), im Terminal dünne `▄`.
 import type { RenderElement, RenderNode } from 'claude-code'
 import { tokensText, t, usdFine, usdText } from './i18n.js'
-import { ARTS, NOTE_COLS, ROLES, active, compareNote, dayModels, dayRows, factorText, hasTipp, keyDate, missShare, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf, stufenSpread, tipRuns, tipSaved, tipsRows } from './logic.js'
+import { ARTS, NOTE_COLS, ROLES, noteCount, active, compareNote, dayModels, dayRows, factorText, hasTipp, keyDate, missShare, modelCompare, perText, modelRows, periodTitle, ratioOf, savedOf, secsText, spanLabel, spanOf, stufenSpread, tipRuns, tipSaved, tipsRows } from './logic.js'
 import type { Day, Period, Span } from './logic.js'
 import { modelLabel } from './models.js'
 import { RULE_IDS } from './wartung.js'
@@ -169,7 +169,7 @@ function tipsBlock(d: Day): RenderElement | null {
  */
 function noteCounts(nz: Day['notizen']): string {
   const x = t()
-  const parts = NOTE_COLS.filter((f) => f !== 'keins' && f !== 'verworfen' && f !== 'fehler' && (f === 'gezeigt' || nz[f] > 0)).map((f) => `${x.noteCol[f]} ${nz[f]}`)
+  const parts = NOTE_COLS.filter((f) => f !== 'keins' && f !== 'verworfen' && f !== 'fehler' && (f === 'gezeigt' || noteCount(nz, f) > 0)).map((f) => `${x.noteCol[f]} ${noteCount(nz, f)}`)
   return parts.join(' · ')
 }
 

@@ -4,7 +4,7 @@ Two slim bars on the left of the band above the prompt show live how much of the
 
 Texts are English by default; set `language` to `de` for German.
 
-Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.17.2**
+Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.17.4**
 
 ## Display
 
@@ -97,7 +97,7 @@ Known issue: the desktop settings page may show switches that were never saved a
 | `/keepwarm [hours]` · `/keepwarm off` | Keep the cache warm, default 2 h, at most 4 h. **Off by default**, because every ping costs quota. `/keepwarm` without a number turns off a running keep-warm |
 | `/disk` · `/disk refresh` | Drive usage by file type, as a ring with a legend (see [Storage ring](#storage-ring)). Scans again if the last scan is older than an hour, or always with `refresh` |
 | `/bars` · `/bars show 5h\|week\|cache\|storage\|cost\|cpu on\|off` · `/bars style bar\|ring` · `/bars reset` | Show or hide parts of the display; the same settings as the settings page (see [Customize](#customize)) |
-| `/bars language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, quick-replies, sidekick, tint, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes (see [Known limitations](#known-limitations) for what a reload resets). In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.11.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
+| `/bars language [de\|en]` | Switch the language of **all** installed fynn-mods at once (clawd-buddy, cost-ledger, limit-bars, prompt-deck, quick-replies, sidekick, tint, tune-strip), one line per mod in the answer; without a value, show each mod's current language. Applies right away: Claude Code reloads each mod it changes (see [Known limitations](#known-limitations) for what a reload resets). In the desktop app and `claude -p`, where Claude Code lists no plugin settings, it goes through `claude plugin configure` instead (since 0.11.1): saved for the next chat, and right away in the current one after `/reload-plugins` |
 | `/bars help` · `/bars ?` | All commands, features and settings at a glance, with their current state and how to switch them. In the terminal and the desktop app a drawn table with headings in the theme's warning color (yellow, follows light and dark); in `claude -p` and VS Code the same as Markdown. It shows the state at the moment you call it; call it again after switching something |
 | `/cache help` · `/keepwarm help` · `/disk help` | Answer only with "All commands: `/bars help`" |
 
@@ -159,7 +159,7 @@ No file system access of its own (no `$.fs`), no network, no environment variabl
 In plain language:
 
 - `$.state.set`: tells the tune-strip mod how wide the bars are (`limit-bars.band`, a width in terminal cells on both surfaces since 0.17.0; before, pixels in the desktop app), so tune-strip can make room for them. Written at session start, on the tick and when the display or the band width changes, never while drawing. Nothing else reads it.
-- Hook `ui.render` for `AbovePromptList` (since 0.17.0): arranges the rows of the band mods (fynn-mods) into one band: the rows of sidekick, tune-strip (desktop, full bar) and quick-replies on top, rows of other mods below them, then one line with the bars on the left, tune-strip next to them and Clawd on the right. The same code runs in every band mod; whichever runs outermost arranges, the others pass the rows on unchanged. It changes no row and calls nothing on `$`.
+- Hook `ui.render` for `AbovePromptList` (since 0.17.0): arranges the rows of the band mods (fynn-mods) into one band: the rows of sidekick (0.29.0 or later), tune-strip, quick-replies and prompt-deck on top (prompt-deck's button row right above the base line), rows of other mods below them, then one line with the bars on the left and Clawd on the right. The same code runs in every band mod; whichever runs outermost arranges, the others pass the rows on unchanged. It changes no row and calls nothing on `$`.
 - `$.state.get` (`state reads: cost-ledger.here`, since 0.12.0): reads the chat and project cost that cost-ledger provides, for the cost ring. Amounts, the first day of recording, the number of devices and the project's folder name; nothing is written back.
 - `$.session.usage`: limits, context size and session cost at start and on every tick (without `breakdown`, free)
 - Hook `session.measure`: takes the percentage and reset time of `five_hour` and `seven_day` after every measurement
@@ -250,6 +250,8 @@ Both mods draw their own row into the band above the prompt (since 0.17.0, Claud
 
 ## Changes
 
+- **0.17.4**: band.ts: prompt-deck as level 10 above the base row, sidekick back on top (level 50); language switch also covers prompt-deck. Update the band mods together (clawd-buddy 0.16.3, limit-bars 0.17.4, quick-replies 0.8.5, tune-strip 0.12.4, sidekick 0.29.0, prompt-deck 0.1.0). No other change.
+- **0.17.3**: shared band code learned the bottom row `foot`, so sidekick 0.28.1 can stand under the band row, right above the prompt. Update the band mods together (clawd-buddy 0.16.2, limit-bars 0.17.3, quick-replies 0.8.3, tune-strip 0.12.2, sidekick 0.28.1). No other change.
 - **0.17.2**: language switch also covers tint (shared language list of the fynn-mods). No other change.
 - **0.17.1**: shared language list of the fynn-mods updated. No other change.
 - **0.17.0** (Claude Code 2.1.323 or later): the bars are their own row in the band. Since Claude Code 2.1.323 each mod draws only its own row; a new `AbovePromptList` hook, the same in every band mod, puts the rows back into one band as before: bars left, tune-strip next to them, Clawd right, sidekick and quick-replies on top. The row has a fixed width in cells, and `limit-bars.band` reports that width in cells on both surfaces (was pixels in the desktop app). New right: the hook `ui.render{component=AbovePromptList}`.

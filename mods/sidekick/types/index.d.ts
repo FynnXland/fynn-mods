@@ -1,4 +1,4 @@
-// $.state-Werte von sidekick (docs/raw/en/interface.md:714-769). Jeder Mod darf sie lesen, nur sidekick schreibt (types:3308-3313).
+// $.state-Werte von sidekick (docs/raw/en/interface.md:714-769). Jeder Mod darf sie lesen, nur sidekick schreibt (types:3629-3659).
 // `buddy` ist die Schnittstelle zu clawd-buddy: was sidekick gerade tut, damit Clawd es zeigt. clawd-buddy deklariert denselben
 // Wert in seinem eigenen Vertrag (mods/clawd-buddy/types/index.d.ts); dort genügt eine Teilmenge, die gelesenen Felder müssen gleich bleiben.
 //   check   = prüft die Nachricht mit dem Modell
@@ -17,24 +17,29 @@
 // solange sidekick in diesem Chat nach einem angenommenen Modell-Tipp umstellt; fehlt sonst. `cold` (Ausbau 0.20.0): `true`, solange
 // die Cache-Schätzung dieses Chats abgelaufen ist (letzte Anfrage + TTL), nur auf den Stufen cache und guide; fehlt sonst.
 // `handoff` (0.26.0, Band 2, docs/BAND-SPEC-2.md §4): `true`, solange die Übergabe-Box steht, auf jeder Stufe; fehlt sonst. quick-replies
-// liest es und zeichnet dann keine Zeile. Gleiche Fassung in limit-bars, clawd-buddy und quick-replies.
+// liest es und zeichnet dann keine Zeile. limit-bars, clawd-buddy und quick-replies deklarieren eine Teilmenge ohne `later`/`laterUsed`;
+// prompt-deck liest `later` und `laterUsed` (gleiche Fassung in mods/prompt-deck/types/index.d.ts).
+// `later` (Ausbau 0.29.0, Absprache mit prompt-deck): `true`, solange der Knopf „Danach“ gelten darf (Zug läuft, Stufe Begleiter,
+// `queue` an); fehlt sonst. `laterUsed`: `at` der zuletzt verbrauchten Markierung `prompt-deck.later`; prompt-deck löscht sie dann.
 //
 // `quick-replies.band` (Kopie aus mods/quick-replies/types/index.d.ts, muss gleich bleiben): steht die Pille, zeigt „Gut zu wissen“
 // keine Ziffern (BAND-SPEC-2 §5).
+//
+// `prompt-deck` (Kopie aus mods/prompt-deck/types/index.d.ts, muss gleich bleiben; Ausbau 0.29.0): `saved` = Namen und Wortmengen
+// der in prompt-deck gespeicherten Prompts (Angebot, Umzug); `later` = Knopf „Danach“ geklickt (`at` = Zeitpunkt des Klicks).
 
 declare module 'claude-code' {
   interface PluginState {
     sidekick: {
       buddy: { kind: 'check' | 'stop' | 'handoff' | 'fresh' | 'hint' | 'upkeep'; at: number; why?: 'cold' | 'wrong' | 'model' | 'rewrite' | 'topic' } | null
-      status: { level: 'off' | 'cache' | 'guide'; busy: boolean; tip?: string; cold?: true; handoff?: true } | null
-      // Nachtrag 0.21.0: Namen der gespeicherten Prompts mit Knopf (höchstens 4, Reihenfolge des Speicherns). Nur sidekick liest ihn;
-      // der Knopf-Baum wird so nur neu gezeichnet, wenn sich die Liste ändert, ohne $.ui.invalidate. Keine Prompt-Texte.
-      // Ausbau 0.24.0: `later` = Knopf „Danach“ während einer Runde (`on`), nach einem Klick `armed`; fehlt sonst. Keine Texte
-      // Ausbau 0.27.0: nur, was die Fußzeile zeigt: `buttons` leer bei userConfig `promptButtons` aus, ohne `later` bei `laterButton` aus
-      prompts: { buttons: string[]; later?: 'on' | 'armed' } | null
+      status: { level: 'off' | 'cache' | 'guide'; busy: boolean; tip?: string; cold?: true; handoff?: true; later?: true; laterUsed?: number } | null
     }
     'quick-replies': {
       band: { shown: true } | null
+    }
+    'prompt-deck': {
+      saved: { items: { name: string; words: string[] }[] } | null
+      later: { armed: true; at: number } | null
     }
   }
 }

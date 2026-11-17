@@ -1,11 +1,15 @@
-// sidekick: gespeicherte Prompts (SPEC Nachtrag 0.21.0). Reine Logik ohne `$`: Verlauf eigener Nachrichten, Wortmenge, Vorfilter,
-// Namensprüfung, Haiku-Prompt und Parser. register.ts liest und schreibt den Store und ruft das Modell.
+// sidekick: Erkennung wiederholter Prompts (SPEC Nachtrag 0.21.0) und die Absprachen mit prompt-deck (Ausbau 0.29.0). Reine Logik
+// ohne `$`: Verlauf eigener Nachrichten, Wortmenge, Vorfilter, Namensprüfung, Haiku-Prompt und Parser, dazu das Lesen von
+// `prompt-deck.saved`/`prompt-deck.later` und der Antwort von `/deck save`. register.ts liest und schreibt Store und `$.state`,
+// ruft das Modell und `/deck`. Seit 0.29.0 speichert und sendet prompt-deck; sidekick erkennt nur und bietet an (prompt-deck SPEC E6).
 import type { Lang } from './i18n.js'
 
 /** Ein gemerkter eigener Prompt für die Erkennung (`$.store` `prompts:recent`). `id` = `<session>:<zeit>`. */
 export type Recent = { id: string; sid: string; at: number; text: string; words: string[]; intent?: string }
-/** Ein gespeicherter Prompt (`$.store` `prompts:saved`). */
+/** Ein bis 0.28.1 in sidekick gespeicherter Prompt (`$.store` `prompts:saved`); seit 0.29.0 nur noch Sicherung und Quelle des Umzugs. */
 export type Saved = { name: string; text: string; button: boolean; at: number; from: 'auto' | 'manual' }
+/** Ein Eintrag von `prompt-deck.saved` (mods/prompt-deck/SPEC.md „Absprachen“): Name und Wortmenge, kein Text. */
+export type DeckItem = { name: string; words: string[] }
 /** Haiku-Aufrufe je Tag (`$.store` `prompts:budget`). */
 export type Budget = { day: string; n: number }
 /** Was Haiku vorschlägt: Name und eigenständige Fassung. */
@@ -28,21 +32,19 @@ export const MIN_SESSIONS = 3
 export const GROUP_MAX = 4
 /** Vorschlags-Aufrufe (Name und Fassung) je Tag (Fynn 2026-11-06, Variante B). */
 export const HAIKU_PER_DAY = 5
+/** Höchstens so viele Einträge liest der Umzug aus `prompts:saved` (so viele konnte sidekick bis 0.28.1 speichern). */
 export const SAVED_MAX = 12
-export const BUTTONS_MAX = 4
 export const SEEN_MAX = 100
 export const NAME_MAX = 24
-export const LABEL_MAX = 14
 export const TEXT_MAX = 1200
 /**
- * Gesendet wird mit einem festen Befehl `/p <name>` (Fynn 2026-11-06). Ein eigener Befehl je Prompt bräuchte einen `command.run`-Hook
- * ohne Filter oder mit Muster; beide zählt die Engine als Hook auf jeden Befehl und stellt dann die Ausgabe aller anderen
- * Plugin-Befehle unter sidekicks Namen („sidekick+cost-ledger: …“, Smoke-Tests 2026-11-06). Nur ein fester Name vermeidet das.
+ * Gesendet wird seit 0.29.0 von prompt-deck mit `/p <name>` (mods/prompt-deck/SPEC.md E2); sidekick nennt den Befehl nur in Texten
+ * („Als /p tidy-chats speichern?“). `/deck` ist prompt-decks Verwaltungsbefehl, über den sidekick speichert.
  */
 export const P_CMD = 'p'
+export const DECK_CMD = 'deck'
 /** So steht ein Prompt in Texten: `p tidy-chats` (mit `/` davor). */
 export const PREFIX = `${P_CMD} `
-export const cmdOf = (name: string) => `${PREFIX}${name}`
 const NAME_RE = /^[a-z0-9-]{1,24}$/
 
 const DAY_MS = 24 * 60 * 60000
@@ -118,9 +120,9 @@ export function candidates(list: readonly Recent[], r: Recent, seen: ReadonlySet
   return [r, ...[...bySession.values()].slice(0, GROUP_MAX - 1)]
 }
 
-/** Ähnelt die Nachricht einem schon gespeicherten Prompt? Dann kein Angebot. */
-export function nearSaved(saved: readonly Saved[], words: readonly string[], threshold = JACCARD): boolean {
-  return saved.some((s) => jaccard(wordSet(s.text), words) >= threshold)
+/** Ähnelt die Nachricht einem schon gespeicherten Prompt (Wortmengen aus `prompt-deck.saved`)? Dann kein Angebot. */
+export function nearSaved(items: readonly DeckItem[], words: readonly string[], threshold = JACCARD): boolean {
+  return items.some((s) => jaccard(s.words, words) >= threshold)
 }
 
 // ---------- gesehene Gruppen ----------
@@ -146,7 +148,7 @@ export function cleanBudget(v: unknown): Budget {
 export const budgetLeft = (b: Budget, day: string) => (b.day === day ? Math.max(0, HAIKU_PER_DAY - b.n) : HAIKU_PER_DAY)
 export const useBudget = (b: Budget, day: string): Budget => ({ day, n: (b.day === day ? b.n : 0) + 1 })
 
-// ---------- gespeicherte Prompts ----------
+// ---------- bis 0.28.1 gespeicherte Prompts (Quelle des Umzugs) ----------
 
 export function cleanSaved(v: unknown): Saved[] {
   if (!Array.isArray(v)) return []
@@ -160,39 +162,57 @@ export function cleanSaved(v: unknown): Saved[] {
   return out.slice(0, SAVED_MAX)
 }
 
-/** Ergebnis von `upsert`: neu, überschrieben oder voll (13. Prompt). */
-export type Upsert = { list: Saved[]; kind: 'new' | 'replaced' } | { list: Saved[]; kind: 'full' }
+/**
+ * Argumente von `/deck save` für einen Eintrag des Umzugs (SPEC 0.29.0 Verhalten 6): Schalter vor dem Namen (prompt-deck `saveArgs`),
+ * `--off` bei `button: false`, `--manual` bei selbst gespeicherten (sonst führte prompt-deck sie als „von sidekick vorgeschlagen“).
+ */
+export function migrateArgs(s: Saved): string {
+  return [s.button ? '' : '--off', s.from === 'manual' ? '--manual' : '', s.name, s.text].filter(Boolean).join(' ')
+}
 
-/** Einen Prompt anlegen oder einen eigenen gleichen Namens überschreiben (Knopf-Einstellung bleibt); beim 13. nichts. */
-export function upsert(list: readonly Saved[], s: Saved): Upsert {
-  const i = list.findIndex((x) => x.name === s.name)
-  if (i >= 0) {
-    const next = [...list]
-    next[i] = { ...s, button: list[i]!.button, at: list[i]!.at }
-    return { list: next, kind: 'replaced' }
+// ---------- Absprachen mit prompt-deck (Ausbau 0.29.0, mods/prompt-deck/types/index.d.ts) ----------
+
+/** `prompt-deck.saved` tolerant gelesen; null = kein Wert (prompt-deck fehlt, nach /clear noch nicht geschrieben) oder unlesbar. */
+export function cleanDeckSaved(v: unknown): DeckItem[] | null {
+  const items = (v && typeof v === 'object' ? (v as { items?: unknown }).items : undefined) as unknown
+  if (!Array.isArray(items)) return null
+  const out: DeckItem[] = []
+  for (const x of items) {
+    const o = (x && typeof x === 'object' ? x : null) as Record<string, unknown> | null
+    if (!o || typeof o.name !== 'string' || !o.name) continue
+    out.push({ name: o.name, words: Array.isArray(o.words) ? o.words.filter((w): w is string => typeof w === 'string') : [] })
   }
-  if (list.length >= SAVED_MAX) return { list: [...list], kind: 'full' }
-  return { list: [...list, s], kind: 'new' }
+  return out
 }
 
-/** Knöpfe: höchstens 4, in der Reihenfolge des Speicherns. */
-export function buttonNames(list: readonly Saved[]): string[] {
-  return list
-    .filter((s) => s.button)
-    .slice(0, BUTTONS_MAX)
-    .map((s) => s.name)
+/** Zeitpunkt der Markierung „Danach“ aus `prompt-deck.later` (`{ armed: true, at }`); sonst null. */
+export function deckLaterAt(v: unknown): number | null {
+  const o = (v && typeof v === 'object' ? v : null) as { armed?: unknown; at?: unknown } | null
+  return o?.armed === true && typeof o.at === 'number' && Number.isFinite(o.at) ? o.at : null
 }
 
-/** Beschriftung eines Knopfs: Name ohne Schrägstrich, höchstens 14 Zeichen. */
-export const buttonLabel = (name: string) => (name.length > LABEL_MAX ? `${name.slice(0, LABEL_MAX - 1)}…` : name)
+/** Antwort von `/deck save` für sidekick: erste Zeile maschinenlesbar, ab Zeile 2 ein Satz für Menschen (prompt-deck Verhalten 5). */
+export type DeckAnswer = { kind: 'saved'; name: string; human: string } | { kind: 'full' | 'refused' | 'other'; why: string; human: string }
 
-/** Kurzbeschreibung eines Prompts (Liste, Tabelle): „sidekick: “ und der Anfang des Texts. */
-export function commandDescription(text: string): string {
-  const one = String(text ?? '').replace(/\s+/g, ' ').trim()
-  return `sidekick: ${one.length > 60 ? `${one.slice(0, 59)}…` : one}`
+export function deckAnswer(text: string | undefined): DeckAnswer {
+  const [first = '', ...rest] = String(text ?? '').split('\n')
+  const line = first.trim()
+  const human = rest.join('\n').trim()
+  const m = /^saved\s+(\S+)$/.exec(line)
+  if (m) return { kind: 'saved', name: m[1]!, human }
+  if (line === 'full') return { kind: 'full', why: 'full', human }
+  const r = /^refused(?:\s+(.*))?$/.exec(line)
+  if (r) return { kind: 'refused', why: (r[1] ?? '').trim(), human }
+  return { kind: 'other', why: line.slice(0, 140), human }
 }
 
-/** Anfang des Texts in einer Zeile, für Angebot und Tabelle. */
+/** Die vier umgezogenen Unterbefehle (SPEC 0.29.0 Verhalten 2) und ihr Gegenstück in prompt-deck. */
+export const MOVED: Readonly<Record<string, string>> = { save: '/deck save', prompts: '/deck list', forget: '/deck forget', buttons: '/deck buttons' }
+export function movedTarget(verb: string): string | null {
+  return MOVED[verb.toLowerCase()] ?? null
+}
+
+/** Anfang des Texts in einer Zeile, für das Angebot. */
 export function preview(text: string, n = 80): string {
   const one = String(text ?? '').replace(/\s+/g, ' ').trim()
   return one.length > n ? `${one.slice(0, n - 1)}…` : one
@@ -224,8 +244,8 @@ export function freeName(name: string, taken: ReadonlySet<string>): string {
 }
 
 /**
- * Darf `name` ein gespeicherter Prompt heißen (`/p <name>`)? Andere Befehle stören nicht mehr, nur eigene gespeicherte Namen:
- * erlaubt, wenn `overwrite` (manuelles Speichern überschreibt), sonst ein freier Vorschlag.
+ * Darf `name` ein gespeicherter Prompt heißen (`/p <name>`)? Andere Befehle stören nicht, nur schon gespeicherte Namen (seit 0.29.0
+ * die aus `prompt-deck.saved`): erlaubt, wenn `overwrite`, sonst ein freier Vorschlag. Das Angebot überschreibt nie.
  */
 export function checkName(raw: string, ownSaved: readonly string[], overwrite: boolean): NameCheck {
   const name = normName(raw)
@@ -233,18 +253,6 @@ export function checkName(raw: string, ownSaved: readonly string[], overwrite: b
   if (!NAME_RE.test(name) || /^-|-$/.test(name)) return { ok: false, name, why: 'invalid', suggest: freeName(name || 'prompt', busy) }
   if (ownSaved.includes(name) && !overwrite) return { ok: false, name, why: 'own', suggest: freeName(name, busy) }
   return { ok: true, name }
-}
-
-/** Hinweis hinter `/p` im Menü: die gespeicherten Namen, höchstens 80 Zeichen; ohne Prompts `<name>`. */
-export function pHint(list: readonly Saved[]): string {
-  if (!list.length) return '<name>'
-  let out = ''
-  for (const s of list) {
-    const next = out ? `${out}|${s.name}` : s.name
-    if (next.length > 76) return `<${out}|…>`
-    out = next
-  }
-  return `<${out}>`
 }
 
 

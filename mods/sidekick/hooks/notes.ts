@@ -13,7 +13,7 @@ export const NOTES_EVERY = 6
 export const NOTES_KEEP = 50
 /** Längstes Thema in Zeichen; länger ist kein Satz mehr, sondern ein Absatz. */
 export const NOTE_MAX = 240
-/** Längster Titel und längste Erklärung in Zeichen (der Prompt verlangt 2–6 Wörter bzw. höchstens 100 Wörter). */
+/** Längster Titel und längste Erklärung in Zeichen (der Prompt verlangt 2–6 Wörter bzw. seit 0.29.0 höchstens 80 Wörter). */
 export const TITLE_MAX = 60
 export const TEXT_MAX = 1200
 /** Ein Hinweis verschwindet mit der so-vielten eigenen Nachricht als „ignoriert“. */
@@ -23,11 +23,15 @@ export const SKIP_MAX = 16
 
 export type NoteArt = 'achtung' | 'wissen'
 
+/** Längster `schlimmer`-Satz in Zeichen (Teil C, ein Satz). */
+export const WORSE_MAX = 300
+
 /**
- * Der Hinweis einer Session (`sitzung:<id>.note`). `survived`: eigene Nachrichten seit dem Zeigen. Seit 0.27.1 ohne `open`: Es gibt
- * keine aufgeklappte Ansicht mehr; ein altes `open: true` wird beim Lesen übergangen.
+ * Der Hinweis einer Session (`sitzung:<id>.note`). `survived`: eigene Nachrichten seit dem Zeigen. Seit 0.27.1 ohne `open` (ein altes
+ * `open: true` wird übergangen; aufgeklappt ist seit 0.29.0 Teil C nur im Speicher). `worse` (0.29.0 Teil C): ein bekanntes Thema, das
+ * deutlich schlimmer geworden ist; `text` beginnt dann mit dem `schlimmer`-Satz.
  */
-export type Note = { thema: string; art: NoteArt; titel: string; text: string; shownAt: number; turnId: string; survived: number }
+export type Note = { thema: string; art: NoteArt; titel: string; text: string; shownAt: number; turnId: string; survived: number; worse?: true }
 
 /** Nach n ignorierten Hinweisen in Folge: so viele Prüfungen auslassen (0, 0, 1, 2, 4, 8, 16, 16 …). */
 export function skipAfter(ignored: number): number {
@@ -63,6 +67,7 @@ export function cleanNote(v: unknown): Note | null {
     shownAt: o.shownAt,
     turnId: typeof o.turnId === 'string' ? o.turnId : '',
     survived: nonNeg(o.survived),
+    ...(o.worse === true ? { worse: true as const } : {}),
   }
 }
 
@@ -118,12 +123,14 @@ export function notesPrompt(seen: readonly string[], known: readonly string[], l
     '',
     'Kennt er schon, nie anbieten:',
     list(known),
+    'Ausnahme: Ist eines dieser Themen jetzt deutlich schlimmer geworden (nach dem Verlauf, nicht vermutet), darfst du es noch einmal nennen, nur mit "art": "achtung", mit "thema" wörtlich wie in dieser Liste und dem zusätzlichen Feld "schlimmer": ein Satz, was sich seitdem verschlimmert hat.',
     '',
     'Antworte nur mit einem JSON-Objekt, ohne Text davor oder danach.',
     'Kein Thema: {"thema": null}',
-    'Sonst: {"thema": "<ein Satz, höchstens 25 Wörter, endet mit Punkt; sagt, was er wissen sollte, nicht nur ein Stichwort>", "art": "achtung" oder "wissen", "titel": "<2 bis 6 Wörter>", "erklaerung": "<höchstens 100 Wörter für jemanden, der den Code nicht vor Augen hat: was die Sache ist, in Alltagsworten; dann die konkrete Folge in seinen Begriffen (eine Zahl, ein Betrag, ein falsches Ergebnis); zuletzt die Wahl, die er hat>"}',
+    'Sonst: {"thema": "<ein Satz, höchstens 25 Wörter, endet mit Punkt; sagt, was er wissen sollte, nicht nur ein Stichwort>", "art": "achtung" oder "wissen", "titel": "<2 bis 6 Wörter>", "erklaerung": "<höchstens 80 Wörter in einfacher Sprache und kurzen Sätzen für jemanden, der den Code nicht vor Augen hat. Der erste Satz sagt, was genau das Problem ist, ohne Fachwort oder mit kurzer Erklärung; dann die konkrete Folge in seinen Begriffen (eine Zahl, ein Betrag, ein falsches Ergebnis); zuletzt die Wahl, die er hat>"}',
+    'Nur bei einem bekannten, schlimmer gewordenen Thema zusätzlich: "schlimmer": "<ein Satz: was sich seitdem verschlimmert hat>".',
     '"achtung", wenn gerade eine Entscheidung oder ein Risiko ansteht; "wissen" für Hintergrund, der ihm später Ärger erspart.',
-    `Schreib "thema", "titel" und "erklaerung" auf ${sprache}. Erfinde keine Begriffe; Fachwörter nur mit kurzer Erklärung.`,
+    `Schreib "thema", "titel", "erklaerung" und "schlimmer" auf ${sprache}. Erfinde keine Begriffe; Fachwörter nur mit kurzer Erklärung.`,
     'Im Zweifel: {"thema": null}',
   ].join('\n')
 }
@@ -132,7 +139,7 @@ export function notesPrompt(seen: readonly string[], known: readonly string[], l
 export type NoteParse =
   | { kind: 'none' }
   | { kind: 'bad'; why: 'json' | 'lang' | 'doppelt' | 'kontext' }
-  | { kind: 'note'; thema: string; art: NoteArt; titel: string; text: string }
+  | { kind: 'note'; thema: string; art: NoteArt; titel: string; text: string; schlimmer?: string }
 
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
 
@@ -140,8 +147,11 @@ const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim()
  * Antwort des Forks lesen. JSON wie bei der Prüfung (erstes `{` bis letztes `}`, ```json-Zäune egal, ein deutsches „…" mit geradem
  * Schlusszeichen wird repariert). Verworfen: kein gültiges JSON, Thema zu lang, schon gezeigt oder bekannt, Rede über Kontextgröße oder
  * Chatwechsel (`KONTEXT_REDE`, Nachtrag 0.12.0; darum kümmert sich sidekick selbst).
+ * Teil C (0.29.0): Ein bekanntes Thema (`known`, „Ignorieren“ = nie wieder) kommt nur mit `art: achtung` und nicht leerem `schlimmer`
+ * durch, und nur, wenn es in dieser Session noch nicht schlimmer geworden ist (`worse`, Vergleichsform); dann mit `schlimmer`. Ein
+ * `schlimmer` an einem Thema, das nicht in `known` steht, wird verworfen (Review S1: der Prompt verlangt das Thema wörtlich).
  */
-export function parseNote(raw: string, seen: readonly string[], known: readonly string[]): NoteParse {
+export function parseNote(raw: string, seen: readonly string[], known: readonly string[], worse: readonly string[] = []): NoteParse {
   const answer = String(raw || '')
   const a = answer.indexOf('{')
   const b = answer.lastIndexOf('}')
@@ -167,10 +177,17 @@ export function parseNote(raw: string, seen: readonly string[], known: readonly 
   if (thema.length > NOTE_MAX) return { kind: 'bad', why: 'lang' }
   if (!/[.!?…]["“”»)]*$/u.test(thema)) thema += '.'
   const k = normTopic(thema)
-  if ([...seen, ...known].some((x) => normTopic(x) === k)) return { kind: 'bad', why: 'doppelt' }
-  if (KONTEXT_REDE.test(thema)) return { kind: 'bad', why: 'kontext' }
   const str = (x: unknown) => (typeof x === 'string' ? x.trim() : '')
+  const art: NoteArt = r.art === 'achtung' ? 'achtung' : 'wissen'
+  const schlimmer = oneLine(str(r.schlimmer)).slice(0, WORSE_MAX)
+  // Teil C: ein bekanntes Thema nur, wenn es schlimmer geworden ist (achtung + Satz), und nur einmal je Session
+  const isKnown = known.some((x) => normTopic(x) === k)
+  const again = isKnown && art === 'achtung' && !!schlimmer && !worse.includes(k)
+  if (!again && [...seen, ...known].some((x) => normTopic(x) === k)) return { kind: 'bad', why: 'doppelt' }
+  // Review S1: `schlimmer` ohne Treffer in `known` meint ein ignoriertes Thema in anderen Worten; verworfen statt als neuer Hinweis
+  if (schlimmer && !isKnown) return { kind: 'bad', why: 'doppelt' }
+  if (KONTEXT_REDE.test(thema)) return { kind: 'bad', why: 'kontext' }
   const titel = oneLine(str(r.titel)).slice(0, TITLE_MAX)
   const text = str(r.erklaerung).replace(/[ \t]+/g, ' ').slice(0, TEXT_MAX)
-  return { kind: 'note', thema, art: r.art === 'achtung' ? 'achtung' : 'wissen', titel, text }
+  return { kind: 'note', thema, art, titel, text, ...(again ? { schlimmer } : {}) }
 }

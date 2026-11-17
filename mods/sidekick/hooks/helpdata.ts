@@ -1,7 +1,6 @@
 // sidekick: Inhalt von `/sidekick help` (SPEC Nachtrag 0.14.0, docs/HELP-SPEC.md §5 „sidekick 0.14.0“). Aus Einstellungen und
 // Zustand beim Aufruf ein Schnappschuss `HelpData`; gezeichnet wird er von help.ts (Kopie von templates/help/help.ts). Rein, ohne `$`.
 import type { HelpCommand, HelpData, HelpFeature, HelpSetting } from './help.js'
-import { FOOTER_BUTTONS, kindTitle } from './buttons.js'
 import { SETTINGS } from './fields.js'
 import { lang, shortDate, t, tokensText } from './i18n.js'
 import { languageHelp } from './language.js'
@@ -20,8 +19,8 @@ export type HelpFacts = {
   known: number
   /** Jetzt (ms), für „Modell-Tipp ruht bis …“ (Ausbau 0.18.0) */
   now: number
-  /** Gespeicherte Prompts und davon mit Knopf (Nachtrag 0.21.0) */
-  prompts?: { n: number; buttons: number }
+  /** Ist prompt-deck da (`/deck` angemeldet)? Die Verweis-Zeile sagt dann `/deck help`, sonst wie man es installiert (Ausbau 0.29.0) */
+  deck?: boolean
   /** userConfig-Werte (0.23.0) für EINSTELLUNGEN; fehlt ein Feld, gilt sein Standard */
   cfg?: Readonly<Record<string, unknown>>
 }
@@ -68,11 +67,6 @@ function commands(): HelpCommand[] {
     { cmd: '/sidekick tips stop', does: h.tipsStop },
     { cmd: '/sidekick loop [status]', does: h.loop },
     { cmd: '/sidekick loop on|off', does: h.loopOnOff },
-    { cmd: '/sidekick save <name> [text]', does: h.pSave },
-    { cmd: '/sidekick prompts [name]', does: h.pList },
-    { cmd: '/sidekick prompts <name> on|off', does: h.pButton },
-    { cmd: '/sidekick forget <name>', does: h.pForget },
-    { cmd: '/p <name>', does: h.pRun },
     // Ausbau 0.24.0
     { cmd: '/sidekick queue', does: h.qList },
     { cmd: '/sidekick queue on|off', does: h.qOnOff },
@@ -81,9 +75,6 @@ function commands(): HelpCommand[] {
     { cmd: '/sidekick catalog', does: h.catList },
     { cmd: '/sidekick catalog on|off', does: h.catOnOff },
     { cmd: '/sidekick catalog mute|unmute <id>', does: h.catMute },
-    // Ausbau 0.27.0
-    { cmd: '/sidekick buttons', does: h.bList },
-    { cmd: '/sidekick buttons later|prompts|<name> on|off', does: h.bSet },
     // Ausbau 0.22.0 (von limit-bars übernommen)
     { cmd: '/handoff', does: h.handoff },
     { cmd: '/handoff fork|text', does: h.handoffForce },
@@ -106,16 +97,14 @@ function controls(): HelpCommand[] {
   const h = x.help
   return [
     { cmd: `1 ${x.noteClaude}`, does: h.cClaude },
-    { cmd: `2 ${x.noteKnown}`, does: h.cKnown },
+    { cmd: `2 ${x.noteExplain}`, does: h.cExplain },
     { cmd: `0 ${x.noteIgnore}`, does: h.cIgnore },
     { cmd: h.cLine, does: h.cLineDoes },
     { cmd: h.cInsert, does: h.cInsertDoes },
     { cmd: h.cWhy, does: h.cWhyDoes },
     { cmd: h.cOffer, does: h.cOfferDoes },
-    { cmd: h.cPromptBtn, does: h.cPromptBtnDoes },
-    { cmd: x.q.btn(false), does: h.cLaterDoes },
+    { cmd: h.cLater, does: h.cLaterDoes },
     { cmd: h.cSug, does: h.cSugDoes },
-    { cmd: h.cButtons, does: h.cButtonsDoes },
   ]
 }
 
@@ -151,16 +140,8 @@ function features(f: HelpFacts): HelpFeature[] {
     tips,
     auto,
     loop,
-    { name: h.fPrompts, state: { kind: 'value', text: h.promptsState(f.prompts?.n ?? 0, f.prompts?.buttons ?? 0), isDefault: !f.prompts?.n }, toggle: '/sidekick prompts' },
     f.cfg?.queue === false ? { name: h.settings.queue, state: { kind: 'off' }, toggle: '/sidekick queue on' } : { name: h.settings.queue, state: { kind: 'on' }, toggle: '/sidekick queue off' },
     f.cfg?.catalog === false ? { name: h.settings.catalog, state: { kind: 'off' }, toggle: '/sidekick catalog on' } : { name: h.settings.catalog, state: { kind: 'on' }, toggle: '/sidekick catalog off' },
-    // Fußzeilen-Knöpfe (Ausbau 0.27.0): je Knopfart aus hooks/buttons.ts eine Zeile, neue Knopfarten erscheinen von selbst
-    ...FOOTER_BUTTONS.map((k): HelpFeature => {
-      const name = (h.settings as Readonly<Record<string, string>>)[k.field] ?? kindTitle(k)
-      return f.cfg?.[k.field] === false
-        ? { name, state: { kind: 'off' }, toggle: `/sidekick buttons ${k.id} on` }
-        : { name, state: { kind: 'on' }, toggle: `/sidekick buttons ${k.id} off` }
-    }),
   ]
 }
 
@@ -173,7 +154,7 @@ export function sidekickHelp(f: HelpFacts): HelpData {
     lang: l,
     intro: h.intro,
     commands: commands(),
-    notes: [h.rules(RULE_IDS.join(' · ')), h.aliases],
+    notes: [h.rules(RULE_IDS.join(' · ')), h.aliases, h.deckNote(f.deck === true)],
     controls: controls(),
     features: features(f),
     settings: settingRows(f),
