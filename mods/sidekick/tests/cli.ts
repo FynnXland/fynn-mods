@@ -27,9 +27,10 @@ export function cliAnswer(e: { argv: readonly string[]; init?: { stdin?: string 
 }
 
 /** Stubs für Weg 2; zurück kommt die Liste der Schreibvorgänge (alle Werte als Strings, wie die CLI sie bekommt). */
-export function cliStubs(on: On): Cli {
+export function cliStubs(on: On, rows: () => unknown[] = () => []): Cli {
   const cli: Cli = { writes: [], fail: '' }
-  on('config.list', () => ({ value: [] }))
+  // `rows`: Zeilen der Engine (etwa `theme`, Nachtrag 0.29.1), nie Plugin-Zeilen; wirft `rows`, lehnt config.list ab
+  on('config.list', () => ({ value: rows() as never }))
   on('process.run', ($, e) => cliAnswer(e as never, cli) ?? res(9, '', 'unerwartet'))
   return cli
 }

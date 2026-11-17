@@ -27,6 +27,29 @@ export type NoteArt = 'achtung' | 'wissen'
 export const WORSE_MAX = 300
 
 /**
+ * Hintergrund der aufgeklappten Erklärung (Nachtrag 0.29.1). `backgroundColor` nimmt einen Theme-Schlüssel oder eine rohe Farbe
+ * (types@2.1.325:1743-1749); kein Schlüssel ist ein zartes Blau (types@2.1.325:14390). Desktop (VS Code zeichnet das Band nicht): sidekicks Blau halb
+ * durchsichtig, so liegt es auf dem hellen wie dem dunklen Hintergrund der App. Terminal: Ink deckt voll, deshalb eine feste Farbe nach
+ * der `theme`-Zeile von `$.config.list` (types@2.1.325:3355); bei `*-ansi` (nur 16 Farben), unbekanntem Theme oder ohne Zeile kein
+ * Hintergrund, dann bleibt der Rahmen.
+ */
+export const NOTE_BG = {
+  /** sidekicks Blau `#6CB6FF` mit Deckkraft 0x14 (≈ 8 %); Ton „A zarter“, von Fynn gewählt am 2026-11-17. */
+  surface: '#6CB6FF14',
+  dark: '#172331',
+  light: '#EEF5FD',
+} as const
+
+/** Farbe für `backgroundColor` der Erklär-Box; `undefined` = keine. `theme`: Wert der `theme`-Zeile (nur Terminal gelesen). */
+export function noteBg(surface: string, theme: unknown): string | undefined {
+  if (surface !== 'terminal') return NOTE_BG.surface
+  if (typeof theme !== 'string' || theme.includes('ansi')) return undefined
+  if (theme.startsWith('dark')) return NOTE_BG.dark
+  if (theme.startsWith('light')) return NOTE_BG.light
+  return undefined
+}
+
+/**
  * Der Hinweis einer Session (`sitzung:<id>.note`). `survived`: eigene Nachrichten seit dem Zeigen. Seit 0.27.1 ohne `open` (ein altes
  * `open: true` wird übergangen; aufgeklappt ist seit 0.29.0 Teil C nur im Speicher). `worse` (0.29.0 Teil C): ein bekanntes Thema, das
  * deutlich schlimmer geworden ist; `text` beginnt dann mit dem `schlimmer`-Satz.

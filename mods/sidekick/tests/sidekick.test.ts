@@ -51,7 +51,7 @@ import type { Measure, Wartung } from '../hooks/wartung.js'
 import { T, dec, setLang, shortDate, spanText, tokensText, usdText } from '../hooks/i18n.js'
 import { CHECK, CHECK_NAME, HANDOFF as HANDOFF_ROLE, genitiveDe, modelLabel, modelName } from '../hooks/models.js'
 import { savingsTree } from '../hooks/view.js'
-import { IGNORE_AFTER, NOTE_MAX, NOTES_EVERY, NOTES_KEEP, addTopic, afterOwnMessage, cleanNote, cleanTopics, normTopic, notesPrompt, parseNote, shouldCheck, skipAfter } from '../hooks/notes.js'
+import { IGNORE_AFTER, NOTE_BG, NOTE_MAX, NOTES_EVERY, NOTES_KEEP, addTopic, afterOwnMessage, cleanNote, cleanTopics, noteBg, normTopic, notesPrompt, parseNote, shouldCheck, skipAfter } from '../hooks/notes.js'
 import type { Note } from '../hooks/notes.js'
 import { NOTES_WORDS } from '../hooks/notes.js'
 import { HELP_WORDS, SAVINGS_WORDS, SETTING_WORDS, TIPS_FORMS, TTL_WORDS } from '../hooks/logic.js'
@@ -309,13 +309,18 @@ type W = {
   usageFails?: boolean
   noBreakdown?: boolean // breakdown fehlt in der Antwort
   noCli?: boolean // ohne Stubs für `claude plugin` (der Test stubbt config.list/process.run selbst)
+  theme?: string // Wert der `theme`-Zeile in config.list (Nachtrag 0.29.1); 'throws': config.list lehnt ab
 }
 
 function world(on: On, o: W = {}) {
   const clock = mock.clock(on, { now: NOW })
   const saved = o.saved ?? new Map<string, unknown>()
   // Einstellungen kommen seit 0.23.0 als userConfig (Test-Optionen); Schreiben über `claude plugin configure` (Weg 2)
-  const cli: Cli = o.noCli ? { writes: [], fail: '' } : cliStubs(on)
+  const themeRows = () => {
+    if (o.theme === 'throws') throw new Error('config.list abgelehnt')
+    return o.theme ? [{ key: 'theme', label: 'Theme', kind: 'choice', value: o.theme, provider: { kind: 'engine' }, isLocked: false }] : []
+  }
+  const cli: Cli = o.noCli ? { writes: [], fail: '' } : cliStubs(on, themeRows)
   const toasts: string[] = []
   const asks: { question: string; options: string[] }[] = []
   const sent: string[] = []
@@ -4945,6 +4950,70 @@ deTest('0.29.0 Teil C: alter Hinweis ohne text → die Erklärung zeigt das Them
   await ui.unmount()
   expect([T.en.noteExplain, T.en.noteCollapse, T.en.noteWorse]).toEqual(['Explain', 'Collapse', 'got worse'])
   expect(Object.keys(T.en.help).sort()).toEqual(Object.keys(T.de.help).sort())
+})
+
+// ---------- 0.29.1: Erklärung als blaue Box ----------
+
+const BOX = { borderStyle: 'round', borderColor: '#6CB6FF', paddingX: 1 }
+type Found = { props: Record<string, unknown> } | undefined
+
+/** Hinweis aufklappen und die Erklär-Box holen; danach zuklappen und prüfen, dass keine Box bleibt. */
+async function explainBox($: Engine, surface: string, cols: number): Promise<Found> {
+  await notesOn($)
+  const ui = await $.ui.mount(bandNote(surface, { bodyColumns: cols }))
+  expect(await ui.find({ key: 'sidekick-note-text' })).toBeUndefined()
+  await ui.press({ key: 'sidekick-note-explain' })
+  await flush(120)
+  const box = (await ui.find({ key: 'sidekick-note-text' })) as Found
+  // Die Zeile mit Thema und Knöpfen bleibt darüber
+  for (const key of ['sidekick-note-line', 'sidekick-note-claude', 'sidekick-note-explain', 'sidekick-note-ignore']) expect(await ui.find({ key }), key).toBeDefined()
+  await ui.press({ key: 'sidekick-note-explain' })
+  await flush(120)
+  expect(await ui.find({ key: 'sidekick-note-text' })).toBeUndefined()
+  await ui.unmount()
+  return box
+}
+
+test('0.29.1 noteBg: Desktop/VS Code halb durchsichtig, Terminal nach Theme, ansi/auto/unbekannt/ohne Zeile ohne Hintergrund', () => {
+  expect(NOTE_BG.surface).toMatch(/^#6CB6FF[0-9A-F]{2}$/)
+  // Ink deckt voll und liest Alpha nicht: Terminal-Farben nur 6-stellig (Review 0.29.1 K2)
+  for (const c of [NOTE_BG.dark, NOTE_BG.light]) expect(c).toMatch(/^#[0-9A-F]{6}$/)
+  for (const s of ['desktop', 'vscode', 'mobile']) expect(noteBg(s, undefined), s).toBe(NOTE_BG.surface)
+  expect(noteBg('desktop', 'light')).toBe(NOTE_BG.surface)
+  for (const v of ['dark', 'dark-daltonized']) expect(noteBg('terminal', v), v).toBe(NOTE_BG.dark)
+  for (const v of ['light', 'light-daltonized']) expect(noteBg('terminal', v), v).toBe(NOTE_BG.light)
+  for (const v of ['dark-ansi', 'light-ansi', 'auto', 'sepia', '', 3, null, undefined]) expect(noteBg('terminal', v), String(v)).toBeUndefined()
+})
+
+for (const cols of [40, 99, 125])
+  deTest(`0.29.1 Desktop, Breite ${cols}: Erklärung in runder blauer Box mit halb durchsichtigem Hintergrund, zugeklappt keine Box`, async ($, on) => {
+    world(on, { surfaces: ['desktop'], saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+    const box = await explainBox($, 'desktop', cols)
+    expect(box?.props).toMatchObject({ ...BOX, width: cols, backgroundColor: NOTE_BG.surface })
+    expect(box?.props.paddingLeft).toBeUndefined()
+    expect(JSON.stringify(box)).toContain('Der Planer speichert je Adresse.')
+    expect(JSON.stringify(box)).toContain('"wrap":"wrap"')
+  })
+
+for (const [theme, bg] of [['dark', NOTE_BG.dark], ['light', NOTE_BG.light], ['dark-ansi', undefined], ['auto', undefined], ['throws', undefined], ['', undefined]] as const)
+  deTest(`0.29.1 Terminal, Theme ${theme || 'ohne Zeile'}: Rahmen immer, Hintergrund ${bg ?? 'keiner'}`, async ($, on) => {
+    world(on, { theme, saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+    const box = await explainBox($, 'terminal', 99)
+    expect(box?.props).toMatchObject({ ...BOX, width: 99 })
+    expect(box?.props.backgroundColor).toBe(bg)
+  })
+
+test('0.29.1 en: Box gleich, Text und Knöpfe englisch', { options: { language: 'en' } }, async ($, on) => {
+  setLang('en')
+  world(on, { theme: 'light', saved: new Map<string, unknown>([['sitzung:sess-1', { note: NOTE, savedAt: NOW }]]) })
+  await notesOn($)
+  const ui = await $.ui.mount(bandNote('terminal', { bodyColumns: 40 }))
+  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.label).toBe('Explain')
+  await ui.press({ key: 'sidekick-note-explain' })
+  await flush(120)
+  expect(((await ui.find({ key: 'sidekick-note-text' })) as Found)?.props).toMatchObject({ ...BOX, width: 40, backgroundColor: NOTE_BG.light })
+  expect((await ui.find({ key: 'sidekick-note-explain' }))?.props.label).toBe('Collapse')
+  await ui.unmount()
 })
 
 deTest('0.29.0 Teil C: parseNote: bekanntes Thema ohne schlimmer verworfen, mit schlimmer und achtung angenommen, mit wissen oder schon einmal verworfen', async () => {

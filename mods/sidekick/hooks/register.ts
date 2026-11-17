@@ -8,7 +8,7 @@ import type { EngineInterface, On, RenderElement, RenderNode, Timer, UiPressArgu
 import { cacheState, cleanMem, completeCost, dayKey, emptyMem, hhmm, observeStep, parseTokens, rewriteCost, totalInput, ttlOf } from './cache.js'
 import { lang, setLang, shortDate, spanText, t, tokensText, usdText } from './i18n.js'
 import { isLanguage, languageCommand } from './language.js'
-import { NOTES_KEEP, NOTES_WORDS, addTopic, afterOwnMessage, cleanNote, cleanTopics, nonNeg, normTopic, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.js'
+import { NOTES_KEEP, NOTES_WORDS, addTopic, afterOwnMessage, cleanNote, cleanTopics, nonNeg, normTopic, noteBg, notesPrompt, parseNote, shouldCheck, skipAfter } from './notes.js'
 import type { Note } from './notes.js'
 import { CATALOG as CATALOG_SPEC, CHECK, HANDOFF, QUEUE, RATE, TIP_TARGETS, modelLabel, modelName } from './models.js'
 import {
@@ -2356,6 +2356,18 @@ async function noteAfterOwn($: EngineInterface, text: string, kind: string) {
   $.ui.invalidate('ui.render')
 }
 
+/**
+ * Wert der `theme`-Zeile aus `/config` (types@2.1.325:3355), für den Hintergrund der Erklär-Box im Terminal (Nachtrag 0.29.1). Gelesen
+ * beim Zeichnen einer aufgeklappten Erklärung, so gilt ein Themenwechsel beim nächsten Zeichnen. Fehler: `undefined` (nur Rahmen).
+ */
+async function termTheme($: EngineInterface): Promise<unknown> {
+  try {
+    return (await $.config.list()).find((row) => row.key === 'theme')?.value
+  } catch {
+    return undefined
+  }
+}
+
 type NoteAction = 'claude' | 'explain' | 'ignore'
 /** Aufgeklappte Hinweise (Teil C, `shownAt`), nur im Speicher; `noteExplained`: schon als „erklärt“ gezählt (je Hinweis einmal). */
 const noteOpen = new Set<number>()
@@ -2468,9 +2480,10 @@ type NoteButton = (p: { key: string; label: string; hotkey?: string; plain?: tru
  * (Teil C, 0.29.0; bis 0.28.1 „Weiß ich schon“). `flexWrap`: Ist die Zeile zu schmal, brechen die Knöpfe um. Keine Leerzeile darunter.
  * `digits`: Ziffern als hotkey; nicht, solange quick-replies 1 … n belegt (types:9073). `open`: unter der Zeile die Erklärung
  * (`text`, ohne Text das Thema), Breite `bodyColumns`, Umbruch `wrap`; die Knöpfe bleiben, der zweite heißt dann „Zuklappen“.
+ * Seit 0.29.1 in einer runden Box mit Rahmen `ACCENT`, `paddingX: 1` und Hintergrund `bg` (`noteBg`, fehlt er: nur Rahmen).
  * Ein bekanntes, schlimmer gewordenes Thema: `✦ Achtung · schlimmer geworden · <thema>`.
  */
-function noteView(n: Note, cols: number, digits: boolean, button: NoteButton, press: (a: NoteAction) => void, open = false): RenderElement {
+function noteView(n: Note, cols: number, digits: boolean, button: NoteButton, press: (a: NoteAction) => void, open = false, bg?: string): RenderElement {
   const x = t()
   const b = (key: string, label: string, hotkey: string, a: NoteAction) => button({ key, label, plain: true, ...(digits ? { hotkey } : {}), onPress: () => press(a) })
   const worse = n.worse ? [el('Text', { dimColor: true }, [' · ']), el('Text', { color: ACCENT }, [x.noteWorse])] : []
@@ -2485,7 +2498,10 @@ function noteView(n: Note, cols: number, digits: boolean, button: NoteButton, pr
   if (!open) return el('Box', { key: 'sidekick-note', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3, width }, line)
   return el('Box', { key: 'sidekick-note', flexDirection: 'column', width }, [
     el('Box', { key: 'sidekick-note-line', flexDirection: 'row', flexWrap: 'wrap', columnGap: 3, width }, line),
-    el('Box', { key: 'sidekick-note-text', paddingLeft: 2, width }, [el('Text', { wrap: 'wrap' }, [n.text || n.thema])]),
+    // Nachtrag 0.29.1: blau umrahmte Box direkt unter der Zeile, Hintergrund aus noteBg (ohne Farbe nur der Rahmen)
+    el('Box', { key: 'sidekick-note-text', borderStyle: 'round', borderColor: ACCENT, paddingX: 1, width, ...(bg ? { backgroundColor: bg } : {}) }, [
+      el('Text', { wrap: 'wrap' }, [n.text || n.thema]),
+    ]),
   ])
 }
 
@@ -4058,7 +4074,9 @@ export function register(on: On, options?: Readonly<Record<string, string | numb
           // (docs/raw/en/reference.md:320), etwa die Antwort „2“ auf „Variante 1 oder 2?“ (Review 0.13.0 K1). Und nur ohne Pille von
           // quick-replies (BAND-SPEC-2 §5): gleiche Ziffern in zwei Zeilen lösen nichts aus (Probe §5)
           const digits = e.props.isWorking && !(await qrShown($))
-          views.push(noteView(n, e.props.bodyColumns, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a), noteOpen.has(n.shownAt)))
+          const open = noteOpen.has(n.shownAt)
+          const bg = open ? noteBg(e.surface, e.surface === 'terminal' ? await termTheme($) : undefined) : undefined
+          views.push(noteView(n, e.props.bodyColumns, digits, (p) => ui.Button(p) as RenderNode, (a) => void pressNote($, n.shownAt, a), open, bg))
         }
         if (s) views.push(suggestView(s, e.props.bodyColumns, e.surface, (p) => ui.Button(p) as RenderNode, (a) => void pressSuggest($, a)))
         return sidekickLayer(views, e.surface)
