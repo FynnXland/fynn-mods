@@ -1,6 +1,6 @@
 {
   "name": "prompt-deck",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Saves prompts you send again and again and puts them as buttons above the prompt in the desktop app: one click sends. Send by name with /p <name>, manage with /deck. With sidekick also the Later button.",
   "author": {
     "name": "Fynn Hansen"

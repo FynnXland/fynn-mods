@@ -30,6 +30,8 @@ const ARG_HINT = '[status|on|off|more on|more off|language|help]'
 const ACCENT = 'autoAccept'
 // Rahmen (2) und Innenabstand (2) der eigenen Pille (nur Desktop)
 const FRAME = 4
+// Abstand zwischen den Zeilen der Pille im Desktop: Stufe 'xs' = 8 px (Desktop-Probe 2026-11-17; Stufen docs/raw/en/reference.md:369-381)
+const ROW_GAP = 'xs'
 // Keine Neubelegung so lange nach einer Eingabe (SPEC → Stabilität)
 const QUIET_MS = 2000
 // So lange nach der letzten Ziffer zählt dieselbe Ziffer als Wiederholung der gehaltenen Taste. Über der längsten
@@ -375,10 +377,24 @@ async function ownRow($: EngineInterface, e: AbovePromptEvent): Promise<RenderEl
     const buttons = texts.map((text, i) =>
       Button({ key: `reply-${i + 1}`, label: label(text), hotkey: String(i + 1), plain: true, onPress: () => send($, text) }),
     )
-    const cell = (b: RenderNode) => Box({ width: e.surface === 'terminal' ? half : '50%', flexShrink: 0, children: [b] })
     const rows: RenderNode[] = []
-    if (layout === 'grid') {
-      // 2 × 2: links 1/3, rechts 2/4
+    if (layout === 'grid' && framed) {
+      // Desktop 2 × 2 (0.8.7, Wahl Fynn nach Desktop-Probe V2): zwei Spalten statt Zellen à 50 %. Die linke ist so breit wie ihr
+      // längster Knopf, die rechte steht `columnGap: 'sm'` (12 px) daneben; die Spalten bleiben bündig. Links 1/3, rechts 2/4.
+      // `alignItems: 'flex-start'`: jeder Knopf behält seine eigene Breite, die Hover-Fläche reicht nicht bis zur Nachbarspalte.
+      const col = (key: string, bs: RenderNode[]) =>
+        Box({ key, flexDirection: 'column', alignItems: 'flex-start', flexShrink: 0, rowGap: ROW_GAP, children: bs })
+      rows.push(
+        Box({
+          flexDirection: 'row',
+          columnGap: 'sm',
+          flexShrink: 0,
+          children: [col('replies-left', buttons.filter((_, i) => i % 2 === 0)), col('replies-right', buttons.filter((_, i) => i % 2 === 1))],
+        }),
+      )
+    } else if (layout === 'grid') {
+      // Terminal 2 × 2: Zellen mit fester halber Breite, links 1/3, rechts 2/4 (unverändert)
+      const cell = (b: RenderNode) => Box({ width: half, flexShrink: 0, children: [b] })
       for (let i = 0; i < buttons.length; i += 2) {
         rows.push(Box({ flexDirection: 'row', columnGap: GAP, flexShrink: 0, children: buttons.slice(i, i + 2).map(cell) }))
       }
@@ -386,10 +402,10 @@ async function ownRow($: EngineInterface, e: AbovePromptEvent): Promise<RenderEl
       for (const b of buttons) rows.push(Box({ flexDirection: 'row', flexShrink: 0, children: [b] }))
     }
     // Eigene Pille: gedimmter Rahmen, eine Zeile Abstand zu Clawd und den Balken darunter. Der native Desktop-Knopf ist höher als
-    // eine Zeile; ohne Abstand ragte seine Hover-Fläche in die Zeile darüber. rowGap 'sm' (Stufenname, docs/raw/en/reference.md:369-381,
-    // types@2.1.325:13454) gibt im Desktop einen kleinen Abstand, im Terminal wären es 0 Zeilen (Wahl Fynn nach Desktop-Probe, 0.8.4)
+    // eine Zeile; ohne Abstand ragte seine Hover-Fläche in die Nachbarzeile (0.8.4). ROW_GAP 'xs' (8 px im Desktop) hält die
+    // Hover-Fläche frei, `rowGap: 0` berührte die Nachbarzeile (Desktop-Probe 0.8.7). Im Terminal ohne Abstand (unverändert).
     const node = framed
-      ? Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, borderStyle: 'round', borderDimColor: true, paddingX: 1, marginBottom: 1, rowGap: 'sm', children: rows })
+      ? Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, borderStyle: 'round', borderDimColor: true, paddingX: 1, marginBottom: 1, rowGap: ROW_GAP, children: rows })
       : Box({ key: 'quick-replies', flexDirection: 'column', flexShrink: 0, children: rows })
     cached = { sig, node }
   }

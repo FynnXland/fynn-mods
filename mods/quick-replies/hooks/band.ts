@@ -175,9 +175,8 @@ export function orderOf(s: Split): BandRow[] {
 }
 
 /**
- * Ob die Anordnung nichts zu tun hat (SPEC §3 Schritt 2): höchstens ein Platz in der Grundzeile und die Zeilen
- * stehen schon in der Reihenfolge von `orderOf`. Dann gibt `arrange` `next(e)` unverändert zurück. Das macht die
- * Anordnung idempotent: Die inneren Hooks sehen nur noch die Teilmengen, die der äußere einzeln weitergibt.
+ * Ob die Zeilen schon geordnet sind: höchstens ein Platz in der Grundzeile und die Folge von `orderOf`. `arrange` nutzt
+ * das seit dem Einzel-Stapel (ROW_GAP) nicht mehr; es bleibt für Tests und fremde Aufrufer.
  */
 export function isSettled(rows: readonly BandRow[], s: Split = splitRows(rows)): boolean {
   if (s.left.length + s.right.length > 1) return false
@@ -200,39 +199,49 @@ export function rowGapCells(left: number, right: number): number {
 export type ListEvent = { readonly props: { readonly rows: readonly BandRow[] } }
 
 /**
+ * Abstand zwischen den Zeilen des Bands: Stufe `xs`. Im Terminal und in VS Code 0 Zeilen (en/reference.md:371-377), im Desktop
+ * 8 px (Desktop-Probe 2026-11-17: xs 8, sm 12, md 16 px). Der native Desktop-Knopf ist höher als eine Zeile und bekommt so Luft.
+ */
+export const ROW_GAP = 'xs'
+
+/**
  * Anordnung für `on('ui.render', { component: 'AbovePromptList' }, ($, e, next) => arrange(e, next))`.
  *
- * - Grundzeile mit höchstens einem Platz: `next(e)` unverändert, bzw. ein `next` mit den Zeilen in der richtigen Folge.
- * - Sonst `Box{column, key:'band'}`: Ebenen (ein `next`), Rest (ein `next`, falls vorhanden), `Box{row, key:'band-row'}`
- *   mit je einem `next` pro Platz in `Box{flexShrink:0}` (links aufsteigend, Abstand `Box{flexGrow:1}`, rechts
- *   aufsteigend), danach Clawds Bühne (ein `next`) und zuletzt die Füße (ein `next`) als unterste Zeile.
+ * - Eine Zeile (oder keine): `next(e)` unverändert.
+ * - Sonst `Box{column, key:'band', rowGap: ROW_GAP}` mit **je einem `next` pro Zeile**: Ebenen absteigend, Rest, dann die Grundzeile,
+ *   Clawds Bühne und zuletzt die Füße. Bei zwei und mehr Plätzen steht die Grundzeile in `Box{row, key:'band-row'}` mit je einem
+ *   `next` pro Platz in `Box{flexShrink:0}` (links aufsteigend, Abstand `Box{flexGrow:1}`, rechts aufsteigend).
+ *   Je eine Zeile pro `next`, weil die Engine mehrere Zeilen in eine eigene Spalte stapelt und der Desktop dort rund 12 px
+ *   Abstand zeichnet (Leerzeile über tune-strip, Desktop-Probe 2026-11-17; Stapel ohne Schlüssel: Binary 2.1.325 `m1t`).
  * - Hüllen um fremde Zeilen tragen nur `key`, `flexDirection`, `flexShrink`, `flexGrow`, `columnGap`, `rowGap`, `alignItems`
  *   (Probe 7: `minWidth` oder `position` darum wird abgelehnt).
+ * - Idempotent: Innere Hooks sehen nur noch einzelne Zeilen und reichen sie unverändert weiter.
  * - Scheitert etwas: `next(e)`, lieber gestapelt als leer (SPEC §3 Schritt 4).
  */
 export async function arrange<E extends ListEvent>(e: E, next: (e: NoInfer<E>) => Promise<RenderElement>): Promise<RenderElement> {
   try {
     const rows = e.props.rows
+    if (rows.length <= 1) return await next(e)
     const s = splitRows(rows)
-    if (isSettled(rows, s)) return await next(e)
-    const sub = (rs: readonly BandRow[]): Promise<RenderElement> => next({ ...e, props: { ...e.props, rows: rs } })
-    if (s.left.length + s.right.length <= 1) return await sub(orderOf(s))
+    const one = (row: BandRow): Promise<RenderElement> => next({ ...e, props: { ...e.props, rows: [row] } })
     const kids: RenderNode[] = []
-    if (s.layers.length > 0) kids.push(await sub(s.layers))
-    if (s.rest.length > 0) kids.push(await sub(s.rest))
-    const line: RenderNode[] = []
-    // Index im Schlüssel: Zwei Zeilen mit gleichem Schlüssel (z. B. @inline neben @fynn-mods beim Testen) bleiben unterscheidbar
-    const cell = async (row: BandRow): Promise<RenderElement> =>
-      box({ key: `band-cell:${line.length}:${keyOfRow(row)}`, flexShrink: 0 }, [await sub([row])])
-    for (const row of s.left) line.push(await cell(row))
-    if (s.right.length > 0) {
-      line.push(box({ key: 'band-gap', flexGrow: 1 }, []))
-      for (const row of s.right) line.push(await cell(row))
+    for (const row of [...s.layers, ...s.rest]) kids.push(await one(row))
+    if (s.left.length + s.right.length > 1) {
+      const line: RenderNode[] = []
+      // Index im Schlüssel: Zwei Zeilen mit gleichem Schlüssel (z. B. @inline neben @fynn-mods beim Testen) bleiben unterscheidbar
+      const cell = async (row: BandRow): Promise<RenderElement> =>
+        box({ key: `band-cell:${line.length}:${keyOfRow(row)}`, flexShrink: 0 }, [await one(row)])
+      for (const row of s.left) line.push(await cell(row))
+      if (s.right.length > 0) {
+        line.push(box({ key: 'band-gap', flexGrow: 1 }, []))
+        for (const row of s.right) line.push(await cell(row))
+      }
+      kids.push(box({ key: 'band-row', flexDirection: 'row', columnGap: SLOT_GAP, alignItems: 'flex-end' }, line))
+    } else {
+      for (const row of [...s.left, ...s.right]) kids.push(await one(row))
     }
-    kids.push(box({ key: 'band-row', flexDirection: 'row', columnGap: SLOT_GAP, alignItems: 'flex-end' }, line))
-    if (s.stage.length > 0) kids.push(await sub(s.stage))
-    if (s.foot.length > 0) kids.push(await sub(s.foot))
-    return box({ key: 'band', flexDirection: 'column' }, kids)
+    for (const row of [...s.stage, ...s.foot]) kids.push(await one(row))
+    return box({ key: 'band', flexDirection: 'column', rowGap: ROW_GAP }, kids)
   } catch {
     return next(e)
   }

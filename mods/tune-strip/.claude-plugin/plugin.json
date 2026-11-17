@@ -1,6 +1,6 @@
 {
   "name": "tune-strip",
-  "version": "0.12.4",
+  "version": "0.12.5",
   "description": "Windows only. Shows the song playing in Spotify above the prompt, with cover and playback controls. No login, and nothing leaves your computer.",
   "author": {
     "name": "Fynn Hansen"

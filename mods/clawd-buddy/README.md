@@ -4,7 +4,7 @@ An animated pixel mascot ("Clawd") sits to the right above the prompt. It reacts
 
 > Texts are English by default; set `language` to `de` for German.
 
-Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** in the terminal and in the desktop app · Plugin version **0.16.3**
+Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** in the terminal and in the desktop app · Plugin version **0.16.4**
 
 ## What it does
 
@@ -145,6 +145,7 @@ To just hide him without uninstalling, use `/clawd off`.
 
 ## Changelog
 
+- **0.16.4**: band.ts: in the desktop app the empty line between band rows is gone (about 12 px, for example between sidekick's hint and tune-strip's bar). Each row now goes through the engine on its own, and the band keeps a small gap, `rowGap: 'xs'`: 8 px in the desktop app, 0 rows in the terminal and VS Code, so those look as before. Update the band mods together (clawd-buddy 0.16.4, limit-bars 0.17.5, prompt-deck 0.1.1, quick-replies 0.8.6, sidekick 0.31.2, tune-strip 0.12.5). No other change.
 - **0.16.3**: band.ts: prompt-deck as level 10 above the base row, sidekick back on top (level 50); language switch also covers prompt-deck. Update the band mods together (clawd-buddy 0.16.3, limit-bars 0.17.4, quick-replies 0.8.5, tune-strip 0.12.4, sidekick 0.29.0, prompt-deck 0.1.0). No other change.
 - **0.16.2**: shared band code learned the bottom row `foot`, so sidekick 0.28.1 can stand under the band row, right above the prompt. Update the band mods together (clawd-buddy 0.16.2, limit-bars 0.17.3, quick-replies 0.8.3, tune-strip 0.12.2, sidekick 0.28.1). No other change.
 - **0.16.1**: no second greeting after the mod reloads (`/clawd on|off`, `/clawd language`, `/reload-plugins`, an update). To tell a reload from a new chat, Clawd reads his own published value `clawd-buddy.mood` once at start (new right `state reads: clawd-buddy.mood`).

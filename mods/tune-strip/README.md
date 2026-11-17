@@ -8,7 +8,7 @@ Spotify is a trademark of Spotify AB. This is an unofficial hobby mod, not made 
 
 Since 0.6.0 it also finds the **beat** of the song (tempo, where the beats fall, and whether the song is calm, groove/hip-hop, hard or sad) so that clawd-buddy can nod along in time. **Spotify's audio is analysed locally for tempo only; nothing is recorded, stored or sent.** Only Spotify is listened to, never the rest of your system sound. Turn it off with `/tune beat off`.
 
-Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.12.4** · Windows only
+Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.12.5** · Windows only
 
 ## Display
 
@@ -137,6 +137,7 @@ claude --plugin-dir <path-to-clone>/mods/tune-strip
 
 ## Changes
 
+- **0.12.5**: band.ts: in the desktop app the empty line between band rows is gone (about 12 px, for example between sidekick's hint and tune-strip's bar). Each row now goes through the engine on its own, and the band keeps a small gap, `rowGap: 'xs'`: 8 px in the desktop app, 0 rows in the terminal and VS Code, so those look as before. Update the band mods together (clawd-buddy 0.16.4, limit-bars 0.17.5, prompt-deck 0.1.1, quick-replies 0.8.6, sidekick 0.31.2, tune-strip 0.12.5). No other change.
 - **0.12.4**: band.ts: prompt-deck as level 10 above the base row, sidekick back on top (level 50); language switch also covers prompt-deck. Update the band mods together (clawd-buddy 0.16.3, limit-bars 0.17.4, quick-replies 0.8.5, tune-strip 0.12.4, sidekick 0.29.0, prompt-deck 0.1.0). No other change.
 - **0.12.3**: less room under the orange line in the desktop app (4 px instead of 16 px), so the gap between the bar and the rows below it is smaller and the band is less likely to scroll with quick-replies' pill. No other change.
 - **0.12.2**: shared band code learned the bottom row `foot`, so sidekick 0.28.1 can stand under the band row, right above the prompt. Update the band mods together (clawd-buddy 0.16.2, limit-bars 0.17.3, quick-replies 0.8.3, tune-strip 0.12.2, sidekick 0.28.1). No other change.

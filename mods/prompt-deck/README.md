@@ -6,7 +6,7 @@ With [sidekick](../sidekick/README.md) installed you also get the **Later** butt
 
 Texts are English by default; set `language` to `de` for German, or run `/deck language de`.
 
-Requires Claude Code **2.1.323 or later** · Tested with Claude Code **v2.1.325** · Plugin version **0.1.0**
+Requires Claude Code **2.1.323 or later** · Tested with Claude Code **v2.1.325** · Plugin version **0.1.1**
 
 ## Where it shows
 
@@ -105,6 +105,7 @@ Update: `claude plugin update prompt-deck@fynn-mods`. Remove: `claude plugin uni
 
 ## Changelog
 
+- **0.1.1**: band.ts: in the desktop app the empty line between band rows is gone (about 12 px, for example between sidekick's hint and tune-strip's bar). Each row now goes through the engine on its own, and the band keeps a small gap, `rowGap: 'xs'`: 8 px in the desktop app, 0 rows in the terminal and VS Code, so those look as before. Update the band mods together (clawd-buddy 0.16.4, limit-bars 0.17.5, prompt-deck 0.1.1, quick-replies 0.8.6, sidekick 0.31.2, tune-strip 0.12.5). No other change.
 - **0.1.0** (2026-11-17): first version. The saved prompts, `/p`, the buttons and the Later button move here from sidekick 0.28.1, as they were, with their own row above limit-bars instead of sidekick's footer. Commands `/deck …` replace `/sidekick save|prompts|forget|buttons`.
 
 ## License

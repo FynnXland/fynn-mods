@@ -240,22 +240,72 @@ test('more an: Fork über den Timer nach dem Turn, Claude Code vorn, bis zu 4 im
   await narrow.unmount()
 })
 
-test("0.8.4 Desktop: Abstand rowGap 'sm' zwischen den Zeilen der Pille (Hover-Fläche des nativen Knopfs), Terminal ohne", { options: { more: true } }, async ($, on) => {
+test("0.8.7 Desktop 2 × 2: zwei bündige Spalten (links 1/3, rechts 2/4), columnGap 'sm', rowGap 'xs', keine Zellen à 50 %", { options: { more: true } }, async ($, on) => {
   const w = world(on, { stored: { enabled: true, more: true } })
-  for (const surface of ['desktop', 'terminal'] as const) {
-    const ui = await boot($, surface)
-    await finish($)
-    await suggest($, 'Committe die Änderungen')
-    await w.clock.advance(100)
-    const pill = findKey(await ui.drawn(), OWN)!.children[0]!
-    // 2 × 2: zwei Zeilen, je zwei Zellen
-    expect(pill.children.length).toBe(2)
-    expect(pill.children.map((r) => r.children.length)).toEqual([2, 2])
-    expect(pill.props.rowGap).toBe(surface === 'desktop' ? 'sm' : undefined)
-    if (surface === 'desktop') expect(pill.children[1]!.children.map((c) => c.children[0]!.props.key)).toEqual(['reply-3', 'reply-4'])
-    await ui.unmount()
-    await $.turn.start({ turnId: `t-${surface}`, text: 'weiter' })
+  const ui = await boot($, 'desktop')
+  await finish($)
+  await suggest($, 'Committe die Änderungen')
+  await w.clock.advance(100)
+  const pill = findKey(await ui.drawn(), OWN)!.children[0]!
+  expect(pill.props).toMatchObject({ borderStyle: 'round', borderDimColor: true, paddingX: 1, marginBottom: 1, rowGap: 'xs' })
+  // Eine Zeile mit zwei Spalten
+  expect(pill.children.length).toBe(1)
+  const row = pill.children[0]!
+  expect(row.props).toMatchObject({ flexDirection: 'row', columnGap: 'sm' })
+  const [left, right] = row.children
+  for (const col of [left!, right!]) expect(col.props).toMatchObject({ flexDirection: 'column', alignItems: 'flex-start', rowGap: 'xs' })
+  expect(left!.props.key).toBe('replies-left')
+  expect(right!.props.key).toBe('replies-right')
+  expect(left!.children.map((b) => b.props.key)).toEqual(['reply-1', 'reply-3'])
+  expect(right!.children.map((b) => b.props.key)).toEqual(['reply-2', 'reply-4'])
+  // Keine feste Zellbreite mehr; die Knöpfe sitzen direkt in den Spalten, ohne Text-Kind (size: 'footnote' wirkte nicht, Probe V3)
+  expect(JSON.stringify(pill)).not.toContain('"width"')
+  for (const b of [...left!.children, ...right!.children]) {
+    expect(b.type).toBe('Button')
+    expect(b.children ?? []).toEqual([])
   }
+  // Klick sendet weiter den vollen Text (Reihenfolge wie im Test „more an“ oben)
+  expect(await labels(ui)).toEqual(['Committe die Änderungen', 'Lauf die Tests', 'Committe das', 'Zeig den Diff'])
+  await ui.press({ key: 'reply-3' })
+  expect(w.sent).toEqual([{ text: 'Committe das', asUser: true }])
+  await ui.unmount()
+})
+
+test("0.8.7 Desktop-Liste: je Knopf eine Zeile, rowGap 'xs'; Ziffer sendet den vollen Text", { options: { more: true } }, async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  await $.session.start({ surface: null, isInteractive: false, cwd: '/work' })
+  // Schmales Band: die Beschriftungen passen nicht in die halbe Breite, also Liste (chooseLayout)
+  const ui = await $.ui.mount(band('desktop', 30))
+  await finish($)
+  await suggest($, 'Committe die Änderungen')
+  await w.clock.advance(2100)
+  const pill = findKey(await ui.drawn(), OWN)!.children[0]!
+  expect(pill.props.rowGap).toBe('xs')
+  expect(pill.children.length).toBe(4)
+  expect(pill.children.every((r) => r.props.flexDirection === 'row' && r.children.length === 1)).toBe(true)
+  expect(await type($, '', '2')).toMatchObject({ text: '', cursor: 0 })
+  await ui.find({ type: 'Text', text: 'clawd' })
+  expect(w.sent).toEqual([{ text: 'Lauf die Tests', asUser: true }])
+  await ui.unmount()
+})
+
+test('0.8.7 Terminal unverändert: Zeilen mit Zellen fester halber Breite, columnGap 2, kein rowGap', { options: { more: true } }, async ($, on) => {
+  const w = world(on, { stored: { enabled: true, more: true } })
+  const ui = await boot($, 'terminal')
+  await finish($)
+  await suggest($, 'Committe die Änderungen')
+  await w.clock.advance(100)
+  const pill = findKey(await ui.drawn(), OWN)!.children[0]!
+  expect(pill.props.rowGap).toBeUndefined()
+  expect(pill.props.borderStyle).toBeUndefined()
+  expect(pill.children.length).toBe(2)
+  // bodyColumns 120 im Terminal ohne Rahmen: halbe Breite (120 − 2) / 2 = 59
+  for (const r of pill.children) {
+    expect(r.props).toMatchObject({ flexDirection: 'row', columnGap: 2 })
+    expect(r.children.map((c) => c.props.width)).toEqual([59, 59])
+  }
+  expect(pill.children[1]!.children.map((c) => c.children[0]!.props.key)).toEqual(['reply-3', 'reply-4'])
+  await ui.unmount()
 })
 
 test('more an: kommt der Fork vor Claude Code, rückt Claude Codes Vorschlag auf 1, die anderen rücken nach, der vierte fällt weg', async ($, on) => {

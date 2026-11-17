@@ -4,7 +4,7 @@ After Claude answers, Claude Code often suggests your next message itself (the g
 
 Texts are English by default; set `language` to `de` for German.
 
-Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.8.5**
+Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin version **0.8.7**
 
 ## Display
 
@@ -13,7 +13,7 @@ Requires Claude Code **2.1.323 or later** · tested with **v2.1.325** · Plugin 
 | Desktop Code tab | Its own pill with a dimmed rounded border and one blank line above Clawd, the limit bars and the cache ring, which stay unchanged below |
 | Terminal | Compact, without border or spacing, above the row with limit-bars and Clawd |
 
-- **Layout:** a single suggestion stands alone in its row. From two suggestions on, **2 × 2** (left `1`/`3`, right `2`/`4`) if the longest label fits into half the width, otherwise one per row. The `layout` setting can force either.
+- **Layout:** a single suggestion stands alone in its row. From two suggestions on, **2 × 2** (left `1`/`3`, right `2`/`4`) if the longest label fits into half the width, otherwise one per row. The `layout` setting can force either. In the desktop app the two columns sit close together: the left one is as wide as its longest label, the right one follows right after it.
 - **Labels** are at most 40 characters, shortened with `…`. That only affects Claude Code's own suggestion, which is shown in full as grey text in the prompt and is sent in full.
 - **The pill only shows** when a turn has finished since your last message, at least one suggestion exists, the prompt is empty and the mod is on. It disappears while Claude is working, while you type, during a survey in the band, while a subagent transcript is open, and after `/clear` until the next answer. Without a pill the band keeps its height; quick-replies never moves Clawd or the bars.
 - **Stability:** if suggestions are already shown and you typed or clicked within the last 2 s, newly arriving suggestions wait until 2 s of quiet. If nothing is shown yet, a new suggestion appears at once.
@@ -142,6 +142,8 @@ claude --plugin-dir <path-to-clone>/mods/quick-replies
 
 ## Changes
 
+- **0.8.7**: desktop app: a tighter pill. Rows are 8 px apart instead of 12 px (`rowGap: 'xs'`), and in the 2 × 2 layout the right column now follows the left one (12 px gap, `columnGap: 'sm'`) instead of starting at half the width. The grey hover area of a suggestion still leaves its neighbours free. The terminal is unchanged.
+- **0.8.6**: band.ts: in the desktop app the empty line between band rows is gone (about 12 px, for example between sidekick's hint and tune-strip's bar). Each row now goes through the engine on its own, and the band keeps a small gap, `rowGap: 'xs'`: 8 px in the desktop app, 0 rows in the terminal and VS Code, so those look as before. Update the band mods together (clawd-buddy 0.16.4, limit-bars 0.17.5, prompt-deck 0.1.1, quick-replies 0.8.6, sidekick 0.31.2, tune-strip 0.12.5). No other change.
 - **0.8.5**: band.ts: prompt-deck as level 10 above the base row, sidekick back on top (level 50); language switch also covers prompt-deck. Update the band mods together (clawd-buddy 0.16.3, limit-bars 0.17.4, quick-replies 0.8.5, tune-strip 0.12.4, sidekick 0.29.0, prompt-deck 0.1.0). No other change.
 - **0.8.4**: desktop app: the grey hover area of a suggestion no longer reaches into the row above it (seen with 3 or 4 suggestions in the 2 × 2 layout). The pill now has a small gap between its rows in both layouts (`rowGap: 'sm'`). The terminal draws no gap and is unchanged.
 - **0.8.3**: shared band code learned the bottom row `foot`, so sidekick 0.28.1 can stand under the band row, right above the prompt. Update the band mods together (clawd-buddy 0.16.2, limit-bars 0.17.3, quick-replies 0.8.3, tune-strip 0.12.2, sidekick 0.28.1). No other change.
