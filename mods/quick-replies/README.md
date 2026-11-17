@@ -139,6 +139,7 @@ claude --plugin-dir <path-to-clone>/mods/quick-replies
 - **Band mods from fynn-mods on older versions:** the band only looks like one band again when the other band mods (clawd-buddy, limit-bars, prompt-deck, sidekick, tune-strip) are on their Band 2 versions too; an older one draws its own stacked row. Rows of other mods that do not use the shared keys stay in the band, below prompt-deck's row and above the base row.
 - **Haiku 5.5 above 100k tokens:** Haiku 5.5 costs five times as much when a request has more than 100,000 prompt tokens. The fork reports only the sum over its requests, so the cost line always uses the lower price. Each fork request carries the whole chat, so in a Haiku 5.5 chat whose context is over 100,000 tokens the estimate is about five times too low.
 - **Hover flicker in the desktop app:** next to animated mods in the band (e.g. clawd-buddy's Clawd), the buttons can flicker under the mouse. Clicks still work.
+- **Forced 2 × 2 in a narrow window (desktop app):** with `layout: grid` and a narrow window, long labels can push the right column past the frame of the pill. `auto` avoids this: it switches to one suggestion per row when two columns do not fit.
 
 ## Changes
 
